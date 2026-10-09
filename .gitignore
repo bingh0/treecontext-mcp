@@ -1,0 +1,14 @@
+node_modules
+dist/
+*.tgz
+coverage/
+.DS_Store
+Thumbs.db
+.env
+.treecontext-store
+
+# Bench corpora are fetched on demand, never committed
+bench/.cache/
+bench/.cache/models/
+.gherkin-trace/
+.claude/worktrees/

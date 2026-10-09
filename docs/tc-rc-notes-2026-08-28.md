@@ -1,0 +1,27 @@
+- a complete journal of the chat conversation, saved with zstd (do we need fallback to gzip/zip?) in sqlite3
+- a searchable index of the journal (some minor filtering of the tool calls but for the human and agent responses fully searchable)
+- fts bm25 lexical search
+- option for future development of better searches and fusions and etc but none explicitly needed for mvp
+- can handle concurrent readers and writers
+- handles multiple users with namespaces
+- there is some mechanism to import/export or move or merge (the specifics are less important than the ability) between namespaces. the ask is if a subagent completes some work they are able to drop a summary of work and then that can somehow make it back to the main project namespace
+- supports git worktrees
+- best practices for sqlite3 databases in terms of ATOM guarantees, write safety, loss of data understanding that while very robust, it's not guaranteed but the most we would lose is the current in flight write
+- robust mechanics for intelligently retiring entries (frequently access material remains "hot") from the search, or archiving older entries without losing them, so keep performance (read/write/search) excellent in even relatively low spec machines down to even mobile devices. but assume that machines are multi-core, oses are multithreaded, and storage is flash based.
+- separate side channel (explicit call by user) or cli support to delete/prune/retire those very old entries but with clear safeguards as it is destructive
+- works on any system that supports mcp (and tracks latest mcp sdk version) and hooks and skills, but should gracefully function even without hooks
+- can function as a typescript library
+- latest dependencies (typescript version, gnt, zod, better-sqlite3), and we should be judicious about what we add in this regards
+- full gherkin A.C. and unit tests and linting and CI with a goal for 100% code coverage
+- exemplar of current aBDD practice and full integration of gnt/gt/tc/scope/audit, but must stand alone - if a user only wants to use tc to store context history and search it, that's required
+- offline and avoid unnecessary token spend unless absolutely necessary (ie no automatic summaries a la RAPTOR or MemTree)
+- minimal support for multimodal by linking URI and a text summary of the media file (image, audio, video) that can be searched
+- not in current scope, but should have the provision for possible introduction of AST trees for code with linkage to tc stores a la gherkin-trace. no work - just a clear architecture to allow that. it may be out of scope in the sense that this would be better served by a separate project like treecontext-ast etc.
+- installer into common client types (claude code, codex, gemini, vs code, opencode but this is open to discussion)
+- doctor to check install
+- clean, safe migration mechanics of stores
+- reasonable performant ie even a very fast local agent (1000-2000 tps) wouldn't be waiting for tc. probably needs some sort of performance harness.
+- some sort of benchmark/testing harness or facility or emitting statistics to test search modes, write/read, memory
+- support for linux, mac, windows
+- clean interfaces for integration with gherkin-trace to support aBDD
+- eventual support for a visualizer or GUI to allow visual searching - this is where maybe building a HNSW knowledge on the fly might be interesting

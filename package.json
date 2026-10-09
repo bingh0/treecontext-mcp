@@ -1,0 +1,106 @@
+{
+  "name": "treecontext-mcp",
+  "version": "0.1.0-beta.1",
+  "description": "A searchable chat-session journal for AI coding agents \u2014 local, lexical, no model.",
+  "keywords": [
+    "mcp",
+    "claude-code",
+    "agent-memory",
+    "journal",
+    "session-history",
+    "sqlite",
+    "fts5",
+    "context"
+  ],
+  "license": "MIT",
+  "author": "treecontext contributors",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bingh0/treecontext-mcp.git"
+  },
+  "homepage": "https://github.com/bingh0/treecontext-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/bingh0/treecontext-mcp/issues"
+  },
+  "type": "module",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./persistence/node": {
+      "import": "./dist/persistence/better-sqlite.js",
+      "types": "./dist/persistence/better-sqlite.d.ts"
+    },
+    "./server": {
+      "import": "./dist/server/server.js",
+      "types": "./dist/server/server.d.ts"
+    }
+  },
+  "bin": {
+    "treecontext": "./dist/server/cli.js"
+  },
+  "files": [
+    "dist/**/*.js",
+    "dist/**/*.d.ts",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/server": "^2.0.0",
+    "@types/better-sqlite3": "^9.6.0",
+    "better-sqlite3": "^13.0.3",
+    "smol-toml": "^1.8.0",
+    "zod": "^4.5.4"
+  },
+  "peerDependenciesMeta": {
+    "@opencode-ai/plugin": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@bcoe/v8-coverage": "1.0.2",
+    "@jridgewell/trace-mapping": "0.3.31",
+    "@modelcontextprotocol/client": "^2.0.0",
+    "@opencode-ai/plugin": "^1.18.26",
+    "@types/istanbul-lib-coverage": "2.0.6",
+    "@types/istanbul-lib-report": "3.0.3",
+    "@types/istanbul-reports": "3.0.4",
+    "@vitest/coverage-v8": "^4.1.11",
+    "gherkin-node-test": "0.11.0",
+    "istanbul-lib-coverage": "3.2.2",
+    "istanbul-lib-report": "3.0.1",
+    "istanbul-reports": "3.2.0",
+    "oxlint": "^1.81.0",
+    "tsx": "^4.23.13",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11"
+  },
+  "scripts": {
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+    "build": "npm run clean && tsc -p tsconfig.build.json",
+    "dev": "tsc -p tsconfig.build.json --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "tsx scripts/coverage/run.ts",
+    "coverage:merge": "tsx scripts/coverage/merge.ts",
+    "lint": "oxlint -c .oxlintrc.json src tests",
+    "lint:fast": "oxlint -c .oxlintrc.json src tests",
+    "typecheck": "tsc -p tsconfig.build.json --noEmit && tsc -p tsconfig.bench.json --noEmit && tsx scripts/tsc-ratchet.ts",
+    "serve": "tsx src/server/cli.ts serve --transport stdio",
+    "pack:beta": "npm run release-gate && npm run release-scan && npm run typecheck && npm test && npm run build && npm pack && npm run install-smoke",
+    "dogfood": "npm run typecheck && npm test && npm run dogfood:now",
+    "dogfood:now": "npm pack && node -e \"require('node:child_process').execSync('npm i -g ./treecontext-mcp-'+require('./package.json').version+'.tgz',{stdio:'inherit'})\" && treecontext install --force --agent claude -y",
+    "bench": "tsx bench/cli.ts",
+    "bench:falsify": "tsx bench/falsify.ts",
+    "bench:compare": "tsx bench/compare.ts",
+    "bench:capsweep": "tsx bench/cap-sweep.ts",
+    "bench:capcost": "tsx bench/cap-cost.ts",
+    "release-gate": "tsx scripts/release-gate.ts",
+    "release-scan": "tsx scripts/release-scan.ts",
+    "install-smoke": "tsx scripts/install-smoke.ts"
+  }
+}

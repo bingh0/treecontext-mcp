@@ -1,0 +1,261 @@
+{"run-manifest":1}
+{"file":"features/journal-agent-surface.feature","title":"every channel teaches the same session-start protocol","status":"passed"}
+{"file":"features/journal-agent-surface.feature","title":"gap markers are explained where the agent will meet them","status":"passed"}
+{"file":"features/journal-agent-surface.feature","title":"installing the AGENTS.md block twice yields one block","status":"passed"}
+{"file":"features/journal-agent-surface.feature","title":"instructions survive the platform's size cap un-truncated","status":"passed"}
+{"file":"features/journal-agent-surface.feature","title":"the handshake stays a card and the long form lives in the skill reference","status":"passed"}
+{"file":"features/journal-agent-surface.feature","title":"the instructions explain the preview marker before the agent meets one","status":"passed"}
+{"file":"features/journal-agent-surface.feature","title":"the instructions name doctor as the first move when something looks wrong","status":"passed"}
+{"file":"features/journal-agent-surface.feature","title":"the instructions teach the checkpoint protocol","status":"passed"}
+{"file":"features/journal-agent-surface.feature","title":"the instructions tell the agent to show the packet first after a clear","status":"passed"}
+{"file":"features/journal-agent-surface.feature","title":"the instructions tell the agent to suggest a clear after a chapter summary","status":"passed"}
+{"file":"features/journal-agent-surface.feature","title":"the lexical backend never advertises machinery it lacks","status":"passed"}
+{"file":"features/journal-agent-surface.feature","title":"the media guidance in the lexical instructions is honest","status":"passed"}
+{"file":"features/journal-agent-surface.feature","title":"the tool surface is exactly the ruled set","status":"passed"}
+{"file":"features/journal-agent-surface.feature","title":"tool schemas describe only what the backend does","status":"passed"}
+{"file":"features/journal-capture.feature","title":"a client that dies before the server finishes starting leaves no orphan","status":"passed"}
+{"file":"features/journal-capture.feature","title":"a dropped or failed event leaves a visible gap marker","status":"passed"}
+{"file":"features/journal-capture.feature","title":"a schema-less store file left by an earlier hook is healed, not abandoned","status":"passed"}
+{"file":"features/journal-capture.feature","title":"a server abandoned by its client shuts down instead of spinning","status":"passed"}
+{"file":"features/journal-capture.feature","title":"a stop that asks for a bookmark still captures the response","status":"passed"}
+{"file":"features/journal-capture.feature","title":"a tool event can be the first thing a fresh install ever captures","status":"passed"}
+{"file":"features/journal-capture.feature","title":"a tool event is captured with both its input and its response","status":"passed"}
+{"file":"features/journal-capture.feature","title":"a user message is captured verbatim","status":"passed"}
+{"file":"features/journal-capture.feature","title":"an assistant response is captured at turn end","status":"passed"}
+{"file":"features/journal-capture.feature","title":"an oversized non-re-derivable event keeps its full content","status":"passed"}
+{"file":"features/journal-capture.feature","title":"curated notes carry what the raw stream cannot","status":"passed"}
+{"file":"features/journal-capture.feature","title":"every capture carries the session that produced it","status":"passed"}
+{"file":"features/journal-capture.feature","title":"every entry carries the moment its event happened","status":"passed"}
+{"file":"features/journal-capture.feature","title":"every tool invocation is journaled, even the boring ones","status":"passed"}
+{"file":"features/journal-capture.feature","title":"hooks racing to create one fresh store all land on the finished schema","status":"passed"}
+{"file":"features/journal-capture.feature","title":"outputs of execution and external tools are kept in full","status":"passed"}
+{"file":"features/journal-capture.feature","title":"outputs of repo-reading tools are trail, not treasure","status":"passed"}
+{"file":"features/journal-capture.feature","title":"platforms without a Stop hook still journal user and tool events","status":"passed"}
+{"file":"features/journal-capture.feature","title":"repeated identical events dedup without losing distinct ones","status":"passed"}
+{"file":"features/journal-capture.feature","title":"the first hook on a fresh install captures without waiting for a server","status":"passed"}
+{"file":"features/journal-clients.feature","title":"a copied configuration that drifted reads inconsistent with its remedy","status":"passed"}
+{"file":"features/journal-clients.feature","title":"a copied configuration that matches reads present and consistent","status":"passed"}
+{"file":"features/journal-clients.feature","title":"a teammate on another agent reads and writes through the tools","status":"passed"}
+{"file":"features/journal-clients.feature","title":"a translated Gemini copy that drifted reads inconsistent with its remedy","status":"passed"}
+{"file":"features/journal-clients.feature","title":"a translated Gemini copy that matches reads present and consistent","status":"passed"}
+{"file":"features/journal-clients.feature","title":"doctor reports Codex CLI as a client that copies the hooks into its own configuration [1]","status":"passed"}
+{"file":"features/journal-clients.feature","title":"doctor reports Cursor as a client that reads the Claude settings file by default [4]","status":"passed"}
+{"file":"features/journal-clients.feature","title":"doctor reports Gemini CLI as a client that copies the hooks into its own translated configuration [2]","status":"passed"}
+{"file":"features/journal-clients.feature","title":"doctor reports OpenCode as a client that offers no shell hooks, so the tools are its whole surface [5]","status":"passed"}
+{"file":"features/journal-clients.feature","title":"doctor reports VS Code as a client that reads the Claude settings file when its Claude-hooks setting is on [3]","status":"passed"}
+{"file":"features/journal-clients.feature","title":"every matrix row carries its client, its events, its documentation date and one status","status":"passed"}
+{"file":"features/journal-clients.feature","title":"without the experimental flag a copying client gets tools only","status":"passed"}
+{"file":"features/journal-handoff.feature","title":"12000 entries exported inline write 10000 and state 2000 omitted [1]","status":"passed"}
+{"file":"features/journal-handoff.feature","title":"500 entries exported inline write 500 and state 0 omitted [2]","status":"passed"}
+{"file":"features/journal-handoff.feature","title":"a file born in this store imports without failing","status":"passed"}
+{"file":"features/journal-handoff.feature","title":"a handoff is announced in the packet from the sender's universal timestamps and a skewed clock is disclosed","status":"passed"}
+{"file":"features/journal-handoff.feature","title":"a shell command writes the same file","status":"passed"}
+{"file":"features/journal-handoff.feature","title":"a whole journal of any size lands in a file without transiting the conversation","status":"passed"}
+{"file":"features/journal-handoff.feature","title":"a whole-journal export warns about secrets before it writes","status":"passed"}
+{"file":"features/journal-handoff.feature","title":"an export path outside the project is refused","status":"passed"}
+{"file":"features/journal-handoff.feature","title":"an imported entry that claims to supersede a chapter lands as a reference only","status":"passed"}
+{"file":"features/journal-handoff.feature","title":"an imported summary is marked as imported and counted","status":"passed"}
+{"file":"features/journal-handoff.feature","title":"importing a whole journal twice lands it once","status":"passed"}
+{"file":"features/journal-handoff.feature","title":"the agent writes the handoff file on the developer's request","status":"passed"}
+{"file":"features/journal-handoff.feature","title":"the default export carries summaries only","status":"passed"}
+{"file":"features/journal-handoff.feature","title":"the file's authorship claims are data, not identity","status":"passed"}
+{"file":"features/journal-handoff.feature","title":"the handoff file says how to use itself","status":"passed"}
+{"file":"features/journal-install.feature","title":"a corrupt config file is backed up, not destroyed","status":"passed"}
+{"file":"features/journal-install.feature","title":"a forced reinstall rewrites only the agent it names","status":"passed"}
+{"file":"features/journal-install.feature","title":"an interpreter that cannot load the binding is reported, not tolerated","status":"passed"}
+{"file":"features/journal-install.feature","title":"an unverified platform gets tools, not capture hooks","status":"passed"}
+{"file":"features/journal-install.feature","title":"an unwritable agent config fails loudly and changes nothing","status":"passed"}
+{"file":"features/journal-install.feature","title":"doctor names the build the agent is wired to, and spells the fix through this one","status":"passed"}
+{"file":"features/journal-install.feature","title":"doctor names the build the command on PATH would run","status":"passed"}
+{"file":"features/journal-install.feature","title":"doctor proves health rather than inferring it","status":"passed"}
+{"file":"features/journal-install.feature","title":"doctor says so when the command is on no PATH at all","status":"passed"}
+{"file":"features/journal-install.feature","title":"existing configuration is merged, never clobbered","status":"passed"}
+{"file":"features/journal-install.feature","title":"experimental capture is an opt-in by name","status":"passed"}
+{"file":"features/journal-install.feature","title":"hooks-only uninstall keeps the launcher its MCP registration points at","status":"passed"}
+{"file":"features/journal-install.feature","title":"install wires only the agents that are present","status":"passed"}
+{"file":"features/journal-install.feature","title":"nothing the installer writes invokes a bare interpreter","status":"passed"}
+{"file":"features/journal-install.feature","title":"project instructions refresh in place","status":"passed"}
+{"file":"features/journal-install.feature","title":"reinstalling converges instead of duplicating","status":"passed"}
+{"file":"features/journal-install.feature","title":"the command doctor prints is one that clears the finding","status":"passed"}
+{"file":"features/journal-install.feature","title":"the command the install instructions tell you to type produces output","status":"passed"}
+{"file":"features/journal-install.feature","title":"the dry run is the whole plan","status":"passed"}
+{"file":"features/journal-install.feature","title":"the experimental capture flag without a named agent is refused","status":"passed"}
+{"file":"features/journal-install.feature","title":"the interpreter install chooses can actually run this package","status":"passed"}
+{"file":"features/journal-install.feature","title":"the registration lands where the agent itself reads it","status":"passed"}
+{"file":"features/journal-install.feature","title":"uninstall removes everything install wrote and nothing else","status":"passed"}
+{"file":"features/journal-library.feature","title":"a plain Node program journals without any server","status":"passed"}
+{"file":"features/journal-library.feature","title":"a reader can watch a live store without stopping the writer","status":"passed"}
+{"file":"features/journal-library.feature","title":"an import holding more nodes than the count guardrail is refused whole","status":"passed"}
+{"file":"features/journal-library.feature","title":"an import larger than the size guardrail is refused whole","status":"passed"}
+{"file":"features/journal-library.feature","title":"closing the store loses nothing that was staged","status":"passed"}
+{"file":"features/journal-library.feature","title":"closing the store loses nothing that was written","status":"passed"}
+{"file":"features/journal-library.feature","title":"events from any platform journal identically","status":"passed"}
+{"file":"features/journal-library.feature","title":"exports are portable across consumers","status":"passed"}
+{"file":"features/journal-library.feature","title":"library and server read the same truth","status":"passed"}
+{"file":"features/journal-library.feature","title":"the whole journal exports through the tool surface","status":"passed"}
+{"file":"features/journal-media.feature","title":"a dangling link is returned honestly, not repaired or hidden","status":"passed"}
+{"file":"features/journal-media.feature","title":"a media reference without a description is refused","status":"passed"}
+{"file":"features/journal-media.feature","title":"an attachment is journaled as description plus reference","status":"passed"}
+{"file":"features/journal-media.feature","title":"extracted metadata rides along verbatim","status":"passed"}
+{"file":"features/journal-media.feature","title":"filename and extension filters honor the same two-sided contract","status":"passed"}
+{"file":"features/journal-media.feature","title":"media can be recalled as a class","status":"passed"}
+{"file":"features/journal-media.feature","title":"media is recalled through its description's words","status":"passed"}
+{"file":"features/journal-media.feature","title":"several attachments are several entries","status":"passed"}
+{"file":"features/journal-media.feature","title":"the same file attached twice is two entries","status":"passed"}
+{"file":"features/journal-namespaces.feature","title":"a merge can carry a single entry, not the whole branch","status":"passed"}
+{"file":"features/journal-namespaces.feature","title":"a merge carries a subagent's journal into the trunk with provenance","status":"passed"}
+{"file":"features/journal-namespaces.feature","title":"a namespace cannot merge into itself","status":"passed"}
+{"file":"features/journal-namespaces.feature","title":"auto-capture lands in the namespace of the session that produced it","status":"passed"}
+{"file":"features/journal-namespaces.feature","title":"clearing one namespace leaves the others whole","status":"passed"}
+{"file":"features/journal-namespaces.feature","title":"dedup never reaches across namespaces","status":"passed"}
+{"file":"features/journal-namespaces.feature","title":"merged provenance is filterable and weightable at query time","status":"passed"}
+{"file":"features/journal-namespaces.feature","title":"merging the same lane twice adds nothing","status":"passed"}
+{"file":"features/journal-namespaces.feature","title":"resume pointers are scoped to their namespace","status":"passed"}
+{"file":"features/journal-namespaces.feature","title":"servers on different namespaces of one store serve concurrently","status":"passed"}
+{"file":"features/journal-namespaces.feature","title":"the drain serves namespaces nobody is serving","status":"passed"}
+{"file":"features/journal-namespaces.feature","title":"two servers sharing one namespace keep their sessions apart","status":"passed"}
+{"file":"features/journal-namespaces.feature","title":"writers in different namespaces never see each other by default","status":"passed"}
+{"file":"features/journal-orchestration.feature","title":"a new subagent starts from its role's prior trail and the plan it was spawned under","status":"passed"}
+{"file":"features/journal-orchestration.feature","title":"a new worktree is treated as a new subagent process","status":"passed"}
+{"file":"features/journal-orchestration.feature","title":"a restarted worktree session resumes its own thread","status":"passed"}
+{"file":"features/journal-orchestration.feature","title":"a subagent appends into the main lane with its writer and reference stamped","status":"passed"}
+{"file":"features/journal-orchestration.feature","title":"a subagent cannot retire the orchestrator's pointer","status":"passed"}
+{"file":"features/journal-orchestration.feature","title":"a subagent's tool-written note carries its own writer though it shares the session","status":"passed"}
+{"file":"features/journal-orchestration.feature","title":"references resolve one hop deep, the rest on request","status":"passed"}
+{"file":"features/journal-orchestration.feature","title":"the orchestrator finds the subagent's summary by search","status":"passed"}
+{"file":"features/journal-orchestration.feature","title":"the orchestrator reads the subagent's trail on its own","status":"passed"}
+{"file":"features/journal-orchestration.feature","title":"the session-start hook registers self and the server stamps rows from it","status":"passed"}
+{"file":"features/journal-policy.feature","title":"a contributor can add but never remove","status":"passed"}
+{"file":"features/journal-policy.feature","title":"a contributor server ingests captured events","status":"passed"}
+{"file":"features/journal-policy.feature","title":"a contributor's insert is a real write, not just a listed tool","status":"passed"}
+{"file":"features/journal-policy.feature","title":"a read-only server exposes only the reading tools","status":"passed"}
+{"file":"features/journal-policy.feature","title":"merging between namespaces requires full trust","status":"passed"}
+{"file":"features/journal-policy.feature","title":"reliance bookkeeping is a full-trust write a contributor export never makes","status":"passed"}
+{"file":"features/journal-recall.feature","title":"a broad \"what was I working on\" query surfaces the latest thread","status":"passed"}
+{"file":"features/journal-recall.feature","title":"a cold-started agent finds the active plan without knowing any IDs","status":"passed"}
+{"file":"features/journal-recall.feature","title":"a hit can be read in its conversational context","status":"passed"}
+{"file":"features/journal-recall.feature","title":"a hit on an oversized tool event returns a preview with an honest marker","status":"passed"}
+{"file":"features/journal-recall.feature","title":"a hit on conversational text returns the whole message","status":"passed"}
+{"file":"features/journal-recall.feature","title":"a keyword recalls the exact prior finding, not a paraphrase","status":"passed"}
+{"file":"features/journal-recall.feature","title":"a metadata filter narrows recall to matching entries only","status":"passed"}
+{"file":"features/journal-recall.feature","title":"a tool event's searchable reach extends past its displayed preview","status":"passed"}
+{"file":"features/journal-recall.feature","title":"a very long conversational message is findable by any of its words","status":"passed"}
+{"file":"features/journal-recall.feature","title":"bounding the indexed view is a configuration choice, not the default","status":"passed"}
+{"file":"features/journal-recall.feature","title":"recall needs no embedding model","status":"passed"}
+{"file":"features/journal-recall.feature","title":"retrieval performance is observable where the agent can act on it","status":"passed"}
+{"file":"features/journal-recall.feature","title":"superseded plans stop appearing as live pointers","status":"passed"}
+{"file":"features/journal-recall.feature","title":"superseding a missing id succeeds and names the miss","status":"passed"}
+{"file":"features/journal-recall.feature","title":"temporal questions can read newest first","status":"passed"}
+{"file":"features/journal-recall.feature","title":"temporal questions get temporal answers","status":"passed"}
+{"file":"features/journal-recall.feature","title":"the orientation surface stays small enough to be read","status":"passed"}
+{"file":"features/journal-reorientation.feature","title":"a bookmark that cannot be written is reported once and never blocks","status":"passed"}
+{"file":"features/journal-reorientation.feature","title":"a chapter referenced from another lane shows its referrer one hop deep","status":"passed"}
+{"file":"features/journal-reorientation.feature","title":"a chapter summary outranks a bookmark in search","status":"passed"}
+{"file":"features/journal-reorientation.feature","title":"a developer with no checkpoint is re-oriented from recent entries and nudged once a day","status":"passed"}
+{"file":"features/journal-reorientation.feature","title":"a fresh checkpoint of either kind lets the agent stop","status":"passed"}
+{"file":"features/journal-reorientation.feature","title":"a new bookmark supersedes the previous one","status":"passed"}
+{"file":"features/journal-reorientation.feature","title":"a pasted log shows as its first line and its length","status":"passed"}
+{"file":"features/journal-reorientation.feature","title":"a retracted chapter summary stays findable by search","status":"passed"}
+{"file":"features/journal-reorientation.feature","title":"a retraction becomes the live pointer and the chapter it names is superseded","status":"passed"}
+{"file":"features/journal-reorientation.feature","title":"a session that is not being journaled says so","status":"passed"}
+{"file":"features/journal-reorientation.feature","title":"a sprint that pushes the store past its byte budget asks nothing of the developer","status":"passed"}
+{"file":"features/journal-reorientation.feature","title":"a superseded bookmark stays searchable","status":"passed"}
+{"file":"features/journal-reorientation.feature","title":"an interval of 0 rounds is echoed back as off [1]","status":"passed"}
+{"file":"features/journal-reorientation.feature","title":"an interval of 1 round is echoed back as a bookmark at every stop [3]","status":"passed"}
+{"file":"features/journal-reorientation.feature","title":"an interval of 1000 rounds and 1 week is echoed back as honored, which is effectively off [4]","status":"passed"}
+{"file":"features/journal-reorientation.feature","title":"an interval of off is echoed back as off [2]","status":"passed"}
+{"file":"features/journal-reorientation.feature","title":"bookmarks without a chapter say that no chapter summary exists","status":"passed"}
+{"file":"features/journal-reorientation.feature","title":"doctor names a locked store as the cause with one command","status":"passed"}
+{"file":"features/journal-reorientation.feature","title":"no turn since the bookmark is said in one line","status":"passed"}
+{"file":"features/journal-reorientation.feature","title":"status labels each live pointer with its kind","status":"passed"}
+{"file":"features/journal-reorientation.feature","title":"the default interval trips when the newest checkpoint is 0 rounds and 0 minutes old [5]","status":"passed"}
+{"file":"features/journal-reorientation.feature","title":"the default interval trips when the newest checkpoint is 0 rounds and 45 minutes old [4]","status":"passed"}
+{"file":"features/journal-reorientation.feature","title":"the default interval trips when the newest checkpoint is 19 rounds and 44 minutes old [1]","status":"passed"}
+{"file":"features/journal-reorientation.feature","title":"the default interval trips when the newest checkpoint is 19 rounds and 46 minutes old [2]","status":"passed"}
+{"file":"features/journal-reorientation.feature","title":"the default interval trips when the newest checkpoint is 20 rounds and 0 minutes old [3]","status":"passed"}
+{"file":"features/journal-reorientation.feature","title":"the developer sees early that the session is being journaled","status":"passed"}
+{"file":"features/journal-reorientation.feature","title":"the packet after a clear carries the chapter, the bookmark and the tail","status":"passed"}
+{"file":"features/journal-reorientation.feature","title":"the packet says what it could not read when the store is locked","status":"passed"}
+{"file":"features/journal-reorientation.feature","title":"the stop hook asks for a bookmark when the interval has elapsed","status":"passed"}
+{"file":"features/journal-reorientation.feature","title":"the tail keeps its shape with 1 turns since the bookmark [1]","status":"passed"}
+{"file":"features/journal-reorientation.feature","title":"the tail keeps its shape with 10000 turns since the bookmark [4]","status":"passed"}
+{"file":"features/journal-reorientation.feature","title":"the tail keeps its shape with 5 turns since the bookmark [2]","status":"passed"}
+{"file":"features/journal-reorientation.feature","title":"the tail keeps its shape with 6 turns since the bookmark [3]","status":"passed"}
+{"file":"features/journal-search-modes.feature","title":"a chronological listing never receives the served default","status":"passed"}
+{"file":"features/journal-search-modes.feature","title":"a present embedding model changes nothing until asked","status":"unbound"}
+{"file":"features/journal-search-modes.feature","title":"a query of only near-universal tokens still matches","status":"passed"}
+{"file":"features/journal-search-modes.feature","title":"a zero role weight down-ranks — it never hides","status":"passed"}
+{"file":"features/journal-search-modes.feature","title":"adaptive count over a fused ranking discloses no cutoff rather than inventing one","status":"passed"}
+{"file":"features/journal-search-modes.feature","title":"adaptive expansion respects its cap and honesty on flat distributions","status":"passed"}
+{"file":"features/journal-search-modes.feature","title":"an adaptive query never receives the served recency default","status":"passed"}
+{"file":"features/journal-search-modes.feature","title":"dense fusion is an explicit opt-in that fuses, never replaces","status":"unbound"}
+{"file":"features/journal-search-modes.feature","title":"near-universal query tokens are pruned for speed, never at the cost of a discriminative hit","status":"passed"}
+{"file":"features/journal-search-modes.feature","title":"recency joins ranking as a fused rank list, never a score formula","status":"passed"}
+{"file":"features/journal-search-modes.feature","title":"result count can follow the score distribution instead of a fixed k","status":"passed"}
+{"file":"features/journal-search-modes.feature","title":"role weights are per-query, the store is untouched","status":"passed"}
+{"file":"features/journal-search-modes.feature","title":"small corpora are never pruned","status":"passed"}
+{"file":"features/journal-search-modes.feature","title":"the user's words outrank the assistant's paraphrase of them","status":"passed"}
+{"file":"features/journal-search-modes.feature","title":"without adaptive, top_k means exactly k — today's contract unchanged","status":"passed"}
+{"file":"features/journal-session-echo.feature","title":"a capture-disabled server's inserts keep their ladder attribution","status":"passed"}
+{"file":"features/journal-session-echo.feature","title":"a curated insert unresolved at write time is healed by its own echo","status":"passed"}
+{"file":"features/journal-session-echo.feature","title":"a dedup-hit echo cannot re-stamp the older original","status":"passed"}
+{"file":"features/journal-session-echo.feature","title":"a failed insert's echo heals nothing","status":"passed"}
+{"file":"features/journal-session-echo.feature","title":"an echo stranded by a crash heals the row on the next start","status":"passed"}
+{"file":"features/journal-session-echo.feature","title":"an exact insert-time attribution is never overwritten","status":"passed"}
+{"file":"features/journal-session-echo.feature","title":"an export taken before the drain shows the pre-heal state honestly","status":"passed"}
+{"file":"features/journal-session-echo.feature","title":"an insert whose input overflows the echo preview still correlates","status":"passed"}
+{"file":"features/journal-session-echo.feature","title":"identical concurrent inserts from two sessions disclose their ambiguity","status":"passed"}
+{"file":"features/journal-session-echo.feature","title":"the echo outranks a freshest-beacon guess that disagrees","status":"passed"}
+{"file":"features/journal-session-namespace.feature","title":"a beacon guess never publishes a namespace annotation","status":"passed"}
+{"file":"features/journal-session-namespace.feature","title":"a healed insert corroborates the session's namespace","status":"passed"}
+{"file":"features/journal-session-namespace.feature","title":"a status echo teaches the store which namespace a session's server serves","status":"passed"}
+{"file":"features/journal-session-namespace.feature","title":"an annotation whose server stopped heartbeating is not honored","status":"passed"}
+{"file":"features/journal-session-namespace.feature","title":"capture rows staged before the first echo keep today's routing","status":"passed"}
+{"file":"features/journal-session-namespace.feature","title":"neither rung resolves rather than borrowing another session's answer","status":"passed"}
+{"file":"features/journal-session-namespace.feature","title":"the session rung outranks the pid rung when both resolve","status":"passed"}
+{"file":"features/journal-sidecar.feature","title":"a classification the journal learns later still reaches the pane","status":"passed"}
+{"file":"features/journal-sidecar.feature","title":"a config kept as a symlink stays a symlink","status":"passed"}
+{"file":"features/journal-sidecar.feature","title":"a config that is not JSON at all is refused rather than overwritten","status":"passed"}
+{"file":"features/journal-sidecar.feature","title":"a drain that fails confesses rather than leaving yesterday's health up","status":"passed"}
+{"file":"features/journal-sidecar.feature","title":"a pane names its producer and the moment its numbers were taken","status":"passed"}
+{"file":"features/journal-sidecar.feature","title":"a reader never catches the pane half-written","status":"passed"}
+{"file":"features/journal-sidecar.feature","title":"a server that does not own the drain writes no pane","status":"passed"}
+{"file":"features/journal-sidecar.feature","title":"an encoding the reader cannot parse is repaired, not discarded","status":"passed"}
+{"file":"features/journal-sidecar.feature","title":"an entry the reader ignores is still the operator's","status":"passed"}
+{"file":"features/journal-sidecar.feature","title":"another tool's panes and settings survive the wiring","status":"passed"}
+{"file":"features/journal-sidecar.feature","title":"every signal family appears, including the ones with nothing to report","status":"passed"}
+{"file":"features/journal-sidecar.feature","title":"no pane exists before the first drain has run","status":"passed"}
+{"file":"features/journal-sidecar.feature","title":"shutting down cleanly does not leave a pane claiming a failure","status":"passed"}
+{"file":"features/journal-sidecar.feature","title":"text that entered the journal from outside cannot carry terminal control onto the pane","status":"passed"}
+{"file":"features/journal-sidecar.feature","title":"the first drain leaves a pane that a schema-blind reader accepts","status":"passed"}
+{"file":"features/journal-sidecar.feature","title":"the open threads pane names what the session is in the middle of","status":"passed"}
+{"file":"features/journal-sidecar.feature","title":"the pane is a function of the journal and the drain moment, and nothing else","status":"passed"}
+{"file":"features/journal-sidecar.feature","title":"the pane is rewritten on every drain, so its age is the drain's age","status":"passed"}
+{"file":"features/journal-sidecar.feature","title":"the trail pane grades the one thing it can stand behind","status":"passed"}
+{"file":"features/journal-sidecar.feature","title":"the trail pane reports what the journal is made of without grading it","status":"passed"}
+{"file":"features/journal-sidecar.feature","title":"the wiring is written for the operator, in the reader's own config","status":"passed"}
+{"file":"features/journal-sidecar.feature","title":"wiring twice is the same as wiring once","status":"passed"}
+{"file":"features/journal-storage.feature","title":"a budget the file cannot mean leaves the default in force","status":"passed"}
+{"file":"features/journal-storage.feature","title":"a crash mid-write never corrupts the store","status":"passed"}
+{"file":"features/journal-storage.feature","title":"a full disk fails loudly and corrupts nothing","status":"passed"}
+{"file":"features/journal-storage.feature","title":"a poison event cannot wedge ingestion","status":"passed"}
+{"file":"features/journal-storage.feature","title":"a store built by a deleted backend refuses loudly and loses nothing","status":"passed"}
+{"file":"features/journal-storage.feature","title":"a store that cannot get under budget says so","status":"passed"}
+{"file":"features/journal-storage.feature","title":"an additive migration also runs behind a backup","status":"passed"}
+{"file":"features/journal-storage.feature","title":"an over-budget store names the knob that raises its budget","status":"passed"}
+{"file":"features/journal-storage.feature","title":"concurrent sessions do not corrupt each other","status":"passed"}
+{"file":"features/journal-storage.feature","title":"curated synthesis outlives auto-captured bulk","status":"passed"}
+{"file":"features/journal-storage.feature","title":"deleted space is actually reclaimed","status":"passed"}
+{"file":"features/journal-storage.feature","title":"demotion archives before it shrinks","status":"passed"}
+{"file":"features/journal-storage.feature","title":"evicted content leaves a tombstone pointing at its archive","status":"passed"}
+{"file":"features/journal-storage.feature","title":"eviction demotes to cold archive, it never destroys","status":"passed"}
+{"file":"features/journal-storage.feature","title":"eviction refuses when it cannot archive","status":"passed"}
+{"file":"features/journal-storage.feature","title":"frequently relied-on history evicts last","status":"passed"}
+{"file":"features/journal-storage.feature","title":"only an explicit command destroys content","status":"passed"}
+{"file":"features/journal-storage.feature","title":"schema changes never eat a store","status":"passed"}
+{"file":"features/journal-storage.feature","title":"the byte budget and the session cap are the operator's to set, per project","status":"passed"}
+{"file":"features/journal-storage.feature","title":"the byte budget defaults to a size a sprint of subagents can fill","status":"passed"}
+{"file":"features/journal-storage.feature","title":"the search index is a bounded view, the journal is the record","status":"passed"}
+{"file":"features/journal-storage.feature","title":"the session cap the operator sets is the cap that bites","status":"passed"}
+{"file":"features/journal-storage.feature","title":"the store does not grow without bound","status":"passed"}
+{"file":"features/journal-storage.feature","title":"what goes in comes back out, byte for byte","status":"passed"}

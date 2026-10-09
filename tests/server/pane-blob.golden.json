@@ -1,0 +1,17 @@
+{
+  "v": 1,
+  "tool": "gherkin-trace",
+  "title": "trace",
+  "status": "ok",
+  "basis": { "label": "refresh", "at": "2026-08-01 14:10" },
+  "message": null,
+  "rows": [
+    { "label": "attention", "value": "3", "status": "alert", "detail": "1 breach, 2 orphans" },
+    { "label": "reviewed", "value": "8", "status": "ok" },
+    { "label": "heat", "value": "withheld", "status": "dark", "detail": "no natural break" },
+    { "label": "binding", "value": "dark", "status": "dark", "detail": "no run manifest" },
+    { "label": "fence", "value": "clean", "status": "ok", "spark": [2, 5, 3, 8] },
+    { "label": "exceptions", "value": "0", "status": "ok" },
+    { "label": "experimental", "value": "off", "status": "off" }
+  ]
+}

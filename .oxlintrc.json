@@ -1,0 +1,15 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["eslint", "typescript", "unicorn"],
+  "categories": { "correctness": "warn" },
+  "ignorePatterns": [
+    "dist/**",
+    "node_modules/**",
+    "benchmarks-ts/**",
+    "tests/**/fixtures/**"
+  ],
+  "rules": {
+    "eslint/no-unused-vars": "off",
+    "typescript/no-unused-vars": "off"
+  }
+}

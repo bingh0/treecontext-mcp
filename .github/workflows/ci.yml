@@ -1,0 +1,208 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# A superseded run's minutes buy nothing — cancel it when a newer push
+# arrives (this workflow runs on a limited monthly minute budget, with
+# macOS billed at 10x).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# What this is for, since it went red on 2026-08-01 and stayed red through five
+# releases without anyone noticing: every lane here has to be one whose failure
+# would have stopped a release that shipped. The Windows lanes matter most —
+# 0.0.13-beta and 0.0.14-beta were both Windows-only defects, and the lane that
+# should have caught them died in `npm ci` before running a single test.
+#
+# MINUTE DIET (2026-08-11, zero-spend CI ruling): the full three-OS matrix
+# is the RELEASE gate and runs on every tag push and every manual dispatch
+# — tagging without it is not a sanctioned path, and a release candidate
+# gets a dispatch run before the tag. Ordinary main pushes run the Linux
+# lanes only (~12 billed minutes instead of ~135: macOS bills 10x,
+# Windows 2x). The Windows/macOS lanes still guard every release exactly
+# as the paragraph above demands — they just no longer bill 10x on every
+# doc commit.
+jobs:
+  plan:
+    name: plan (full matrix on tags/dispatch, Linux on pushes)
+    runs-on: ubuntu-latest
+    outputs:
+      test-os: ${{ steps.set.outputs.test-os }}
+      package-os: ${{ steps.set.outputs.package-os }}
+    steps:
+      - id: set
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            echo 'test-os=["ubuntu-latest","macos-latest","windows-latest"]' >> "$GITHUB_OUTPUT"
+            echo 'package-os=["ubuntu-latest","macos-latest","windows-latest"]' >> "$GITHUB_OUTPUT"
+          else
+            echo 'test-os=["ubuntu-latest"]' >> "$GITHUB_OUTPUT"
+            echo 'package-os=["ubuntu-latest"]' >> "$GITHUB_OUTPUT"
+          fi
+
+  test:
+    name: test (${{ matrix.os }}, node ${{ matrix.node }})
+    needs: plan
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(needs.plan.outputs.test-os) }}
+        node: ['lts/*']
+        include:
+          # package.json says engines >=22, and a claim nothing executes is the
+          # failure mode this repo keeps writing releases about. One lane is
+          # enough: the floor is a runtime question, not an OS one.
+          - os: ubuntu-latest
+            node: '22'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+
+      # The dev tree may or may not compile better-sqlite3 from source — npm
+      # decides that, and either way it works. The property worth guarding is
+      # about the ARTIFACT, not this checkout, so it lives in the package job
+      # where a tarball exists to install. Asserting "no build ever happens"
+      # here was wrong: it failed every lane on a true statement about npm.
+      - name: the platform prebuild ships in the package
+        shell: bash
+        run: ls node_modules/better-sqlite3/prebuilds/
+
+      # journal-install's boundary scenarios ask the agent itself what it can
+      # see, and fail loudly rather than skip when it is absent — deliberately,
+      # because nobody asking the other side is what 0.0.9-beta shipped.
+      - name: install the reference agent CLI
+        run: npm i -g @anthropic-ai/claude-code
+
+      - run: npm run typecheck
+      - run: npm test
+
+  # Source passing is not the same as the shipped artifact working. Pack it,
+  # install it somewhere clean, and exercise it end to end.
+  package:
+    name: package (${{ matrix.os }})
+    needs: plan
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(needs.plan.outputs.package-os) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 'lts/*'
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Pack
+        run: npm pack
+
+      # The gate the pack script runs, run here too: a lockfile or a README
+      # naming a different version than package.json has already shipped twice.
+      - name: Release gate
+        run: npm run release-gate
+
+      # Drives the real tarball: global install into a throwaway prefix, run
+      # the binary, run `install` against a throwaway HOME, then grade every
+      # hook command it wrote with the same checker doctor ships. On the
+      # Windows lane this is the gate that would have caught 0.0.13 and 0.0.14
+      # — its own header said as much, and until now there was no Windows
+      # runner to say it to.
+      - name: Install smoke (the artifact, as a tester installs it)
+        run: npm run install-smoke
+
+      # The question a Windows tester actually asks: do I need Visual Studio?
+      # better-sqlite3 12.x did — with no prebuild for the running ABI it fell
+      # through to node-gyp, and `npm install` exited 1 on a machine without a
+      # toolchain. 13.x carries N-API binaries in the package instead. This
+      # proves that on every platform by making node-gyp unconditionally fail
+      # and requiring the install to succeed anyway.
+      - name: the artifact installs with no compiler available
+        shell: bash
+        run: |
+          cat > "$RUNNER_TEMP/fake-gyp.js" <<'EOF'
+          console.error('gyp ERR! simulated: this machine has no C++ toolchain')
+          process.exit(1)
+          EOF
+          export npm_config_node_gyp="$RUNNER_TEMP/fake-gyp.js"
+          export HOME="$RUNNER_TEMP/nocompiler-home"
+          mkdir -p "$HOME" "$RUNNER_TEMP/nocompiler"
+          npm install -g --prefix "$RUNNER_TEMP/nocompiler" ./treecontext-mcp-*.tgz --no-audit --no-fund
+          # npm puts the shim in different places per platform.
+          BIN="$RUNNER_TEMP/nocompiler/bin/treecontext"
+          [ -f "$BIN" ] || BIN="$RUNNER_TEMP/nocompiler/treecontext.cmd"
+          "$BIN" doctor 2>&1 | tee doctor.txt
+          grep -q "better-sqlite3: native binding loaded" doctor.txt
+
+      - name: Install the tarball into a clean project
+        shell: bash
+        working-directory: ${{ runner.temp }}
+        run: |
+          mkdir -p gate && cd gate
+          npm init -y >/dev/null
+          npm install "$GITHUB_WORKSPACE"/treecontext-mcp-*.tgz --no-audit --no-fund
+
+      - name: doctor must load the native binding
+        shell: bash
+        working-directory: ${{ runner.temp }}/gate
+        run: |
+          node node_modules/treecontext-mcp/dist/server/cli.js doctor | tee out.txt
+          grep -q "\[ok\]   better-sqlite3" out.txt
+
+      - name: Store round-trip against the packaged build
+        shell: bash
+        working-directory: ${{ runner.temp }}/gate
+        run: |
+          cat > smoke.mjs <<'EOF'
+          import BetterSqlite3 from 'better-sqlite3'
+          import { FlatStore } from 'treecontext-mcp'
+          import { wrapBetterSqlite } from 'treecontext-mcp/persistence/node'
+          import { mkdtempSync } from 'node:fs'
+          import { tmpdir } from 'node:os'
+          import { join } from 'node:path'
+
+          const dbPath = join(mkdtempSync(join(tmpdir(), 'tc-')), 'journal.db')
+          const store = await FlatStore.open({
+            database: wrapBetterSqlite(new BetterSqlite3(dbPath)),
+            ownsDatabase: true,
+          })
+          const { nodeId } = await store.insert('the beta ships as a tarball', { metadata: { role: 'note' } })
+          await store.insert('unrelated: the turbine schedule slipped', { metadata: { role: 'user' } })
+          const hits = await store.query('beta tarball', { topK: 3 })
+          const exported = JSON.parse(store.exportJson({ nodeId }))
+          await store.close()
+
+          // Inspect SQLite directly — the charter's verification rule.
+          const raw = new BetterSqlite3(dbPath, { readonly: true })
+          const rows = raw.prepare('SELECT count(*) c FROM nodes').get().c
+          raw.close()
+
+          if (hits.length < 1) throw new Error('query returned nothing')
+          if (exported.nodes.length !== 1) throw new Error('export round-trip failed')
+          if (rows !== 2) throw new Error(`expected 2 rows in sqlite, found ${rows}`)
+          console.log('round-trip ok:', hits.length, 'hit(s),', rows, 'rows')
+          EOF
+          node smoke.mjs
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 'lts/*'
+          cache: npm
+      - run: npm ci
+      - run: npm run lint:fast

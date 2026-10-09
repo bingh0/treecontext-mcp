@@ -1,0 +1,250 @@
+{"run-manifest":1}
+{"file":"backup-cli.feature","title":"a forced backup replaces the destination","status":"passed"}
+{"file":"backup-cli.feature","title":"backup copies the named store's rows","status":"passed"}
+{"file":"backup-cli.feature","title":"backup refuses to overwrite an existing destination","status":"passed"}
+{"file":"backup-cli.feature","title":"backup without a destination is an error","status":"passed"}
+{"file":"backup-lifecycle.feature","title":"a destructive migration records a success verdict at completion","status":"passed"}
+{"file":"backup-lifecycle.feature","title":"a migration whose completion comparison fails records a failed verdict","status":"passed"}
+{"file":"backup-lifecycle.feature","title":"a retry that kept an earlier backup records no verdict","status":"passed"}
+{"file":"backup-lifecycle.feature","title":"stores prune spares a live-rollback backup just like rm","status":"passed"}
+{"file":"backup-lifecycle.feature","title":"stores prune takes a stray's verified backup with the store","status":"passed"}
+{"file":"backup-lifecycle.feature","title":"stores prune without --yes previews the removals and the spare rule","status":"passed"}
+{"file":"backup-lifecycle.feature","title":"stores rm names the backup it would take","status":"passed"}
+{"file":"backup-lifecycle.feature","title":"stores rm on a shell holding both an orphaned verified backup and a live rollback","status":"passed"}
+{"file":"backup-lifecycle.feature","title":"stores rm reclaims a shell holding only an orphaned verified backup","status":"passed"}
+{"file":"backup-lifecycle.feature","title":"stores rm refuses a shell that holds only a spared backup","status":"passed"}
+{"file":"backup-lifecycle.feature","title":"stores rm spares a backup whose verdict is failed [1]","status":"passed"}
+{"file":"backup-lifecycle.feature","title":"stores rm spares a backup whose verdict is missing [2]","status":"passed"}
+{"file":"backup-lifecycle.feature","title":"stores rm with --yes takes verified backups with the store","status":"passed"}
+{"file":"backup-lifecycle.feature","title":"stores rm without --yes names an orphaned verified backup as reclaimable","status":"passed"}
+{"file":"backup-sweep.feature","title":"a --yes sweep deletes every eligible backup and reports the freed total","status":"passed"}
+{"file":"backup-sweep.feature","title":"a --yes sweep refuses a backup the backup file itself cannot be opened [6]","status":"passed"}
+{"file":"backup-sweep.feature","title":"a --yes sweep refuses a backup the backup has no recorded migration verdict [4]","status":"passed"}
+{"file":"backup-sweep.feature","title":"a --yes sweep refuses a backup the backup is corrupt in a way that still opens [7]","status":"passed"}
+{"file":"backup-sweep.feature","title":"a --yes sweep refuses a backup the live store fails its integrity check [2]","status":"passed"}
+{"file":"backup-sweep.feature","title":"a --yes sweep refuses a backup the live store file is missing [1]","status":"passed"}
+{"file":"backup-sweep.feature","title":"a --yes sweep refuses a backup the live store is below the current schema version [3]","status":"passed"}
+{"file":"backup-sweep.feature","title":"a --yes sweep refuses a backup the live store is locked by another process [8]","status":"passed"}
+{"file":"backup-sweep.feature","title":"a --yes sweep refuses a backup the recorded migration verdict is failure [5]","status":"passed"}
+{"file":"backup-sweep.feature","title":"a --yes sweep refuses a verified backup whose live store is gone and names the reclaim path","status":"passed"}
+{"file":"backup-sweep.feature","title":"a --yes sweep removes a verdict sidecar whose backup is gone","status":"passed"}
+{"file":"backup-sweep.feature","title":"a --yes sweep that cannot delete a backup reports it and exits partial","status":"passed"}
+{"file":"backup-sweep.feature","title":"a --yes sweep that cannot remove an orphaned verdict sidecar exits partial","status":"passed"}
+{"file":"backup-sweep.feature","title":"a bare sweep lists every backup and deletes nothing","status":"passed"}
+{"file":"backup-sweep.feature","title":"a bare sweep reports an orphaned verdict sidecar and leaves it","status":"passed"}
+{"file":"backup-sweep.feature","title":"a mixed sweep deletes the eligible and reports each refusal","status":"passed"}
+{"file":"backup-sweep.feature","title":"a sidecar stranded by its own backup's deletion is not a partial completion","status":"passed"}
+{"file":"backup-sweep.feature","title":"a sweep scoped to a store that does not exist refuses by name","status":"passed"}
+{"file":"backup-sweep.feature","title":"a sweep scoped to one store touches only that store's backups","status":"passed"}
+{"file":"backup-sweep.feature","title":"a sweep with nothing to do says so and succeeds","status":"passed"}
+{"file":"backup-sweep.feature","title":"backup generations of one store are judged independently","status":"passed"}
+{"file":"backup-sweep.feature","title":"hand-made .bak files are never swept","status":"passed"}
+{"file":"backup-sweep.feature","title":"the dry-run already reports what a --yes run would refuse","status":"passed"}
+{"file":"backup-visibility.feature","title":"doctor is honest about an orphan the CLI cannot address","status":"passed"}
+{"file":"backup-visibility.feature","title":"doctor labels a backup that has no recorded migration verdict","status":"passed"}
+{"file":"backup-visibility.feature","title":"doctor lists an orphaned verdict sidecar and names the sweep","status":"passed"}
+{"file":"backup-visibility.feature","title":"doctor points out an orphaned spared backup","status":"passed"}
+{"file":"backup-visibility.feature","title":"doctor points out an orphaned verified backup and names the reclaim command","status":"passed"}
+{"file":"backup-visibility.feature","title":"doctor prints no backup section when no backups exist","status":"passed"}
+{"file":"backup-visibility.feature","title":"doctor reports each pre-migration backup and the total","status":"passed"}
+{"file":"backup-visibility.feature","title":"every backup warning carries its remediation in the fix channel","status":"passed"}
+{"file":"backup-visibility.feature","title":"files not matching the pre-migration pattern are invisible to doctor","status":"passed"}
+{"file":"config-file.feature","title":"a config flag with no path is a parse error","status":"passed"}
+{"file":"config-file.feature","title":"a corrupt config file does not block doctor","status":"passed"}
+{"file":"config-file.feature","title":"a corrupt config file does not block install","status":"passed"}
+{"file":"config-file.feature","title":"a set-but-missing environment config is skipped, not fatal","status":"passed"}
+{"file":"config-file.feature","title":"a wrongly-typed value is dropped, never fatal","status":"passed"}
+{"file":"config-file.feature","title":"an out-of-range value is dropped like a mistyped one","status":"passed"}
+{"file":"config-file.feature","title":"discovery prefers environment over project over global","status":"passed"}
+{"file":"config-file.feature","title":"install adds capture only when it is missing","status":"passed"}
+{"file":"config-file.feature","title":"install leaves an explicit capture=false alone","status":"passed"}
+{"file":"config-file.feature","title":"install side-files a corrupt config before replacing it","status":"passed"}
+{"file":"config-file.feature","title":"serve still refuses a corrupt config loudly","status":"passed"}
+{"file":"config-file.feature","title":"the environment config is used when it exists","status":"passed"}
+{"file":"content-codec.feature","title":"a legacy plain-TEXT row decodes unchanged","status":"passed"}
+{"file":"content-codec.feature","title":"a zstd row on a runtime without zstd is refused, not corrupted","status":"passed"}
+{"file":"content-codec.feature","title":"an unrecognized flag byte is treated as store corruption","status":"passed"}
+{"file":"content-codec.feature","title":"large strings round-trip through zstd compression","status":"passed"}
+{"file":"content-codec.feature","title":"non-ASCII and NUL-containing content round-trips exactly","status":"passed"}
+{"file":"content-codec.feature","title":"small strings round-trip as plain TEXT, unchanged legacy shape","status":"passed"}
+{"file":"content-codec.feature","title":"zstd-unavailable runtimes fall back to the flag-0x00 plain form","status":"passed"}
+{"file":"debug-log-sharing.feature","title":"captured prompts never reach the debug logs","status":"passed"}
+{"file":"debug-log-sharing.feature","title":"doctor with dump-logs is additive","status":"passed"}
+{"file":"debug-log-sharing.feature","title":"doctor's crash excerpt is redacted","status":"passed"}
+{"file":"debug-log-sharing.feature","title":"dumped logs replace the home directory as they print","status":"passed"}
+{"file":"debug-log-sharing.feature","title":"the file on disk keeps full fidelity","status":"passed"}
+{"file":"fingerprint-digest.feature","title":"a store carrying a false collision heals when it climbs to the digest","status":"passed"}
+{"file":"fingerprint-digest.feature","title":"the collision check reads zero on the migrated store, and names the leftover key for what it is","status":"passed"}
+{"file":"fingerprint-digest.feature","title":"two tool calls differing only in a middle identifier stay two entries","status":"passed"}
+{"file":"flat-store-c4-read-view.feature","title":"a demoted full-fidelity row advertises its archived tail and stays preview-findable","status":"passed"}
+{"file":"flat-store-c4-read-view.feature","title":"a full-fidelity hit returns the preview and advertises the rest","status":"passed"}
+{"file":"flat-store-c4-read-view.feature","title":"export returns the raw full content the marker advertises","status":"passed"}
+{"file":"flat-store-c4-read-view.feature","title":"rows without the boundary marker are returned whole, as today","status":"passed"}
+{"file":"flat-store-c4-read-view.feature","title":"supersede and demotion metadata rewrites never ghost the contentless index","status":"passed"}
+{"file":"flat-store-c4-read-view.feature","title":"the full tail never leaks through a conversation window","status":"passed"}
+{"file":"flat-store-c4-read-view.feature","title":"the marker text is not findable","status":"passed"}
+{"file":"flat-store-conversation-window.feature","title":"a hit is never duplicated as its own neighbor","status":"passed"}
+{"file":"flat-store-conversation-window.feature","title":"a hit that is itself a user message has no anchor","status":"passed"}
+{"file":"flat-store-conversation-window.feature","title":"a hit with no session key gets an omitted, empty window","status":"passed"}
+{"file":"flat-store-conversation-window.feature","title":"a neighbor over 700 chars is truncated but the hit itself never is","status":"passed"}
+{"file":"flat-store-conversation-window.feature","title":"a returned hit is never also another hit's neighbor","status":"passed"}
+{"file":"flat-store-conversation-window.feature","title":"an anchor already present in the reply is referenced, not duplicated","status":"passed"}
+{"file":"flat-store-conversation-window.feature","title":"an oversized anchor is truncated at its own larger bound","status":"passed"}
+{"file":"flat-store-conversation-window.feature","title":"created_at ties are broken by rowid","status":"passed"}
+{"file":"flat-store-conversation-window.feature","title":"interleaved sessions never bleed into each other's window","status":"passed"}
+{"file":"flat-store-conversation-window.feature","title":"the MCP conversation_window parameter reaches the FlatStore query path end-to-end","status":"passed"}
+{"file":"flat-store-conversation-window.feature","title":"the anchor is drawn only from the hit's own session","status":"passed"}
+{"file":"flat-store-conversation-window.feature","title":"the anchor recovers the nearest preceding user message","status":"passed"}
+{"file":"flat-store-conversation-window.feature","title":"the first entry of a session has no cross-session bleed","status":"passed"}
+{"file":"flat-store-conversation-window.feature","title":"two hits one apart produce disjoint neighbor sets, first-claim to the first-returned hit","status":"passed"}
+{"file":"flat-store-conversation-window.feature","title":"window 0 is byte-identical to today's results","status":"passed"}
+{"file":"flat-store-conversation-window.feature","title":"window 2 on a 7-entry session returns 2 before and 2 after, chronologically","status":"passed"}
+{"file":"flat-store-dedup.feature","title":"Stop-hook double-fire inside the window still dedups","status":"passed"}
+{"file":"flat-store-dedup.feature","title":"a curated insert never dedups onto an auto-capture node","status":"passed"}
+{"file":"flat-store-dedup.feature","title":"a dedup hit re-arms resume-pointer tags on the surviving note","status":"passed"}
+{"file":"flat-store-dedup.feature","title":"a repeated user directive outside the window becomes its own node","status":"passed"}
+{"file":"flat-store-dedup.feature","title":"anchors resolve to the current occurrence, not a stale first one","status":"passed"}
+{"file":"flat-store-dedup.feature","title":"curated notes keep global idempotent dedup across sessions","status":"passed"}
+{"file":"flat-store-dedup.feature","title":"dedup compares capture timestamps, not drain time","status":"passed"}
+{"file":"flat-store-dedup.feature","title":"identical content from another session inside the window is a distinct event","status":"passed"}
+{"file":"flat-store-dedup.feature","title":"the dedup window slides with the newest occurrence","status":"passed"}
+{"file":"flat-store-dedup.feature","title":"the fingerprint map rebuilds its dedup classes on reopen","status":"passed"}
+{"file":"flat-store-role-weights.feature","title":"a roleWeights override changes the ranking monotonically","status":"passed"}
+{"file":"flat-store-role-weights.feature","title":"all-ones weights reproduce the legacy single-column ranking exactly","status":"passed"}
+{"file":"flat-store-role-weights.feature","title":"default weights rank a user-column match above an equal assistant-column match","status":"passed"}
+{"file":"flat-store-role-weights.feature","title":"the MCP role_weights parameter reaches the ranking","status":"passed"}
+{"file":"flat-store-role-weights.feature","title":"weight zero still returns assistant-only matches, ranked last","status":"passed"}
+{"file":"fts-dual-cap.feature","title":"FlatStore query hits return the full decoded content, never truncated by the index cap","status":"passed"}
+{"file":"fts-dual-cap.feature","title":"a marker-less legacy row recomputes from the frozen 2000-char cap","status":"passed"}
+{"file":"fts-dual-cap.feature","title":"a marker-less prose assistant row recomputes from the frozen 4000-char cap","status":"passed"}
+{"file":"fts-dual-cap.feature","title":"insert then delete leaves the FTS index empty for a compressed row","status":"passed"}
+{"file":"fts-dual-cap.feature","title":"insert then delete leaves the FTS index empty for a plain row","status":"passed"}
+{"file":"fts-dual-cap.feature","title":"insert then delete leaves the FTS index empty when the index text is a proper prefix of content","status":"passed"}
+{"file":"fts-dual-cap.feature","title":"insert then update keeps the FTS index in sync","status":"passed"}
+{"file":"hook-dispatch.feature","title":"a corrupt config file cannot break a hook","status":"passed"}
+{"file":"hook-dispatch.feature","title":"a hook is named by its first token","status":"passed"}
+{"file":"hook-dispatch.feature","title":"a known event with unparseable input exits zero","status":"passed"}
+{"file":"hook-dispatch.feature","title":"an unknown event exits zero and logs its name","status":"passed"}
+{"file":"hook-dispatch.feature","title":"junk in place of the event still exits zero","status":"passed"}
+{"file":"ingestion-fidelity.feature","title":"a backlog drain preserves intra-session chronology","status":"passed"}
+{"file":"ingestion-fidelity.feature","title":"a batch full of poison rows self-heals","status":"passed"}
+{"file":"ingestion-fidelity.feature","title":"a dead-letter node never embeds the poison payload","status":"passed"}
+{"file":"ingestion-fidelity.feature","title":"a large backlog drains completely with no row-count drop","status":"passed"}
+{"file":"ingestion-fidelity.feature","title":"a malformed recovery snapshot is dead-lettered, never silently dropped","status":"passed"}
+{"file":"ingestion-fidelity.feature","title":"a poison row dead-letters after three attempts instead of wedging the drain","status":"passed"}
+{"file":"ingestion-fidelity.feature","title":"a rescued old session is still honestly subject to retention","status":"passed"}
+{"file":"ingestion-fidelity.feature","title":"a session whose tombstone cannot be written is not dropped","status":"passed"}
+{"file":"ingestion-fidelity.feature","title":"nodes carry capture time, not drain time","status":"passed"}
+{"file":"ingestion-fidelity.feature","title":"the byte valve drops oldest whole sessions and leaves one tombstone each","status":"passed"}
+{"file":"ingestion-fidelity.feature","title":"the newest session is never dropped, even when it alone exceeds the valve","status":"passed"}
+{"file":"ingestion-fidelity.feature","title":"tombstones outlive retention","status":"passed"}
+{"file":"output-shielding.feature","title":"a write failure returns the response inline","status":"passed"}
+{"file":"output-shielding.feature","title":"an oversize export is shielded the same way","status":"passed"}
+{"file":"output-shielding.feature","title":"an oversize query response is replaced by a file reference","status":"passed"}
+{"file":"output-shielding.feature","title":"output exactly at the threshold stays inline","status":"passed"}
+{"file":"output-shielding.feature","title":"status is never shielded","status":"passed"}
+{"file":"output-shielding.feature","title":"the file lands under the operator's own roof by default","status":"passed"}
+{"file":"output-shielding.feature","title":"the shutdown sweep deletes only expired files this module minted","status":"passed"}
+{"file":"retention-demotion.feature","title":"a demoted full-view row narrows to the floor but its tail survives the shrink","status":"passed"}
+{"file":"retention-demotion.feature","title":"a demoted pre-expansion row is query-findable exactly as before demotion","status":"passed"}
+{"file":"retention-demotion.feature","title":"a row whose demotion floor is empty is never demoted","status":"passed"}
+{"file":"retention-demotion.feature","title":"a row whose shrink would reclaim nothing is left intact","status":"passed"}
+{"file":"retention-demotion.feature","title":"deletion at the far horizons still happens exactly as before, ahead of demotion","status":"passed"}
+{"file":"retention-demotion.feature","title":"demotion never touches protected rows even when they are the oldest","status":"passed"}
+{"file":"retention-demotion.feature","title":"demotion refuses when there is no archive destination","status":"passed"}
+{"file":"retention-demotion.feature","title":"importing the demotion archive restores a stump to the full row","status":"passed"}
+{"file":"retention-demotion.feature","title":"tool bulk demotes before conversational prose","status":"passed"}
+{"file":"role-weighted-fts.feature","title":"a query naming a column is not a column filter","status":"passed"}
+{"file":"role-weighted-fts.feature","title":"an omitted trailing weight silently means one point zero","status":"passed"}
+{"file":"role-weighted-fts.feature","title":"delete and update round-trip cleanly for compressed rows","status":"passed"}
+{"file":"role-weighted-fts.feature","title":"insert routes content to exactly one column by role attribution","status":"passed"}
+{"file":"role-weighted-fts.feature","title":"metadata edits between insert and delete do not corrupt the index","status":"passed"}
+{"file":"role-weighted-fts.feature","title":"migration is atomic — a mid-rebuild failure leaves the legacy index intact","status":"passed"}
+{"file":"role-weighted-fts.feature","title":"migration rebuilds a legacy index and every old row stays findable","status":"passed"}
+{"file":"role-weighted-fts.feature","title":"role weights are validated at the query surface","status":"passed"}
+{"file":"role-weighted-fts.feature","title":"summaries remain unindexed across the migration","status":"passed"}
+{"file":"role-weighted-fts.feature","title":"the rebuild runs exactly once","status":"passed"}
+{"file":"stop.feature","title":"a re-fire on a text-free turn does not stage the same response twice","status":"passed"}
+{"file":"stop.feature","title":"extracts the last assistant text block, skipping a trailing tool_use-only turn","status":"passed"}
+{"file":"stop.feature","title":"returns null when the transcript file does not exist","status":"passed"}
+{"file":"stop.feature","title":"returns null when the transcript has no assistant text at all","status":"passed"}
+{"file":"stop.feature","title":"the hook stages nothing when transcript_path is absent","status":"passed"}
+{"file":"stop.feature","title":"the hook stages the extracted text as an assistant row with no tool_name","status":"passed"}
+{"file":"store-as-arbiter.feature","title":"a pre-arbiter store climbs the ladder losslessly","status":"passed"}
+{"file":"store-as-arbiter.feature","title":"an expired lease is reclaimed and an active one refused","status":"passed"}
+{"file":"store-as-arbiter.feature","title":"the doctor's view of role holders is one read-only SELECT","status":"passed"}
+{"file":"store-as-arbiter.feature","title":"two drains claim disjoint batches","status":"passed"}
+{"file":"store-as-arbiter.feature","title":"two same-namespace library writers cannot double a curated entry","status":"passed"}
+{"file":"store-bindings.feature","title":"a corrupt bindings file is side-filed, never overwritten","status":"passed"}
+{"file":"store-bindings.feature","title":"a deep backlog with no capture gaps warns that nothing is draining","status":"passed"}
+{"file":"store-bindings.feature","title":"a directory bound under another spelling of its own path keeps its journal","status":"passed"}
+{"file":"store-bindings.feature","title":"a hand-written .git file cannot steal a path-bound project's journal","status":"passed"}
+{"file":"store-bindings.feature","title":"a held bindings lock defers the write, never the answer","status":"passed"}
+{"file":"store-bindings.feature","title":"a legacy sticky answers a read-only lookup","status":"passed"}
+{"file":"store-bindings.feature","title":"a linked worktree resolves to the project it was cut from","status":"passed"}
+{"file":"store-bindings.feature","title":"a lock left by a dead writer cannot block persistence","status":"passed"}
+{"file":"store-bindings.feature","title":"a monorepo sibling can never be handed the other sibling's journal","status":"passed"}
+{"file":"store-bindings.feature","title":"a pair whose git store never landed on disk is a dangling binding, not a split","status":"passed"}
+{"file":"store-bindings.feature","title":"a project that gains a remote keeps its journal","status":"passed"}
+{"file":"store-bindings.feature","title":"a repo-local core.worktree cannot point identity at another project","status":"passed"}
+{"file":"store-bindings.feature","title":"a store merely named like a derived split is not reported","status":"passed"}
+{"file":"store-bindings.feature","title":"a symlinked bindings file is refused for reading and writing","status":"passed"}
+{"file":"store-bindings.feature","title":"an already-bound project is never re-pointed by succession","status":"passed"}
+{"file":"store-bindings.feature","title":"an unrecognized bindings version is preserved the same way","status":"passed"}
+{"file":"store-bindings.feature","title":"an unsafe stored value is dropped and re-derived while its neighbors survive","status":"passed"}
+{"file":"store-bindings.feature","title":"backup never mints a binding for an unbound directory","status":"passed"}
+{"file":"store-bindings.feature","title":"concurrent first resolutions all keep their bindings","status":"passed"}
+{"file":"store-bindings.feature","title":"doctor counts the dedup keys that cover more than one content","status":"passed"}
+{"file":"store-bindings.feature","title":"doctor names a bound store that has never held anything","status":"passed"}
+{"file":"store-bindings.feature","title":"doctor names a split without writing a binding","status":"passed"}
+{"file":"store-bindings.feature","title":"doctor reports the capture debt of the store this directory is bound to","status":"passed"}
+{"file":"store-bindings.feature","title":"git init above a bound subdirectory discloses, never adopts","status":"passed"}
+{"file":"store-bindings.feature","title":"injected git config cannot lend a project a remote it does not have","status":"passed"}
+{"file":"store-bindings.feature","title":"lookup reports no binding rather than an unsafe value","status":"passed"}
+{"file":"store-bindings.feature","title":"symlinked working directories of different depth cannot collapse two projects","status":"passed"}
+{"file":"store-bindings.feature","title":"the ssh and https spellings of one remote share a store","status":"passed"}
+{"file":"store-bindings.feature","title":"two raw URL forms bound to different stores fail closed","status":"passed"}
+{"file":"stores-list.feature","title":"a shell directory is labeled as one","status":"passed"}
+{"file":"stores-list.feature","title":"a shell holding a zero-byte backup shows 0B, not an empty cell","status":"passed"}
+{"file":"stores-list.feature","title":"a stray home-hash store is labeled","status":"passed"}
+{"file":"stores-list.feature","title":"an empty stores directory reports itself plainly","status":"passed"}
+{"file":"stores-list.feature","title":"an unopenable database shows dashes, not a crash","status":"passed"}
+{"file":"stores-list.feature","title":"backup bytes are split out of the size column","status":"passed"}
+{"file":"stores-list.feature","title":"the wal sibling is not part of the size column","status":"passed"}
+{"file":"stores-list.feature","title":"user backups are invisible to the backups column","status":"passed"}
+{"file":"stores-merge.feature","title":"a curated entry's protections travel with it","status":"passed"}
+{"file":"stores-merge.feature","title":"a held drain lease on the destination refuses the merge","status":"passed"}
+{"file":"stores-merge.feature","title":"a schema-version mismatch is refused rather than migrated","status":"passed"}
+{"file":"stores-merge.feature","title":"a source entry whose content already lives in the destination is skipped as a duplicate","status":"passed"}
+{"file":"stores-merge.feature","title":"a source holding a non-leaf row is refused","status":"passed"}
+{"file":"stores-merge.feature","title":"a source id already present under different content is an id conflict","status":"passed"}
+{"file":"stores-merge.feature","title":"a source row below depth 0 is refused","status":"passed"}
+{"file":"stores-merge.feature","title":"a source with an undrained staging backlog is refused","status":"passed"}
+{"file":"stores-merge.feature","title":"a store directory that is a symlink outside the root is refused","status":"passed"}
+{"file":"stores-merge.feature","title":"a store name that reaches outside the stores root is refused","status":"passed"}
+{"file":"stores-merge.feature","title":"an agent lane in the source survives the merge","status":"passed"}
+{"file":"stores-merge.feature","title":"an alias symlinked to the real store refuses a self-merge","status":"passed"}
+{"file":"stores-merge.feature","title":"an undecodable source row is skipped and the rest of the merge lands","status":"passed"}
+{"file":"stores-merge.feature","title":"merging a split pair leaves one journal holding both","status":"passed"}
+{"file":"stores-merge.feature","title":"merging a store into itself is refused","status":"passed"}
+{"file":"stores-merge.feature","title":"merging twice imports nothing the second time","status":"passed"}
+{"file":"stores-merge.feature","title":"merging without a backup of both stores is refused","status":"passed"}
+{"file":"stores-merge.feature","title":"repointing collapses the split and doctor reads clean","status":"passed"}
+{"file":"stores-merge.feature","title":"the merge command doctor advises actually parses","status":"passed"}
+{"file":"stores-merge.feature","title":"without the repoint flag the merge names the command that finishes the job","status":"passed"}
+{"file":"telemetry-privacy.feature","title":"query telemetry stays off without the opt-in","status":"passed"}
+{"file":"telemetry-privacy.feature","title":"session stats carry counts, never content","status":"passed"}
+{"file":"telemetry-privacy.feature","title":"telemetry keys are bounded by the server, not the caller","status":"passed"}
+{"file":"telemetry-privacy.feature","title":"the opted-in debug fragment is bounded at forty characters","status":"passed"}
+{"file":"tool-event-fidelity.feature","title":"a Claude Code-shaped payload's tool_response is captured as the output","status":"passed"}
+{"file":"tool-event-fidelity.feature","title":"a new hook binary degrades cleanly against a not-yet-migrated database","status":"passed"}
+{"file":"tool-event-fidelity.feature","title":"an event that fits its caps stages exactly what it stages today","status":"passed"}
+{"file":"tool-event-fidelity.feature","title":"an oversized tool event stages preview plus full tail with the boundary recorded","status":"passed"}
+{"file":"tool-event-fidelity.feature","title":"identical previews with different full outputs are distinct nodes","status":"passed"}
+{"file":"tool-event-fidelity.feature","title":"ingestion carries the boundary into node metadata verbatim","status":"passed"}
+{"file":"tool-event-fidelity.feature","title":"shielded outputs never enter a tail, but an overflowed input still does","status":"passed"}
+{"file":"tool-event-fidelity.feature","title":"the composed row respects the store safety cap by cutting the tail, never the preview","status":"passed"}
+{"file":"tool-event-fidelity.feature","title":"the index boundary is measured in code units, not bytes","status":"passed"}
+{"file":"user-prompt-fidelity.feature","title":"a post-expansion capture is findable by its last word","status":"passed"}
+{"file":"user-prompt-fidelity.feature","title":"a pre-expansion row keeps its frozen 2000-char searchable view","status":"passed"}
+{"file":"user-prompt-fidelity.feature","title":"a user message longer than 2000 chars is staged in full","status":"passed"}
