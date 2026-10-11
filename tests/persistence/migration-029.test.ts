@@ -6,9 +6,10 @@
  * build, and every row is read straight from SQLite.
  */
 import { describe, expect, it } from 'vitest'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { rmTree } from '../helpers/fs.js'
 import BetterSqlite3 from 'better-sqlite3'
 import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
 import { FlatStore } from '../../src/flat-store.js'
@@ -52,8 +53,13 @@ describe('migration 029 (D263)', () => {
       // A row whose metadata does not parse.
       await put('invalid', 'a row whose metadata is an array', { note: 'x' })
       await put('nullMeta', 'a row with no metadata', { note: 'y' })
-      registerSubagent(wrapBetterSqlite(new BetterSqlite3(path)), S, 'a-reg', null,
+      // Its own connection, closed before the directory goes: a handle left
+      // open here is what made the temp dir unremovable on Windows (the
+      // beta.2 matrix, 2026-10-11: EPERM at the final rmSync).
+      const reg = new BetterSqlite3(path)
+      registerSubagent(wrapBetterSqlite(reg), S, 'a-reg', null,
         { worktree: null, branch: null, cwd: dir, toplevel: null, commonDir: null }, 1)
+      reg.close()
       await store.close()
 
       const raw = new BetterSqlite3(path)
@@ -98,7 +104,7 @@ describe('migration 029 (D263)', () => {
         expect(after[k], k).toEqual(before[k])
       }
     } finally {
-      rmSync(dir, { recursive: true, force: true })
+      rmTree(dir)
     }
   })
 })

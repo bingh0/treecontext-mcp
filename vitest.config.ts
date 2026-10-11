@@ -13,7 +13,11 @@ export default defineConfig({
     // the two whole-journal export scenarios take 90-200 s (3-5 s on
     // Linux) — the runner's per-insert cost, not a product path, which the
     // export itself shows by doing nothing per row.
-    testTimeout: process.platform === 'win32' ? 600_000 : 30_000,
+    // Elsewhere, 120 s: the mature-journal seeds behind the broad
+    // orientation scenarios (D266) take ~7 s on a developer machine and
+    // crossed 30 s on the hosted Linux runner in the beta.2 matrix
+    // (2026-10-11, Node 22 lane) — runner load, not a product path.
+    testTimeout: process.platform === 'win32' ? 600_000 : 120_000,
     // The merged provider: vitest's V8 collector for the workers, plus the
     // raw V8 coverage of every subprocess the charter suite spawns, folded
     // through the same remapper (scripts/coverage/provider.ts). `npm run
