@@ -18,7 +18,7 @@ is and why it is shaped this way; [ARCHITECTURE.md](ARCHITECTURE.md) is
 how it hangs together; [docs/security.md](docs/security.md) is the
 trust contract.
 
-> **This is a public beta (`0.1.0-beta.1`).** It installs from npm under
+> **This is a public beta (`0.1.0-beta.2`).** It installs from npm under
 > the `beta` dist-tag, as `treecontext-mcp@beta`. The store schema may still change between beta
 > releases; migrations are additive, but treat your journal as replaceable
 > for now.
@@ -43,23 +43,26 @@ it, which needs:
 
 ## 2. Install
 
+Two commands. The first puts the `treecontext` command on your PATH; the
+second wires it into your agent. Run both before you check anything:
+`doctor` reports the agent as not set up until the second has run.
+
 ### macOS / Linux
 
 ```bash
 npm install -g treecontext-mcp@beta
+treecontext install
 ```
 
 ### Windows (PowerShell)
 
 ```powershell
 npm install -g treecontext-mcp@beta
+treecontext install
 ```
 
-Check it landed:
-
-```bash
-treecontext doctor
-```
+Section 3 says what `treecontext install` writes and how to audit or
+restrict it; section 4 checks that it all landed.
 
 <details>
 <summary><b>Alternative: clone and build</b> (if you want to patch or debug)</summary>
@@ -83,6 +86,19 @@ copying it, so the command follows your checkout.
 </details>
 
 ### Upgrading between beta releases
+
+First, **quit every running session** — every Claude Code session and
+every VS Code window with an agent in it — and only then upgrade. A
+server from the older release keeps running against your store until
+its session ends, and the new release migrates the store the first time
+it opens it. From `0.1.0-beta.2` on, a server that finds its store
+migrated past it steps aside: it stops draining and tells the agent to
+restart the session. A `0.1.0-beta.1` server has no such step-aside: left
+running beside a store `0.1.0-beta.2` has migrated, it keeps draining,
+but without this release's re-indexing of treecontext's own echoes, so
+the echoes it drains are indexed with their results and stay that way
+until the next beta.2 server heals them. Quit first and none of it
+happens.
 
 Install the new beta over the old one:
 
@@ -111,7 +127,9 @@ skips anything already correct, and refreshes the hook wrapper scripts
 and any stale interpreter paths. Store migrations run automatically the
 next time the server opens your store and are additive — but per the
 beta caveat above, treat the journal as replaceable between beta
-releases anyway.
+releases anyway. The re-run also refreshes the installed reference skill
+text: until you re-run it, an installed skill from an earlier beta still
+says recency fusion is served at `0.5`.
 
 ## 3. Set up your agent
 
@@ -152,7 +170,17 @@ treecontext init
 
 ## 4. Verify it's working
 
-Start a new session in any project and ask your agent to run
+First, from any directory:
+
+```bash
+treecontext doctor
+```
+
+Every row should be `[ok]`. A `[warn]` row carries the command that
+fixes it; on a machine where nothing is wired yet, the first line after
+the header says so and names `treecontext install`.
+
+Then start a new session in any project and ask your agent to run
 `treecontext_status`. You should see a store name, a path, and a node
 count. Do a few turns of ordinary work, then run it again — **the node
 count should have grown**. That is capture working.

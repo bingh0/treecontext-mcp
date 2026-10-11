@@ -3,6 +3,7 @@
 {"file":"features/journal-agent-surface.feature","title":"gap markers are explained where the agent will meet them","status":"passed"}
 {"file":"features/journal-agent-surface.feature","title":"installing the AGENTS.md block twice yields one block","status":"passed"}
 {"file":"features/journal-agent-surface.feature","title":"instructions survive the platform's size cap un-truncated","status":"passed"}
+{"file":"features/journal-agent-surface.feature","title":"the handshake keeps its orientation query and the skill says what ranks where","status":"passed"}
 {"file":"features/journal-agent-surface.feature","title":"the handshake stays a card and the long form lives in the skill reference","status":"passed"}
 {"file":"features/journal-agent-surface.feature","title":"the instructions explain the preview marker before the agent meets one","status":"passed"}
 {"file":"features/journal-agent-surface.feature","title":"the instructions name doctor as the first move when something looks wrong","status":"passed"}
@@ -20,6 +21,7 @@
 {"file":"features/journal-capture.feature","title":"a stop that asks for a bookmark still captures the response","status":"passed"}
 {"file":"features/journal-capture.feature","title":"a tool event can be the first thing a fresh install ever captures","status":"passed"}
 {"file":"features/journal-capture.feature","title":"a tool event is captured with both its input and its response","status":"passed"}
+{"file":"features/journal-capture.feature","title":"a tool event's output is captured as text, a line a line","status":"passed"}
 {"file":"features/journal-capture.feature","title":"a user message is captured verbatim","status":"passed"}
 {"file":"features/journal-capture.feature","title":"an assistant response is captured at turn end","status":"passed"}
 {"file":"features/journal-capture.feature","title":"an oversized non-re-derivable event keeps its full content","status":"passed"}
@@ -57,6 +59,7 @@
 {"file":"features/journal-handoff.feature","title":"an imported summary is marked as imported and counted","status":"passed"}
 {"file":"features/journal-handoff.feature","title":"importing a whole journal twice lands it once","status":"passed"}
 {"file":"features/journal-handoff.feature","title":"the agent writes the handoff file on the developer's request","status":"passed"}
+{"file":"features/journal-handoff.feature","title":"the default export carries no internal summary","status":"passed"}
 {"file":"features/journal-handoff.feature","title":"the default export carries summaries only","status":"passed"}
 {"file":"features/journal-handoff.feature","title":"the file's authorship claims are data, not identity","status":"passed"}
 {"file":"features/journal-handoff.feature","title":"the handoff file says how to use itself","status":"passed"}
@@ -65,9 +68,11 @@
 {"file":"features/journal-install.feature","title":"an interpreter that cannot load the binding is reported, not tolerated","status":"passed"}
 {"file":"features/journal-install.feature","title":"an unverified platform gets tools, not capture hooks","status":"passed"}
 {"file":"features/journal-install.feature","title":"an unwritable agent config fails loudly and changes nothing","status":"passed"}
+{"file":"features/journal-install.feature","title":"doctor names a staging row retried past ten times the ceiling and who spins on it","status":"passed"}
 {"file":"features/journal-install.feature","title":"doctor names the build the agent is wired to, and spells the fix through this one","status":"passed"}
 {"file":"features/journal-install.feature","title":"doctor names the build the command on PATH would run","status":"passed"}
 {"file":"features/journal-install.feature","title":"doctor proves health rather than inferring it","status":"passed"}
+{"file":"features/journal-install.feature","title":"doctor says in one line that nothing is set up yet","status":"passed"}
 {"file":"features/journal-install.feature","title":"doctor says so when the command is on no PATH at all","status":"passed"}
 {"file":"features/journal-install.feature","title":"existing configuration is merged, never clobbered","status":"passed"}
 {"file":"features/journal-install.feature","title":"experimental capture is an opt-in by name","status":"passed"}
@@ -82,6 +87,7 @@
 {"file":"features/journal-install.feature","title":"the experimental capture flag without a named agent is refused","status":"passed"}
 {"file":"features/journal-install.feature","title":"the interpreter install chooses can actually run this package","status":"passed"}
 {"file":"features/journal-install.feature","title":"the registration lands where the agent itself reads it","status":"passed"}
+{"file":"features/journal-install.feature","title":"the upgrading instructions say to quit every running session first","status":"passed"}
 {"file":"features/journal-install.feature","title":"uninstall removes everything install wrote and nothing else","status":"passed"}
 {"file":"features/journal-library.feature","title":"a plain Node program journals without any server","status":"passed"}
 {"file":"features/journal-library.feature","title":"a reader can watch a live store without stopping the writer","status":"passed"}
@@ -121,7 +127,9 @@
 {"file":"features/journal-orchestration.feature","title":"a subagent appends into the main lane with its writer and reference stamped","status":"passed"}
 {"file":"features/journal-orchestration.feature","title":"a subagent cannot retire the orchestrator's pointer","status":"passed"}
 {"file":"features/journal-orchestration.feature","title":"a subagent's tool-written note carries its own writer though it shares the session","status":"passed"}
+{"file":"features/journal-orchestration.feature","title":"internal summaries already stored are re-marked when a newer treecontext opens the store","status":"passed"}
 {"file":"features/journal-orchestration.feature","title":"references resolve one hop deep, the rest on request","status":"passed"}
+{"file":"features/journal-orchestration.feature","title":"the client's own internal agent is marked as such, never as a subagent","status":"passed"}
 {"file":"features/journal-orchestration.feature","title":"the orchestrator finds the subagent's summary by search","status":"passed"}
 {"file":"features/journal-orchestration.feature","title":"the orchestrator reads the subagent's trail on its own","status":"passed"}
 {"file":"features/journal-orchestration.feature","title":"the session-start hook registers self and the server stamps rows from it","status":"passed"}
@@ -137,19 +145,26 @@
 {"file":"features/journal-recall.feature","title":"a hit on an oversized tool event returns a preview with an honest marker","status":"passed"}
 {"file":"features/journal-recall.feature","title":"a hit on conversational text returns the whole message","status":"passed"}
 {"file":"features/journal-recall.feature","title":"a keyword recalls the exact prior finding, not a paraphrase","status":"passed"}
+{"file":"features/journal-recall.feature","title":"a metadata filter finds an entry wherever its words rank","status":"passed"}
 {"file":"features/journal-recall.feature","title":"a metadata filter narrows recall to matching entries only","status":"passed"}
 {"file":"features/journal-recall.feature","title":"a tool event's searchable reach extends past its displayed preview","status":"passed"}
+{"file":"features/journal-recall.feature","title":"a treecontext echo is found by its arguments, never by its results","status":"passed"}
 {"file":"features/journal-recall.feature","title":"a very long conversational message is findable by any of its words","status":"passed"}
+{"file":"features/journal-recall.feature","title":"an import echo is found by its label and tool name, never by the handoff it carried","status":"passed"}
 {"file":"features/journal-recall.feature","title":"bounding the indexed view is a configuration choice, not the default","status":"passed"}
+{"file":"features/journal-recall.feature","title":"echoes a store already holds are re-indexed when a newer treecontext opens it","status":"passed"}
 {"file":"features/journal-recall.feature","title":"recall needs no embedding model","status":"passed"}
 {"file":"features/journal-recall.feature","title":"retrieval performance is observable where the agent can act on it","status":"passed"}
 {"file":"features/journal-recall.feature","title":"superseded plans stop appearing as live pointers","status":"passed"}
 {"file":"features/journal-recall.feature","title":"superseding a missing id succeeds and names the miss","status":"passed"}
 {"file":"features/journal-recall.feature","title":"temporal questions can read newest first","status":"passed"}
 {"file":"features/journal-recall.feature","title":"temporal questions get temporal answers","status":"passed"}
+{"file":"features/journal-recall.feature","title":"the developer's directives and the agent's notes outrank captured tool output","status":"passed"}
 {"file":"features/journal-recall.feature","title":"the orientation surface stays small enough to be read","status":"passed"}
+{"file":"features/journal-reorientation.feature","title":"a bookmark is findable by its own words in a mature journal","status":"passed"}
 {"file":"features/journal-reorientation.feature","title":"a bookmark that cannot be written is reported once and never blocks","status":"passed"}
 {"file":"features/journal-reorientation.feature","title":"a chapter referenced from another lane shows its referrer one hop deep","status":"passed"}
+{"file":"features/journal-reorientation.feature","title":"a chapter summary is placed above a later bookmark on the page as served, in a mature journal","status":"passed"}
 {"file":"features/journal-reorientation.feature","title":"a chapter summary outranks a bookmark in search","status":"passed"}
 {"file":"features/journal-reorientation.feature","title":"a developer with no checkpoint is re-oriented from recent entries and nudged once a day","status":"passed"}
 {"file":"features/journal-reorientation.feature","title":"a fresh checkpoint of either kind lets the agent stop","status":"passed"}
@@ -239,6 +254,7 @@
 {"file":"features/journal-storage.feature","title":"a crash mid-write never corrupts the store","status":"passed"}
 {"file":"features/journal-storage.feature","title":"a full disk fails loudly and corrupts nothing","status":"passed"}
 {"file":"features/journal-storage.feature","title":"a poison event cannot wedge ingestion","status":"passed"}
+{"file":"features/journal-storage.feature","title":"a stale server tells the agent to restart instead of failing","status":"passed"}
 {"file":"features/journal-storage.feature","title":"a store built by a deleted backend refuses loudly and loses nothing","status":"passed"}
 {"file":"features/journal-storage.feature","title":"a store that cannot get under budget says so","status":"passed"}
 {"file":"features/journal-storage.feature","title":"an additive migration also runs behind a backup","status":"passed"}

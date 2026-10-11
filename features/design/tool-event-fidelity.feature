@@ -8,7 +8,12 @@ Feature: C4 producer — tool-event full-fidelity staging
   pinned in index-cap-expansion.test.ts. THIS suite stages into a
   schema 16/17 fixture (index_len, no preview_len), pinning the middle
   tier: a single boundary at the preview, byte-for-byte the pre-expansion
-  composition, because old readers treat index_len as display cut too.
+  composition for a string payload, because old readers treat index_len
+  as display cut too; an object or content-block payload composes as its
+  text since D270 (2026-10-10). One scenario below, the old server
+  stepping aside (D265), is a drain scenario with no hook in it and runs
+  its own world: a real ingestion loop and a real lease client over one
+  store.
   Footguns: JF-1, JF-3, JF-8, JF-10, JF-12.
 
   Scenario: an oversized tool event stages preview plus full tail with the boundary recorded
@@ -48,10 +53,43 @@ Feature: C4 producer — tool-event full-fidelity staging
     Then the event is staged through the legacy column list rather than lost
     And the staged content is the preview alone — a tail without its boundary would be indexed whole
 
+  Scenario: an old server degrades cleanly against a newer-migrated database
+    Given a server built for one schema version draining a store that a newer treecontext has since migrated past it
+    When its next drain tick takes the drain lease
+    Then it releases the lease and its staging claims, writes one warning, and stops its drain and its sweeps
+    And a newer server takes the drain on its next tick
+    And every staged event is drained by the newer server, none lost
+    # D265, the mirror of the scenario above. On the beta.1 night the
+    # still-running rc.7 server retried five staging rows every five
+    # seconds for two hours and twenty minutes against a migrated store;
+    # the valve was right to keep the rows, the gap was in noticing.
+
   Scenario: a Claude Code-shaped payload's tool_response is captured as the output
     Given a PostToolUse payload carrying the result under tool_response, as Claude Code sends it
     When the post-tool-use hook stages it
     Then the staged content carries an Output section with that result
+
+  Scenario: an object or content-block tool_response and an object tool_input are composed as their text, line breaks and tabs real
+    Given a PostToolUse payload whose tool_response is an object holding stdout with several lines and a tab and an interrupted flag, and whose tool_input is an object holding a multi-line command
+    When the post-tool-use hook stages it
+    Then the Output section carries the stdout text as its lines after its name, with the tab as a character
+    And every other field of the response is in the Output section as its name and value
+    And the Input section carries the command's lines as lines after its name
+
+  Scenario: a file read's nested content and an MCP content block compose as their text
+    Given a PostToolUse payload whose tool_response nests a file's content under file.content across several lines
+    And a second payload whose tool_response is a list of content blocks whose text is a JSON document
+    When the post-tool-use hook stages both
+    Then the file's content lines stand under their field path in the Output section
+    And the content block's text is written verbatim, so a key quoted inside it is still readable by key
+    # D270. The preview is the FTS index view, so this is a composition
+    # change that moves what is findable: the word after each line break
+    # becomes its own token. Rows staged before it recompute their index
+    # text from their stored (encoded) content, exactly as before. The
+    # echo readers that parse an Output by key are pinned end to end by
+    # journal-session-echo and journal-session-namespace, which stage a
+    # real echo through this hook. A shielded pointer inside a content
+    # block is recognized as the pointer it is.
 
   Scenario: ingestion carries the boundary into node metadata verbatim
     Given a staged row with index_len set

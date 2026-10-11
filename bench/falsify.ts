@@ -21,7 +21,7 @@ import BetterSqlite3 from 'better-sqlite3'
 import { createRequire } from 'node:module'
 import { ARMS, findArm } from './arms/index.js'
 import { advisoryFloor, clusterBootstrapSE, mean, queryBootstrapSE } from './lib/metrics.js'
-import { compareRuns, compareSlices, type RunRecord, type SliceResult } from './lib/report.js'
+import { compareRuns, compareSlices, sigmasCell, sigmasPhrase, type RunRecord, type SliceResult } from './lib/report.js'
 import { MUTATIONS, expectationFor, findMutation, type Mutation } from './mutations.js'
 import type { Arm } from './arms/types.js'
 
@@ -182,11 +182,11 @@ async function main(): Promise<void> {
   for (const o of outcomes) {
     const seen = o.aggregateFlagged ? 'aggregate' : o.sliceFlagged ? 'slice only' : 'nothing'
     const worst = o.worstSlice && o.worstSlice.deltaPp < -0.005
-      ? `${o.worstSlice.flagged ? '⚠️ ' : ''}${o.worstSlice.slice} ${o.worstSlice.deltaPp.toFixed(1)}pp (${o.worstSlice.sigmas.toFixed(1)} SE)`
+      ? `${o.worstSlice.flagged ? '⚠️ ' : ''}${o.worstSlice.slice} ${o.worstSlice.deltaPp.toFixed(1)}pp ${Number.isFinite(o.worstSlice.sigmas) ? `(${sigmasPhrase(o.worstSlice.sigmas)})` : '(exact, SE 0)'}`
       : '—'
     console.log(
       `| \`${o.mutation.id}\` | ${expectationFor(o.mutation, arm.id)} | ${o.pass ? '✅ ' : '❌ '}${seen} | ` +
-      `${o.deltaPp >= 0 ? '+' : ''}${o.deltaPp.toFixed(2)}pp | ${o.sigmas.toFixed(1)} | ${worst} |`,
+      `${o.deltaPp >= 0 ? '+' : ''}${o.deltaPp.toFixed(2)}pp | ${sigmasCell(o.sigmas)} | ${worst} |`,
     )
   }
 
@@ -205,7 +205,7 @@ async function main(): Promise<void> {
   for (const f of failures) {
     console.log(
       `   \`${f.mutation.id}\` expected ${f.mutation.expect} but the verdict was ` +
-      `"${f.verdict}" (${f.deltaPp.toFixed(2)}pp, ${f.sigmas.toFixed(1)} SE)`,
+      `"${f.verdict}" (${f.deltaPp.toFixed(2)}pp, ${sigmasPhrase(f.sigmas)})`,
     )
   }
   console.log('')

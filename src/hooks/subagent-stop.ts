@@ -13,14 +13,51 @@
  * hook reads the main transcript. Then the registration is retired, on the
  * same connection, so the next tool-written row is no longer the
  * subagent's. The capture comes first: retiring never displaces it.
+ *
+ * A SubagentStop whose agent id nobody registered and whose payload names
+ * no agent type is the client's own internal agent (D263): its report is
+ * captured just the same, whole, but staged with kind `internal-summary`,
+ * and the drain stamps it with the writer `claude-code`.
  */
 import type { Database as DatabaseType } from 'better-sqlite3'
-import { parseHookInput, resolveDbPath, writeStaging, openHookDb, isDirectInvocation, payloadWriter } from './shared.js'
+import { parseHookInput, resolveDbPath, writeStaging, openHookDb, isDirectInvocation, payloadWriter, STOP_GUARD_TIMEOUT_MS } from './shared.js'
 import { extractLastAssistantText } from './stop.js'
-import { hasRegistry, retireSubagent } from '../persistence/session-registry.js'
+import { hasRegistry, retireSubagent, subagentOf, INTERNAL_SUMMARY_KIND } from '../persistence/session-registry.js'
 import { SUBAGENT_SUMMARY_KIND } from '../handoff.js'
 import { STORE_SAFETY_CAP, activeIndexCap } from '../persistence/capture-constants.js'
 import { dbg } from '../debug.js'
+
+/**
+ * D263: whether this SubagentStop is the client's own internal agent — the
+ * compaction summarizer, a prompt-suggestion side call — rather than a
+ * subagent anyone spawned. Claude Code fires SubagentStop for those too,
+ * with an agent id but no agent type, and no SubagentStart before it.
+ *
+ * Internal only on positive evidence: no agent type in the payload, and a
+ * registry that was read and holds no row for (session, agent id), live or
+ * retired — a registration, even a retired one, means a SubagentStart
+ * happened. Anything less — no session or agent id to look up, a store the
+ * registry has not reached, a lookup that throws or times out — is no
+ * evidence, and the report stays a subagent summary: mis-marking a real
+ * subagent's report would drop it from the handoff and the lanes silently,
+ * the worse error (D3, D238). Read-only, on the Stop hook's guard budget,
+ * so it never stacks past the platform's kill with the write behind it.
+ */
+function isInternalAgent(dbPath: string, sessionId: string | undefined, agentId: string | undefined, agentType: string | undefined): boolean {
+  if (agentType || !sessionId || !agentId) return false
+  let db: DatabaseType | null = null
+  try {
+    db = openHookDb(dbPath, { readonly: true, timeoutMs: STOP_GUARD_TIMEOUT_MS })
+    if (!hasRegistry(db)) {
+      dbg('hook:subagent-stop', 'no registry readable — kept as a subagent summary')
+      return false
+    }
+    return subagentOf(db, sessionId, agentId) === null
+  } catch (err) {
+    dbg('hook:subagent-stop', 'registration lookup FAILED — kept as a subagent summary', { error: err instanceof Error ? err.message : String(err) })
+    return false
+  } finally { if (db) db.close() }
+}
 
 function retire(db: DatabaseType, sessionId: string, agentId: string): void {
   if (!hasRegistry(db)) return
@@ -47,6 +84,8 @@ export function main(preParsed?: Record<string, unknown>): void {
     let retired = false
     if (report) {
       const content = report.substring(0, STORE_SAFETY_CAP)
+      const internal = isInternalAgent(dbPath, sessionId, agentId, agentType)
+      dbg('hook:subagent-stop', internal ? 'unregistered and untyped — the client\'s own internal agent' : 'a subagent\'s report', { agentId: agentId ?? null })
       writeStaging(dbPath, {
         sessionId: sessionId ?? null,
         role: 'assistant',
@@ -56,7 +95,7 @@ export function main(preParsed?: Record<string, unknown>): void {
         indexLen: Math.min(activeIndexCap('assistant'), content.length),
         ...(agentId ? { agentId } : {}),
         ...(agentType ? { agentType } : {}),
-        kind: SUBAGENT_SUMMARY_KIND,
+        kind: internal ? INTERNAL_SUMMARY_KIND : SUBAGENT_SUMMARY_KIND,
       }, andRetire ? (db) => { andRetire(db); retired = true } : undefined)
     } else {
       dbg('hook:subagent-stop', 'no report in the payload or the transcript — nothing to capture')

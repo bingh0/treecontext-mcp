@@ -24,6 +24,8 @@ import { ftsSearch } from '../helpers/fts-search.js'
 import { makePersistedNode } from '../helpers/persisted-node.js'
 import { FlatStore } from '../../src/flat-store.js'
 import { INDEX_CAP_USER, INDEX_CAP_ASSISTANT } from '../../src/persistence/index-text.js'
+import type { CaptureWorld } from '../journal/capture-harness.js'
+import { type DrainedEcho, drainedDeleteEcho, ftsNodeIds, ftsVocab, rawEchoes } from '../helpers/echo-capture.js'
 
 /** The shared builder under this feature's baseline: every scenario here
  *  stages an auto-capture row, so the label and the source metadata are
@@ -49,6 +51,13 @@ interface World {
   store?: FlatStore
   hit?: { content: string } | undefined
   fullContent?: string
+  /** D261: the capture sandbox the echo scenario drains into, and what it drained. */
+  cw?: CaptureWorld
+  drained?: DrainedEcho
+  /** Observations recorded inside the update-and-delete When, while the row lived. */
+  livedIndexHits?: string[]
+  livedResultHits?: string[]
+  livedHitContent?: string | undefined
 }
 
 export const ftsDualCapDefiner = (reg: Registry<World>): void => {
@@ -138,6 +147,73 @@ export const ftsDualCapDefiner = (reg: Registry<World>): void => {
       w.beyondMarker = beyondMarker
     },
   )
+
+  // ── D261: the echo's boundary is stamped, so the recompute replays it ──
+  reg.define(/^a treecontext echo drained with its index boundary ahead of its output and its display boundary stamped in its metadata$/, async (w) => {
+    w.cw = { defer: w.defer }
+    // The echo of a real delete: a fitting event, its index boundary at the
+    // end of its Input (the deleted entry's id), its Output the response.
+    w.drained = await drainedDeleteEcho(w.cw)
+    const { echo, indexTerm, resultTerm } = w.drained
+    const outAt = echo.content.indexOf('\nOutput:')
+    expect(outAt).toBeGreaterThan(0)
+    expect(echo.content.slice(outAt)).toContain(resultTerm)
+    expect(echo.content.slice(0, outAt)).toContain(indexTerm)
+    expect(echo.metadata['_index_len']).toBe(outAt)
+    expect(echo.indexLen, 'the boundary column carries the stamp').toBe(outAt)
+    expect(echo.content.slice(0, echo.metadata['_index_len'] as number)).not.toContain(resultTerm)
+    // The display boundary is stamped although the event fit its caps.
+    expect(echo.metadata['_preview_len']).toBe(echo.content.length)
+  })
+
+  reg.define(/^the row is updated and then deleted by the store's ordinary update and delete, which read only the stamp$/, async (w) => {
+    const dbPath = w.cw!.dbPath!
+    const { echo, indexTerm, resultTerm } = w.drained!
+    const store = w.cw!.store!
+    const raw = new BetterSqlite3(dbPath, { readonly: true })
+    let tree: number
+    let createdAt: number
+    try {
+      const row = raw.prepare('SELECT tree_id, created_at FROM nodes WHERE node_id = ?').get(echo.nodeId) as { tree_id: number; created_at: number }
+      tree = row.tree_id
+      createdAt = row.created_at
+    } finally {
+      raw.close()
+    }
+    // The ordinary update: same content, the stamped metadata plus one
+    // more key — the old index text is recomputed from the stamp alone.
+    store.store.updateNode(makeNode({
+      nodeId: echo.nodeId, treeId: tree, content: echo.content, createdAt,
+      metadata: { ...echo.metadata, _relied_count: 1 },
+    }))
+    // While the row lives: what the index holds, and what a hit shows.
+    w.livedIndexHits = ftsNodeIds(dbPath, indexTerm)
+    w.livedResultHits = ftsNodeIds(dbPath, resultTerm)
+    w.livedHitContent = (await store.query(indexTerm, { topK: 10 })).find((h) => h.nodeId === echo.nodeId)?.content
+    await store.delete(echo.nodeId)
+    expect(rawEchoes(dbPath)).toEqual([])
+  })
+
+  reg.define(/^the index held what the echo indexes and not its results while the row lived$/, (w) => {
+    const { echo, noteId } = w.drained!
+    expect(w.livedIndexHits, 'the echo was not findable by what it indexes').toContain(echo.nodeId)
+    expect(w.livedResultHits, 'the echo was indexed by its results').not.toContain(echo.nodeId)
+    // Control: the result word is live in the index — the note's own row.
+    expect(w.livedResultHits).toContain(noteId)
+  })
+
+  reg.define(/^a hit on the echo showed its output while the row lived$/, (w) => {
+    const { resultTerm } = w.drained!
+    expect(w.livedHitContent, 'no hit on the echo').toBeDefined()
+    expect(w.livedHitContent!).toContain('\nOutput:\n')
+    expect(w.livedHitContent!, 'the hit was cut at the index boundary').toContain(resultTerm)
+  })
+
+  reg.define(/^the FTS index holds no ghost entry for it in any column after the delete$/, (w) => {
+    // Every posting, every column, compared with the index before the echo
+    // drained: the delete removed exactly what the insert and update put in.
+    expect(ftsVocab(w.cw!.dbPath!)).toEqual(w.drained!.vocabBefore)
+  })
 
   reg.define(/^a FlatStore with an auto-capture user node whose content exceeds the index cap$/, async (w) => {
     const flatDbDir = mkdtempSync(join(tmpdir(), 'tc-fts-dual-cap-flat-'))

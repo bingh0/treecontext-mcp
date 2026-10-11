@@ -20,15 +20,18 @@ import { appendFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 
 /** The MCP query surface's default recency fusion weight (owner ruling
- *  2026-08-01). Promoted from the shadow arm's working hypothesis once
- *  the ruling landed; the library default stays 0. Explicit
- *  recency_weight: 0 opts a call out. */
-export const DEFAULT_RECENCY_WEIGHT = 0.5
+ *  2026-08-01 at 0.5; lowered to 0.25 on 2026-10-10, D273/D274, when the
+ *  mature-journal arm's recency sweep priced what 0.5 cost exact lookups
+ *  of older rows: lookups 49.95% to 63.02% MRR@5, orientation unchanged).
+ *  The library default stays 0. Explicit recency_weight: 0 opts a call
+ *  out. */
+export const DEFAULT_RECENCY_WEIGHT = 0.25
 
 /** The shadow arm's fusion weight when a caller explicitly opts out —
- *  measures what the default would have served. (For fused responses the
- *  shadow arm runs at weight 0 instead: the pure lexical ordering.) */
-export const SHADOW_RECENCY_WEIGHT = 0.5
+ *  measures what the default would have served, so it follows the
+ *  served default. (For fused responses the shadow arm runs at weight 0
+ *  instead: the pure lexical ordering.) */
+export const SHADOW_RECENCY_WEIGHT = DEFAULT_RECENCY_WEIGHT
 
 export function telemetryEnabled(): boolean {
   const v = process.env['TREECONTEXT_QUERY_TELEMETRY']

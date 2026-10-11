@@ -78,6 +78,8 @@ inspection out. Reading the source is not verification.
   the triggers that keep it
 - `src/persistence/curated-index.ts` — the partial curated unique index,
   spelled once
+- `src/persistence/metadata-filter.ts` — a metadata filter's flat keys as
+  SQL predicates (D268); the rest stays on the pool post-filter
 - `src/hooks/` — journaling hooks. Claude Code is the verified reference
   platform; the other adapters are unverified scaffolding. `subagent-start`
   and `subagent-stop` register and retire subagents; `git-self.ts` reads
@@ -89,7 +91,7 @@ inspection out. Reading the source is not verification.
 ## Design decisions worth not re-litigating
 
 1. **Flat store, lexical retrieval.** FTS5 BM25 with per-role column
-   weights (user/tool/note 1.0, assistant prose 0.25). Dense retrieval has
+   weights (user/note 1.0, assistant prose 0.25, tool output 0.1; D260 amended by D272). Recency fusion is served at 0.25 (D56 amended by D273). Dense retrieval has
    no seat at any tier; if it ever earns one it enters as a fused, opt-in
    second ranked list — see the fence.
 2. **Capture is judged by one question:** if a future agent needed this

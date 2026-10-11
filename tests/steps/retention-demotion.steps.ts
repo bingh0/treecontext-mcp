@@ -18,6 +18,8 @@ import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
 import type { Database } from '../../src/persistence/database.js'
 import { FlatStore } from '../../src/flat-store.js'
 import { INDEX_CAP_USER } from '../../src/persistence/index-text.js'
+import type { CaptureWorld } from '../journal/capture-harness.js'
+import { type DrainedEcho, drainedQueryEcho, ftsNodeIds, rawEchoes } from '../helpers/echo-capture.js'
 
 interface ExportedNode {
   nodeId: string
@@ -60,6 +62,9 @@ interface World {
   protectedContent?: string
   oldSessionId?: string
   survivorId?: string
+  /** D261: the capture sandbox the echo drained into, and what it drained. */
+  cw?: CaptureWorld
+  drained?: DrainedEcho
 }
 
 export const retentionDemotionDefiner = (reg: Registry<World>): void => {
@@ -321,6 +326,60 @@ export const retentionDemotionDefiner = (reg: Registry<World>): void => {
 
   // Merged: every scenario in this feature sweeps here; the result is
   // captured for the scenarios whose Thens read it.
+  // ── D261: a demoted echo keeps its output and its index boundary ──
+  reg.define(/^an over-budget store whose demotion candidate is a treecontext echo carrying its index boundary ahead of its output and a display boundary, with an archive destination$/, async (w) => {
+    w.cw = { defer: w.defer }
+    // The realistic candidate: a query's echo whose output overflowed its
+    // preview (a long note among the results), so a full tail follows the
+    // display boundary and the sweep has something real to shrink.
+    w.drained = await drainedQueryEcho(
+      w.cw,
+      { maxStoreBytes: 1, maxSessions: 1_000_000, maxAutoEntries: 1_000_000, retentionInterval: 1_000_000 },
+    )
+    const { echo, resultTerm } = w.drained
+    w.store = w.cw.store!
+    w.dir = join(w.cw.dbPath!, '..') // the store's directory: its archive/ lives beside it
+    w.nodeId = echo.nodeId
+    w.content = echo.content
+    const outAt = echo.content.indexOf('\nOutput:')
+    const indexEnd = echo.metadata['_index_len'] as number
+    expect(indexEnd, 'a query echo indexes its tool name: the first line').toBe(echo.content.indexOf('\n'))
+    expect(indexEnd).toBeLessThan(outAt)
+    const preview = echo.metadata['_preview_len'] as number
+    expect(preview).toBeGreaterThan(outAt)
+    expect(preview, 'the echo must carry a tail past its display preview').toBeLessThan(echo.content.length)
+    expect(echo.content.slice(outAt, preview)).toContain(resultTerm)
+    // Before the sweep: the result word matches the note, never the echo.
+    const before = ftsNodeIds(w.cw.dbPath!, resultTerm)
+    expect(before).toContain(w.drained.noteId)
+    expect(before).not.toContain(echo.nodeId)
+  })
+
+  reg.define(/^the echo's content now equals its display preview, output included$/, (w) => {
+    const { echo, resultTerm } = w.drained!
+    expect(w.swept!.demoted).toBe(1)
+    const [after] = rawEchoes(w.cw!.dbPath!)
+    expect(after!.nodeId).toBe(echo.nodeId)
+    expect(after!.metadata['_demoted']).toBe(true)
+    expect(after!.content).toBe(echo.content.slice(0, echo.metadata['_preview_len'] as number))
+    expect(after!.content).toContain('\nOutput:\n')
+    expect(after!.content).toContain(resultTerm)
+  })
+
+  reg.define(/^the demoted echo is still found by what it indexed before and not by its results$/, (w) => {
+    const { echo, indexTerm, resultTerm, noteId } = w.drained!
+    const dbPath = w.cw!.dbPath!
+    const [after] = rawEchoes(dbPath)
+    // The index boundary did not move: it still ends where it ended.
+    expect(after!.metadata['_index_len']).toBe(echo.metadata['_index_len'])
+    expect(ftsNodeIds(dbPath, indexTerm)).toContain(echo.nodeId)
+    // The result word sits inside the stump, yet the stump does not index it.
+    expect(after!.content).toContain(resultTerm)
+    const resultHits = ftsNodeIds(dbPath, resultTerm)
+    expect(resultHits).not.toContain(echo.nodeId)
+    expect(resultHits, 'control: the result word is live in the index').toContain(noteId)
+  })
+
   reg.define(/^the retention sweep runs$/, (w) => {
     w.swept = w.store!.retentionSweep()
   })

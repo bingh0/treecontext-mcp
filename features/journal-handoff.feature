@@ -19,6 +19,13 @@ Feature: Handoff between teammates — a file through the shared repository
     Then the file A commits holds 2 entries, the chapter summary and the tester's summary, and no bookmark
     And the tool's reply carries no warning
 
+  @D263
+  Scenario: the default export carries no internal summary
+    Given developer A's store holding the tester subagent's summary "12 tests pass, CSRF fails" and the client's compaction summary of the same session
+    When A exports a handoff without choosing a form
+    Then the file A commits holds the tester's summary and not the compaction summary
+    And a whole-journal export still carries the compaction summary
+
   @D177 @D149
   Scenario: a whole-journal export warns about secrets before it writes
     Given developer A's store holding 2000 entries including captured tool output

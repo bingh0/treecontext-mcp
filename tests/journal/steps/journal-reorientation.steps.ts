@@ -16,8 +16,9 @@ import { TS_ROOT, tsxArgv, killAndWait } from '../proc.js'
 import { spawnCli, sandboxedSpawnEnv, type CliSpawnResult } from '../../helpers/cli-spawn.js'
 import {
   type CaptureWorld, type HookRun, openCaptureSandbox, runHook, hookJson, writeTranscript,
-  expectBookmarkAsked, expectAgentMayStop, seedCheckpointAge,
+  expectBookmarkAsked, expectAgentMayStop, seedCheckpointAge, spawnHooksInBatches, drainStaging,
 } from '../capture-harness.js'
+import { copyMatureJournalTo, rawOutranking } from '../../helpers/mature-journal.js'
 
 // ── journal-reorientation ───────────────────────────────────────────────
 //
@@ -73,6 +74,8 @@ export interface ReorientationWorld extends CaptureWorld {
   chainIds?: string[]
   /** Packet sizes measured, for the report. */
   packetChars?: number
+  /** The developer's last search, for a Then that repeats it. */
+  lastQuery?: string
 }
 
 const LOCKER = fileURLToPath(new URL('../../helpers/store-locker.cjs', import.meta.url))
@@ -99,6 +102,55 @@ export async function openWorld(w: ReorientationWorld): Promise<void> {
 }
 
 export const now = (): number => Date.now() / 1000
+
+/** openWorld over the mature journal (D266): the capture sandbox, with the
+ *  mature journal copied to the store path it derives, so the real hooks
+ *  this world spawns capture into it and the drain lands their rows. */
+async function openMatureWorld(w: ReorientationWorld): Promise<void> {
+  openCaptureSandbox(w)
+  mkdirSync(dirname(w.dbPath!), { recursive: true })
+  await copyMatureJournalTo(w.dbPath!)
+  const store = await FlatStore.open({
+    database: wrapBetterSqlite(new BetterSqlite3(w.dbPath!)),
+    ownsDatabase: true,
+    retentionInterval: 1_000_000_000,
+  })
+  w.defer(() => store.close())
+  w.store = store
+  w.rootSession = w.sessionId!
+  writeSessionBeacon(w.dbPath!, process.pid, w.sessionId!, w.proj!, { rewrite: true })
+}
+
+/** Developer turns through the real UserPromptSubmit hook, drained by the
+ *  production loop: what a developer typing these would leave behind. */
+async function captureDeveloperTurns(w: ReorientationWorld, prompts: string[]): Promise<void> {
+  await spawnHooksInBatches(w, 'user-prompt-submit', prompts.map((prompt) => ({
+    hook_event_name: 'UserPromptSubmit', transcript_path: join(w.proj!, 'transcript.jsonl'), prompt,
+  })))
+  await drainStaging(w)
+}
+
+/** Long developer turns that mention `words` once each, in passing: other
+ *  work is the subject. Each turn is one word longer than the last, as
+ *  real turns differ in length, so no two score alike: a run of turns
+ *  tied at one lexical score shares one rank in recency fusion's
+ *  competition ranking, and that tie, not the words, is what a newer
+ *  crowd would win by. */
+const ASIDES = [
+  'the payments retry test is still flaky on the second run, so look at its fixture teardown first',
+  'the release notes need the migration caveat and the rollback steps spelled out for operators',
+  'rename the queue worker metrics so the dashboards stop showing two series for one counter',
+  'the docs site build warns about a broken anchor in the configuration page, fix that link',
+  'pin the linter version in the workspace so the formatter stops fighting the editor settings',
+  'the nightly export job ran long again; check whether the index on created_at is being used',
+]
+const ASIDE_WORDS = ASIDES.join(' ').replace(/[,;]/g, '').split(' ')
+function passingTurns(n: number, words: string): string[] {
+  return Array.from({ length: n }, (_, i) => {
+    const more = Array.from({ length: i }, (_, k) => ASIDE_WORDS[(i + k) % ASIDE_WORDS.length]).join(' ')
+    return `turn ${i}: before anything else, ${ASIDES[0]}. Separately, ${words} came up in standup, not today's work. ${more}`.trim()
+  })
+}
 
 async function turn(w: ReorientationWorld, text: string, at: number): Promise<void> {
   await w.store!.insert(text, { metadata: { source: 'auto-capture', role: 'user', session_id: w.sessionId }, createdAt: at })
@@ -677,6 +729,7 @@ export const reorientationDefiner = (reg: Registry<ReorientationWorld>): void =>
   })
   reg.define(/^the developer searches "([^"]+)"$/, async (w, q$) => {
     const q = String(q$)
+    w.lastQuery = q
     w.nodeIds = await search(w, q)
   })
   reg.define(/^the developer finds the oldest bookmark$/, (w) => {
@@ -707,6 +760,74 @@ export const reorientationDefiner = (reg: Registry<ReorientationWorld>): void =>
     // the chapter above it.
     w.chapterId = await mcpCheckpoint(w, `plan: ${phrase} lands before the login form ships; next: wire the retry path, then the expiry banner, then the tests`, { at: now() - 3600 })
     w.bookmarkIds = [await mcpCheckpoint(w, `at: ${phrase}`, { kind: 'bookmark' })]
+  })
+  // ── the same promises on a mature journal (D166, D183 under D275) ──
+  reg.define(/^a mature journal in which more than two hundred entries carry a bookmark's words in passing, and one bookmark written before them reads "([^"]*)" word for word$/, async (w, text$) => {
+    const text = String(text$)
+    await openMatureWorld(w)
+    w.bookmarkIds = [await mcpCheckpoint(w, text, { kind: 'bookmark' })]
+    // Written after the bookmark, through the capture pipeline: the
+    // bookmark is the oldest row that carries these words.
+    const words = text.replace(/^at:\s*/, '')
+    await captureDeveloperTurns(w, passingTurns(220, words))
+    const keyWords = ['scaffolding', 'login', 'form']
+    const bm = rawAll<{ created_at: number; kind: string | null }>(w,
+      "SELECT created_at, json_extract(metadata_json, '$.kind') AS kind FROM nodes WHERE node_id = ?", w.bookmarkIds[0])[0]!
+    expect(bm.kind).toBe('bookmark')
+    const carriers = rawAll<{ n: number; newer: number }>(w,
+      `SELECT COUNT(*) AS n, SUM(created_at > ?) AS newer FROM nodes WHERE node_id != ? AND rowid IN
+         (SELECT rowid FROM nodes_fts WHERE nodes_fts MATCH '"scaffolding" AND "login" AND "form"')`, bm.created_at, w.bookmarkIds[0])[0]!
+    expect(carriers.n, 'entries carrying the bookmark\'s words').toBeGreaterThan(200)
+    expect(carriers.newer, 'every one of them written after the bookmark').toBe(carriers.n)
+    // The words are not near-universal, so the query keeps them (D54).
+    const total = rawAll<{ n: number }>(w, 'SELECT COUNT(*) AS n FROM nodes')[0]!.n
+    expect(carriers.n + 1).toBeLessThan(total / 2)
+    // Discriminating control, read from SQLite: under the retired factor
+    // (a quarter of the bookmark's score, inside the ordering that chose
+    // the candidates) more rows would outrank the bookmark than the old
+    // served top-ten search's candidate pool held, max(4 × 10, 2 × 30, 50)
+    // = 60 (adaptiveMax defaulted to 3 × top_k), so it could not be found;
+    // at its own score it leads.
+    const quartered = rawOutranking(w.dbPath!, keyWords, w.bookmarkIds[0]!, 0.25)
+    const oldPool = Math.max(10 * 4, 10 * 3 * 2, 50)
+    expect(quartered.better, 'rows outranking the bookmark at a quarter of its score').toBeGreaterThan(oldPool)
+  })
+  reg.define(/^the developer finds that bookmark among the first ten results$/, (w) => {
+    expect(w.nodeIds!.slice(0, 10), `ranking: ${w.nodeIds!.join(', ')}`).toContain(w.bookmarkIds![0])
+  })
+  reg.define(/^the developer finds it among the first ten results with recency fusion declined too$/, async (w) => {
+    const q = w.lastQuery!
+    const res = parseTool(await w.client!.callTool({ name: 'treecontext_query', arguments: { query: q, top_k: 10, recency_weight: 0 } }))
+    const ids = (res['results'] as Array<{ nodeId: string }>).map((r) => r.nodeId)
+    expect(ids, `ranking: ${ids.join(', ')}`).toContain(w.bookmarkIds![0])
+  })
+  reg.define(/^a mature journal in which a chapter summary and a later bookmark both contain "([^"]+)", among more than fifty other entries carrying those words$/, async (w, phrase$) => {
+    const phrase = String(phrase$)
+    await openMatureWorld(w)
+    await captureDeveloperTurns(w, passingTurns(60, phrase))
+    // The chapter, then the later bookmark: the bookmark is the newer AND
+    // the lexically stronger (shorter) match, so recency fusion orders it
+    // first; only the placement puts the chapter above it.
+    w.chapterId = await mcpCheckpoint(w, `plan: ${phrase} lands before the login form ships; next: wire the retry path, then the expiry banner, then the tests`, { at: now() - 60 })
+    w.bookmarkIds = [await mcpCheckpoint(w, `at: ${phrase}`, { kind: 'bookmark' })]
+    const carriers = rawAll<{ n: number }>(w,
+      `SELECT COUNT(*) AS n FROM nodes WHERE node_id NOT IN (?, ?) AND rowid IN
+         (SELECT rowid FROM nodes_fts WHERE nodes_fts MATCH '"csrf" AND "token" AND "refresh"')`, w.chapterId, w.bookmarkIds[0])[0]!
+    expect(carriers.n, 'other entries carrying the words').toBeGreaterThan(50)
+    const at = rawAll<{ node_id: string; created_at: number }>(w,
+      'SELECT node_id, created_at FROM nodes WHERE node_id IN (?, ?)', w.chapterId, w.bookmarkIds[0])
+    const t = new Map(at.map((r) => [r.node_id, r.created_at]))
+    expect(t.get(w.bookmarkIds[0]!)!).toBeGreaterThan(t.get(w.chapterId)!)
+  })
+  reg.define(/^both are returned$/, (w) => {
+    expect(w.nodeIds).toContain(w.chapterId)
+    expect(w.nodeIds).toContain(w.bookmarkIds![0])
+    // Discriminating control: the served scores rank the bookmark above
+    // the chapter (it is the stronger lexical match and the newer row);
+    // the order the developer sees is the placement's, never the scores'.
+    const results = w.panel!['results'] as Array<{ nodeId: string; similarity: number }>
+    const sim = (id: string): number => results.find((r) => r.nodeId === id)!.similarity
+    expect(sim(w.bookmarkIds![0]!), 'fixture is not discriminating: the bookmark must outscore its chapter').toBeGreaterThan(sim(w.chapterId!))
   })
   reg.define(/^the developer sees the chapter summary ranked above the bookmark$/, (w) => {
     const ids = w.nodeIds!

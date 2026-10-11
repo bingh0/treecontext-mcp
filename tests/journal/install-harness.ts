@@ -57,6 +57,10 @@ export interface InstallWorld extends World {
   iHooksBefore?: string
   /** Which-build scenarios: the rival global install fabricated on PATH. */
   iOtherBuild?: FakeGlobalInstall
+  /** D265 doctor scenario: the runaway staging row and the drain holder. */
+  iRunaway?: { stagingId: number; attempts: number; holderPid: number; holderHost: string }
+  /** D265 README scenario: the upgrading section's text. */
+  iReadmeSection?: string
 }
 
 /**

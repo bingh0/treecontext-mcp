@@ -89,17 +89,18 @@ describe('query telemetry (recency-ruling instrument)', () => {
     expect(line!.ages_d).toHaveLength(2)
     expect(line!.roles).toEqual(['user', 'user'])
     expect(line!.shadow?.weight).toBe(SHADOW_RECENCY_WEIGHT)
+    expect(SHADOW_RECENCY_WEIGHT).toBe(0.25) // follows the served default (D273)
     expect(line!.shadow?.ages_d).toHaveLength(2)
     expect(line!.shadow?.top1_pos).toBeGreaterThanOrEqual(0)
     // Observation only: nothing telemetry-shaped leaks into the response.
     expect(Object.keys(response).sort()).toEqual(['results'])
   })
 
-  it('an omitted recency_weight serves and records the 0.5 default (ruling 2026-08-01)', async () => {
+  it('an omitted recency_weight serves and records the 0.25 default (ruling 2026-08-01, amended by D273)', async () => {
     process.env['TREECONTEXT_QUERY_TELEMETRY'] = '1'
     await runQuery({})
     const [line] = lines()
-    expect(line!.recency_weight).toBe(0.5)
+    expect(line!.recency_weight).toBe(0.25)
     expect(line!.shadow?.weight).toBe(0) // fused response shadows the pure lexical ordering
   })
 

@@ -68,10 +68,18 @@ export function demotionTextFor(content: string, meta: Record<string, unknown> |
   if (meta['source'] !== 'auto-capture') return content
 
   const bounds: number[] = []
+  // The display boundary governs whenever one is stamped; the index
+  // boundary bounds a demotion only in the pre-018 shape that stamped
+  // nothing else. A D261 echo's index boundary sits before its Output,
+  // and a demotion cutting there would take the evidence the writer heal
+  // and the namespace annotation read.
   const preview = meta[EXPLICIT_PREVIEW_LEN_KEY]
-  if (typeof preview === 'number' && Number.isFinite(preview) && preview >= 0) bounds.push(preview)
-  const explicit = meta[EXPLICIT_INDEX_LEN_KEY]
-  if (typeof explicit === 'number' && Number.isFinite(explicit) && explicit >= 0) bounds.push(explicit)
+  if (typeof preview === 'number' && Number.isFinite(preview) && preview >= 0) {
+    bounds.push(preview)
+  } else {
+    const explicit = meta[EXPLICIT_INDEX_LEN_KEY]
+    if (typeof explicit === 'number' && Number.isFinite(explicit) && explicit >= 0) bounds.push(explicit)
+  }
 
   const role = meta['role']
   if (role === 'user') bounds.push(INDEX_CAP_USER)

@@ -21,6 +21,9 @@ interface World {
   defer: (fn: () => void | Promise<void>) => void
   userId?: string
   assistantId?: string
+  /** D260 pair: a curated note and a captured tool event. */
+  noteId?: string
+  toolId?: string
   order?: string[]
   newRanked?: Array<{ rowid: number; score: number }>
   legacyRanked?: Array<{ rowid: number; score: number }>
@@ -66,6 +69,83 @@ export const flatStoreRoleWeightsDefiner = (reg: Registry<World>): void => {
     ).nodeId
     w.userId = (await store.insert('shared query term alpha', { metadata: { source: 'auto-capture', role: 'user' } })).nodeId
     w.s = store
+  })
+
+  // D260: the note-vs-tool twin of the user/assistant pair. The tool row
+  // is inserted FIRST for the same reason as above: on a tie insertion
+  // order wins, so the note can only rank first if the default weights
+  // re-ranked it. Both carry the literal phrase the reused When queries.
+  const TOOL_META = { source: 'auto-capture', role: 'assistant', tool_name: 'Bash' }
+  reg.define(/^two nodes matching the query equally, one via note text and one via tool text$/, async (w) => {
+    const dir = freshTmp(w, 'tc-role-weights-')
+    const store = await freshStore(w, dir)
+    w.toolId = (await store.insert('shared query term gamma', { metadata: TOOL_META })).nodeId
+    w.noteId = (await store.insert('shared query term delta', { metadata: { type: 'finding' } })).nodeId
+    w.s = store
+    // Attribution as stored, read from SQLite: the pair sits in the tool
+    // and note columns, so the ranking below is the column weights'.
+    const raw = new BetterSqlite3(join(dir, 'flat.db'), { readonly: true })
+    let cols: Array<{ node_id: string; index_col: number }>
+    try {
+      cols = raw
+        .prepare('SELECT node_id, index_col FROM nodes WHERE node_id IN (?, ?)')
+        .all(w.toolId, w.noteId) as Array<{ node_id: string; index_col: number }>
+    } finally {
+      raw.close()
+    }
+    const colOf = new Map(cols.map((c) => [c.node_id, c.index_col]))
+    expect(colOf.get(w.toolId)).toBe(2)
+    expect(colOf.get(w.noteId)).toBe(3)
+  })
+
+  reg.define(/^the note-text node ranks first$/, (w) => {
+    expect(w.order![0], 'the note did not rank first at default weights').toBe(w.noteId)
+  })
+
+  reg.define(/^the tool-text node is still a result$/, (w) => {
+    expect(w.order!, 'a weight below one hid the tool row').toContain(w.toolId)
+  })
+
+  reg.define(/^a server over a lexical store with the note-and-tool pair$/, async (w) => {
+    const dir = freshTmp(w, 'tc-role-weights-mcp-')
+    const store = await freshStore(w, dir, 'mcp.db')
+    w.server = createServer(store, {})
+    const [ct, st] = InMemoryTransport.createLinkedPair()
+    w.client = new Client({ name: 't', version: '0' })
+    await w.server.connect(st)
+    await w.client.connect(ct)
+    w.defer(async () => {
+      await w.client!.close()
+      await w.server!.close()
+      await store.close()
+    })
+    w.toolId = parse(await w.client.callTool({
+      name: 'treecontext_insert',
+      arguments: { content: 'shared query term gamma', metadata: TOOL_META },
+    })).node_id
+    w.noteId = parse(await w.client.callTool({
+      name: 'treecontext_insert',
+      arguments: { content: 'shared query term delta', metadata: { type: 'finding' } },
+    })).node_id
+  })
+
+  reg.define(/^treecontext_query passes role_weights with the tool weight above the note weight$/, async (w) => {
+    const res = parse(
+      await w.client!.callTool({
+        name: 'treecontext_query',
+        arguments: { query: 'shared query term', top_k: 5, role_weights: { note: 1.0, tool: 5.0 } },
+      }),
+    )
+    w.order = res.results.map((r: { nodeId: string }) => r.nodeId)
+    // The fixture discriminates: without the override the note wins.
+    const plain = parse(
+      await w.client!.callTool({ name: 'treecontext_query', arguments: { query: 'shared query term', top_k: 5 } }),
+    )
+    expect(plain.results[0].nodeId, 'fixture is not discriminating: the note must win at default weights').toBe(w.noteId)
+  })
+
+  reg.define(/^the tool-text node ranks first$/, (w) => {
+    expect(w.order![0], 'the per-query tool weight did not lift the tool row').toBe(w.toolId)
   })
 
   reg.define(/^queried with default weights$/, async (w) => {

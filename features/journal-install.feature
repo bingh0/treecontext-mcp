@@ -176,6 +176,35 @@ Feature: Journal install — setup is auditable, reversible, and honest
     # and assert each carries a fix command — not sample one or two. A
     # sampled binding rots silently the moment a check is added.
 
+  @D276
+  Scenario: doctor says in one line that nothing is set up yet
+    Given a machine where the package is installed and no agent is wired
+    When the developer runs doctor
+    Then the first line after the header says treecontext is not set up for any agent yet and names the one command to run
+    And every warning row below it names that same command as its fix
+    # A second beta tester, 2026-10-10: npm install done, doctor run as
+    # the README said, a wall of warnings each ending in "fix: treecontext
+    # install", read as a failed install. The rows were right; the
+    # headline was missing.
+
+  @D265
+  Scenario: doctor names a staging row retried past ten times the ceiling and who spins on it
+    Given a store whose staging table holds a row retried more than ten times the retry ceiling, while the drain lease names a live holder
+    When the developer runs doctor
+    Then the capture-debt row names that staging row, its attempt count and the drain holder's process
+    And the finding's fix names the process to quit
+    # The drain releases its row claims at the end of every tick, so the
+    # only persisted evidence of who spins is the drain lease's holder;
+    # that is the claimant D265 names. Any unprocessed row past the
+    # ceiling means the dead-letter insert itself is failing, the shape a
+    # migrated store leaves.
+
+  @D265
+  Scenario: the upgrading instructions say to quit every running session first
+    Given the README's section on upgrading between betas
+    When a developer reads it before upgrading
+    Then its first instruction is to quit every running session
+
   @D51
   Scenario: the command doctor prints is one that clears the finding
     Given an installation with a finding doctor knows how to fix

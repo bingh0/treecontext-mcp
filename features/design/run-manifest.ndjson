@@ -111,12 +111,15 @@
 {"file":"flat-store-dedup.feature","title":"the fingerprint map rebuilds its dedup classes on reopen","status":"passed"}
 {"file":"flat-store-role-weights.feature","title":"a roleWeights override changes the ranking monotonically","status":"passed"}
 {"file":"flat-store-role-weights.feature","title":"all-ones weights reproduce the legacy single-column ranking exactly","status":"passed"}
+{"file":"flat-store-role-weights.feature","title":"default weights rank a note-column match above an equal tool-column match","status":"passed"}
 {"file":"flat-store-role-weights.feature","title":"default weights rank a user-column match above an equal assistant-column match","status":"passed"}
 {"file":"flat-store-role-weights.feature","title":"the MCP role_weights parameter reaches the ranking","status":"passed"}
+{"file":"flat-store-role-weights.feature","title":"the MCP role_weights parameter still raises the tool weight per query","status":"passed"}
 {"file":"flat-store-role-weights.feature","title":"weight zero still returns assistant-only matches, ranked last","status":"passed"}
 {"file":"fts-dual-cap.feature","title":"FlatStore query hits return the full decoded content, never truncated by the index cap","status":"passed"}
 {"file":"fts-dual-cap.feature","title":"a marker-less legacy row recomputes from the frozen 2000-char cap","status":"passed"}
 {"file":"fts-dual-cap.feature","title":"a marker-less prose assistant row recomputes from the frozen 4000-char cap","status":"passed"}
+{"file":"fts-dual-cap.feature","title":"an echo's index boundary is stamped on the row, so any build recomputes the same index text","status":"passed"}
 {"file":"fts-dual-cap.feature","title":"insert then delete leaves the FTS index empty for a compressed row","status":"passed"}
 {"file":"fts-dual-cap.feature","title":"insert then delete leaves the FTS index empty for a plain row","status":"passed"}
 {"file":"fts-dual-cap.feature","title":"insert then delete leaves the FTS index empty when the index text is a proper prefix of content","status":"passed"}
@@ -145,6 +148,7 @@
 {"file":"output-shielding.feature","title":"status is never shielded","status":"passed"}
 {"file":"output-shielding.feature","title":"the file lands under the operator's own roof by default","status":"passed"}
 {"file":"output-shielding.feature","title":"the shutdown sweep deletes only expired files this module minted","status":"passed"}
+{"file":"retention-demotion.feature","title":"a demoted echo shrinks to its display preview, never to its index boundary","status":"passed"}
 {"file":"retention-demotion.feature","title":"a demoted full-view row narrows to the floor but its tail survives the shrink","status":"passed"}
 {"file":"retention-demotion.feature","title":"a demoted pre-expansion row is query-findable exactly as before demotion","status":"passed"}
 {"file":"retention-demotion.feature","title":"a row whose demotion floor is empty is never demoted","status":"passed"}
@@ -237,8 +241,11 @@
 {"file":"telemetry-privacy.feature","title":"telemetry keys are bounded by the server, not the caller","status":"passed"}
 {"file":"telemetry-privacy.feature","title":"the opted-in debug fragment is bounded at forty characters","status":"passed"}
 {"file":"tool-event-fidelity.feature","title":"a Claude Code-shaped payload's tool_response is captured as the output","status":"passed"}
+{"file":"tool-event-fidelity.feature","title":"a file read's nested content and an MCP content block compose as their text","status":"passed"}
 {"file":"tool-event-fidelity.feature","title":"a new hook binary degrades cleanly against a not-yet-migrated database","status":"passed"}
 {"file":"tool-event-fidelity.feature","title":"an event that fits its caps stages exactly what it stages today","status":"passed"}
+{"file":"tool-event-fidelity.feature","title":"an object or content-block tool_response and an object tool_input are composed as their text, line breaks and tabs real","status":"passed"}
+{"file":"tool-event-fidelity.feature","title":"an old server degrades cleanly against a newer-migrated database","status":"passed"}
 {"file":"tool-event-fidelity.feature","title":"an oversized tool event stages preview plus full tail with the boundary recorded","status":"passed"}
 {"file":"tool-event-fidelity.feature","title":"identical previews with different full outputs are distinct nodes","status":"passed"}
 {"file":"tool-event-fidelity.feature","title":"ingestion carries the boundary into node metadata verbatim","status":"passed"}

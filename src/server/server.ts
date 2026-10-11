@@ -40,6 +40,23 @@ import {
   type HandoffForm,
 } from '../handoff.js'
 import { DEFAULT_RECENCY_WEIGHT, SHADOW_RECENCY_WEIGHT, recordQueryTelemetry, telemetryEnabled } from './query-telemetry.js'
+import { maxSupportedVersion } from '../persistence/migrations/index.js'
+import { newerSchemaLine } from '../persistence/migrations.js'
+
+/** D265: how long a tool call trusts the last read of the store's schema
+ *  version. One PRAGMA at most this often, never a lock; a tool ERROR
+ *  re-reads uncached (see toolError), so the window never lets a raw
+ *  constraint error through. */
+export const SCHEMA_CHECK_TTL_MS = 5_000
+
+/** A tool call against a store migrated past this build (D265): its
+ *  message is the one line the agent reads. */
+class NewerSchemaError extends Error {
+  constructor(line: string) {
+    super(line)
+    this.name = 'NewerSchemaError'
+  }
+}
 
 // ── Server state ────────────────────────────────────────────────────
 
@@ -171,6 +188,13 @@ export interface CreateServerOptions {
    * `process.cwd()`, which is what the CLI resolves when nothing is set.
    */
   projectDir?: string
+  /**
+   * TEST-ONLY schema ceiling override (D265; precedent the ingestion
+   * loop's `stagingMaxBytes`): the highest store version this server
+   * serves, default `maxSupportedVersion`. The charter's "newer server"
+   * is this binary given one version more. Production never sets it.
+   */
+  schemaCeiling?: number
 }
 
 /**
@@ -224,14 +248,60 @@ export function createServer(
     },
   )
   const sanitizeOpts: SanitizeOptions = { transport: opts.transport ?? 'stdio' }
+
+  // D265 — the stale server steps aside. Every tool call first reads the
+  // store's schema version (cached SCHEMA_CHECK_TTL_MS), independent of
+  // the drain, and a store a newer treecontext has migrated past this
+  // build answers every tool with one line telling the agent to restart.
+  const schemaCeiling = opts.schemaCeiling ?? maxSupportedVersion
+  let schemaReadAt = -Infinity
+  let schemaSeen = 0
+  /** The restart line when the store is past this build, else null.
+   *  `uncached` forces the PRAGMA. A store with no schema to read (an
+   *  injected non-SQLite MemoryStore) or a read that fails is never
+   *  called stale: the call proceeds and fails, if it fails, as itself. */
+  const newerSchema = (uncached = false): string | null => {
+    const now = Date.now()
+    if (uncached || now - schemaReadAt >= SCHEMA_CHECK_TTL_MS) {
+      let store: IngestibleStore['store'] | undefined
+      try {
+        store = (resolve() as Partial<IngestibleStore>).store
+      } catch {
+        return null
+      }
+      if (!store || typeof store.liveSchemaVersion !== 'function') return null
+      try {
+        schemaSeen = store.liveSchemaVersion()
+        schemaReadAt = now
+      } catch {
+        return null
+      }
+    }
+    return schemaSeen > schemaCeiling ? newerSchemaLine(schemaSeen, schemaCeiling) : null
+  }
+  /** The one-line reply (the tool's error reply, its text the line and
+   *  nothing else). */
+  const newerSchemaReply = (line: string) =>
+    ({ content: [{ type: 'text' as const, text: line }], isError: true as const })
+
   /** Format a tool error response with proper sanitization. */
   const toolError = (err: unknown) => {
+    if (err instanceof NewerSchemaError) return newerSchemaReply(err.message)
+    // Any other failure re-reads the version uncached: a migration that
+    // landed inside the cache window answers with the restart line, never
+    // the raw constraint error it caused (the insert path is where
+    // beta.1's still-running rc.7 server died).
+    const line = newerSchema(true)
+    if (line) return newerSchemaReply(line)
     const { message, correlationId } = sanitizeError(err, sanitizeOpts)
     const payload: Record<string, string> = { error: message }
     if (correlationId) payload.correlationId = correlationId
     return { content: [{ type: 'text' as const, text: JSON.stringify(payload) }], isError: true as const }
   }
   const ensureReady = async (): Promise<void> => {
+    // The version check comes first: a stale server takes no lease.
+    const line = newerSchema()
+    if (line) throw new NewerSchemaError(line)
     if (opts.lockHook) opts.lockHook()
   }
 
@@ -510,8 +580,8 @@ export function createServer(
         'Maximum results when adaptive=true. Default: 3× top_k.',
       ),
       recency_weight: z.number().min(0).max(2).optional().describe(
-        'Recency fusion weight. Default 0.5 at this surface (owner ruling '
-        + '2026-08-01: broad orientation queries should favor the latest '
+        'Recency fusion weight. Default 0.25 at this surface (owner ruling '
+        + '2026-08-01, lowered from 0.5 on 2026-10-10: broad orientation queries should favor the latest '
         + 'thread; the library default stays 0). Pass 0 for pure lexical '
         + 'ranking. Re-ranks by reciprocal rank fusion of the BM25 '
         + 'ordering with the same candidates ordered by capture time. '
@@ -531,13 +601,13 @@ export function createServer(
       role_weights: z.object({
         user: z.number().min(0).max(10).optional().describe('Weight for user-authored text. Default 1.0.'),
         assistant: z.number().min(0).max(10).optional().describe('Weight for assistant prose text. Default 0.25.'),
-        tool: z.number().min(0).max(10).optional().describe('Weight for tool-event text. Default 1.0.'),
+        tool: z.number().min(0).max(10).optional().describe('Weight for tool-event text. Default 0.1.'),
         note: z.number().min(0).max(10).optional().describe('Weight for agent-authored (curated) text. Default 1.0.'),
       }).optional().describe(
         'Per-role bm25 column weights (0-10 each), this query only. Weight '
         + '0 down-ranks but never hides: MATCH is column-agnostic, so a '
         + 'row matching only through a weight-0 role stays in the results, '
-        + 'ranked lower. Default: {user: 1.0, assistant: 0.25, tool: 1.0, '
+        + 'ranked lower. Default: {user: 1.0, assistant: 0.25, tool: 0.1, '
         + 'note: 1.0}.',
       ),
       scope: z.enum(['all']).optional().describe(
@@ -588,7 +658,8 @@ export function createServer(
         // Search-modes wave (2026-07-26): recency fusion + adaptive count.
         // Default-on at this surface (owner ruling 2026-08-01): the MCP
         // layer serves cold-start orientation, where recency is signal —
-        // the shadow arm below measured 0.5 before it became the default.
+        // the shadow arm below measured 0.5 before it became the default
+        // (lowered to 0.25 on 2026-10-10, D273).
         // Explicit 0 opts out; the library default stays 0.
         let adaptiveMeta: { returnedK: number; confidence: number; flat: boolean } | undefined
         // The default does NOT apply to adaptive queries: fusion suppresses
@@ -604,6 +675,10 @@ export function createServer(
         const relevanceOrdered = sort_by === undefined || sort_by === 'relevance'
         const effectiveRecency = recency_weight ?? (adaptive || !relevanceOrdered ? 0 : DEFAULT_RECENCY_WEIGHT)
         if (effectiveRecency > 0) queryOpts.recencyWeight = effectiveRecency
+        // Nor the chapter-over-bookmark placement (D275): the surface
+        // time-sorts the relevance page for a temporal listing, so the page
+        // must be the strongest lexical matches, unplaced.
+        if (!relevanceOrdered) queryOpts.chapterPlacement = false
         if (adaptive) {
           queryOpts.adaptive = true
           if (adaptive_max !== undefined) queryOpts.adaptiveMax = adaptive_max
@@ -783,6 +858,10 @@ export function createServer(
       }),
     },
     async ({ scope }) => {
+      // Status swallows ensureReady's failures, so the D265 check is
+      // spelled here too: a stale server's status is the restart line.
+      const stale = newerSchema()
+      if (stale) return newerSchemaReply(stale)
       try { await ensureReady() } catch (err) {
         warn(`[treecontext] ensureReady failed in status: ${err instanceof Error ? err.message : String(err)}`)
       }
@@ -1142,7 +1221,9 @@ export function createServer(
         + '(no size cap, nothing of it enters the conversation), or data with a label for pasted content. '
         + 'Everything new lands; anything already in the store is left alone, and the reply '
         + 'counts both. Every imported entry is marked as imported from that file by you; the '
-        + "file's own claims about who wrote an entry are kept on it as data, not trusted.",
+        + "file's own claims about who wrote an entry are kept on it as data, not trusted. "
+        + 'A handoff imports read-only by default, from a file or pasted (read_only true): '
+        + 'its entries cannot be modified, only queried, exported or deleted, and retention never evicts or shrinks them.',
       inputSchema: z.object({
       path: z.string().min(1).max(4096).optional().describe(
         "The handoff file, relative to the project directory (e.g. 'handoffs/login-plan.json'). "

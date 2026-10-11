@@ -21,6 +21,26 @@ Feature: Orchestration inside one store — lanes that stay their own
     When the tester finishes
     Then the orchestrator searching "CSRF" finds that report marked as the tester subagent's summary
 
+  @D263
+  Scenario: the client's own internal agent is marked as such, never as a subagent
+    Given a session in which the client's compaction summarizer finishes, with an agent id nobody registered and no agent type
+    When its report is captured and ingested
+    Then the entry carries the kind "internal-summary" and the writer "claude-code"
+    And the orchestrator searching the report's own words finds it
+    And it is not marked as any subagent's summary
+    # Claude Code fires SubagentStop for agents nobody spawned, the
+    # compaction summarizer and prompt-suggestion side calls; on the
+    # owner's store they outnumbered real subagents ten to one over two
+    # days and led the default handoff file. Captured whole, nothing is
+    # filtered; only the marking changes (D263).
+
+  @D263
+  Scenario: internal summaries already stored are re-marked when a newer treecontext opens the store
+    Given a store in which an earlier treecontext stored an untyped SubagentStop report as a subagent's summary beside a typed subagent's summary
+    When this treecontext opens the store
+    Then the untyped report carries the kind "internal-summary" and the writer "claude-code", its content unchanged
+    And the typed subagent's summary is unchanged
+
   @D148
   Scenario: the orchestrator reads the subagent's trail on its own
     Given an orchestrating session holding 300 entries of its own

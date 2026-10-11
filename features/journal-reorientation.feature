@@ -167,6 +167,30 @@ Feature: Re-orientation after a clear — the first reply carries the thread
     When the developer searches "CSRF token refresh"
     Then the developer sees the chapter summary ranked above the bookmark
 
+  @D166
+  Scenario: a bookmark is findable by its own words in a mature journal
+    Given a mature journal in which more than two hundred entries carry a bookmark's words in passing, and one bookmark written before them reads "at: scaffolding the login form" word for word
+    When the developer searches "scaffolding the login form"
+    Then the developer finds that bookmark among the first ten results
+    And the developer finds it among the first ten results with recency fusion declined too
+    # Measured on the owner's store, 2026-10-09: the bookmark's rank
+    # factor was multiplied into the score inside the ordering that chose
+    # the candidates, so with six hundred rows carrying the word the live
+    # bookmark fell outside the top two hundred for its own first sentence.
+    # D262 rules the factor out of that ordering; D275 retires it, and a
+    # bookmark is limited by nothing but its own words.
+
+  @D183
+  Scenario: a chapter summary is placed above a later bookmark on the page as served, in a mature journal
+    Given a mature journal in which a chapter summary and a later bookmark both contain "CSRF token refresh", among more than fifty other entries carrying those words
+    When the developer searches "CSRF token refresh"
+    Then the developer sees the chapter summary ranked above the bookmark
+    And both are returned
+    # D275: recency fusion would lift the later bookmark above its chapter
+    # in a crowded pool; the promise holds on the page as served, so each
+    # matching chapter is placed above the bookmarks it shares a match
+    # with after fusion has ordered the candidates.
+
   @D171
   Scenario: the developer sees early that the session is being journaled
     Given a fresh session with capture on

@@ -40,8 +40,10 @@ import { NodeNotFoundError } from './errors/index.js'
 import { computeAdaptiveCount } from './adaptive-count.js'
 import { decodeContent, encodeContent } from './persistence/content-codec.js'
 import { demotionTextFor, applyLiftedBoundaries, EXPLICIT_INDEX_LEN_KEY, EXPLICIT_PREVIEW_LEN_KEY } from './persistence/index-text.js'
+import { stampEchoBoundaries } from './persistence/echo-index.js'
 import { roleWeightVector } from './persistence/fts.js'
-import { BOOKMARK_KIND, BOOKMARK_RANK_FACTOR, checkpointKindOf, sessionChainWith } from './checkpoints.js'
+import { BOOKMARK_KIND, checkpointKindOf, placeChaptersAboveBookmarks, searchCheckpointKindOf, sessionChainWith } from './checkpoints.js'
+import { metadataFilterSql } from './persistence/metadata-filter.js'
 import { AMBIGUOUS_LANE, laneWriterOf, referencedBy, refIdsOf } from './references.js'
 import { resolveWriter, selfOf, selfWriterOf, MAIN_WRITER, type WriterStamp } from './persistence/session-registry.js'
 import { retireMeta } from './persistence/writer-heal.js'
@@ -57,6 +59,10 @@ export interface FlatStoreOptions {
   namespace?: string
   ownsDatabase?: boolean
   migrate?: boolean
+  /** TEST-ONLY schema ceiling override (D265): the highest store version
+   *  this open accepts, default the ladder's head. Production never sets
+   *  it; see MigrationOptions.schemaCeiling. */
+  schemaCeiling?: number
   /** Retain auto-capture from the most recent N sessions (D6). Default 100;
    *  the serve path passes the config file's `[retention] max_sessions`
    *  when set (D141). */
@@ -225,8 +231,14 @@ function boundaryOf(meta: Record<string, unknown> | null, key: string, contentLe
 
 /** The DISPLAY boundary of a row: `_preview_len` when present (schema 18+,
  *  where the FTS view can extend past the preview), else `_index_len` (the
- *  pre-018 shape, where one number was both boundaries). */
+ *  pre-018 shape, where one number was both boundaries). A stamped
+ *  `_preview_len` that covers the whole content means "display it all":
+ *  it is authoritative, and the fallback never reads an index boundary
+ *  narrower than the content as a display cut (a D261 echo indexes its
+ *  arguments only, yet a hit on it shows its output). */
 function displayLenOf(meta: Record<string, unknown> | null, contentLength: number): number | null {
+  const preview = meta?.[EXPLICIT_PREVIEW_LEN_KEY]
+  if (typeof preview === 'number' && Number.isFinite(preview) && preview >= contentLength) return null
   return (
     boundaryOf(meta, EXPLICIT_PREVIEW_LEN_KEY, contentLength) ??
     boundaryOf(meta, EXPLICIT_INDEX_LEN_KEY, contentLength)
@@ -415,8 +427,9 @@ export class FlatStore implements MemoryStore {
 
   static async open(opts: FlatStoreOptions): Promise<FlatStore> {
     const db = opts.database
-    const openOpts: { migrate?: boolean; readOnly?: boolean } = {}
+    const openOpts: { migrate?: boolean; readOnly?: boolean; schemaCeiling?: number } = {}
     if (opts.migrate !== undefined) openOpts.migrate = opts.migrate
+    if (opts.schemaCeiling !== undefined) openOpts.schemaCeiling = opts.schemaCeiling
     if (opts.readOnly) openOpts.readOnly = true
     const persistence = Persistence.openLexical(db, openOpts)
     const treeId = persistence.ensureTree(0, opts.namespace ?? 'project')
@@ -784,7 +797,11 @@ export class FlatStore implements MemoryStore {
     const topK = opts?.topK ?? 5
     const sortBy = opts?.sortBy ?? 'relevance'
     const phrase = buildFtsMatch(this.pruneHighDfTokens(ftsTokens(text)))
-    const metaFilter = opts?.metadataFilter
+    // D268: the filter's flat scalar keys become WHERE predicates (the
+    // candidates are narrowed before the cut); the residue, keys the query
+    // cannot carry, still sifts the pool below with matchesMeta.
+    const metaSql = opts?.metadataFilter ? metadataFilterSql(opts.metadataFilter, 'n.metadata_json') : undefined
+    const metaFilter = metaSql?.residue
     const excludeNs = opts?.excludeNamespaces && opts.excludeNamespaces.length > 0
       ? new Set(opts.excludeNamespaces)
       : undefined
@@ -798,6 +815,12 @@ export class FlatStore implements MemoryStore {
     let poolLimit = metaFilter || excludeNs || mediaFilter ? Math.max(topK * 5, 200) : topK
     if (recencyWeight > 0 || adaptive) {
       poolLimit = Math.max(poolLimit, topK * 4, adaptiveMax * 2, 50)
+    } else if (phrase && sortBy === 'relevance') {
+      // D275: the chapter-over-bookmark placement reads a candidate list
+      // wider than the page, so a chapter a few ranks behind a bookmark
+      // lands on the page: max(4 × top_k, 50), fusion's pool without its
+      // adaptiveMax term (adaptive is off on this branch).
+      poolLimit = Math.max(poolLimit, topK * 4, 50)
     }
     // FG-8: validated (0-10 per weight) before the vector ever reaches
     // bm25() — roleWeightVector throws synchronously on an out-of-range
@@ -818,15 +841,18 @@ export class FlatStore implements MemoryStore {
       params.unshift(phrase)
       // FG-3: always all four weights, via the one shared helper — never a
       // bare `bm25(nodes_fts)` that would silently 1.0-default every column.
-      // D183: a bookmark ranks below a chapter summary by a multiplier on
-      // its score (bm25 is negative-better, so the factor shrinks it).
-      scoreExpr = `bm25(nodes_fts, ?, ?, ?, ?) * (CASE WHEN json_extract(n.metadata_json, '$.kind') = '${BOOKMARK_KIND}' THEN ${BOOKMARK_RANK_FACTOR} ELSE 1.0 END) AS score`
+      // Raw weighted bm25, nothing else: the bookmark's score factor is
+      // retired (D275); a chapter outranks a bookmark by placement after
+      // the candidates are chosen, below, so the ordering that chooses the
+      // candidates limits a bookmark by nothing but its own words (D166).
+      scoreExpr = 'bm25(nodes_fts, ?, ?, ?, ?) AS score'
       selectParams.push(...weights)
     }
     const scope = laneScopeSql(opts?.laneScope, 'n.')
     if (scope) { where.push(scope.sql); params.push(...scope.params) }
     if (opts?.timeRange?.after !== undefined) { where.push('n.created_at >= ?'); params.push(opts.timeRange.after) }
     if (opts?.timeRange?.before !== undefined) { where.push('n.created_at <= ?'); params.push(opts.timeRange.before) }
+    if (metaSql && metaSql.where.length > 0) { where.push(...metaSql.where); params.push(...metaSql.params) }
 
     let orderBy: string
     if (sortBy === 'chronological') orderBy = 'n.created_at ASC'
@@ -838,7 +864,7 @@ export class FlatStore implements MemoryStore {
     // (or zstd-decoded) for a row that never makes the final cut. Content
     // and summary are fetched below, for exactly the returned hits.
     const sql =
-      `SELECT n.rowid AS rowid, n.node_id, n.created_at, n.metadata_json, n.session_key, n.index_len, n.preview_len, ${scoreExpr} ` +
+      `SELECT n.rowid AS rowid, n.node_id, n.created_at, n.metadata_json, n.session_key, n.index_len, n.preview_len, n.source_label, ${scoreExpr} ` +
       `${fromClause} WHERE ${where.join(' AND ')} ORDER BY ${orderBy} LIMIT ?`
     params.push(poolLimit)
 
@@ -850,6 +876,7 @@ export class FlatStore implements MemoryStore {
       session_key: string | null
       index_len: number | null
       preview_len: number | null
+      source_label: string | null
       score: number
     }>
 
@@ -859,6 +886,7 @@ export class FlatStore implements MemoryStore {
       createdAt: number
       metadata: Record<string, unknown> | null
       sessionKey: string | null
+      sourceLabel: string | null
       similarity: number
     }
     const out: SlimHit[] = []
@@ -879,9 +907,9 @@ export class FlatStore implements MemoryStore {
         createdAt: r.created_at,
         metadata: meta,
         sessionKey: r.session_key,
+        sourceLabel: r.source_label,
         similarity: phrase ? -r.score : 0,
       })
-      if (recencyWeight === 0 && !adaptive && out.length >= topK) break
     }
 
     let hits = out
@@ -914,6 +942,13 @@ export class FlatStore implements MemoryStore {
       })
     }
 
+    // D275: the chapter-over-bookmark placement runs on the ordered
+    // candidates, after fusion and before the cut. Adaptive counting reads
+    // the score distribution of the order BEFORE placement (the lexical
+    // scores, or the fused ranking's flat disclosure, exactly as before);
+    // placement then changes the order the count is cut from, never the
+    // count or any score. A placed chapter keeps its own similarity, so a
+    // page may show a lower score above a higher one.
     if (adaptive) {
       // Break detection reads the lexical score distribution. A fused
       // ordering is rank-shaped by construction (1/(K+i) terms) and has
@@ -926,9 +961,9 @@ export class FlatStore implements MemoryStore {
         : computeAdaptiveCount(hits.map((r) => r.similarity), topK, adaptiveMax)
       const finalK = Math.max(1, Math.min(applied.k, adaptiveMax, hits.length))
       opts?.onAdaptive?.({ returnedK: finalK, confidence: applied.confidence, flat: applied.flat })
-      hits = hits.slice(0, finalK)
+      hits = this.placeChapters(hits, phrase, sortBy, opts?.chapterPlacement).slice(0, finalK)
     } else {
-      hits = hits.slice(0, topK)
+      hits = this.placeChapters(hits, phrase, sortBy, opts?.chapterPlacement).slice(0, topK)
     }
 
     // Fetch + decode content for the RETURNED hits only.
@@ -1083,6 +1118,19 @@ export class FlatStore implements MemoryStore {
 
       hit.window = window
     }
+  }
+
+  /** D275 (amends D262): on a relevance-ordered search, each matching
+   *  chapter summary is placed above every matching bookmark that
+   *  precedes it in the ordered candidates; a stable pass. */
+  private placeChapters<T extends { metadata: Record<string, unknown> | null; sourceLabel: string | null }>(
+    hits: T[],
+    phrase: string | null | undefined,
+    sortBy: string,
+    enabled: boolean | undefined,
+  ): T[] {
+    if (!phrase || sortBy !== 'relevance' || enabled === false) return hits
+    return placeChaptersAboveBookmarks(hits, (h) => searchCheckpointKindOf(h.metadata, h.sourceLabel))
   }
 
   private matchesMeta(
@@ -1501,7 +1549,9 @@ export class FlatStore implements MemoryStore {
    * chapter summary is a live `next_session` pointer that is not a
    * bookmark, a subagent summary is a row whose metadata `kind` is
    * `subagent-summary` (the orchestration chunk stamps it from the
-   * SubagentStop capture). `whole` is every row of the lane. `limit` is
+   * SubagentStop capture). A report of the client's own internal agent,
+   * kind `internal-summary` (D263), is no subagent summary and is left
+   * out by that same kind test. `whole` is every row of the lane. `limit` is
    * the inline cap: when given, the NEWEST `limit` rows are returned
    * (still oldest first) and `total` says how many the form holds, so the
    * caller can state what was omitted. A file-bound export passes no limit
@@ -1641,7 +1691,9 @@ export class FlatStore implements MemoryStore {
         const fp = contentFingerprint(content)
         const now = Date.now() / 1000
         const claimed = (n['metadata'] as Record<string, unknown> | null) ?? null
-        const meta = handoff ? handoffMetadata(claimed, handoff, importedAt) : claimed
+        // D261: an echo the file carries without its index boundary gets
+        // it here, exactly as the drain would stamp it.
+        const meta = stampEchoBoundaries(content, handoff ? handoffMetadata(claimed, handoff, importedAt) : claimed)
         // On the handoff door the importer, not the file, sets the row's
         // own columns (D165): the source is derived from the entry's
         // descriptive metadata exactly as insert() derives it.
@@ -2572,8 +2624,17 @@ export class FlatStore implements MemoryStore {
           _full_len: v.decoded.length,
           _archive_path: archivePath,
         }
-        newMeta[EXPLICIT_INDEX_LEN_KEY] = v.idxText.length
-        delete newMeta[EXPLICIT_PREVIEW_LEN_KEY]
+        // A demotion never moves an index boundary outward (D261): an
+        // echo's boundary sits at its arguments, inside the stump, and
+        // stays there so the stump never indexes its Output again; the
+        // stump is then displayed whole by an explicit display boundary.
+        const oldIdx = v.meta?.[EXPLICIT_INDEX_LEN_KEY]
+        const keptIdx = typeof oldIdx === 'number' && Number.isFinite(oldIdx) && oldIdx >= 0
+          ? Math.min(Math.trunc(oldIdx), v.idxText.length)
+          : v.idxText.length
+        newMeta[EXPLICIT_INDEX_LEN_KEY] = keptIdx
+        if (keptIdx < v.idxText.length) newMeta[EXPLICIT_PREVIEW_LEN_KEY] = v.idxText.length
+        else delete newMeta[EXPLICIT_PREVIEW_LEN_KEY]
         this.persistence.updateNode({
           nodeId: r.node_id,
           treeId: this.treeId,

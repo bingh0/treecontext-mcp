@@ -13,7 +13,8 @@ import {
 /**
  * AC2.1 golden pin, retargeted at the deletion phase (2026-07-25) and
  * re-pinned 2026-10-08 when D174 added the checkpoint protocol (and
- * again that day when the handoff step named the label, D218): the
+ * again that day when the handoff step named the label, D218; and
+ * 2026-10-11 when step 2 said what it recovers, D264): the
  * served instruction set is INSTRUCTIONS_BRIEF_LEXICAL — brief by the
  * t10 activation evidence (verbose SUPPRESSED activation and blew the
  * 2KB cap). Changing these bytes is a deliberate act: update this pin
@@ -24,7 +25,7 @@ const GOLDEN_LEXICAL: string = [
   '1. treecontext_status — check resume_pointers ("newest N of M" means',
   '   stale pointers need supersession cleanup).',
   '   Fetch each resume pointer via treecontext_export(node_id).',
-  '2. treecontext_query("what was I working on, what was the next step").',
+  '2. treecontext_query("what was I working on, what was the next step") recovers the thread around the resume pointers status found.',
   'Only then respond to the user.',
   '',
   'On Claude Code, hooks auto-capture tool-use and user messages; elsewhere',

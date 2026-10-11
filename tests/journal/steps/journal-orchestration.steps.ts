@@ -9,7 +9,8 @@ import { type Registry } from 'gherkin-node-test/vitest'
 import { FlatStore } from '../../../src/flat-store.js'
 import { wrapBetterSqlite } from '../../../src/persistence/better-sqlite.js'
 import { writeSessionBeacon } from '../../../src/session-beacon.js'
-import { SUBAGENT_SUMMARY_KIND } from '../../../src/handoff.js'
+import { SUBAGENT_SUMMARY_KIND, INTERNAL_SUMMARY_KIND, CLIENT_WRITER } from '../../../src/handoff.js'
+import { decodeContent } from '../../../src/persistence/content-codec.js'
 import { mcpOver, parseTool, rawAll } from '../world.js'
 import { TS_ROOT, tsxArgv } from '../proc.js'
 import { sandboxedSpawnEnv } from '../../helpers/cli-spawn.js'
@@ -86,6 +87,12 @@ export interface OrchestrationWorld extends ReorientationWorld {
   startPackets?: Record<string, string>
   /** The brief the orchestrator injected. */
   briefText?: string
+  /** The client's own internal agent (D263): its agent id and report. */
+  internalId?: string
+  internalReport?: string
+  /** Rows exactly as SQLite held them before this treecontext opened the
+   *  store (D263's migration), by node id. */
+  rowsBefore?: Record<string, { metadata_json: string; content: Buffer | string | null }>
 }
 
 type Hit = { nodeId: string; content: string; metadata: Record<string, unknown> | null; referencedBy?: RefBy }
@@ -217,6 +224,41 @@ async function testerTrail(w: OrchestrationWorld, agentId: string, outputs: stri
   subagentStop(w, agentId, 'tester', report)
   await drainStaging(w)
 }
+
+// ── The client's own internal agent (D263) ──────────────────────────────
+
+/** What Claude Code's compaction summarizer hands back: a long, structured
+ *  summary of the conversation so far (the owner's largest was 11 KB). One
+ *  word in it, `quokkaledger`, is in no other row, so a search for the
+ *  report's own words has one right answer. */
+export function compactionSummary(): string {
+  const sections = [
+    'This session is being continued from a previous conversation that ran out of context. The conversation is summarized below:',
+    'Analysis: the developer asked for the login form, then for the CSRF test; the quokkaledger migration was discussed and deferred.',
+    '1. Primary Request and Intent: wire the login form to POST /session and make the CSRF test pass.',
+    '2. Key Technical Concepts: SameSite cookies, double-submit tokens, the session middleware.',
+    '3. Files and Code Sections: src/routes/session.ts (the POST handler), test/csrf.test.ts (the failing case).',
+    '4. Errors and fixes: the token was read from the body before the parser ran; moved the parser up.',
+    '5. Pending Tasks: rerun the CSRF suite; write the chapter summary.',
+  ]
+  const detail = Array.from({ length: 60 }, (_, i) => `   - step ${i}: reviewed the session middleware ordering against case ${i} and noted the result`)
+  return [...sections, ...detail].join('\n')
+}
+
+/** A SubagentStop for an agent nobody spawned, as Claude Code fires it: the
+ *  parent's session id, an agent id, no agent_type, the report. */
+function internalStop(w: OrchestrationWorld, agentId: string, report: string): void {
+  runHook(w, 'subagent-stop', {
+    hook_event_name: 'SubagentStop', agent_id: agentId, stop_hook_active: false,
+    agent_transcript_path: join(w.proj!, `agent-${agentId}.jsonl`), last_assistant_message: report,
+  })
+}
+
+type StoredRow = { node_id: string; metadata_json: string; content: Buffer | string | null }
+function storedRows(w: OrchestrationWorld, where: string, ...params: unknown[]): StoredRow[] {
+  return rawAll<StoredRow>(w, `SELECT node_id, metadata_json, content FROM nodes WHERE ${where} ORDER BY created_at, node_id`, ...params)
+}
+const contentBytes = (c: Buffer | string | null): Buffer => Buffer.isBuffer(c) ? c : Buffer.from(c ?? '', 'utf8')
 
 // ── A real repository with real worktrees (D167, D190) ──────────────────
 
@@ -378,6 +420,111 @@ export const orchestrationDefiner = (reg: Registry<OrchestrationWorld>): void =>
     for (const m of [hit!.metadata, rawMeta(w, hit!.nodeId)]) {
       expect(m).toMatchObject({ kind: SUBAGENT_SUMMARY_KIND, _writer: 'tester', _writer_agent_id: w.testerId, _writer_src: 'hook', session_id: w.sessionId })
     }
+  })
+
+  // ── D263: the client's own internal agent, marked as such ──
+  reg.define(/^a session in which the client's compaction summarizer finishes, with an agent id nobody registered and no agent type$/, async (w) => {
+    await openWorld(w)
+    sessionStart(w)
+    w.internalId = `a${randomBytes(8).toString('hex')}`
+    w.internalReport = compactionSummary()
+    // Nobody registered it: the registry holds the session's self only.
+    expect(rawAll(w, 'SELECT agent_id FROM session_registry WHERE session_id = ?', w.sessionId)).toEqual([{ agent_id: '' }])
+  })
+  reg.define(/^its report is captured and ingested$/, async (w) => {
+    internalStop(w, w.internalId!, w.internalReport!)
+    // Staged as the hook wrote it: the agent id, no agent type, the kind.
+    expect(rawAll(w, 'SELECT agent_id, agent_type, kind, length(content) AS n FROM staging WHERE agent_id = ?', w.internalId)).toEqual([
+      { agent_id: w.internalId, agent_type: null, kind: INTERNAL_SUMMARY_KIND, n: w.internalReport!.length },
+    ])
+    await drainStaging(w)
+  })
+  reg.define(/^the entry carries the kind "([^"]+)" and the writer "([^"]+)"$/, (w, kind$, writer$) => {
+    expect([String(kind$), String(writer$)]).toEqual([INTERNAL_SUMMARY_KIND, CLIENT_WRITER])
+    const rows = storedRows(w, "json_extract(metadata_json, '$._writer_agent_id') = ?", w.internalId)
+    expect(rows).toHaveLength(1)
+    // Captured whole: the stored bytes decode to the report itself.
+    expect(decodeContent(rows[0]!.content)).toBe(w.internalReport)
+    expect(JSON.parse(rows[0]!.metadata_json)).toMatchObject({
+      kind: String(kind$), _writer: String(writer$), _writer_src: 'hook', _writer_agent_id: w.internalId,
+      role: 'assistant', source: 'auto-capture', session_id: w.sessionId,
+    })
+    w.noteId = rows[0]!.node_id
+  })
+  reg.define(/^the orchestrator searching the report's own words finds it$/, async (w) => {
+    await sessionClient(w)
+    const hits = await query(w, 'quokkaledger migration deferred')
+    expect(hits[0]?.nodeId, JSON.stringify(hits.map((h) => h.content.slice(0, 80)))).toBe(w.noteId)
+    expect(hits[0]!.metadata).toMatchObject({ kind: INTERNAL_SUMMARY_KIND, _writer: CLIENT_WRITER })
+  })
+  reg.define(/^it is not marked as any subagent's summary$/, async (w) => {
+    const m = rawMeta(w, w.noteId!)
+    expect(m['kind']).not.toBe(SUBAGENT_SUMMARY_KIND)
+    // Not under the agent id as a writer either, the lane a subagent's
+    // report would have joined.
+    expect(m['_writer']).not.toBe(w.internalId)
+    expect(rawAll(w, "SELECT node_id FROM nodes WHERE json_extract(metadata_json, '$.kind') = ?", SUBAGENT_SUMMARY_KIND)).toEqual([])
+    // Nor a resume pointer: the status panel the next session reads.
+    const panel = await statusPanel(w)
+    expect(JSON.stringify(panel['resume_pointers'] ?? [])).not.toContain(w.noteId!)
+  })
+
+  // ── D263: what an earlier treecontext stored, re-marked on open ──
+  reg.define(/^a store in which an earlier treecontext stored an untyped SubagentStop report as a subagent's summary beside a typed subagent's summary$/, async (w) => {
+    await openWorld(w)
+    sessionStart(w)
+    // The typed subagent, through the real hooks and the drain.
+    w.testerId = `agent-${randomBytes(4).toString('hex')}`
+    w.report = '12 tests pass, CSRF fails on the login form'
+    subagentStart(w, w.testerId, 'tester')
+    subagentStop(w, w.testerId, 'tester', w.report)
+    // The untyped one as the earlier SubagentStop hook staged it — the
+    // agent id, no agent type, kind subagent-summary, the columns that
+    // hook's staging writer filled — then the same drain.
+    w.internalId = `a${randomBytes(8).toString('hex')}`
+    w.internalReport = compactionSummary()
+    const stage = new BetterSqlite3(w.dbPath!)
+    try {
+      stage.prepare(
+        `INSERT INTO staging (session_id, role, content, tool_name, timestamp, priority, processed, created_at, index_len, preview_len, namespace, agent_id, agent_type, kind)
+         VALUES (?, 'assistant', ?, NULL, ?, 1, 0, ?, ?, NULL, NULL, ?, NULL, ?)`,
+      ).run(w.sessionId, w.internalReport, now(), now(), w.internalReport.length, w.internalId, SUBAGENT_SUMMARY_KIND)
+    } finally { stage.close() }
+    await drainStaging(w)
+    const untyped = storedRows(w, "json_extract(metadata_json, '$._writer_agent_id') = ?", w.internalId)
+    const typed = storedRows(w, "json_extract(metadata_json, '$._writer_agent_id') = ?", w.testerId)
+    expect([untyped.length, typed.length]).toEqual([1, 1])
+    // As the earlier treecontext left them: both subagent summaries, the
+    // untyped one under its agent id.
+    expect(JSON.parse(untyped[0]!.metadata_json)).toMatchObject({ kind: SUBAGENT_SUMMARY_KIND, _writer: w.internalId, _writer_src: 'hook' })
+    expect(JSON.parse(typed[0]!.metadata_json)).toMatchObject({ kind: SUBAGENT_SUMMARY_KIND, _writer: 'tester', _writer_src: 'hook' })
+    w.noteId = untyped[0]!.node_id
+    w.planId = typed[0]!.node_id
+    w.rowsBefore = Object.fromEntries([...untyped, ...typed].map((r) => [r.node_id, { metadata_json: r.metadata_json, content: r.content }]))
+    // ...at that treecontext's schema.
+    await w.store!.close()
+    const raw = new BetterSqlite3(w.dbPath!)
+    try { raw.pragma('user_version = 28') } finally { raw.close() }
+  })
+  reg.define(/^this treecontext opens the store$/, async (w) => {
+    const store = await FlatStore.open({ database: wrapBetterSqlite(new BetterSqlite3(w.dbPath!)), ownsDatabase: true })
+    w.defer(() => store.close())
+    w.store = store
+    expect(rawAll<{ v: number }>(w, 'SELECT user_version AS v FROM pragma_user_version')[0]!.v).toBe(29)
+  })
+  reg.define(/^the untyped report carries the kind "([^"]+)" and the writer "([^"]+)", its content unchanged$/, (w, kind$, writer$) => {
+    const [row] = storedRows(w, 'node_id = ?', w.noteId)
+    const before = w.rowsBefore![w.noteId!]!
+    expect(JSON.parse(row!.metadata_json)).toEqual({ ...JSON.parse(before.metadata_json), kind: String(kind$), _writer: String(writer$) })
+    expect(contentBytes(row!.content).equals(contentBytes(before.content))).toBe(true)
+    expect(decodeContent(row!.content)).toBe(w.internalReport)
+  })
+  reg.define(/^the typed subagent's summary is unchanged$/, (w) => {
+    const [row] = storedRows(w, 'node_id = ?', w.planId)
+    const before = w.rowsBefore![w.planId!]!
+    expect(row!.metadata_json).toBe(before.metadata_json)
+    expect(contentBytes(row!.content).equals(contentBytes(before.content))).toBe(true)
+    expect(JSON.parse(row!.metadata_json)).toMatchObject({ kind: SUBAGENT_SUMMARY_KIND, _writer: 'tester' })
   })
 
   // ── D148: the subagent's trail, read on its own ──

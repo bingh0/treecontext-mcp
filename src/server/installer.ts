@@ -11,7 +11,7 @@ import {
 } from 'node:fs'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { createRequire } from 'node:module'
-import { homedir } from 'node:os'
+import { homedir, hostname } from 'node:os'
 import { join, dirname, basename, resolve, isAbsolute, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parse as parseToml, stringify as stringifyToml } from 'smol-toml'
@@ -4138,6 +4138,21 @@ export function storeLockRow(label: string, dbPath: string, found: StoreLockProc
   }
 }
 
+/** The command that wires treecontext into every detected agent. */
+export const INSTALL_COMMAND = 'treecontext install'
+
+/** Doctor's first line after its header on a machine where nothing is
+ *  wired yet (D276). */
+export const NOT_SET_UP_HEADLINE = `treecontext is not set up for any agent yet — run: ${INSTALL_COMMAND}`
+
+/** A documented client's doctor row that shows nothing of treecontext
+ *  wired: no MCP entry, and no hooks of ours (installed, partial, present
+ *  or copied by a copying client) and no skill on disk. */
+function unwiredAgentRow(detail: string): boolean {
+  return detail.includes('MCP not configured')
+    && !/hooks (installed|incomplete|present|copied into)|two hook routes|hook scripts:|skill (installed|outdated)|config parse error/.test(detail)
+}
+
 export async function doctor(): Promise<DiagnosticResult[]> {
   const results: DiagnosticResult[] = []
   const platform = process.platform as Platform
@@ -4820,13 +4835,28 @@ export async function doctor(): Promise<DiagnosticResult[]> {
     // anything, and the schema section already says so.
     if (!existsSync(dbPath)) return
 
-    const { captureDebt, humanAge } = await import('./store-audit.js')
+    const { captureDebt, humanAge, runawayStaging, RUNAWAY_ATTEMPTS_FACTOR } = await import('./store-audit.js')
+    const { MAX_INGEST_ATTEMPTS } = await import('../persistence/capture-constants.js')
     const Database = (await import('better-sqlite3')).default
     let debt: import('./store-audit.js').CaptureDebt
+    let runaway: import('./store-audit.js').RunawayStaging | null = null
+    let drainHolder: (ReturnType<typeof leaseHolders>[number]) | null = null
+    // D265: "far past the ceiling" is more than ten times the retry
+    // ceiling (RUNAWAY_ATTEMPTS_FACTOR × MAX_INGEST_ATTEMPTS).
+    const runawayThreshold = RUNAWAY_ATTEMPTS_FACTOR * MAX_INGEST_ATTEMPTS
     let db: import('better-sqlite3').Database | null = null
     try {
       db = new Database(dbPath, { readonly: true, fileMustExist: true })
       debt = captureDebt(db)
+      runaway = runawayStaging(db, runawayThreshold)
+      if (runaway) {
+        // The drain releases its row claims at every tick's end, so the
+        // one persisted evidence of who spins is the drain lease's holder.
+        try {
+          drainHolder = leaseHolders(db as unknown as Parameters<typeof leaseHolders>[0])
+            .find((l) => l.role === 'drain') ?? null
+        } catch { /* a pre-arbiter store has no leases table */ }
+      }
     } catch {
       // The schema section above already reports an unreadable store, in
       // its own voice and with its own fix. Saying it twice reads as two
@@ -4858,7 +4888,42 @@ export async function doctor(): Promise<DiagnosticResult[]> {
     const stalledNote = ' — and a backlog this old with nothing drained usually means'
       + ' nothing is draining this store (an idle machine between sessions can look the'
       + ' same; the age is the tell)'
-    if (debt.deadLetters > 0) {
+    if (runaway) {
+      // D265: a row retried this far past the ceiling is a drain whose
+      // dead-letter insert fails every tick — on the beta.1 night, an
+      // rc.7 server beside a store a newer release had migrated retried 5
+      // rows every 5 s for 2 h 20 min. The fix names the process to quit
+      // (D51: a runnable command, the locked-store row's shape).
+      const windows = process.platform === 'win32'
+      // The kill is offered only for a process this machine can stop and
+      // that is still heartbeating: a live lease held on this host. An
+      // expired lease or a foreign host gets the plain command instead.
+      const killable = drainHolder !== null && drainHolder.live && drainHolder.holderHost === hostname()
+      const who = drainHolder
+        ? `the drain is held by pid ${drainHolder.holderPid}@${drainHolder.holderHost}`
+          + (drainHolder.holderLabel ? ` (${drainHolder.holderLabel})` : '')
+          + (drainHolder.live ? '' : ', its lease expired — the last holder')
+        : 'no drain holder is recorded'
+      const more = runaway.count > 1 ? ` (${runaway.count} rows are past it)` : ''
+      const act = killable
+        ? ` Quit and restart the session whose server is pid ${drainHolder!.holderPid} (the fix stops it);`
+          + ' `treecontext doctor --dump-logs` first shows what it logged.'
+        : ' Quit every running session (Claude Code, VS Code) and start again;'
+          + ' the fix shows what the drain logged.'
+      results.push({
+        check: 'Capture debt', status: 'warn',
+        detail: `${boundStore}: staging row ${runaway.id} has been retried ${runaway.attempts} times,`
+          + ` more than ten times the retry ceiling of ${MAX_INGEST_ATTEMPTS}${more}, and ${who}`
+          + ' — a server whose every attempt fails before it can record the gap; the rows are kept, not lost; '
+          + staged
+          + (debt.deadLetters > 0 ? `; ${debt.deadLetters} capture gap${debt.deadLetters !== 1 ? 's' : ''} recorded` : '')
+          + '.' + act,
+        // D51: the fix is a bare runnable command (the locked-store row's shape).
+        fix: killable
+          ? (windows ? `taskkill /F /PID ${drainHolder!.holderPid}` : `kill ${drainHolder!.holderPid}`)
+          : 'treecontext doctor --dump-logs',
+      })
+    } else if (debt.deadLetters > 0) {
       results.push({
         check: 'Capture debt', status: 'warn',
         detail: `${boundStore}: ${debt.deadLetters} capture gap${debt.deadLetters !== 1 ? 's' : ''}`
@@ -5083,6 +5148,8 @@ export async function doctor(): Promise<DiagnosticResult[]> {
 
   // Per-agent checks
   const detected = detectAgents(platform)
+  // Each documented client's row, kept for the headline (D276).
+  const agentRows: DiagnosticResult[] = []
   let agentsCaptureOk = 0
   let agentsCaptureWarn = 0
   let agentsTotal = 0
@@ -5413,12 +5480,14 @@ export async function doctor(): Promise<DiagnosticResult[]> {
     const fix = !allGood
       ? `treecontext install --force --agent ${agent.slug}${copyWarn ? ' --experimental-capture' : ''}`
       : client?.warn ? client.fix : undefined
-    results.push({
+    const agentRow: DiagnosticResult = {
       check: agent.name,
       status: allGood && !client?.warn ? 'ok' : 'warn',
       detail: parts.join(', '),
       ...(fix ? { fix } : {}),
-    })
+    }
+    results.push(agentRow)
+    agentRows.push(agentRow)
     if (unmanagedRow) results.push(unmanagedRow)
   }
 
@@ -5490,6 +5559,24 @@ export async function doctor(): Promise<DiagnosticResult[]> {
         fix: 'Ensure --debug is in your MCP args (default since v0.x). Run treecontext install --force to update configs.',
       })
     }
+  }
+
+  // D276: nothing wired yet — every documented client's row unconfigured
+  // (no MCP entry, no hooks of ours, no skill) and no CCS hooks synced.
+  // Keyed on the wiring, not on install artifacts: a config.toml or a logs
+  // directory an uninstall left behind wires nothing. A wall of right
+  // warnings read as a failed install; one line above them says what the
+  // state is and the one command that ends it. On that machine the plain
+  // command is every client row's fix too: it wires each detected client
+  // whole, so the rows and the headline name the same command (D51 still
+  // holds: that command clears every one of them).
+  const nothingWired = !results.some((r) => r.check === 'CCS' && r.detail.includes('hooks synced'))
+    && agentRows.every((r) => unwiredAgentRow(r.detail))
+  if (nothingWired) {
+    for (const r of agentRows) {
+      if (r.fix?.startsWith(`${INSTALL_COMMAND} --force --agent `)) r.fix = INSTALL_COMMAND
+    }
+    console.log(NOT_SET_UP_HEADLINE)
   }
 
   // Print results

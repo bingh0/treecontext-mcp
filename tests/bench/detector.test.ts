@@ -3,7 +3,8 @@ import BetterSqlite3 from 'better-sqlite3'
 import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
 import { FlatStore } from '../../src/flat-store.js'
 import { clusterBootstrapSE, queryBootstrapSE, recallAtK, advisoryFloor } from '../../bench/lib/metrics.js'
-import { compareValues, compareSlices, type SliceResult } from '../../bench/lib/report.js'
+import { compareValues, compareSlices, renderReport, sigmasCell, sigmasPhrase, type RunRecord, type SliceResult } from '../../bench/lib/report.js'
+import { pairedCompare } from '../../bench/lib/paired.js'
 import { MUTATIONS, findMutation } from '../../bench/mutations.js'
 
 /**
@@ -76,6 +77,68 @@ describe('per-slice detection', () => {
   it('leaves untouched slices alone', () => {
     const same = compareSlices(slice('knowledge-update', 0.986, 72, 0.014), slice('knowledge-update', 0.986, 72, 0.014))
     expect(same.verdict).toBe('within-noise')
+  })
+})
+
+describe('a change over a zero standard error (D271)', () => {
+  it('flags a nonzero drop when neither side has any variance', () => {
+    // The chunk-2 case: a checkpoint slice at 100% on the reference and at
+    // 50% on a mutated run, each with SE 0, read "0.0 SE, within noise".
+    const cmp = compareSlices(slice('checkpoint-lookup', 0.5, 8, 0), slice('checkpoint-lookup', 1, 8, 0))
+    expect(cmp.verdict).toBe('regression')
+    expect(cmp.jointSe).toBe(0)
+    expect(cmp.sigmas).toBe(Number.POSITIVE_INFINITY)
+  })
+
+  it('flags a nonzero gain by its sign', () => {
+    expect(compareValues(1, 0, 0.5, 0).verdict).toBe('improvement')
+  })
+
+  it('keeps a zero change over a zero error within noise', () => {
+    const cmp = compareValues(1, 0, 1, 0)
+    expect(cmp.verdict).toBe('within-noise')
+    expect(cmp.sigmas).toBe(0)
+  })
+
+  it('never renders Infinity', () => {
+    expect(sigmasCell(Number.POSITIVE_INFINITY)).toBe('exact (SE 0)')
+    expect(sigmasPhrase(Number.POSITIVE_INFINITY)).toBe('exact (SE 0)')
+    expect(sigmasPhrase(3.21)).toBe('3.2 SE')
+    const run = (value: number, sliceValue: number): RunRecord => ({
+      schema: 1, arm: 'a', metric: 'mrr@5', value, se: 0.01, se_cluster: 0, n: 100, advisory_floor: 0,
+      elapsed_s: 1, measured_at: '2026-10-10T00:00:00Z', mapping_version: 1, partial: false,
+      corpus: { id: 'c', path: 'p', bytes: 1, sha256: 'x'.repeat(64), pinned: true, mismatch: false },
+      slices: [slice('s', sliceValue, 8, 0)], slice_rule: 'r', code_sha: null, code_dirty: false,
+      better_sqlite3: 'x', sqlite: 'x', node: 'x', platform: 'x',
+    } as unknown as RunRecord)
+    const text = renderReport(run(0.9, 0.5), [run(0.9, 1)])
+    expect(text).toContain('⚠️ exact (SE 0)')
+    expect(text).not.toContain('Infinity')
+  })
+
+  it('keeps a slice flag a slice flag: the aggregate verdict is its own test', () => {
+    // A slice that lost everything inside an aggregate that barely moved.
+    const sliceCmp = compareSlices(slice('s', 0, 4, 0), slice('s', 1, 4, 0))
+    const aggregate = compareValues(0.98, 0.01, 0.99, 0.01)
+    expect(sliceCmp.verdict).toBe('regression')
+    expect(aggregate.verdict).toBe('within-noise')
+  })
+})
+
+describe('the paired comparison over a zero standard error (D271)', () => {
+  it('flags a change every query shares by its sign', () => {
+    const a = [1, 1, 1, 1]
+    const worse = pairedCompare(a, [0.5, 0.5, 0.5, 0.5])
+    expect(worse.se).toBe(0)
+    expect(worse.verdict).toBe('A better')
+    expect(sigmasCell(worse.sigmas)).toBe('exact (SE 0)')
+    expect(pairedCompare(a.map(() => 0.5), a).verdict).toBe('B better')
+  })
+
+  it('reads no change as no change', () => {
+    const same = pairedCompare([1, 0.5, 0], [1, 0.5, 0])
+    expect(same.verdict).toBe('no detectable difference')
+    expect(same.sigmas).toBe(0)
   })
 })
 

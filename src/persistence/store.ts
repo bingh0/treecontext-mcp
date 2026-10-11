@@ -182,6 +182,13 @@ export class Persistence {
     return this.db
   }
 
+  /** The store's schema version as the file says it NOW — one PRAGMA,
+   *  uncached, no lock. `schemaVersion` is the version at open; this is
+   *  what a newer treecontext may have migrated it to since (D265). */
+  liveSchemaVersion(): number {
+    return currentSchemaVersion(this.db)
+  }
+
   // ── Open / initial setup ──────────────────────────────────────────
 
   /**
@@ -190,7 +197,7 @@ export class Persistence {
    * carries no vectors, and writing one would break D7 legacy-store
    * detection.
    */
-  static openLexical(db: Database, opts?: { migrate?: boolean; readOnly?: boolean }): Persistence {
+  static openLexical(db: Database, opts?: { migrate?: boolean; readOnly?: boolean; schemaCeiling?: number }): Persistence {
     // ensureBaseSchema is the ONE definition of "fresh" (version 0 AND
     // empty sqlite_master, decided under a transaction) — the old
     // version-0-only check here would have stamped user_version = 5
@@ -211,6 +218,7 @@ export class Persistence {
     } else if (opts?.migrate !== undefined) {
       migrationOpts.migrate = opts.migrate
     }
+    if (opts?.schemaCeiling !== undefined) migrationOpts.schemaCeiling = opts.schemaCeiling
     runMigrations(db, migrationOpts)
     if (!opts?.readOnly) writeSchemaMeta(db, 'last_opened_at', String(Math.floor(Date.now() / 1000)))
     const p = new Persistence(db)

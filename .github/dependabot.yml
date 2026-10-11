@@ -1,0 +1,22 @@
+# Dependabot version updates — free on the public repo, so they are on.
+# Weekly, grouped, so a quiet project gets at most two pull requests a
+# week (one for npm, one for the actions the CI workflow pins) rather than
+# one per bump. Security updates are a separate repo setting and arrive
+# as they happen, ungrouped, regardless of this schedule.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      npm-dependencies:
+        patterns: ['*']
+    open-pull-requests-limit: 5
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns: ['*']

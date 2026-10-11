@@ -131,6 +131,10 @@ export function exporterName(): string {
  *  orchestration chunk, which stamps it from the SubagentStop capture. */
 export const SUBAGENT_SUMMARY_KIND = 'subagent-summary'
 
+/** The client's own internal agent's report kind and writer (D263),
+ *  spelled in the persistence layer beside the other writers. */
+export { INTERNAL_SUMMARY_KIND, CLIENT_WRITER } from './persistence/session-registry.js'
+
 /** What a handoff carries: the default `summaries` (the chapter summaries
  *  and the subagent summaries, D177), or the `whole` journal, a deliberate
  *  choice behind the secrets warning. */

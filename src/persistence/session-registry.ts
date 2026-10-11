@@ -59,6 +59,18 @@ export const MAIN_WRITER = 'main'
  *  worktree is its own lane (D167, D169), kept apart from role names. */
 export const WORKTREE_WRITER_PREFIX = 'worktree:'
 
+/** The kind of a report from the client's own internal agent (D263): a
+ *  SubagentStop whose agent id no SubagentStart registered and whose
+ *  payload names no agent type, the compaction summarizer or a side call.
+ *  Captured whole and searchable, never a subagent summary, so neither the
+ *  summaries handoff form, the packet nor the resume pointers take it. */
+export const INTERNAL_SUMMARY_KIND = 'internal-summary'
+
+/** The writer such a report is stamped with: the client itself. A user
+ *  subagent type of the same name is escaped (`agent:claude-code`,
+ *  agentWriterOf), so the two never share a lane. */
+export const CLIENT_WRITER = 'claude-code'
+
 /** The metadata keys only the store writes — the stamp, the heal's
  *  record, and the supersession trace the heal restores from. A caller's
  *  copy through the insert tool is a forgery and is dropped. */
@@ -208,12 +220,12 @@ export const AGENT_WRITER_PREFIX = 'agent:'
 
 /** The writer a subagent's type or id names: its role (D167: a
  *  subagent's self is its role), the instance id when no type was sent,
- *  under `agent:` when the bare name would read as the main checkout's or
- *  a worktree's lane. One spelling for the drain, the registry and the
+ *  under `agent:` when the bare name would read as the main checkout's
+ *  lane, a worktree's, or the client's own (`claude-code`, D263). One spelling for the drain, the registry and the
  *  echo heal. */
 export function agentWriterOf(agentType: string | null | undefined, agentId: string | null | undefined): string {
   const name = agentType && agentType.trim() !== '' ? agentType : (agentId ?? '')
-  return name === MAIN_WRITER || name.startsWith(WORKTREE_WRITER_PREFIX) || name.startsWith(AGENT_WRITER_PREFIX)
+  return name === MAIN_WRITER || name === CLIENT_WRITER || name.startsWith(WORKTREE_WRITER_PREFIX) || name.startsWith(AGENT_WRITER_PREFIX)
     ? `${AGENT_WRITER_PREFIX}${name}` : name
 }
 

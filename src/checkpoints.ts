@@ -29,14 +29,51 @@ export type CheckpointKind = 'chapter' | 'bookmark'
  *  kind (or any other value): it is today's resume pointer, unchanged. */
 export const BOOKMARK_KIND = 'bookmark'
 
-/** BM25 multiplier for a bookmark in search (D183): a chapter outranks a
- *  bookmark the way curated notes outrank assistant prose — by a weight,
- *  not a filter, so a bookmark that is the only match still surfaces. The
- *  same 0.25 the role weights give assistant prose (persistence/fts.ts). */
-export const BOOKMARK_RANK_FACTOR = 0.25
-
 export function checkpointKindOf(meta: Record<string, unknown> | null | undefined): CheckpointKind {
   return meta?.['kind'] === BOOKMARK_KIND ? 'bookmark' : 'chapter'
+}
+
+/** A search hit's checkpoint kind, for the chapter-over-bookmark placement
+ *  of search (D183, D275), or null for a row the placement leaves where
+ *  fusion put it. A curated row only (never an auto-capture): a bookmark
+ *  is one whose `kind` is `bookmark`, live or superseded; a chapter
+ *  summary is a LIVE resume pointer that is not a bookmark (D158:
+ *  `next_session`, or `status: active`). A superseded chapter is not
+ *  lifted (D275 as clarified): it ranks as fusion left it. */
+export function searchCheckpointKindOf(
+  meta: Record<string, unknown> | null | undefined,
+  sourceLabel: string | null | undefined,
+): CheckpointKind | null {
+  if (!meta || sourceLabel === 'auto-capture') return null
+  if (checkpointKindOf(meta) === 'bookmark') return 'bookmark'
+  return meta['next_session'] === true || meta['status'] === 'active' ? 'chapter' : null
+}
+
+/** The chapter-over-bookmark placement (D275, amending D262): over an
+ *  ordered candidate list. It reaches as far as the candidate pool the
+ *  query fetched and no further: max(4 × top_k, 50) rows for an
+ *  unfiltered search (more under adaptive), max(5 × top_k, 200) when a
+ *  residue metadata key, a namespace exclusion or a media filter sifts the
+ *  pool, so the same words can place a deep chapter differently by the
+ *  filter's shape. Over that list, each chapter summary that some bookmark
+ *  precedes is moved to just above the first bookmark that precedes it;
+ *  everything else keeps its relative order (a stable pass: bookmarks and
+ *  the rows between shift down by one). Returns a new array; scores are
+ *  untouched, only order changes. */
+export function placeChaptersAboveBookmarks<T>(items: readonly T[], kindOf: (item: T) => CheckpointKind | null): T[] {
+  const out: T[] = []
+  let firstBookmark = -1
+  for (const item of items) {
+    const kind = kindOf(item)
+    if (kind === 'chapter' && firstBookmark >= 0) {
+      out.splice(firstBookmark, 0, item)
+      firstBookmark++
+      continue
+    }
+    if (kind === 'bookmark' && firstBookmark < 0) firstBookmark = out.length
+    out.push(item)
+  }
+  return out
 }
 
 /** The label status and the packet print for a kind. */

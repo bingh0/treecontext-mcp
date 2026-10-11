@@ -220,6 +220,48 @@ export function captureDebt(db: ReadonlyStoreDb): CaptureDebt {
   }
 }
 
+/** "Retried far past the ceiling" (D265): more than ten times
+ *  MAX_INGEST_ATTEMPTS. The poison-row path retires a row at the
+ *  ceiling, so an unprocessed row past ten times it means the dead-letter
+ *  insert itself is failing on every tick — the shape a store migrated by
+ *  a newer treecontext leaves under a still-running older server. */
+export const RUNAWAY_ATTEMPTS_FACTOR = 10
+
+/** The most-retried unprocessed staging row past `threshold` attempts,
+ *  and how many such rows there are — one read-only query. */
+export const RUNAWAY_STAGING_SQL = `
+  SELECT id, attempts,
+         (SELECT COUNT(*) FROM staging WHERE processed = 0 AND attempts > ?) AS n
+  FROM staging
+  WHERE processed = 0 AND attempts > ?
+  ORDER BY attempts DESC, id
+  LIMIT 1
+`
+
+export interface RunawayStaging {
+  /** The most-retried such row. */
+  id: number
+  attempts: number
+  /** Unprocessed rows past the threshold, this one included. */
+  count: number
+}
+
+/** The runaway staging row, or null when none is past `threshold` (or
+ *  the store predates the `attempts` column). Read-only. */
+export function runawayStaging(db: ReadonlyStoreDb, threshold: number): RunawayStaging | null {
+  let row: { id: number; attempts: number; n: number } | undefined
+  try {
+    row = db.prepare(RUNAWAY_STAGING_SQL).get(threshold, threshold) as typeof row
+  } catch (err) {
+    // A store older than the retry counter has no attempts column; any
+    // other failure is the caller's to report.
+    if (/no such (column|table)/i.test(err instanceof Error ? err.message : String(err))) return null
+    throw err
+  }
+  if (!row) return null
+  return { id: Number(row.id), attempts: Number(row.attempts), count: Number(row.n) }
+}
+
 // ── Bound stores (§11a check 3) ────────────────────────────────────────
 
 export interface BoundStore {

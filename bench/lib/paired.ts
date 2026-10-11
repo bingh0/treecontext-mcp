@@ -26,6 +26,8 @@
  * statistic can tell you that.
  */
 
+import { sigmasOf } from './report.js'
+
 export interface PairedResult {
   n: number
   meanA: number
@@ -34,7 +36,8 @@ export interface PairedResult {
   meanDelta: number
   /** Bootstrap SE of the paired difference. */
   se: number
-  /** |meanDelta| in units of se. */
+  /** |meanDelta| in units of se; Infinity for a nonzero change over a
+   *  zero se (D271). Render with sigmasCell/sigmasPhrase from report.ts. */
   sigmas: number
   /** Queries B got strictly better. */
   rescued: number
@@ -121,7 +124,9 @@ export function pairedCompare(a: number[], b: number[], sigma = 3): PairedResult
   const mean = (xs: number[]): number => (xs.length ? xs.reduce((p, q) => p + q, 0) / xs.length : 0)
   const meanDelta = mean(deltas)
   const se = bootstrapSE(deltas)
-  const sigmas = se > 0 ? Math.abs(meanDelta) / se : 0
+  // D271: a nonzero mean change over a zero SE (every query moved by the
+  // same amount) is an exact change, flagged by its sign.
+  const sigmas = sigmasOf(meanDelta, se)
 
   return {
     n: a.length,

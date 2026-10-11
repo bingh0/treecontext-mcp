@@ -274,6 +274,16 @@ export async function spawnHooksAtOnce(
   }
 }
 
+/** spawnHooksAtOnce in batches of `width`: many captures through the real
+ *  hook subprocesses without launching them all at once, each batch's
+ *  hooks staged before the next batch starts, so staging order (and the
+ *  honest timestamps the drain keeps) follows batch order. */
+export async function spawnHooksInBatches(
+  w: CaptureWorld, hook: 'user-prompt-submit' | 'post-tool-use', payloads: Array<Record<string, unknown>>, width = 12,
+): Promise<void> {
+  for (let i = 0; i < payloads.length; i += width) await spawnHooksAtOnce(w, hook, payloads.slice(i, i + width))
+}
+
 /**
  * Spawn a real `serve` subprocess against a fresh sandboxed home, teardown
  * deferred on the world. The process-fate scenarios (the abandoned-stderr

@@ -78,6 +78,19 @@ Feature: Journal capture — everything worth recalling enters the journal
     # remembering it. Invocations are tiny; dedup handles repetition.
     # No invocation is ever filtered out.
 
+  @D270
+  Scenario: a tool event's output is captured as text, a line a line
+    Given a shell command whose output spans several lines and carries a tab
+    When the event is captured and ingested
+    Then the word that begins each line is findable by itself
+    And the stored entry shows the output's lines as lines, not as escape sequences
+    And an entry captured before this rule is still found by its glued word and shows its escape sequences
+    # Found by the bench's capture-path arm, 2026-10-10: the client hands
+    # a tool's response over as an object, the hook stored its JSON
+    # encoding, and every line break became the two characters backslash
+    # and n, glued onto the next word by the tokenizer. Only each
+    # output's first line was findable.
+
   @D3
   Scenario: outputs of repo-reading tools are trail, not treasure
     Given a Read or ls call whose output is repo content at that moment

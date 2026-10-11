@@ -5,6 +5,8 @@ import { expect } from 'vitest'
 import { type Registry } from 'gherkin-node-test/vitest'
 import { INSTRUCTIONS_BRIEF_LEXICAL, SKILL_REFERENCE_BODY, SKILL_REFERENCE_NAME, TRIGGER_CORE } from '../../../src/server/instructions.js'
 import { SESSION_REMINDER_TEXT, INSTRUCTIONS_CONTENT } from '../../../src/server/installer.js'
+import { DEFAULT_ROLE_WEIGHTS } from '../../../src/persistence/fts.js'
+import { DEFAULT_RECENCY_WEIGHT } from '../../../src/server/query-telemetry.js'
 import { mcpOver, openLiveStore, exportNode, mediaOf, rawMediaOf, insertAttachment } from '../world.js'
 import { type InstallWorld, tcCli } from '../install-harness.js'
 
@@ -68,6 +70,8 @@ export interface AgentSurfaceWorld extends InstallWorld {
   instructions?: string
   /** The four channels that must teach one protocol, keyed by channel name. */
   channelTexts?: Record<string, string>
+  /** The reference skill as install wrote it to disk (D264). */
+  skillText?: string
 }
 
 export const agentSurfaceDefiner = (reg: Registry<AgentSurfaceWorld>): void => {
@@ -292,6 +296,74 @@ export const agentSurfaceDefiner = (reg: Registry<AgentSurfaceWorld>): void => {
     expect(flat(skill)).toContain('when the developer says "checkpoint"')
     expect(flat(skill)).toContain('metadata.kind = "bookmark"')
     expect(skill.length, 'the long form is no longer than the card').toBeGreaterThan(w.instructions!.length)
+  })
+
+  // ── the handshake keeps its orientation query; the skill says what
+  // ranks where (D264). The card off the live handshake; the skill as the
+  // real `install` writes it where the reference platform loads skills;
+  // both read by content, and every number the skill states compared with
+  // the default the server actually serves.
+  reg.define(/^it reads the handshake instructions and the reference skill$/, (w: AgentSurfaceWorld) => {
+    w.instructions = w.client!.getInstructions() ?? ''
+    expect(w.instructions.length, 'the handshake carried no instructions').toBeGreaterThan(0)
+    w.ihome = mkdtempSync(join(tmpdir(), 'tc-skill-home-'))
+    w.defer(() => rmSync(w.ihome!, { recursive: true, force: true }))
+    mkdirSync(join(w.ihome, '.claude'), { recursive: true })
+    const run = tcCli(w, ['install', '--yes', '--agent', 'claude'])
+    expect(run.status, run.out).toBe(0)
+    w.skillText = readFileSync(join(w.ihome, '.claude', 'skills', SKILL_REFERENCE_NAME, 'SKILL.md'), 'utf8')
+  })
+  reg.define(/^the handshake's second session-start step is the free-text orientation query, described as recovering the thread around the resume pointers$/, (w: AgentSurfaceWorld) => {
+    const lines = w.instructions!.split('\n')
+    const start = lines.findIndex((l) => l.startsWith('SESSION START'))
+    const gate = lines.findIndex((l, i) => i > start && l.startsWith(TRIGGER_CORE.gate))
+    expect(start, 'the handshake has no session-start block').toBeGreaterThanOrEqual(0)
+    const steps = lines.slice(start + 1, gate).join('\n').split(/\n(?=\d\. )/)
+    expect(steps.map((t) => t.slice(0, 2)), 'the session-start block lost or gained a step').toEqual(['1.', '2.'])
+    // Step one finds the resume pointers; step two is the free-text query
+    // the developer's words would be, and says what it is for.
+    expect(flat(steps[0]!)).toMatch(/^1\. treecontext_status — check resume_pointers/)
+    const two = flat(steps[1]!)
+    expect(two).toMatch(/^2\. treecontext_query\("what was I working on, what was the next step"\)/)
+    expect(two).toMatch(/recovers the thread around the resume pointers status found/)
+    expect(w.instructions!.length).toBeLessThan(2500)
+    expect(Buffer.byteLength(w.instructions!, 'utf8')).toBeLessThanOrEqual(2048)
+  })
+  reg.define(/^the skill's search paragraph states the ranking order: the developer's directives and curated notes first, assistant prose and captured tool output below them, treecontext's own echoes found by their tool name$/, (w: AgentSurfaceWorld) => {
+    const m = /\n## Search \(treecontext_query\)\n([\s\S]*?)\n\n## /.exec(w.skillText!)
+    expect(m, 'the installed skill has no search paragraph').toBeTruthy()
+    const para = flat(m![1]!)
+    const f = (n: number): string => n.toFixed(n === Math.trunc(n) ? 1 : String(n).split('.')[1]!.length)
+    const wt = DEFAULT_ROLE_WEIGHTS
+    // The order, in words and in the weights the search serves.
+    const first = para.indexOf(`the developer's directives and the curated notes first (user ${f(wt.user)}, note ${f(wt.note)})`)
+    const below = para.indexOf(`assistant prose and captured tool output below them (assistant ${f(wt.assistant)}, tool ${f(wt.tool)})`)
+    expect(first, para).toBeGreaterThanOrEqual(0)
+    expect(below, para).toBeGreaterThan(first)
+    expect(wt.user).toBeGreaterThan(wt.assistant)
+    expect(wt.note).toBeGreaterThan(wt.assistant)
+    expect(wt.assistant).toBeGreaterThan(wt.tool)
+    // The store's own echoes: found by their tool name, never by results.
+    expect(para).toMatch(/treecontext calls, captured as echoes, are found by their tool name/)
+    expect(para).toMatch(/never by the results they returned/)
+    // Every other claim the paragraph made stays, and stays true.
+    expect(para).toContain('role_weights tunes the weights per query')
+    expect(para).toContain('conversation_window returns the entries around each hit')
+    expect(para).toContain(`recency_weight ${DEFAULT_RECENCY_WEIGHT}`)
+    expect(para).toContain('recency_weight: 0 for pure lexical ranking')
+    expect(para).toContain('adaptive: true lets the score distribution set the result count')
+    // The installed file carries the body install generates from.
+    expect(w.skillText).toContain(SKILL_REFERENCE_BODY)
+  })
+  reg.define(/^the query tool offers no parameter for orientation beyond those it had$/, async (w: AgentSurfaceWorld) => {
+    const query = (await w.client!.listTools()).tools.find((t) => t.name === 'treecontext_query')!
+    const props = Object.keys((query.inputSchema as { properties: Record<string, unknown> }).properties).sort()
+    // The parameter set as committed before D264 (HEAD f1be050): the
+    // ruling declined an orientation parameter, so the set is unchanged.
+    expect(props).toEqual([
+      'adaptive', 'adaptive_max', 'conversation_window', 'exclude_namespaces', 'media_filter', 'metadata_filter',
+      'namespace_weights', 'query', 'recency_weight', 'role_weights', 'scope', 'sort_by', 'time_range', 'top_k',
+    ])
   })
 
   // S: installing the AGENTS.md block twice yields one block.

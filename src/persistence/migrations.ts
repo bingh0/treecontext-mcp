@@ -44,6 +44,22 @@ export interface Migration {
 export interface MigrationOptions {
   /** Opt-in flag for destructive migrations. */
   migrate?: boolean
+  /** TEST-ONLY schema ceiling override (D265; precedent: the ingestion
+   *  loop's `stagingMaxBytes`). The highest store version this open
+   *  accepts; default `maxSupportedVersion`. The charter's "newer server"
+   *  is this one binary told it understands one version more, so it
+   *  opens and drains a store an older build must step aside from.
+   *  Production never sets it. */
+  schemaCeiling?: number
+}
+
+/** The one line a server built for `ceiling` says when the store it
+ *  serves has been migrated to `storeVersion` past it (D265): the tool
+ *  reply, and the drain's warning, so the agent and the log read the
+ *  same sentence. */
+export function newerSchemaLine(storeVersion: number, ceiling: number): string {
+  return `This store was migrated by a newer treecontext (schema ${storeVersion}; this build understands ${ceiling}). `
+    + 'Restart this session to use it.'
 }
 
 export interface MigrationReport {
@@ -222,15 +238,18 @@ export function runMigrations(
   opts: MigrationOptions = {},
 ): MigrationReport {
   const current = currentSchemaVersion(db)
+  const ceiling = opts.schemaCeiling ?? maxSupportedVersion
   dbg('migration', 'schema check', { current, max: maxSupportedVersion })
 
-  if (current > maxSupportedVersion) {
+  if (current > ceiling) {
     throw new SchemaVersionError(
-      `Store schema version ${current} is newer than this build's max ${maxSupportedVersion}. ` +
+      `Store schema version ${current} is newer than this build's max ${ceiling}. ` +
         'Upgrade treecontext to open this store.',
     )
   }
-  if (current === maxSupportedVersion) {
+  // `>=`, not `===`: only the test-only ceiling admits a store past the
+  // ladder's head, and such a store has nothing this build could apply.
+  if (current >= maxSupportedVersion) {
     dbg('migration', 'schema up to date')
     return { from: current, to: current, applied: [] }
   }

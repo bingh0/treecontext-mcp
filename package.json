@@ -1,7 +1,7 @@
 {
   "name": "treecontext-mcp",
-  "version": "0.1.0-beta.1",
-  "description": "A searchable chat-session journal for AI coding agents \u2014 local, lexical, no model.",
+  "version": "0.1.0-beta.2",
+  "description": "A searchable chat-session journal for AI coding agents — local, lexical, no model.",
   "keywords": [
     "mcp",
     "claude-code",
@@ -38,7 +38,7 @@
     }
   },
   "bin": {
-    "treecontext": "./dist/server/cli.js"
+    "treecontext": "dist/server/cli.js"
   },
   "files": [
     "dist/**/*.js",
@@ -99,6 +99,8 @@
     "bench:compare": "tsx bench/compare.ts",
     "bench:capsweep": "tsx bench/cap-sweep.ts",
     "bench:capcost": "tsx bench/cap-cost.ts",
+    "bench:weights": "tsx bench/weight-sweep.ts",
+    "bench:recency": "tsx bench/recency-sweep.ts",
     "release-gate": "tsx scripts/release-gate.ts",
     "release-scan": "tsx scripts/release-scan.ts",
     "install-smoke": "tsx scripts/install-smoke.ts"

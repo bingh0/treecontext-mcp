@@ -7,6 +7,7 @@ import {
   activeIndexCap,
 } from '../persistence/capture-constants.js'
 import { dbg } from '../debug.js'
+import { ECHO_LABEL_PREFIX, echoToolOf } from '../persistence/echo-index.js'
 
 /** Separator between the indexed preview and the full tail (C4).
  *  Re-exported from capture-constants, which OWNS it: no longer merely
@@ -14,6 +15,181 @@ import { dbg } from '../debug.js'
  *  string when a row carries no preview_len (`echo-correlation.ts`
  *  outputSection). Two declarations could drift; one cannot. */
 export { FULL_TAIL_SEPARATOR }
+
+/** The label of a treecontext_import call, on one line, or null for any
+ *  other call (or an import that carried none). */
+function importEchoLabel(toolName: unknown, toolInput: unknown): string | null {
+  if (echoToolOf(toolName) !== 'treecontext_import') return null
+  let input: unknown = toolInput
+  if (typeof input === 'string') {
+    try { input = JSON.parse(input) } catch { return null }
+  }
+  if (input === null || typeof input !== 'object') return null
+  const label = (input as Record<string, unknown>)['label']
+  if (typeof label !== 'string') return null
+  const oneLine = label.replace(/[\r\n]+/g, ' ').trim()
+  return oneLine === '' ? null : oneLine
+}
+
+/** True for the MCP content-block shape: a non-empty list whose every
+ *  element is an object naming its `type`. */
+function isContentBlockList(value: unknown): value is Array<Record<string, unknown>> {
+  return Array.isArray(value) && value.length > 0 && value.every(
+    (b) => b !== null && typeof b === 'object' && !Array.isArray(b) && typeof (b as Record<string, unknown>)['type'] === 'string',
+  )
+}
+
+function isScalar(value: unknown): boolean {
+  return value === null || (typeof value !== 'object' && typeof value !== 'function')
+}
+
+function normalizeText(text: string): string {
+  return text.replace(/\r\n/g, '\n')
+}
+
+function lastSegment(path: string): string {
+  const dot = path.lastIndexOf('.')
+  return dot === -1 ? path : path.slice(dot + 1)
+}
+
+/** One field, under its (dotted) path, as lines. */
+function composeField(path: string, value: unknown, lines: string[]): void {
+  if (typeof value === 'string') {
+    lines.push(`${path}:`)
+    if (value !== '') lines.push(normalizeText(value))
+    return
+  }
+  if (isScalar(value)) {
+    lines.push(`${path}: ${String(value)}`)
+    return
+  }
+  // Content blocks are recognized only where MCP puts them: a field named
+  // `content` (the `{content: [...]}` wrapper); any other array of
+  // objects composes element by element below.
+  if (lastSegment(path) === 'content' && isContentBlockList(value)) {
+    lines.push(`${path}:`)
+    lines.push(composeBlocks(value))
+    return
+  }
+  if (Array.isArray(value)) {
+    if (value.every(isScalar)) {
+      lines.push(`${path}: [${value.map((v) => String(v)).join(', ')}]`)
+      return
+    }
+    value.forEach((v, i) => composeField(`${path}[${i}]`, v, lines))
+    return
+  }
+  if (value === undefined || typeof value !== 'object') return
+  const entries = Object.entries(value as Record<string, unknown>)
+  if (entries.length === 0) {
+    lines.push(`${path}: {}`)
+    return
+  }
+  for (const [k, v] of entries) composeField(`${path}.${k}`, v, lines)
+}
+
+function composeObject(obj: Record<string, unknown>, lines: string[]): void {
+  for (const [k, v] of Object.entries(obj)) composeField(k, v, lines)
+}
+
+/** A content-block list: a text block's text verbatim (byte for byte, no
+ *  line-ending normalisation) followed by its other fields (annotations,
+ *  _meta) as name and value; any other block as `type: <type>` and its
+ *  other fields; blocks separated by a newline. */
+function composeBlocks(blocks: Array<Record<string, unknown>>): string {
+  return blocks.map((b) => {
+    if (b['type'] === 'text' && typeof b['text'] === 'string') {
+      const { type: _type, text, ...rest } = b
+      const lines: string[] = [text as string]
+      composeObject(rest, lines)
+      return lines.join('\n')
+    }
+    const lines: string[] = [`type: ${String(b['type'])}`]
+    const { type: _type, ...rest } = b
+    composeObject(rest, lines)
+    return lines.join('\n')
+  }).join('\n')
+}
+
+/** A shielded-output pointer the server returned. */
+export interface ShieldedPointer { file: string; bytes: unknown }
+
+function pointerOf(value: unknown): ShieldedPointer | null {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
+  const r = value as Record<string, unknown>
+  return r['shielded'] === true && typeof r['file'] === 'string' && r['file'] !== '' ? { file: r['file'], bytes: r['bytes'] } : null
+}
+
+function pointerInText(text: string): ShieldedPointer | null {
+  if (!text.includes('"shielded":true') && !text.includes('"shielded": true')) return null
+  try {
+    const ref = JSON.parse(text) as Record<string, unknown>
+    // As before D270: any truthy shielded flag and file.
+    return ref && ref['shielded'] && ref['file'] ? { file: String(ref['file']), bytes: ref['bytes'] } : null
+  } catch {
+    return null
+  }
+}
+
+function pointerInBlocks(blocks: unknown): ShieldedPointer | null {
+  if (!isContentBlockList(blocks)) return null
+  for (const b of blocks) {
+    if (b['type'] === 'text' && typeof b['text'] === 'string') {
+      const ref = pointerInText(b['text'])
+      if (ref) return ref
+    }
+  }
+  return null
+}
+
+/**
+ * D270 — a shielded pointer is recognized whatever shape the client
+ * wrapped it in, read from the payload BEFORE composing: the pointer
+ * object itself (`{shielded: true, file, bytes}`), a string holding its
+ * JSON, a content-block list whose text block holds it, or a
+ * `{content: [...]}` wrapper around such a list.
+ */
+export function shieldedPointerOf(value: unknown): ShieldedPointer | null {
+  if (typeof value === 'string') return pointerInText(value)
+  if (Array.isArray(value)) return pointerInBlocks(value)
+  const direct = pointerOf(value)
+  if (direct) return direct
+  if (value !== null && typeof value === 'object') return pointerInBlocks((value as Record<string, unknown>)['content'])
+  return null
+}
+
+/**
+ * D270 — a tool event's input or output as the text it is.
+ *
+ * A string is returned as is (byte-for-byte today's composition). An
+ * object writes every field out in its key order: a string field as
+ * `name:` followed by its text on the next lines (line breaks and tabs
+ * real, `\r\n` read as `\n`), a nested object as its fields under their
+ * dotted path (`file.content:`), an array of scalars as `name: [a, b]`,
+ * an array of objects element by element (`name[0].field`), any other
+ * scalar as `name: value`. A content-block list (the MCP shape: the whole
+ * payload, or a `content` field) writes each text block's text verbatim
+ * and then its other fields, one block per line run. Nothing the
+ * client sent is dropped. The JSON encoding this replaces turned every
+ * line break into backslash-n, which the tokenizer glued onto the next
+ * word, so only an output's first line was findable.
+ */
+export function composeToolText(value: unknown): string {
+  if (typeof value === 'string') return value
+  if (value === undefined) return ''
+  if (isScalar(value)) return String(value)
+  if (isContentBlockList(value)) return composeBlocks(value)
+  const lines: string[] = []
+  if (Array.isArray(value)) {
+    if (value.every(isScalar)) return `[${value.map((v) => String(v)).join(', ')}]`
+    value.forEach((v, i) => composeField(`[${i}]`, v, lines))
+  } else {
+    // An empty object is still something the client sent.
+    if (Object.keys(value as object).length === 0) return '{}'
+    composeObject(value as Record<string, unknown>, lines)
+  }
+  return lines.join('\n')
+}
 
 export function main(preParsed?: Record<string, unknown>) {
   try {
@@ -52,12 +228,25 @@ export function main(preParsed?: Record<string, unknown>) {
       priority = 2
     }
 
-    const safeToolInput = typeof tool_input === 'string' ? tool_input : JSON.stringify(tool_input) || ''
-    const safeToolOutput = typeof tool_output === 'string' ? tool_output : JSON.stringify(tool_output) || ''
+    // D270: an object or content-block payload is written as its text,
+    // never as its JSON encoding. Spoof note: echo-correlation's
+    // outputSection once relied on JSON escaping to keep a `\nOutput:`
+    // out of the Input section; its lastIndexOf still wins whenever a real
+    // Output exists. echoIndexBoundary (delete/merge/clear) cuts at the
+    // FIRST `\nOutput:`, so a multi-line argument holding a line `Output:`
+    // shortens that echo's boundary: narrower, never wider.
+    const safeToolInput = composeToolText(tool_input)
+    const safeToolOutput = composeToolText(tool_output)
 
-    // Preview: byte-for-byte the pre-C4 composition — it is the FTS index
+    // Preview: byte-for-byte the pre-C4 layout (and, for a string payload,
+    // the pre-C4 text) — it is the FTS index
     // view, so ranking must not shift.
     let preview = `Tool: ${tool_name}\n`
+    // D261: an import echo's argument is the handoff itself, so its index
+    // boundary stops at its label; the label gets its own line ahead of
+    // the Input so a prefix boundary can reach it. No other layout changes.
+    const importLabel = importEchoLabel(tool_name, tool_input)
+    if (importLabel !== null) preview += `${ECHO_LABEL_PREFIX}${importLabel}\n`
     let inputOverflow = false
     if (safeToolInput) {
       inputOverflow = safeToolInput.length > TOOL_INPUT_PREVIEW_CAP
@@ -66,18 +255,14 @@ export function main(preParsed?: Record<string, unknown>) {
     let shielded = false
     let outputOverflow = false
     if (safeToolOutput) {
+      // A shielded pointer is recognized whatever shape the client wrapped
+      // it in (D270), read from the payload before it was composed.
       let handledAsShielded = false
-      if (safeToolOutput.includes('"shielded":true') || safeToolOutput.includes('"shielded": true')) {
-        try {
-          const ref = JSON.parse(safeToolOutput)
-          if (ref.shielded && ref.file) {
-            preview += `Output: [shielded to ${ref.file}, ${ref.bytes} bytes]\n`
-            shielded = true
-            handledAsShielded = true
-          }
-        } catch {
-          // fall through to the normal preview below
-        }
+      const ref = shieldedPointerOf(tool_output)
+      if (ref) {
+        preview += `Output: [shielded to ${ref.file}, ${String(ref.bytes)} bytes]\n`
+        shielded = true
+        handledAsShielded = true
       }
       if (!handledAsShielded) {
         outputOverflow = safeToolOutput.length > TOOL_OUTPUT_PREVIEW_CAP

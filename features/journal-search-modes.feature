@@ -4,8 +4,9 @@ Feature: Journal search modes — a BM25 core, recency-fused at the surface, eve
   network, no GPU. Role weights encode a structural fact of single-author
   sessions: the user's words are scarce and authoritative, the assistant's
   prose is abundant and mostly paraphrase, tool text is the trail. At the
-  MCP surface, recency fusion is the SERVED DEFAULT (weight 0.5, owner
-  ruling 2026-08-01: broad orientation queries should favor the latest
+  MCP surface, recency fusion is the SERVED DEFAULT (weight 0.25 since
+  2026-10-10, D273, measured on the mature-journal arm; 0.5 by the owner
+  ruling of 2026-08-01: broad orientation queries should favor the latest
   thread); the library default stays 0, and the served default never
   applies to adaptive queries or non-relevance orderings. Dense
   embeddings earned no default seat in testing; the flat journal ships
@@ -143,7 +144,9 @@ Feature: Journal search modes — a BM25 core, recency-fused at the surface, eve
     # scales, while rank fusion pays one uniform price everywhere. The
     # recency channel weight is the knob (bench-tunable; 0.5 graduated
     # from measured working hypothesis to the SERVED DEFAULT at the MCP
-    # surface by owner ruling 2026-08-01 — the library default stays 0,
+    # surface by owner ruling 2026-08-01, lowered to 0.25 on 2026-10-10
+    # when the mature-journal arm priced what 0.5 cost exact lookups of
+    # older rows, D273 — the library default stays 0,
     # and adaptive queries and non-relevance orderings never receive the
     # default; 1.0 measurably over-rotates into fresh tool noise).
     # Reproduction-clause note: time-decay is deterministic given the

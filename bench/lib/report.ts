@@ -106,9 +106,29 @@ export interface Comparison {
   delta: number
   /** Standard error of the DIFFERENCE — both runs contribute. */
   jointSe: number
-  /** |delta| expressed in units of jointSe. */
+  /** |delta| expressed in units of jointSe; Infinity for a nonzero delta
+   *  over a zero jointSe (D271). Render it with sigmasCell/sigmasPhrase. */
   sigmas: number
   verdict: Verdict
+}
+
+/** |delta| / se, with D271's zero-SE rule: a nonzero change over a zero
+ *  standard error is an exact change (Infinity sigmas, flagged by its
+ *  sign), a zero change over a zero error is no change (0 sigmas). Shared
+ *  by the run-to-run detector and the paired comparison. */
+export function sigmasOf(delta: number, se: number): number {
+  if (se > 0) return Math.abs(delta) / se
+  return delta === 0 ? 0 : Number.POSITIVE_INFINITY
+}
+
+/** A sigmas value for a table cell: never "Infinity" (D271). */
+export function sigmasCell(sigmas: number): string {
+  return Number.isFinite(sigmas) ? sigmas.toFixed(1) : 'exact (SE 0)'
+}
+
+/** A sigmas value in prose: "3.2 SE", or "exact (SE 0)" (D271). */
+export function sigmasPhrase(sigmas: number): string {
+  return Number.isFinite(sigmas) ? `${sigmas.toFixed(1)} SE` : 'exact (SE 0)'
 }
 
 /**
@@ -117,13 +137,16 @@ export interface Comparison {
  *
  * Three sigma on the difference of two means. Deliberately blunt: this
  * exists to catch the catastrophic class, not to adjudicate small moves.
+ * D271: when both sides have no variance (a slice at 100% on both runs, a
+ * slice that lost every query), a nonzero change is flagged by its sign
+ * instead of read as noise; a zero change stays within noise.
  */
 export function compareValues(
   value: number, se: number, refValue: number, refSe: number, sigma = 3,
 ): Comparison {
   const delta = value - refValue
   const jointSe = Math.sqrt(se ** 2 + refSe ** 2)
-  const sigmas = jointSe > 0 ? Math.abs(delta) / jointSe : 0
+  const sigmas = sigmasOf(delta, jointSe)
   const verdict: Verdict = sigmas < sigma
     ? 'within-noise'
     : delta < 0 ? 'regression' : 'improvement'
@@ -173,10 +196,11 @@ export function renderReport(record: RunRecord, history: RunRecord[]): string {
   const compare = (label: string, other: RunRecord | undefined): void => {
     if (!other) return
     const { delta, sigmas, verdict } = compareRuns(record, other)
+    const beyond = Number.isFinite(sigmas) ? 'beyond 3 SE' : 'over a zero SE'
     const phrase = verdict === 'within-noise'
       ? 'within noise'
-      : verdict === 'regression' ? '⚠️ REGRESSION beyond 3 SE' : 'improvement beyond 3 SE'
-    lines.push(`- vs ${label} (${other.measured_at.slice(0, 10)}, ${pct(other.value)}): ${pp(delta)} — ${sigmas.toFixed(1)} SE, ${phrase}`)
+      : verdict === 'regression' ? `⚠️ REGRESSION ${beyond}` : `improvement ${beyond}`
+    lines.push(`- vs ${label} (${other.measured_at.slice(0, 10)}, ${pct(other.value)}): ${pp(delta)} — ${sigmasPhrase(sigmas)}, ${phrase}`)
   }
   if (record.partial) {
     lines.push(`- partial run (${record.n} queries) — not comparable to full runs, and not recorded`)
@@ -219,8 +243,8 @@ export function renderReport(record: RunRecord, history: RunRecord[]): string {
       const delta = cmp ? pp(cmp.delta) : '—'
       const mark = cmp === null
         ? ''
-        : cmp.verdict === 'regression' ? `⚠️ ${cmp.sigmas.toFixed(1)} SE`
-        : cmp.verdict === 'improvement' ? `↑ ${cmp.sigmas.toFixed(1)} SE` : ''
+        : cmp.verdict === 'regression' ? `⚠️ ${sigmasPhrase(cmp.sigmas)}`
+        : cmp.verdict === 'improvement' ? `↑ ${sigmasPhrase(cmp.sigmas)}` : ''
       lines.push(`| ${s.slice} | ${s.n} | ${pct(s.value)} | ${delta} | ${mark} |`)
     }
   }

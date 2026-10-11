@@ -50,6 +50,20 @@ Feature: C2 — dual caps, index text != stored content, FTS recompute
     # tests repo-wide (corpus audit); changing it would silently ghost
     # or grow FTS entries for every legacy assistant row.
 
+  Scenario: an echo's index boundary is stamped on the row, so any build recomputes the same index text
+    Given a treecontext echo drained with its index boundary ahead of its output and its display boundary stamped in its metadata
+    When the row is updated and then deleted by the store's ordinary update and delete, which read only the stamp
+    Then the index held what the echo indexes and not its results while the row lived
+    And a hit on the echo showed its output while the row lived
+    And the FTS index holds no ghost entry for it in any column after the delete
+    # The rule lives in the stamp, not in the recompute: a beta.1 server,
+    # which has no step-aside yet, beside a migrated store replays the
+    # stamped boundary on update and delete and so cannot ghost an entry
+    # it never composed (D261; the invariant role-weighted-fts.feature
+    # pins). An echo that fits its caps stamps both boundaries all the
+    # same, since here the index boundary is load-bearing and the display
+    # boundary keeps the read side from cutting a hit at the arguments.
+
   Scenario: FlatStore query hits return the full decoded content, never truncated by the index cap
     Given a FlatStore with an auto-capture user node whose content exceeds the index cap
     When querying for a term near the start of the content

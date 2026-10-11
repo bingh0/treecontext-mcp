@@ -3,7 +3,7 @@
  * §7.7 design review, R1; §7.8 status channel).
  *
  * The PostToolUse hook stages an echo of every treecontext tool call:
- * `Tool: <name>\nInput:\n{json}\nOutput:\n{json}`. For a successful
+ * `Tool: <name>\nInput:\n<input>\nOutput:\n<output>` (text since D270). For a successful
  * `treecontext_insert` the Output section is the platform's
  * serialization of the tool's own response — `node_id` first key,
  * `deduplicated` flag alongside, both inside the 1000-char output
@@ -18,6 +18,7 @@
  * the same way: no extraction, no heal, never an invented id.
  */
 import { FULL_TAIL_SEPARATOR, OUTPUT_SECTION_LABEL } from '../persistence/capture-constants.js'
+import { echoToolOf } from '../persistence/echo-index.js'
 
 const FULL_MARKER = `\n${FULL_TAIL_SEPARATOR}\n`
 const OUTPUT_MARKER = `\n${OUTPUT_SECTION_LABEL}\n`
@@ -43,10 +44,10 @@ const DEDUP_RE = /deduplicated\\{0,3}"\s*:\s*(true|false)/
  * precedes the real Output in the composition, so a marker embedded in
  * raw-string tool input can only appear earlier — a spoof can suppress
  * extraction, never redirect it (review 2026-08-15, #7). Residual:
- * only when the platform delivers RAW-STRING input for a suffix-matched
- * tool AND the call produced no output at all can crafted input become
- * the section; the reference platform sends object inputs, which
- * JSON.stringify escapes.
+ * only when the call produced no output at all can crafted input become
+ * the section. Since D270 an object input is written as its text, not
+ * JSON-escaped, so a multi-line argument can carry a line `Output:` on
+ * any platform; the LAST marker still wins whenever a real Output exists.
  */
 function outputSection(content: string, previewLen?: number | null): string | null {
   let preview: string
@@ -75,7 +76,7 @@ export interface InsertEcho {
  *  Foreign-STORE insert echoes are harmless: their node ids resolve
  *  nowhere here ('not-found'), so they neither heal nor publish. */
 export function isInsertEchoTool(toolName: string | null | undefined): boolean {
-  return typeof toolName === 'string' && toolName.endsWith('__treecontext_insert')
+  return echoToolOf(toolName) === 'treecontext_insert'
 }
 
 export function extractInsertEcho(content: string, previewLen?: number | null): InsertEcho | null {
@@ -96,7 +97,7 @@ export function extractInsertEcho(content: string, previewLen?: number | null): 
  *  ≈187), and the orientation protocol fires one at every session
  *  start. */
 export function isStatusEchoTool(toolName: string | null | undefined): boolean {
-  return typeof toolName === 'string' && toolName.endsWith('__treecontext_status')
+  return echoToolOf(toolName) === 'treecontext_status'
 }
 
 /** Key match requires the quote directly after the key name, so

@@ -20,6 +20,7 @@
 import { findArm } from './arms/index.js'
 import { recallAtK, type Relevance } from './lib/metrics.js'
 import { pairedCompare } from './lib/paired.js'
+import { sigmasPhrase } from './lib/report.js'
 import { Bm25Retriever, DenseRetriever, FusedRetriever, RoleConditionalFusedRetriever, type Retriever } from './lib/retrievers.js'
 import type { Embedder } from './embedders/types.js'
 
@@ -113,7 +114,7 @@ async function main(): Promise<void> {
   console.log(`\n# ${a.id} vs ${b.id} — ${armId}, recall@${K}\n`)
   console.log(`- ${a.id}: **${pct(overall.meanA)}**`)
   console.log(`- ${b.id}: **${pct(overall.meanB)}**`)
-  console.log(`- difference: **${pp(overall.meanDelta)}** (paired SE ${pct(overall.se)}, ${overall.sigmas.toFixed(1)} SE) — ${overall.verdict}`)
+  console.log(`- difference: **${pp(overall.meanDelta)}** (paired SE ${pct(overall.se)}, ${sigmasPhrase(overall.sigmas)}) — ${overall.verdict}`)
   console.log(`- per-query: **${overall.rescued} rescued, ${overall.poisoned} poisoned**, ${overall.unchanged} unchanged (McNemar exact p = ${overall.pValue.toFixed(4)})`)
   console.log('')
   console.log(`> ${b.description}`)

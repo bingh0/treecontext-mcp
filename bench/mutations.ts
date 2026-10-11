@@ -163,10 +163,33 @@ export const SUBGROUP_TARGET = 'multi-session'
  *     property of the metric on a small corpus, not of the ranker.
  */
 export const ARM_EXPECTATIONS: Record<string, Record<string, Mutation['expect']>> = {
+  // Re-measured 2026-10-10 under D271 (n=120, resolution ~16.2pp).
   'code-fixture': {
+    // +0.00pp: every code-fixture entry fits inside 300 characters.
     'index-preview-only': 'no-flag',
-    'rank-collapse': 'below-sensitivity',
+    // -9.58pp aggregate (1.7 SE); the path slice flags, -33.3pp at 3.4 SE
+    // (a finite SE: an expectation correction, not a D271 effect).
+    'rank-collapse': 'flag-slice',
+    // -9.17pp aggregate (1.6 SE); command -25.0pp at 2.3 SE, nothing flags.
     'query-drop-rare-terms': 'below-sensitivity',
+    // -2.50pp aggregate; paraphrase -10.0pp at 0.8 SE, nothing flags.
+    'subgroup-collapse': 'below-sensitivity',
+  },
+  // Re-measured 2026-10-10 at the beta.2 served defaults (tool 0.1 D272,
+  // recency 0.25 D273, the live chapter placed above the bookmark D275;
+  // mapping version 4, n=97, reference 65.26%, resolution ~14.3pp): the
+  // aggregate is diagnostic, its slices are what to read. All eight as expected.
+  'mature-journal': {
+    // -13.76pp aggregate (2.8 SE); shell-lookup flags, -61.5pp at 4.5 SE:
+    // since D270 a hash deep in a git log is findable, and a 300-char index loses it.
+    'index-preview-only': 'flag-slice',
+    // -14.35pp aggregate (3.1 SE, so the aggregate trips too);
+    // checkpoint-lookup flags, -45.8pp at 5.4 SE.
+    'rank-collapse': 'flag-slice',
+    // +1.49pp aggregate; developer-turn -5.7pp at 0.7 SE, no flag.
+    'query-drop-rare-terms': 'below-sensitivity',
+    // -4.73pp aggregate (1.0 SE); the target, developer-turn, -15.3pp at
+    // 2.2 SE: under the slice's 3-SE line, no flag.
     'subgroup-collapse': 'below-sensitivity',
   },
 }

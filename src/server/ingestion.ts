@@ -1,3 +1,4 @@
+import { stampEchoBoundaries } from '../persistence/echo-index.js'
 import type { MemoryStore } from '../memory-store.js'
 import type { Persistence } from '../persistence/store.js'
 import {
@@ -24,7 +25,10 @@ import type { LeaseClient } from '../persistence/leases.js'
 import { hostname } from 'node:os'
 import { SAFE_STORE_RE, isCliAddressableStoreName } from '../tools/store-name.js'
 import { dbg, warn } from '../debug.js'
-import { agentWriterOf } from '../persistence/session-registry.js'
+import { maxSupportedVersion } from '../persistence/migrations/index.js'
+import { newerSchemaLine } from '../persistence/migrations.js'
+import { healEchoIndex } from '../persistence/echo-reindex.js'
+import { agentWriterOf, INTERNAL_SUMMARY_KIND, CLIENT_WRITER } from '../persistence/session-registry.js'
 
 /**
  * What the IngestionLoop needs from a backend: the MemoryStore surface
@@ -58,6 +62,11 @@ export interface IngestionOptions {
   /** D3 byte valve override (default STAGING_MAX_BYTES). Tests inject a
    *  small value; production never needs to. */
   stagingMaxBytes?: number
+  /** TEST-ONLY schema ceiling override (D265; precedent stagingMaxBytes):
+   *  the highest store version this drain treats as its own, default
+   *  `maxSupportedVersion`. The charter's "newer server" is this binary
+   *  given one version more. Production never sets it. */
+  schemaCeiling?: number
   /** Drain-role arbitration (G4): when set, every tick try-acquires the
    *  'drain' lease and skips when a live foreign holder exists — so a
    *  crash-restarted server self-heals within one TTL instead of losing
@@ -92,6 +101,11 @@ export interface IngestionOptions {
   storePath?: string
 }
 
+/** D265: the stale-drain warning is written once per process lifetime —
+ *  the loop that writes it stops, and nothing in this process drains the
+ *  store again, so a second line would only repeat the first. */
+let staleDrainWarned = false
+
 export class IngestionLoop {
   private timer: ReturnType<typeof setTimeout> | null = null
   private sweepTimer: ReturnType<typeof setTimeout> | null = null
@@ -102,6 +116,14 @@ export class IngestionLoop {
   private loopDetector = new LoopDetector()
   private readonly sweepIntervalMs: number
   private readonly stagingMaxBytes: number
+  private readonly schemaCeiling: number
+  /** D265: set when this drain found the store migrated past this build
+   *  and stepped aside. Terminal: ingestBatch returns 0 without touching
+   *  the lease from then on. */
+  private steppedAside = false
+  /** The echo heal's rowid cursor: each sweep reads one bounded page past
+   *  it, so after the start-up pass only rows drained since are read. */
+  private echoHealAfter = 0
   /** Monotonic per-process suffix: two loop instances in one process
    *  (tests, a restarted capture path) must never share a claimant, or
    *  one's tick-end release frees the other's in-flight claims. */
@@ -145,7 +167,7 @@ export class IngestionLoop {
     dbg('ingest', 'session namespace published', { session: sessionId, namespace, derivedFrom })
   }
 
-  readonly options: Required<Omit<IngestionOptions, 'storeName' | 'sweepIntervalMs' | 'stagingMaxBytes' | 'onBatch' | 'storeFor' | 'drainLease' | 'storePath'>> & { storeName?: string }
+  readonly options: Required<Omit<IngestionOptions, 'storeName' | 'sweepIntervalMs' | 'stagingMaxBytes' | 'schemaCeiling' | 'onBatch' | 'storeFor' | 'drainLease' | 'storePath'>> & { storeName?: string }
 
   get errors(): ErrorTracker { return this.errorTracker }
   get loops(): LoopDetector { return this.loopDetector }
@@ -153,6 +175,7 @@ export class IngestionLoop {
   constructor(private ctx: IngestibleStore, opts: IngestionOptions = {}) {
     this.sweepIntervalMs = opts.sweepIntervalMs ?? 300_000
     this.stagingMaxBytes = opts.stagingMaxBytes ?? STAGING_MAX_BYTES
+    this.schemaCeiling = opts.schemaCeiling ?? maxSupportedVersion
     this.onBatch = opts.onBatch ?? null
     this.storeFor = opts.storeFor ?? null
     this.drainLease = opts.drainLease ?? null
@@ -172,6 +195,14 @@ export class IngestionLoop {
 
   start(): void {
     if (this.timer !== null || this.isRunning || this.isStopped) return
+    // Once at start: heal every echo an older server drained without the
+    // D261 boundary (a store this build cannot read is left to the newer
+    // server — the first tick steps aside).
+    try {
+      if (this.ctx.store.liveSchemaVersion() <= this.schemaCeiling) this.healEchoes()
+    } catch (err) {
+      warn('[IngestionLoop] echo heal at start failed (the sweep retries):', err)
+    }
 
     const loop = async () => {
       this.isRunning = true
@@ -250,6 +281,41 @@ export class IngestionLoop {
   }
 
   /**
+   * D265 — the stale server steps aside. Release the drain lease (so the
+   * newer server's next tick takes it, the row being gone rather than
+   * waiting out its TTL) and this claimant's staging claims, say so once,
+   * and stop the drain and the sweeps for good. Nothing is dropped: the
+   * staged rows stay for the newer server. On the beta.1 night the
+   * still-running rc.7 server instead retried 5 staging rows every 5 s
+   * for 2 h 20 min, about 1620 attempts each.
+   */
+  private stepAside(storeVersion: number): void {
+    this.steppedAside = true
+    this.drainRefusedThisTick = true
+    if (this.drainLease) {
+      try {
+        this.drainLease.client.release('drain')
+      } catch (err) {
+        // The TTL frees it within one lease period; say why it took that.
+        dbg('ingest', 'stale drain: lease release failed — the TTL frees it', { error: String(err) })
+      }
+    }
+    try {
+      this.ctx.store.releaseStagingClaims(this.claimant)
+    } catch {
+      /* claims expire by TTL */
+    }
+    if (!staleDrainWarned) {
+      staleDrainWarned = true
+      warn(
+        `[IngestionLoop] ${newerSchemaLine(storeVersion, this.schemaCeiling)} ` +
+          'This server has stopped draining capture; the staged events wait for the newer server.',
+      )
+    }
+    this.stop()
+  }
+
+  /**
    * Store handle for a staged row's target namespace (create-if-absent
    * via the injected factory; without a factory everything drains into
    * the serving handle — test/legacy construction only).
@@ -287,6 +353,14 @@ export class IngestionLoop {
    *  300s usefulness (G2: anchors are swept with staging retention, per
    *  the design note). Returns the number of staging rows purged. */
   async runSweep(): Promise<number> {
+    // D265: a server that never wins the drain still sweeps; one older
+    // than the store steps aside here too, and stops sweeping it.
+    if (this.steppedAside) return 0
+    const live = this.ctx.store.liveSchemaVersion()
+    if (live > this.schemaCeiling) {
+      this.stepAside(live)
+      return 0
+    }
     const purged = this.ctx.store.purgeProcessedStaging()
     if (purged > 0) {
       dbg('sweep', `Purged ${purged} old processed staging rows`)
@@ -311,7 +385,32 @@ export class IngestionLoop {
         dbg('sweep', `Swept ${annotations} stale session namespace annotations`)
       }
     }
+    // The echo heal, one bounded page per sweep (ECHO_REINDEX_PAGE).
+    const healed = healEchoIndex(this.ctx.store.database, this.echoHealAfter)
+    this.echoHealAfter = healed.last
+    if (healed.healed > 0) dbg('sweep', `Healed ${healed.healed} treecontext echoes drained without their index boundary`)
     return purged
+  }
+
+  /**
+   * Heal, to the end of the journal, every treecontext echo drained
+   * without its D261 boundary — what a still-running older server leaves
+   * after the upgrade, indexed with its results and with nothing else to
+   * heal it. Re-stamped and re-indexed exactly as migration 028 does
+   * (persistence/echo-reindex.ts); content never touched; idempotent.
+   * Runs once at start; the sweep then heals one page past the cursor.
+   * Returns the number of rows healed.
+   */
+  healEchoes(): number {
+    let total = 0
+    for (;;) {
+      const r = healEchoIndex(this.ctx.store.database, this.echoHealAfter)
+      total += r.healed
+      if (r.scanned === 0) break
+      this.echoHealAfter = r.last
+    }
+    if (total > 0) dbg('sweep', `Healed ${total} treecontext echoes drained without their index boundary`)
+    return total
   }
 
   async ingestBatch(): Promise<number> {
@@ -320,6 +419,10 @@ export class IngestionLoop {
     // tick rather than failing it; the next tick retries. The valve
     // below runs only in the process that holds the drain this tick.
     this.drainRefusedThisTick = false
+    if (this.steppedAside) {
+      this.drainRefusedThisTick = true
+      return 0
+    }
     if (this.drainLease) {
       try {
         this.drainLease.client.tryAcquire('drain', this.drainLease.ttlSecs)
@@ -330,6 +433,17 @@ export class IngestionLoop {
         this.drainRefusedThisTick = true
         return 0
       }
+    }
+    // D265: a store a newer treecontext has migrated past this build is
+    // not this drain's to work. Read here — after the lease is taken, so
+    // a standby never pays for it, and BEFORE the byte valve, so no valve
+    // tombstone is written against a schema this build does not know.
+    // One PRAGMA, no lock. A store OLDER than the build never gets here
+    // running: the open migrated it.
+    const live = this.ctx.store.liveSchemaVersion()
+    if (live > this.schemaCeiling) {
+      this.stepAside(live)
+      return 0
     }
     // D3 byte valve: rows are never dropped for count reasons — any
     // backlog drains in full. Only when unprocessed staging BYTES exceed
@@ -447,12 +561,24 @@ export class IngestionLoop {
           if (row.previewLen != null) {
             meta._preview_len = row.previewLen
           }
+          // D261: the drain is authoritative for an echo's boundaries. A
+          // treecontext tool call's echo enters the index by its arguments
+          // alone and is displayed whole, whatever hook copy staged it.
+          const echoMeta = stampEchoBoundaries(row.content, meta)
+          if (echoMeta !== meta && echoMeta) Object.assign(meta, echoMeta)
 
           // D190: the writer the hook payload named — a subagent's
           // agent_type (its role, the lane) and agent_id — is stamped by
           // the store, from the platform's payload, never claimed by the
           // writer. A row naming none is the main agent's (the main lane).
-          if (row.agentType != null || row.agentId != null) {
+          // D263: a report the SubagentStop hook staged as the client's own
+          // internal agent's (kind `internal-summary`) is the client's,
+          // `claude-code`, never the unregistered agent id's.
+          if (row.kind === INTERNAL_SUMMARY_KIND) {
+            meta._writer = CLIENT_WRITER
+            if (row.agentId != null) meta._writer_agent_id = row.agentId
+            meta._writer_src = 'hook'
+          } else if (row.agentType != null || row.agentId != null) {
             meta._writer = agentWriterOf(row.agentType, row.agentId)
             if (row.agentId != null) meta._writer_agent_id = row.agentId
             meta._writer_src = 'hook'

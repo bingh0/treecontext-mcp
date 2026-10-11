@@ -138,6 +138,18 @@ Feature: Journal agent surface — the parts the agent reads are product
     When it reads the handshake instructions
     Then the agent reads that when capture or recall looks wrong it runs doctor before anything else
 
+  @D264
+  Scenario: the handshake keeps its orientation query and the skill says what ranks where
+    Given an agent connected to the server
+    When it reads the handshake instructions and the reference skill
+    Then the handshake's second session-start step is the free-text orientation query, described as recovering the thread around the resume pointers
+    And the skill's search paragraph states the ranking order: the developer's directives and curated notes first, assistant prose and captured tool output below them, treecontext's own echoes found by their tool name
+    And the query tool offers no parameter for orientation beyond those it had
+    # A beta tester's agent, 2026-10-09, got its cold start from step one
+    # alone and its noise from step two; with the recall cut in force the
+    # second step answers from curated rows, and the text says what ranks
+    # where rather than teaching a workaround (D264).
+
   @D210
   Scenario: the handshake stays a card and the long form lives in the skill reference
     Given an agent connected to the server

@@ -22,7 +22,9 @@ for the three-layer model.
 - `subagent-stop.ts` — stages the subagent's report
   (`last_assistant_message`, else the last assistant text of
   `agent_transcript_path`) as kind `subagent-summary`, then retires the
-  registration
+  registration; an agent id nobody registered with no `agent_type` is the
+  client's own internal agent (compaction, side calls), staged as kind
+  `internal-summary` and stamped `_writer: "claude-code"` at the drain
 
 At the drain a staged row naming an agent is stamped `_writer` (its
 role) with `_writer_src: "hook"`; a row naming none is the session's own

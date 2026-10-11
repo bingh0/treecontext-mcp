@@ -23,6 +23,60 @@ Feature: Journal recall — a cold-started agent recovers prior context
     Given several sessions of journaled work on distinct topics
     When the agent queries "what was I working on, what was the next step"
     Then the most recent active thread ranks above older completed ones
+    # Since the beta.2 cut its binding seeds the mature journal (D266):
+    # the latest thread must still win with tool text at a tenth of the weight.
+
+  @D260
+  Scenario: the developer's directives and the agent's notes outrank captured tool output
+    Given a mature journal where captured tool output, echoes of earlier orientation queries among it, outnumbers the curated notes many times over and matches the query's own words
+    When the agent queries "what was I working on, what was the next step"
+    Then a developer turn or a curated note is the first result
+    And no echo of an earlier orientation query is among the first five results
+    And a shell tool event is still a hit for a term that appears only in its own output
+    # Measured on the owner's live store, 2026-10-10: at a tie between the
+    # tool and note columns the orientation query's first page was seven
+    # echoes of its own earlier runs and one shell transcript, the first
+    # curated note 45th. The tool weight alone lifted it to 12th, the echo
+    # rule below alone to 43rd, the two together to 3rd with no echo on
+    # the page. They ship together; the bench arm measures the weight.
+
+  @D261
+  Scenario: a treecontext echo is found by its arguments, never by its results
+    Given a journal holding a curated note, the echo of the insert that wrote it, the echo of an orientation query that returned it, and the echo of the status call that listed it as a resume pointer
+    When the agent searches for a phrase that appears only in the note
+    Then the note is the hit and no echo is
+    And a search for the orientation query's own words finds no echo
+    And exporting any of the echoes returns its full input and output
+    And a hit on an echo shows its output
+    # The echo is the evidence attribution reads (journal-session-echo);
+    # it is stored whole and displayed whole. Only its reach into the
+    # index narrows: an insert echo to its tool name, since the note is
+    # its own row; query, export and status echoes to the tool name (a
+    # query echo indexing its own query text matched a repeat of that
+    # query better than any note could, measured 2026-10-10 on the mature
+    # journal); delete, merge and clear echoes to what they were given. The drain stamps the boundary on any echo
+    # that arrives without one, so a hook copy that never learned the
+    # rule still obeys it, and the import door does the same.
+
+  @D261
+  Scenario: an import echo is found by its label and tool name, never by the handoff it carried
+    Given the echo of an import whose pasted handoff holds a distinctive phrase, imported under a label
+    When the agent searches for that phrase
+    Then the imported entries are hits and the import echo is not
+    And a search for the label finds the import echo
+    # The hook writes the label on its own line ahead of the handoff, so
+    # the boundary can reach it; an import echo stored before this rule
+    # has no such line and matches its tool name only (D261, 2026-10-10).
+
+  @D261
+  Scenario: echoes a store already holds are re-indexed when a newer treecontext opens it
+    Given a store whose treecontext echoes were indexed in full by an earlier treecontext
+    When this treecontext opens the store
+    Then a query echo no longer matches the results it returned nor the words of the query it recorded, and still matches its tool name
+    And an insert echo no longer matches the note it wrote
+    And an import echo stored before this rule matches its tool name and not the handoff it carried
+    And every echo's stored content is unchanged, byte for byte
+    And opening the store again leaves the echoes exactly as the first open left them
 
   @D6
   Scenario: a keyword recalls the exact prior finding, not a paraphrase
@@ -91,6 +145,8 @@ Feature: Journal recall — a cold-started agent recovers prior context
 
   @D4
   Scenario: a tool event's searchable reach extends past its displayed preview
+    # A treecontext echo is the one exception since D261: its searchable
+    # reach is its arguments, narrower than its preview, never wider.
     Given a tool event whose indexed view reaches beyond its display preview
     When a query matches words that sit past the preview but inside the indexed view
     Then the event is a hit
@@ -119,6 +175,17 @@ Feature: Journal recall — a cold-started agent recovers prior context
     When a query passes a metadata filter requiring two pairs
     Then only entries carrying both pairs are returned
     And the same query without the filter also surfaces the others
+
+  @D268
+  Scenario: a metadata filter finds an entry wherever its words rank
+    Given a mature journal in which a bookmark's words are outranked by more than two hundred other entries, so a search for them alone does not reach it
+    When a query for those words passes a metadata filter on the bookmark kind
+    Then the bookmark is returned
+    # Measured on the owner's store, 2026-10-09: the filter sifted a pool
+    # of at most two hundred candidates after the ranking, so a filter on
+    # kind bookmark returned nothing for any query once six hundred rows
+    # carried the word. A flat key narrows the candidates in the query
+    # itself; a filter the query cannot carry still sifts the pool.
 
   @D2
   Scenario: superseding a missing id succeeds and names the miss

@@ -109,6 +109,8 @@ change.
 | `scripts/` (2: `install-smoke.ts`, `release-gate.ts`) | SHIP | Both are exemplar-relevant release tooling; tarball name updates with the package rename. |
 | `.github/workflows/ci.yml` | SHIP after read-through | The minute-diet comments describe CI economics generically; one read-through at copy time. |
 | `.github/ISSUE_TEMPLATE/beta-report.yml` | EDIT | Reframe from private-beta reporting to public issue intake at release. |
+| `.github/FUNDING.yml` | SHIP | The sponsor button (added 2026-10-09 to match gnt and ccr); names only the GitHub handle. |
+| `.github/dependabot.yml` | SHIP | Weekly grouped version updates for npm and the pinned actions (added 2026-10-11, owner ruling: every free Actions feature is on in the public repo). Dependabot alerts, security updates, CodeQL default setup and private vulnerability reporting are repo settings there, not files. |
 
 Release-time check: `git ls-files` in `bingh0/treecontext-mcp` equals
 this manifest minus HOLDs, with zero unlisted files. Anything new

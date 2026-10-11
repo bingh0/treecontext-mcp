@@ -12,7 +12,7 @@ import { wrapBetterSqlite } from '../../../src/persistence/better-sqlite.js'
 import { decodeContent } from '../../../src/persistence/content-codec.js'
 import { mcpOver, parseTool, rawAll } from '../world.js'
 import { spawnCli } from '../../helpers/cli-spawn.js'
-import { type CaptureWorld, openCaptureSandbox, runHook, hookJson, writeTranscript } from '../capture-harness.js'
+import { type CaptureWorld, openCaptureSandbox, runHook, hookJson, writeTranscript, drainStaging } from '../capture-harness.js'
 
 // ── journal-handoff ─────────────────────────────────────────────────────
 //
@@ -78,6 +78,8 @@ export interface HandoffWorld extends CaptureWorld {
   /** Contents the Thens name. */
   bookmarkText?: string
   testerText?: string
+  /** The client's compaction summary (D263). */
+  compactionText?: string
   /** The file as B read it off the disk. */
   openedText?: string
   /** The shell door's run, its file's bytes, and its time window. */
@@ -314,6 +316,15 @@ function expectFileHoldsLane(w: HandoffWorld, file: { nodes: Array<Record<string
 }
 
 const PKG_VERSION = (JSON.parse(readFileSync(new URL('../../../package.json', import.meta.url), 'utf8')) as { version: string }).version
+
+/** A compaction summary as Claude Code's summarizer writes one; the word
+ *  `quokkaledger` is in nothing else A's store holds. */
+const COMPACTION_SUMMARY = [
+  'This session is being continued from a previous conversation that ran out of context. The conversation is summarized below:',
+  'Analysis: the login form was wired; the quokkaledger migration was discussed and deferred.',
+  '1. Primary Request and Intent: make the CSRF test pass.',
+  ...Array.from({ length: 40 }, (_, i) => `   - step ${i}: reviewed the session middleware ordering against case ${i}`),
+].join('\n')
 
 const utc = (sec: number): string => `${new Date(sec * 1000).toISOString().slice(0, 16)}Z`
 
@@ -644,6 +655,68 @@ export const handoffDefiner = (reg: Registry<HandoffWorld>): void => {
     // One call wrote it: no second, acknowledging call was needed.
     expect(w.exportReplies).toHaveLength(1)
     expect(w.exportReplies![0]!.fileAfter).toBe(true)
+  })
+
+  // ── the default export carries no internal summary (D263) ──
+  // A's store is the one A's hooks write: the capture sandbox's derived
+  // store, A's project the directory the hooks and the server share. The
+  // tester's report and the compaction summary both arrive as Claude Code
+  // fires them, through the real SubagentStop hook, and the production
+  // drain lands them.
+  reg.define(/^developer A's store holding the tester subagent's summary "([^"]+)" and the client's compaction summary of the same session$/, async (w, tester$) => {
+    openCaptureSandbox(w)
+    mkdirSync(dirname(w.dbPath!), { recursive: true })
+    const store = await FlatStore.open({
+      database: wrapBetterSqlite(new BetterSqlite3(w.dbPath!)), ownsDatabase: true, retentionInterval: 1_000_000_000,
+    })
+    w.defer(() => store.close())
+    w.store = store
+    w.aStore = store
+    w.aDir = dirname(w.dbPath!)
+    w.aRepo = w.proj!
+    w.aSession = w.sessionId!
+    writeSessionBeacon(w.dbPath!, process.pid, w.sessionId!, w.proj!, { rewrite: true })
+    w.aClient = await mcpOver(w, { ccSessionId: w.sessionId!, projectDir: w.proj! }, store)
+    runHook(w, 'session-start', { hook_event_name: 'SessionStart', source: 'startup' })
+    w.testerText = String(tester$)
+    const testerId = `agent-${randomBytes(4).toString('hex')}`
+    runHook(w, 'subagent-start', { hook_event_name: 'SubagentStart', agent_id: testerId, agent_type: 'tester' })
+    runHook(w, 'subagent-stop', {
+      hook_event_name: 'SubagentStop', agent_id: testerId, agent_type: 'tester', stop_hook_active: false,
+      agent_transcript_path: join(w.proj!, `agent-${testerId}.jsonl`), last_assistant_message: w.testerText,
+    })
+    // The compaction summarizer: an agent id nobody registered, no type.
+    w.compactionText = COMPACTION_SUMMARY
+    const internalId = `a${randomBytes(8).toString('hex')}`
+    runHook(w, 'subagent-stop', {
+      hook_event_name: 'SubagentStop', agent_id: internalId, stop_hook_active: false,
+      agent_transcript_path: join(w.proj!, `agent-${internalId}.jsonl`), last_assistant_message: w.compactionText,
+    })
+    await drainStaging(w)
+    // Both in A's store, read straight off its SQLite file.
+    const kinds = rawAll<{ kind: string; writer: string; content: Buffer | string | null }>(w,
+      "SELECT json_extract(metadata_json, '$.kind') AS kind, json_extract(metadata_json, '$._writer') AS writer, content FROM nodes WHERE json_extract(metadata_json, '$.kind') IS NOT NULL ORDER BY kind")
+    expect(kinds.map((r) => [r.kind, r.writer, decodeContent(r.content)])).toEqual([
+      ['internal-summary', 'claude-code', w.compactionText],
+      ['subagent-summary', 'tester', w.testerText],
+    ])
+  })
+  reg.define(/^the file A commits holds the tester's summary and not the compaction summary$/, (w) => {
+    const file = committed(w)
+    expect(file['form']).toBe('summaries')
+    expect(file.nodes.map((x) => x['content'])).toEqual([w.testerText])
+    expect(file['node_count']).toBe(1)
+  })
+  reg.define(/^a whole-journal export still carries the compaction summary$/, async (w) => {
+    w.askedPath = 'handoffs/whole-journal.json'
+    const res = await exportWhole(w, { path: w.askedPath })
+    expect(res.isError, replyText(res)).toBeFalsy()
+    const file = committed(w)
+    expect(file['form']).toBe('whole')
+    const internal = file.nodes.filter((x) => x['content'] === w.compactionText)
+    expect(internal).toHaveLength(1)
+    expect(internal[0]!['metadata']).toMatchObject({ kind: 'internal-summary', _writer: 'claude-code' })
+    expect(file.nodes.some((x) => x['content'] === w.testerText)).toBe(true)
   })
 
   // ── a whole-journal export warns before it writes (D177) ──

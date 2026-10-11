@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync, existsSync, statSync } from 'node:fs'
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { delimiter, dirname, isAbsolute, join } from 'node:path'
-import { tmpdir } from 'node:os'
+import { hostname, tmpdir } from 'node:os'
 import { expect } from 'vitest'
 import { type Registry } from 'gherkin-node-test/vitest'
 import { spawnCli, spawnNodeTs } from '../../helpers/cli-spawn.js'
@@ -9,6 +9,11 @@ import { seedOrphanSidecar, storesDirIn } from '../../helpers/store-fixtures.js'
 import { writeVerdict } from '../../../src/persistence/backup-verdict.js'
 import { TS_ROOT } from '../proc.js'
 import { claudeSessionStartUnwired } from '../../../src/server/installer.js'
+import BetterSqlite3 from 'better-sqlite3'
+import { wrapBetterSqlite } from '../../../src/persistence/better-sqlite.js'
+import { FlatStore } from '../../../src/flat-store.js'
+import { LeaseClient, DRAIN_LEASE_TTL_SECS } from '../../../src/persistence/leases.js'
+import { MAX_INGEST_ATTEMPTS } from '../../../src/persistence/capture-constants.js'
 import { type InstallWorld, tcCli, agentCli, openInstallWorld, treeOf, pathsMentioned, installedCommands, interpreterLoadsBinding, isBatchBody, toPosix, mcpLauncherIn, agentConfigPath, fakeGlobalInstall } from '../install-harness.js'
 
 export const installDefiner = (reg: Registry<InstallWorld>): void => {
@@ -694,6 +699,68 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
     expect(seen, 'no failing check was enumerated — the clause proved nothing').toBeGreaterThan(0)
   })
 
+  // ── doctor's headline when nothing is wired (D276) ─────────────────
+  // A fresh machine as the beta tester had it: Claude Code present, the
+  // package installed the way npm lays out a global install (its command
+  // first on PATH, every other treecontext command filtered off PATH),
+  // and `treecontext install` never run. The real CLI under a sandboxed
+  // HOME; the report read line by line.
+  reg.define(/^a machine where the package is installed and no agent is wired$/, async (w: InstallWorld) => {
+    await openInstallWorld(w, ['.claude'])
+    const version = (JSON.parse(readFileSync(join(TS_ROOT, 'package.json'), 'utf8')) as { version: string }).version
+    w.iOtherBuild = fakeGlobalInstall(w.ihome!, version)
+    // Nothing of treecontext is wired: no global config, no launcher, no
+    // agent entry.
+    expect(existsSync(join(w.ihome!, '.treecontext', 'config.toml'))).toBe(false)
+    expect(existsSync(mcpLauncherIn(w.ihome!))).toBe(false)
+    expect(existsSync(join(w.ihome!, '.claude.json'))).toBe(false)
+  })
+  const packageOnPath = (w: InstallWorld): string => [w.iOtherBuild!.bin, ...(process.env['PATH'] ?? '').split(delimiter).filter((d) => {
+    if (!d) return false
+    try { return !readdirSync(d).some((f) => f === 'treecontext' || f.startsWith('treecontext.')) } catch { return true }
+  })].join(delimiter)
+  reg.define(/^the developer runs doctor$/, (w: InstallWorld) => {
+    w.irun = spawnCli(['doctor'], { home: w.ihome!, cwd: TS_ROOT, env: { PATH: packageOnPath(w) } })
+    expect(w.irun.status, w.irun.out).toBe(0)
+  })
+  reg.define(/^the first line after the header says treecontext is not set up for any agent yet and names the one command to run$/, (w: InstallWorld) => {
+    const lines = w.irun!.stdout.split('\n')
+    const platform = lines.findIndex((l) => l.startsWith('Platform: '))
+    expect(lines[0], w.irun!.stdout).toMatch(/^treecontext doctor v/)
+    expect(platform, w.irun!.stdout).toBeGreaterThan(0)
+    expect(lines[platform + 1]).toBe('treecontext is not set up for any agent yet — run: treecontext install')
+    // The package itself is found: the row for the command on PATH is no
+    // warning, so the headline is the only thing standing between the
+    // developer and a working install.
+    expect(lines.find((l) => l.includes('Command on PATH:')), w.irun!.stdout).toMatch(/^\[ok\]/)
+  })
+  reg.define(/^every warning row below it names that same command as its fix$/, (w: InstallWorld) => {
+    const lines = w.irun!.stdout.split('\n')
+    const failing = lines.map((l, i) => ({ l, i })).filter(({ l }) => /^\[(warn|err)]/.test(l))
+    // Every row the unwired state raises: the global config and the agent.
+    expect(failing.map(({ l }) => l.replace(/^\[\w+\]\s+/, '').split(':')[0]).sort()).toEqual(['Claude Code', 'Global config'])
+    for (const { l, i } of failing) {
+      expect(lines[i + 1], `the row does not name the headline's command: ${l}`).toBe('       fix: treecontext install')
+    }
+    // That command clears every one of them (D51): run as the developer
+    // would, then doctor again says nothing is missing.
+    const install = tcCli(w, ['install', '--yes'])
+    expect(install.status, install.out).toBe(0)
+    const again = spawnCli(['doctor'], { home: w.ihome!, cwd: TS_ROOT, env: { PATH: packageOnPath(w) } })
+    expect(again.stdout, again.out).toMatch(/^\[ok\] +Claude Code: MCP configured/m)
+    const after = again.stdout.split('\n')
+    expect(after.filter((l) => /^\[(warn|err)]/.test(l)), again.stdout).toEqual([])
+    expect(after[after.findIndex((l) => l.startsWith('Platform: ')) + 1]).toMatch(/^\[ok\]/)
+    // The headline keys on the wiring, not on what install leaves behind:
+    // after an uninstall the global config and logs survive, and doctor
+    // again says nothing is set up.
+    const uninstall = tcCli(w, ['uninstall', '--yes'])
+    expect(uninstall.status, uninstall.out).toBe(0)
+    expect(existsSync(join(w.ihome!, '.treecontext', 'config.toml')), 'the uninstall left no config to test against').toBe(true)
+    const gone = spawnCli(['doctor'], { home: w.ihome!, cwd: TS_ROOT, env: { PATH: packageOnPath(w) } }).stdout.split('\n')
+    expect(gone[gone.findIndex((l) => l.startsWith('Platform: ')) + 1]).toBe('treecontext is not set up for any agent yet — run: treecontext install')
+  })
+
   // ── which build is which ────────────────────────────────────────────
   reg.define(/^a working installation where the command on PATH is a different build$/, async (w: InstallWorld) => {
     await openInstallWorld(w, ['.claude'])
@@ -979,6 +1046,104 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
     const body = readFileSync(join(w.iproj!, 'AGENTS.md'), 'utf8')
     expect(body).toMatch(/Some prose that belongs to the project\./)
     expect(body).toMatch(/Trailing prose that must survive\./)
+  })
+
+  // ── doctor names the runaway staging row and who spins on it (D265) ──
+  // The real hook subprocess, run from this repository under a sandboxed
+  // HOME, creates the store and binds this directory to it (the binding
+  // doctor reads); the runaway row is staged and retried through the real
+  // staging API; the drain lease is taken by a real LeaseClient naming a
+  // live process; the real doctor CLI reads it all read-only.
+  reg.define(/^a store whose staging table holds a row retried more than ten times the retry ceiling, while the drain lease names a live holder$/, async (w: InstallWorld) => {
+    await openInstallWorld(w, ['.claude'])
+    const version = (JSON.parse(readFileSync(join(TS_ROOT, 'package.json'), 'utf8')) as { version: string }).version
+    w.iOtherBuild = fakeGlobalInstall(w.ihome!, version)
+    const hook = spawnNodeTs(join(TS_ROOT, 'src', 'hooks', 'user-prompt-submit.ts'), [], {
+      home: w.ihome!, cwd: TS_ROOT,
+      input: JSON.stringify({ session_id: 'cc-runaway', cwd: TS_ROOT, hook_event_name: 'UserPromptSubmit', prompt: 'binds this directory' }),
+    })
+    expect(hook.status, hook.out).toBe(0)
+    const bindings = JSON.parse(readFileSync(join(w.ihome!, '.treecontext', 'bindings.json'), 'utf8')) as {
+      projects: Record<string, { store: string }>
+    }
+    const names = [...new Set(Object.values(bindings.projects).map((p) => p.store))]
+    expect(names).toHaveLength(1)
+    const dbPath = join(storesDirIn(w.ihome!), names[0]!, 'treecontext.db')
+    // The process that spins: a live one, so the fix names a real pid.
+    // It exits on its own after a minute should the deferred kill never run.
+    const spinner = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1e6); setTimeout(() => process.exit(), 60000)'], { stdio: 'ignore' })
+    w.defer(() => { spinner.kill() })
+    const store = await FlatStore.open({ database: wrapBetterSqlite(new BetterSqlite3(dbPath)), ownsDatabase: true })
+    try {
+      const id = store.store.insertStaging({ sessionId: 'cc-runaway', role: 'user', content: 'the row the dead-letter path cannot retire', timestamp: Date.now() / 1000 - 3600 })
+      let attempts = 0
+      for (let i = 0; i <= 10 * MAX_INGEST_ATTEMPTS; i++) attempts = store.store.incrementStagingAttempts(id)
+      expect(attempts).toBe(10 * MAX_INGEST_ATTEMPTS + 1)
+      const leases = new LeaseClient(store.store.database, { pid: spinner.pid!, host: hostname(), label: 'serve:project' })
+      leases.tryAcquire('drain', DRAIN_LEASE_TTL_SECS)
+      w.iRunaway = { stagingId: id, attempts, holderPid: spinner.pid!, holderHost: hostname() }
+    } finally {
+      await store.close()
+    }
+    // Direct inspection: the row and the holder are what the store says.
+    const raw = new BetterSqlite3(dbPath, { readonly: true })
+    try {
+      expect(raw.prepare('SELECT attempts, processed FROM staging WHERE id = ?').get(w.iRunaway.stagingId))
+        .toEqual({ attempts: 10 * MAX_INGEST_ATTEMPTS + 1, processed: 0 })
+      expect(raw.prepare("SELECT holder_pid FROM leases WHERE role = 'drain'").get()).toEqual({ holder_pid: spinner.pid })
+    } finally {
+      raw.close()
+    }
+  })
+
+  reg.define(/^the capture-debt row names that staging row, its attempt count and the drain holder's process$/, (w: InstallWorld) => {
+    const r = w.iRunaway!
+    const lines = w.irun!.stdout.split('\n')
+    const rows = lines.filter((l) => /^\[\w+\]\s+Capture debt:/.test(l))
+    expect(rows, w.irun!.stdout).toHaveLength(1)
+    const row = rows[0]!
+    expect(row).toMatch(/^\[warn\]/)
+    expect(row).toContain(`staging row ${r.stagingId} has been retried ${r.attempts} times`)
+    expect(row).toContain(`more than ten times the retry ceiling of ${MAX_INGEST_ATTEMPTS}`)
+    expect(row).toContain(`the drain is held by pid ${r.holderPid}@${r.holderHost}`)
+    // What it logged is one command away, named in the detail.
+    expect(row).toContain('`treecontext doctor --dump-logs`')
+  })
+
+  reg.define(/^the finding's fix names the process to quit$/, (w: InstallWorld) => {
+    const r = w.iRunaway!
+    const lines = w.irun!.stdout.split('\n')
+    const at = lines.findIndex((l) => /^\[\w+\]\s+Capture debt:/.test(l))
+    const fix = lines[at + 1] ?? ''
+    // D51: the fix is the bare command that stops that process (the
+    // locked-store row's shape) — a live lease held on this host.
+    expect(fix, w.irun!.stdout).toBe(`       fix: ${process.platform === 'win32' ? `taskkill /F /PID ${r.holderPid}` : `kill ${r.holderPid}`}`)
+  })
+
+  // ── the README's upgrading section says quit first (D265) ───────────
+  reg.define(/^the README's section on upgrading between betas$/, (w: InstallWorld) => {
+    const readme = readFileSync(join(TS_ROOT, 'README.md'), 'utf8')
+    const start = readme.indexOf('### Upgrading between beta releases')
+    expect(start, 'the README has no upgrading section').toBeGreaterThan(-1)
+    const rest = readme.slice(start + '### Upgrading between beta releases'.length)
+    const end = rest.search(/^#{2,3} /m)
+    w.iReadmeSection = end === -1 ? rest : rest.slice(0, end)
+  })
+
+  reg.define(/^a developer reads it before upgrading$/, (w: InstallWorld) => {
+    expect(w.iReadmeSection!.trim().length).toBeGreaterThan(0)
+  })
+
+  reg.define(/^its first instruction is to quit every running session$/, (w: InstallWorld) => {
+    const section = w.iReadmeSection!
+    const first = section.trim().split(/\n\s*\n/)[0]!.replace(/\s+/g, ' ')
+    // The opening sentence is the instruction, and it comes before the install.
+    expect(first).toMatch(/^First, \*\*quit every running session\*\*/)
+    expect(section.indexOf('quit every running session')).toBeLessThan(section.indexOf('Install the new beta over the old one'))
+    // And why: an older server keeps running against the store, and a beta.1
+    // server has no step-aside.
+    expect(first).toMatch(/keeps running against your store until its session ends/)
+    expect(first).toMatch(/A `0\.1\.0-beta\.1` server has no such step-aside/)
   })
 }
 

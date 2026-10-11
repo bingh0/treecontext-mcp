@@ -208,6 +208,16 @@ re-decided, and the previous text is in git history.
   and ships in `0.1.0-beta.1`; nothing of it stands in effect and
   unbuilt, D253, awaiting the owner's ratification. (D205, D197,
   2026-10-07)
+- **The shape of N19 (every touch of an entry recorded) and N22 (a group
+  of subagents found as a group)** — unscoped by the audit of
+  2026-10-08; N19 is the access-log design shelved as the drain product,
+  N22 a new feature, each two to four chunks if kept and a fence line if
+  declined. Nothing is built toward either. Reopens at a scope session
+  before `0.1.0-beta.3`, which rules each onto this fence or the
+  schedule, ruling explicitly on the access log (D125, D128) and on
+  group orientation (D168), which stays under its own entry above until
+  then; D209's condition governs D168 until that session. (D267,
+  2026-10-10)
 
 ## Named assumptions
 

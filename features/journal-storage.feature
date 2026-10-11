@@ -282,6 +282,25 @@ Feature: Journal storage — the store is durable, bounded, and honest about los
     And retirement happens only after the dead-letter record exists
     And the rest of the backlog continues to drain past it
 
+  @D265
+  Scenario: a stale server tells the agent to restart instead of failing
+    Given a session whose server predates a migration that a newer treecontext ran on the store
+    When the agent calls each journal tool
+    Then the reply is one line, that the store was migrated by a newer treecontext and this session should be restarted, and nothing else
+    And the session's hooks still stage into the store
+    # D265: the server reads the store's schema version at each tool
+    # call, cached for a few seconds, so the reply never waits on a drain
+    # lease a newer server already holds; on any tool error it re-reads
+    # the version uncached before replying, so a migration that lands
+    # inside the cache window still answers with this line, never a raw
+    # constraint error. The line is the text of the tool's error reply.
+    # Hooks write staging directly and run the package on PATH, so what
+    # they stage waits for the newer server. A beta.1 server has none of
+    # this: beside a beta.2-migrated store it keeps draining, since this
+    # release's migrations change data only, and the echoes it drains
+    # miss the index boundary of D261 until the next beta.2 server heals
+    # them; the README says to quit every session before upgrading.
+
   @D59
   Scenario: schema changes never eat a store
     Given a database created by an older binary

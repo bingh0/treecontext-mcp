@@ -44,6 +44,7 @@
  */
 import { ARMS, findArm } from './arms/index.js'
 import { pairedCompare } from './lib/paired.js'
+import { sigmasCell } from './lib/report.js'
 import type { Mutation } from './mutations.js'
 import type { ArmRun } from './arms/types.js'
 
@@ -140,7 +141,7 @@ async function main(): Promise<void> {
       : 0
     // B is the capped run, so `poisoned` = queries the cap hurt.
     console.log(
-      `| ${cap} ${mode} | ${pct(cmp.meanB)} | ${pp(cmp.meanDelta)} | ${pct(cmp.se)} | ${cmp.sigmas.toFixed(1)} | ` +
+      `| ${cap} ${mode} | ${pct(cmp.meanB)} | ${pp(cmp.meanDelta)} | ${pct(cmp.se)} | ${sigmasCell(cmp.sigmas)} | ` +
       `${cmp.poisoned}/${cmp.rescued} | ${cmp.pValue.toFixed(4)} | ${pct(truncated)} |`,
     )
   }
@@ -160,7 +161,7 @@ async function main(): Promise<void> {
       const cmp = pairedCompare(prefix.run.values, headTail.run.values)
       console.log(
         `| ${cap} | ${pct(cmp.meanA)} | ${pct(cmp.meanB)} | ${pp(cmp.meanDelta)} | ${pct(cmp.se)} | ` +
-        `${cmp.sigmas.toFixed(1)} | ${cmp.poisoned}/${cmp.rescued} | ${cmp.pValue.toFixed(4)} |`,
+        `${sigmasCell(cmp.sigmas)} | ${cmp.poisoned}/${cmp.rescued} | ${cmp.pValue.toFixed(4)} |`,
       )
     }
   }

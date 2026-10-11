@@ -34,6 +34,29 @@ function stopPayload(w: CaptureWorld, turn: string): Record<string, unknown> {
   }
 }
 
+/** The D270 scenario's extra world. */
+type D270World = CaptureWorld & { lineWords?: string[]; tabWord?: string; legacyWords?: string[] }
+
+/** The one captured Bash row whose content carries `word`. */
+function d270Row(w: CaptureWorld, word: string): RawNode {
+  const rows = rawJournal(w).filter((r) => r.metadata['tool_name'] === 'Bash' && r.content.includes(word))
+  expect(rows, `no single captured row carries ${word}`).toHaveLength(1)
+  return rows[0]!
+}
+
+/** Node ids whose FTS row matches `token` as a whole token, read straight
+ *  from nodes_fts (the verification rule). */
+function ftsRowsMatching(w: CaptureWorld, token: string): string[] {
+  const raw = new BetterSqlite3(w.dbPath!, { readonly: true })
+  try {
+    return (raw.prepare(
+      'SELECT n.node_id FROM nodes_fts JOIN nodes n ON n.rowid = nodes_fts.rowid WHERE nodes_fts MATCH ? ORDER BY n.rowid',
+    ).all(`"${token}"`) as Array<{ node_id: string }>).map((r) => r.node_id)
+  } finally {
+    raw.close()
+  }
+}
+
 export const captureDefiner = (reg: Registry<CaptureWorld>): void => {
   // ── a user message is captured verbatim ─────────────────────────────
   reg.define(/^a session where the user submits a prompt$/, async (w: CaptureWorld) => {
@@ -183,6 +206,79 @@ export const captureDefiner = (reg: Registry<CaptureWorld>): void => {
     expect(exportNode(w, row.nodeId)['content'] as string).toContain(w.deepToken!) // …and retrievable
   })
 
+  // ── D270: a tool event's output is captured as text, a line a line ──
+  reg.define(/^a shell command whose output spans several lines and carries a tab$/, async (w: CaptureWorld) => {
+    await openCaptureWorld(w)
+    const d = w as D270World
+    const tag = randomBytes(3).toString('hex').replace(/[0-9]/g, 'q')
+    // One distinctive word to begin each line, the second line's after a
+    // tab; and a word after the tab on the third.
+    d.lineWords = [`alderline${tag}`, `birchline${tag}`, `cedarline${tag}`]
+    d.tabWord = `tabbedword${tag}`
+    w.toolStdout = `${d.lineWords[0]} first line of the log\n\t${d.lineWords[1]} indented second line\n${d.lineWords[2]}\t${d.tabWord} third`
+    w.toolCommand = 'git log --format=%s -3'
+    w.pendingPayload = bashPayload(w, w.toolCommand, w.toolStdout)
+    // An entry captured before this rule: staged in the composition the
+    // hook wrote until D270, the JSON encoding of the object payload.
+    d.legacyWords = [`oakline${tag}`, `pineline${tag}`]
+    const legacyInput = { command: 'git log --format=%s -2', description: 'Run command' }
+    const legacyResponse = { stdout: `${d.legacyWords[0]} old first\n${d.legacyWords[1]} old second`, stderr: '', interrupted: false, isImage: false }
+    w.store!.store.insertStaging({
+      sessionId: w.sessionId!,
+      role: 'assistant',
+      content: `Tool: Bash\nInput:\n${JSON.stringify(legacyInput)}\nOutput:\n${JSON.stringify(legacyResponse)}`,
+      toolName: 'Bash',
+      timestamp: Date.now() / 1000 - 60,
+      priority: 2,
+    })
+  })
+  reg.define(/^the event is captured and ingested$/, async (w: CaptureWorld) => {
+    spawnHook(w, 'post-tool-use', w.pendingPayload!)
+    await drainStaging(w)
+  })
+  reg.define(/^the word that begins each line is findable by itself$/, async (w: CaptureWorld) => {
+    const d = w as D270World
+    const row = d270Row(w, d.lineWords![0]!)
+    for (const word of [...d.lineWords!, d.tabWord!]) {
+      // The index itself: the bare word is its own token in this row.
+      expect(ftsRowsMatching(w, word), `${word} is not its own token`).toEqual([row.nodeId])
+      // And the query surface finds the row by it.
+      const hits = await w.store!.query(word, { topK: 5 })
+      expect(hits.map((h) => h.nodeId), `${word} does not find the captured row`).toContain(row.nodeId)
+    }
+  })
+  reg.define(/^the stored entry shows the output's lines as lines, not as escape sequences$/, (w: CaptureWorld) => {
+    const d = w as D270World
+    const row = d270Row(w, d.lineWords![0]!)
+    const exported = exportNode(w, row.nodeId)['content'] as string
+    // The control: the JSON encoding this rule replaced carries both
+    // escape needles, so the absences below can fire.
+    const encoded = JSON.stringify(w.toolStdout!)
+    expect(encoded).toContain('\\n')
+    expect(encoded).toContain('\\t')
+    for (const c of [row.content, exported]) {
+      expect(c).toContain(`Output:\nstdout:\n${w.toolStdout!}\n`)
+      expect(c).toContain(`Input:\ncommand:\n${w.toolCommand!}\n`)
+      // step-lint: allow unearned-absence -- guarded: the control above proves JSON.stringify of this stdout carries the needle
+      expect(c).not.toContain('\\n')
+      // step-lint: allow unearned-absence -- guarded: the control above proves JSON.stringify of this stdout carries the needle
+      expect(c).not.toContain('\\t')
+    }
+  })
+  reg.define(/^an entry captured before this rule is still found by its glued word and shows its escape sequences$/, async (w: CaptureWorld) => {
+    const d = w as D270World
+    const row = d270Row(w, d.legacyWords![0]!)
+    // Its second line's word was indexed glued to the escape's letter.
+    const glued = `n${d.legacyWords![1]!}`
+    expect(ftsRowsMatching(w, glued)).toEqual([row.nodeId])
+    const hits = await w.store!.query(glued, { topK: 5 })
+    expect(hits.map((h) => h.nodeId)).toContain(row.nodeId)
+    // Its stored text is what it was: the escape sequences, untouched.
+    const exported = exportNode(w, row.nodeId)['content'] as string
+    expect(exported).toContain(`${d.legacyWords![0]!} old first\\n${d.legacyWords![1]!} old second`)
+    expect(row.content).toBe(exported)
+  })
+
   // ── an oversized non-re-derivable event keeps its full content ──────
   reg.define(/^an execution or external tool event far larger than the indexed preview caps$/, async (w: CaptureWorld) => {
     await openCaptureWorld(w)
@@ -315,11 +411,9 @@ export const captureDefiner = (reg: Registry<CaptureWorld>): void => {
       const r = rows.find((x) => x.metadata['tool_name'] === tool)
       expect(r, `no journal entry for ${tool} — an invocation was filtered out`).toBeTruthy()
       expect(r!.content).toContain(`Tool: ${tool}`)
-      // The tool input is journaled as JSON, so a Windows path arrives with
-      // its separators escaped (C:\\Users\\...). Compare against the encoded
-      // form; on POSIX JSON.stringify leaves an ordinary path untouched, so
-      // this is the same assertion there.
-      expect(r!.content).toContain(JSON.stringify(needle).slice(1, -1))
+      // D270: the tool input is journaled as its text, so a path (a
+      // Windows one included) arrives exactly as the client sent it.
+      expect(r!.content).toContain(needle)
     }
     expectCall('Bash', 'npm test')
     expectCall('LS', w.proj!)
@@ -348,9 +442,9 @@ export const captureDefiner = (reg: Registry<CaptureWorld>): void => {
     expect(rows, 'the Read invocation was filtered out instead of kept').toHaveLength(1)
     const c = rows[0]!.content
     expect(c).toContain('Tool: Read')
-    // As in expectCall: the tool input is journaled as JSON, so a Windows path
-    // arrives with its separators escaped. Same assertion on POSIX.
-    expect(c).toContain(JSON.stringify(join(w.proj!, 'src', 'flat-store.ts')).slice(1, -1))
+    // As in expectCall: the input is journaled as its text (D270), the
+    // path raw on every OS.
+    expect(c).toContain(join(w.proj!, 'src', 'flat-store.ts'))
     expect(c).toContain('Output:')
     expect(c).toContain('export function retention(line0)') // the preview's head
   })

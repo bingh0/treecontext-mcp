@@ -8,12 +8,22 @@ import { ValidationError } from '../errors/index.js'
 export type { RoleWeights }
 
 /** Two-corpus evidence (weighted-arm ledger): assistant 0.25 is the
- *  best-of-program weight; tool/note are untested and left at 1.0 as
- *  Phase-2 tunables. */
+ *  best-of-program weight. Tool text was lowered to 0.25 on 2026-10-10
+ *  (D260): on two live stores captured tool output, echoes of the
+ *  orientation query's own earlier runs among it, flooded that query at a
+ *  tie with curated notes. Then to 0.1 (D272), on the mature-journal
+ *  arm's sweep re-run on captures made under D270 (bench/README.md):
+ *  shell-ordering, how matching shell rows order among themselves, holds
+ *  53.06% MRR@5 at every weight from 1.0 down to 0.1 and collapses to
+ *  8.33% at 0 (weight 0 flattens the column's term frequency); at the
+ *  sweep's recency of 0.5 shell rows reached the orientation query's
+ *  first page in 6 of 30 slots at 1.0, 1 at 0.25 and none at 0.1, so 0.1
+ *  keeps a margin below the weights that let them in; against 0.25 the
+ *  aggregate moves within noise. User and note stay at full weight. */
 export const DEFAULT_ROLE_WEIGHTS: Required<RoleWeights> = {
   user: 1.0,
   assistant: 0.25,
-  tool: 1.0,
+  tool: 0.1,
   note: 1.0,
 }
 

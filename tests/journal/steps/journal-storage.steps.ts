@@ -25,6 +25,10 @@ import { Client } from '@modelcontextprotocol/client'
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio'
 import { CLI_TS, nodeTsArgs, sandboxedSpawnEnv } from '../../helpers/cli-spawn.js'
 import { loadConfigFile } from '../../../src/server/config.js'
+import { newerSchemaLine } from '../../../src/persistence/migrations.js'
+import { SCHEMA_CHECK_TTL_MS } from '../../../src/server/server.js'
+import { type CaptureWorld, openCaptureWorld, spawnHook, bashPayload } from '../capture-harness.js'
+import { setTimeout as sleep } from 'node:timers/promises'
 import { readVerdict } from '../../../src/persistence/backup-verdict.js'
 
 // ── journal-storage ─────────────────────────────────────────────────────
@@ -37,7 +41,7 @@ import { readVerdict } from '../../../src/persistence/backup-verdict.js'
  * failed sweep actually did, and what a SIGKILLed writer said it had
  * committed. Nothing outside this feature reads any of it.
  */
-export interface StorageWorld extends World {
+export interface StorageWorld extends World, CaptureWorld {
   /** Schema-migration scenario: the store as an older binary left it. */
   oldSchemaVersion?: number
   migrationReport?: MigrationReport
@@ -75,6 +79,10 @@ export interface StorageWorld extends World {
   /** Additive-backup scenario: the store, its version and rows before, the
    *  rows a concurrent writer added in the window. */
   additive?: { path: string; from: number; seeded: string[]; late: string[]; report?: MigrationReport }
+  /** D265: each journal tool's reply from the stale server, by name. */
+  staleReplies?: Map<string, { isError?: boolean; content: Array<{ type: string; text?: string }> }>
+  /** D265: the journal's row count when the server went stale. */
+  staleNodesBefore?: number
   /** Retention scenario: the archive file the valve wrote a whole session
    *  to, in export format, carried from the write to the restore that
    *  reads it back. (It was `attachedPath` in the core World, where it
@@ -1324,6 +1332,100 @@ function countCaptureGapNodes(dbPath: string): number {
     ).get() as { c: number }
     return Number(r.c)
   } finally { raw.close() }
+}
+
+/**
+ * D265 — a stale server tells the agent to restart. The session's server
+ * is the production MCP server over the real store, reached through the
+ * real client handshake; the "newer treecontext's migration" is the
+ * store's user_version raised past this build's maxSupportedVersion, the
+ * one thing a migration does that this build can see. The hooks are real
+ * subprocesses, and the newer server that drains what they stage is this
+ * binary given one version more through the test-only schemaCeiling seam.
+ */
+export const storageStaleServerDefiner = (reg: Registry<StorageWorld>): void => {
+  // Minimal valid arguments per tool: the reply under test is the server's,
+  // not the schema validator's.
+  const CALLS: Record<string, Record<string, unknown>> = {
+    treecontext_insert: { content: 'a decision written after the migration' },
+    treecontext_query: { query: 'decision' },
+    treecontext_status: {},
+    treecontext_delete: { node_id: 'no-such-node' },
+    treecontext_clear: {},
+    treecontext_export: {},
+    treecontext_import: { data: '{"nodes":[]}' },
+    treecontext_merge_from_agent: { source_namespace: 'other', label: 'stale' },
+  }
+
+  reg.define(/^a session whose server predates a migration that a newer treecontext ran on the store$/, async (w: StorageWorld) => {
+    await openCaptureWorld(w)
+    const client = await mcpOver(w)
+    // It has been serving: an ordinary status before the migration.
+    const before = await client.callTool({ name: 'treecontext_status', arguments: {} })
+    expect(before.isError, JSON.stringify(before)).toBeFalsy()
+    // The newer treecontext migrates the store past this build.
+    const raw = new BetterSqlite3(w.dbPath!)
+    raw.pragma(`user_version = ${maxSupportedVersion + 1}`)
+    raw.close()
+    w.staleNodesBefore = rawAll<{ n: number }>(w, 'SELECT COUNT(*) AS n FROM nodes')[0]!.n
+    // The version read is cached a few seconds; the session carries on past it.
+    await sleep(SCHEMA_CHECK_TTL_MS + 100)
+  })
+
+  reg.define(/^the agent calls each journal tool$/, async (w: StorageWorld) => {
+    const { tools } = await w.client!.listTools()
+    const names = tools.map((t) => t.name).sort()
+    expect(names).toEqual(Object.keys(CALLS).sort())
+    w.staleReplies = new Map()
+    for (const name of names) {
+      const res = await w.client!.callTool({ name, arguments: CALLS[name]! })
+      w.staleReplies.set(name, res as { isError?: boolean; content: Array<{ type: string; text?: string }> })
+    }
+  })
+
+  reg.define(/^the reply is one line, that the store was migrated by a newer treecontext and this session should be restarted, and nothing else$/, (w: StorageWorld) => {
+    const line = newerSchemaLine(maxSupportedVersion + 1, maxSupportedVersion)
+    expect(line).toMatch(/^This store was migrated by a newer treecontext \(schema \d+; this build understands \d+\)\. Restart this session to use it\.$/)
+    expect(w.staleReplies!.size).toBe(8)
+    for (const [name, res] of w.staleReplies!) {
+      expect(res.isError, name).toBe(true)
+      expect(res.content, name).toHaveLength(1)
+      expect(res.content[0]!.type, name).toBe('text')
+      expect(res.content[0]!.text, name).toBe(line)
+      // One line and nothing else: the reply is exactly the line above,
+      // whose shape the regex pins, so no SQLite or constraint text rides it.
+      expect(res.content[0]!.text!.split('\n'), name).toEqual([line])
+    }
+    // Nothing else: the insert wrote no row, the clear cleared none.
+    expect(rawAll<{ n: number }>(w, 'SELECT COUNT(*) AS n FROM nodes')[0]!.n).toBe(w.staleNodesBefore)
+  })
+
+  reg.define(/^the session's hooks still stage into the store$/, async (w: StorageWorld) => {
+    const prompt = `staged after the migration ${randomBytes(4).toString('hex')}`
+    spawnHook(w, 'user-prompt-submit', { hook_event_name: 'UserPromptSubmit', prompt })
+    spawnHook(w, 'post-tool-use', bashPayload(w, 'echo kept-for-the-newer-server', 'kept-for-the-newer-server'))
+    // Staged, as the hook left them, against the migrated store.
+    const staged = rawAll<{ content: string; processed: number }>(w, 'SELECT content, processed FROM staging ORDER BY id')
+    expect(staged.filter((r) => r.content.includes(prompt) && r.processed === 0)).toHaveLength(1)
+    expect(staged.filter((r) => r.content.includes('kept-for-the-newer-server') && r.processed === 0)).toHaveLength(1)
+    // The newer server drains them: the production open, drain and tools.
+    const newer = await FlatStore.open({
+      database: wrapBetterSqlite(new BetterSqlite3(w.dbPath!)), ownsDatabase: true,
+      schemaCeiling: maxSupportedVersion + 1,
+    })
+    w.defer(() => newer.close())
+    const leases = new LeaseClient(newer.store.database, { pid: process.pid, host: hostname(), label: 'newer' })
+    const loop = new IngestionLoop(newer, {
+      batchSize: 50, schemaCeiling: maxSupportedVersion + 1,
+      drainLease: { client: leases, ttlSecs: DRAIN_LEASE_TTL_SECS },
+    })
+    w.defer(() => loop.stop())
+    for (let i = 0; i < 10 && newer.store.countUnprocessedStaging() > 0; i++) await loop.ingestBatch()
+    expect(rawAll<{ n: number }>(w, 'SELECT COUNT(*) AS n FROM staging WHERE processed = 0')[0]!.n).toBe(0)
+    const client = await mcpOver(w, { schemaCeiling: maxSupportedVersion + 1 }, newer)
+    const hits = parseTool(await client.callTool({ name: 'treecontext_query', arguments: { query: prompt.split(' ').at(-1)! } }))
+    expect(JSON.stringify(hits)).toContain(prompt)
+  })
 }
 
 export const storageRefusalDefiner = (reg: Registry<StorageWorld>): void => {

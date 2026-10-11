@@ -73,7 +73,7 @@ import { type MediaWorld, mediaDefiner } from './steps/journal-media.steps.js'
 import { type LibraryWorld, libraryDefiner } from './steps/journal-library.steps.js'
 import { type RecallWorld, recallDefiner, recallNoModelDefiner } from './steps/journal-recall.steps.js'
 import { type AgentSurfaceWorld, agentSurfaceDefiner, agentSurfaceSchemaDefiner } from './steps/journal-agent-surface.steps.js'
-import { type StorageWorld, storageDefiner, storageRefusalDefiner, storageBudgetDefiner, storageAdditiveBackupDefiner } from './steps/journal-storage.steps.js'
+import { type StorageWorld, storageDefiner, storageRefusalDefiner, storageBudgetDefiner, storageAdditiveBackupDefiner, storageStaleServerDefiner } from './steps/journal-storage.steps.js'
 import { type SearchModesWorld, searchModesDefiner } from './steps/journal-search-modes.steps.js'
 import { installDefiner } from './steps/journal-install.steps.js'
 import { type PolicyWorld, policyDefiner } from './steps/journal-policy.steps.js'
@@ -99,7 +99,7 @@ runFeatures(join(HERE, '../../features'), {
   'journal-search-modes': searchModesDefiner satisfies Definer<SearchModesWorld>,
   'journal-library': libraryDefiner satisfies Definer<LibraryWorld>,
   'journal-recall': (reg: Registry<RecallWorld>) => { recallDefiner(reg); recallNoModelDefiner(reg) },
-  'journal-storage': (reg: Registry<StorageWorld>) => { storageDefiner(reg); storageRefusalDefiner(reg); storageBudgetDefiner(reg); storageAdditiveBackupDefiner(reg) },
+  'journal-storage': (reg: Registry<StorageWorld>) => { storageDefiner(reg); storageRefusalDefiner(reg); storageBudgetDefiner(reg); storageAdditiveBackupDefiner(reg); storageStaleServerDefiner(reg) },
   'journal-namespaces': namespacesDefiner satisfies Definer<NamespacesWorld>,
   'journal-session-echo': sessionEchoDefiner satisfies Definer<SessionEchoWorld>,
   'journal-session-namespace': sessionNamespaceDefiner satisfies Definer<SessionNamespaceWorld>,

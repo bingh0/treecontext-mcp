@@ -1,9 +1,14 @@
 Feature: FlatStore role-weighted ranking surface
 
   The lexical query path ranks with bm25(nodes_fts, wUser, wAssistant,
-  wTool, wNote), defaults {1.0, 0.25, 1.0, 1.0} — assistant down-weight
-  per the two-corpus evidence (weighted-arm ledger); tool/note untested
-  and deliberately 1.0. Weight zero is NOT omission: rows stay matchable
+  wTool, wNote), defaults {1.0, 0.25, 0.1, 1.0} — assistant down-weight
+  per the two-corpus evidence (weighted-arm ledger); tool lowered to the
+  assistant's value on 2026-10-10 (D260) after captured tool output was
+  seen flooding the orientation query on two live stores at a tie with
+  curated notes, then to 0.1 on the mature-journal arm's sweep re-run
+  under D270 (D272): the lowest weight at which matching shell rows keep
+  their order among themselves and the highest at which none reaches the
+  orientation page; note stays 1.0. Weight zero is NOT omission: rows stay matchable
   through zero-weighted columns (row-global statistics, pinned in
   the D1 scenario below, which measures the engine directly).
   (Staleness repair 2026-08-12: this preamble once carved out the
@@ -20,6 +25,17 @@ Feature: FlatStore role-weighted ranking surface
     Given the same two nodes
     When queried with the assistant weight raised above the user weight
     Then the assistant-text node overtakes
+
+  Scenario: default weights rank a note-column match above an equal tool-column match
+    Given two nodes matching the query equally, one via note text and one via tool text
+    When queried with default weights
+    Then the note-text node ranks first
+    And the tool-text node is still a result
+
+  Scenario: the MCP role_weights parameter still raises the tool weight per query
+    Given a server over a lexical store with the note-and-tool pair
+    When treecontext_query passes role_weights with the tool weight above the note weight
+    Then the tool-text node ranks first
 
   Scenario: all-ones weights reproduce the legacy single-column ranking exactly
     Given a fixture corpus split across the 4 role columns per production's exclusive attribution rule

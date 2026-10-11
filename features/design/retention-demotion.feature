@@ -35,6 +35,19 @@ Feature: C3 — retention: demote, then delete (FlatStore)
     And a hit on the demoted node carries a marker naming the pre-demotion length and archive path
     And the full pre-demotion content is recoverable from the demotion archive
 
+  Scenario: a demoted echo shrinks to its display preview, never to its index boundary
+    Given an over-budget store whose demotion candidate is a treecontext echo carrying its index boundary ahead of its output and a display boundary, with an archive destination
+    When the retention sweep runs
+    Then the echo's content now equals its display preview, output included
+    And the demoted echo is still found by what it indexed before and not by its results
+    And the full pre-demotion content is recoverable from the demotion archive
+    # The display boundary governs a demotion whenever one is stamped; the
+    # index boundary bounds it only for the pre-018 shape that stamped
+    # nothing else. Under D261 an echo's index boundary sits before its
+    # output, and a demotion that cut there would take the evidence the
+    # heal and the namespace annotation read; a demotion that re-stamped
+    # the index boundary at the stump would index the results again.
+
   Scenario: importing the demotion archive restores a stump to the full row
     Given a demoted full-view row whose tail lives only in the demotion archive
     When the archive file is imported back into the store

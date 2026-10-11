@@ -97,7 +97,7 @@ describe('migration 021_store_as_arbiter', () => {
 
   it('a fresh store reaches the final shape, and SCHEMA_VERSION is the ladder max', () => {
     const db = openMigrated('fresh.db')
-    expect(maxSupportedVersion).toBe(27)
+    expect(maxSupportedVersion).toBe(29)
     expect(SCHEMA_VERSION).toBe(maxSupportedVersion)
 
     for (const table of ['dedup_anchors', 'leases']) {
@@ -142,7 +142,7 @@ describe('migration 021_store_as_arbiter', () => {
     insertRaw(db, { id: 'note', content: 'a curated decision', createdAt: 100 })
 
     const first = rerunFrom20(db)
-    expect(first.applied.map((a) => a.version)).toEqual([21, 22, 23, 24, 25, 26, 27])
+    expect(first.applied.map((a) => a.version)).toEqual([21, 22, 23, 24, 25, 26, 27, 28, 29])
     expect(first.applied.find((a) => a.version === 24)!.kind).toBe('destructive')
     expect(first.backupPath).toBe(`${join(dir, 'backup-fixture.db')}.pre-migration-v20.bak`)
     expect(existsSync(first.backupPath!)).toBe(true)

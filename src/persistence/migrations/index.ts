@@ -26,9 +26,11 @@ import m024 from './024_fingerprint_digest.js'
 import m025 from './025_handoff_lane_index.js'
 import m026 from './026_reference_index.js'
 import m027 from './027_session_registry.js'
+import m028 from './028_echo_index_boundary.js'
+import m029 from './029_internal_summary.js'
 
 /** All known migrations, ordered by version ascending. */
-export const migrations: Migration[] = [m001, m002, m003, m004, m005, m006, m007, m008, m009, m010, m011, m012, m013, m014, m015, m016, m017, m018, m019, m020, m021, m022, m023, m024, m025, m026, m027]
+export const migrations: Migration[] = [m001, m002, m003, m004, m005, m006, m007, m008, m009, m010, m011, m012, m013, m014, m015, m016, m017, m018, m019, m020, m021, m022, m023, m024, m025, m026, m027, m028, m029]
 
 /** The highest schema version this build understands. */
 export const maxSupportedVersion = migrations.at(-1)!.version

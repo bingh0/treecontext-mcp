@@ -316,6 +316,15 @@ export interface QueryOptions {
    */
   recencyWeight?: number
   /**
+   * D275: on a relevance-ordered phrase query the store places each live
+   * chapter summary above the bookmarks it shares a match with. `false`
+   * skips that placement, for a caller that re-orders the page itself
+   * (the MCP surface time-sorts the relevance page for a sort_by temporal
+   * listing, which must hold the strongest lexical matches). Default
+   * true. FlatStore only.
+   */
+  chapterPlacement?: boolean
+  /**
    * Adaptive result count: let the score distribution decide how many
    * results return. topK becomes a BUDGET (results may be fewer when a
    * clear break comes early — a deliberate departure from the deleted

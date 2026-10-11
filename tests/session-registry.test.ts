@@ -306,6 +306,8 @@ describe('self names (F6, F7)', () => {
     expect(agentWriterOf('main', 'a1')).toBe('agent:main')
     expect(agentWriterOf('worktree:x', 'a1')).toBe('agent:worktree:x')
     expect(agentWriterOf('agent:y', 'a1')).toBe('agent:agent:y')
+    // D263: the client's own writer is never a subagent type's.
+    expect(agentWriterOf('claude-code', 'a1')).toBe('agent:claude-code')
     expect(agentWriterOf('tester', 'a1')).toBe('tester')
     expect(agentWriterOf(null, 'a1')).toBe('a1')
     expect(laneWriterOf({ _writer: 'agent:main', _writer_agent_id: 'a1' })).toBe('agent:main')

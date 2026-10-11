@@ -150,8 +150,13 @@ ratification. [ruled: D253] The constraints the build must not cross:
   is automatic, cheap and low in signal; the chapter summary is the
   developer's deliberate, high-signal note. Search ranks the chapter
   above the bookmark; a new bookmark supersedes the session's previous
-  one; chapters keep today's supersession rule. [ruled: D158, D166,
-  D183]
+  one; chapters keep today's supersession rule. Amended 2026-10-10: the
+  chapter-over-bookmark promise holds on the page as served: after the
+  cut and after recency fusion, a matching chapter is placed above the
+  bookmarks it shares a match with, and the bookmark's score factor is
+  retired, so a bookmark stays findable by its own words in a mature
+  store; a metadata filter on flat keys narrows the candidates in the
+  query itself. [ruled: D158, D166, D183, D262, D268, D275]
 - **The bookmark is the stop hook's second duty.** At every turn end the
   hook checks the session's newest checkpoint against a configured
   interval, rounds and or minutes, default `20` rounds or `45` minutes
@@ -256,9 +261,10 @@ ratification. [ruled: D253] The constraints the build must not cross:
   `reorient_nudge:<session>:<local date>`; the command is `treecontext
   config checkpoint-interval <value>`, invoked by the agent through the
   shell, never an MCP tool. A bookmark is a curated entry with metadata
-  kind `bookmark`; a chapter summary is one with `next_session`; the
-  bookmark's rank factor is `0.25`, the weight assistant prose already
-  carries, so a chapter outranks it. "Effectively off" is any limit above
+  kind `bookmark`; a chapter summary is one with `next_session`; a
+  live chapter is placed above the bookmarks it shares a match with on
+  the page as served (the bookmark's `0.25` rank factor, the weight
+  assistant prose carried, was retired 2026-10-10, D275). "Effectively off" is any limit above
   about three hundred rounds or a day. A retraction is written as a
   chapter summary that supersedes the one it names, and status pointers
   carry `kind` and the ids they supersede. The packet reads the handoff
@@ -433,8 +439,11 @@ ratification. [ruled: D253] The constraints the build must not cross:
   every other caller searches the whole store. A writer's trail is
   `treecontext_export` with `writer`, outside the handoff's summaries
   default. Every session (re)start retires the session's live subagents.
-  [ruled: D235, D236, D237, D238, D239, D240, D241, D242, D243, D244,
-  D245]
+  Amended 2026-10-10: a SubagentStop no SubagentStart registered, with
+  no agent type, is the client's own internal agent, staged as kind
+  `internal-summary` with writer `claude-code`, outside the summaries
+  default, the packet and the resume pointers. [ruled: D235, D236,
+  D237, D238, D239, D240, D241, D242, D243, D244, D245, D263]
 - **Deferred, after the betas**: nothing of the beta.2 set remains
   unbuilt (references, the file-bound handoff, doctor per client, self
   registration and the subagent set all landed on 2026-10-08); what
@@ -463,7 +472,7 @@ index is a transcription, not a new decision.
 - trust tiers at the tool surface: a read-only server exposes only the reading tools, a contributor adds but never removes, and merging and reliance bookkeeping are full-trust writes [ruled: D50]
 - install detects what exists, shows a dry-run plan, merges rather than clobbers, registers where the agent itself reads, and doctor diagnoses honestly with fix commands; uninstall reverses the wiring and never the record; the summary names every hook event of the block install writes; on POSIX each hook command execs its wrapper, so the hook's parent is the agent's own process [ruled: D51, D250, D251]
 - near-universal query tokens are pruned for speed and never at the cost of a discriminative hit: pruning applies only above a corpus-size floor, a query of only pruned tokens still matches, and small corpora are never pruned [ruled: D54]
-- recency fusion is the served default at the MCP surface at weight `0.5`, fused as a rank list, never a score formula; the library default stays zero, an explicit zero opts out, and the default is never applied to adaptive queries or non-relevance orderings [ruled: D56]
+- recency fusion is the served default at the MCP surface at weight `0.5`, amended 2026-10-10 to `0.25` on the mature-journal arm's recency sweep (D273), fused as a rank list, never a score formula; the library default stays zero, an explicit zero opts out, and the default is never applied to adaptive queries or non-relevance orderings [ruled: D56, D273]
 - the first hook on a fresh install captures without waiting for a server: a hook may mint the store it binds, applying one definition of fresh and the full migration ladder; a store holding rows is never migrated by a hook; a second starter waits and finishes the ladder [ruled: D58]
 - schema changes never eat a store: every migration on the ladder runs behind a backup taken while store and backup are twins, and only an unwritable store refuses; this replaces the earlier additive-automatic, destructive-opt-in split [ruled: D59]
 - every migration run copies the store aside before any pending migration, additive as well as destructive, and verdicts that copy by containment, every row the backup holds present in the migrated store and none fewer, like any other backup; only an in-memory database is exempt [ruled: D256]
@@ -495,6 +504,13 @@ index is a transcription, not a new decision.
 - a merge from a namespace is idempotent by identity: every copy carries a pointer to the source entry it came from, a repeated merge consults that pointer before the content predicate and adds nothing for an entry already carried across, and the merge counts disclose the already-merged class as its own number [ruled: D144]
 - a dead peer earns a swallowed write or a shutdown, never a storm; a server serving a client writes its diagnostics to its log file under `~/.treecontext/logs/` only and keeps its stderr for warnings, errors and fatals, because the client records every stderr line as an error; `--debug` stays wired, the log file stays what `doctor --dump-logs` reads, and a hook keeps its diagnostics on stderr [ruled: D258]
 - the design document's canonical home is `features/DESIGN.md`, beside the fence, the ledger and the docket, where the docket lint reads it; the root `DESIGN.md` becomes a one-paragraph pointer to it [ruled: D200]
+- captured tool output ranks like assistant prose: the default role weights are user `1.0`, curated note `1.0`, assistant `0.25`, tool `0.25`, amended 2026-10-10 to `0.1` on the mature-journal arm's sweep (D272), so directives and curated notes outrank the tools' chatter and captured tool output ranks below assistant prose; a weight below one never hides a row, and `role_weights` still tunes each query [ruled: D260, D272]
+- the store's own capture of a treecontext tool call is stored in full and still serves attribution and the writer heal, but enters the search index by its arguments at most and never by results or inserted content, a query, insert, export or status echo by its tool name alone; nothing is indexed twice, and an additive migration re-indexes the echoes a store already holds [ruled: D261, D269]
+- the handshake keeps its second session-start step, the orientation query, described as recovering the thread around the resume pointers, and its search paragraph states the ranking order as it is; no orientation parameter is added [ruled: D264]
+- a server older than the store's schema steps aside: each drain tick re-reads the schema version after taking the lease, a newer store makes it release lease and claims, warn once and stop ticking, its tool calls reply that the store was migrated and the session should restart, hooks keep staging, and doctor names a staging row whose attempts far exceed the ceiling with its claimant [ruled: D265]
+- a captured tool event's input and output are stored as text, a line a line and a tab a tab, when the client hands them over as an object; an event captured before this rule keeps its stored text [ruled: D270]
+- the bench detector flags a nonzero change over a zero standard error; the bench reports and never gates [ruled: D271]
+- doctor on a machine with nothing wired says so in one line and names `treecontext install`; the README's install section is the two commands as one step [ruled: D276]
 
 ## Reading order
 
@@ -599,3 +615,4 @@ newest lines had been prepended out of order.*
   orientation sentence is marked deferred (D209); the D104 index line
   notes the unwired VS Code and Cursor adapters (D226); this section is
   put in date order.
+- **2026-10-10** — the beta.2 recall cut ruled (D260 to D277) after the first beta tester's feedback: tool text and echoes down the ranking, bookmarks findable in a mature store, the client's internal agents marked, the stale server stepping aside; four ruled-structure bullets added here and the checkpoint and subagent bullets amended.
