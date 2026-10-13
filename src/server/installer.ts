@@ -1554,6 +1554,12 @@ function applyClaudeHookBlock(hooks: Record<string, ClaudeHookMatcher[]>): Recor
     if (hooks[event]!.length === 0) delete hooks[event]
   }
 
+  // ensureHookEntries rewrites only the matcher it is handed, so our command
+  // under any other matcher (a hand-merged `startup|clear`, one an earlier
+  // build wrote) survived every re-run and fired beside the new one (D51:
+  // no entry registered twice). Take ours out of every matcher first.
+  stripOwnedHooks(hooks as Record<string, unknown>)
+
   // SessionStart hooks: orientation reminder + session snapshot recovery
   const sessionStart = hooks.SessionStart ?? []
   ensureHookEntries(sessionStart, 'startup', [reminderCmd, sessionStartCmd])
