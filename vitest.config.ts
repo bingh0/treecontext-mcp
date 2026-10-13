@@ -4,6 +4,9 @@ export default defineConfig({
   test: {
     include: ['tests/**/*.test.ts'],
     exclude: ['tests/perf/**'],
+    // In-process tests must not read the developer's agent profile or
+    // treecontext seams (see the file for the incident it closes).
+    setupFiles: ['tests/helpers/scrub-ambient-env.ts'],
     // Charter scenarios that drive real subprocesses (the install wave, and
     // journal-policy's read-only capture gate) outlive the 5s default: the
     // ingestion loop alone polls on a 5s interval, so observing that it did
