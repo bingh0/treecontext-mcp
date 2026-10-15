@@ -37,6 +37,23 @@ Feature: Journal storage — the store is durable, bounded, and honest about los
     And ranking is computed from that view alone
     And the recorded boundary says exactly where the indexed view ends
 
+  @D278
+  Scenario: the package has no native dependency and no install script
+    Given the package's manifest and the dependency tree it resolves
+    When every package in that tree is inspected
+    Then none carries a native binding or an install script
+    And the database driver is the one the running Node carries
+    # Ruled 2026-10-11 (D278). The header's "sqlite3" names the engine,
+    # not a driver: the file, the schema and every scenario here are the
+    # same under `node:sqlite` as they were under better-sqlite3, whose
+    # eight prebuilds were 17 MB of a 27 MB tarball and whose ABI
+    # mismatch was a failure class doctor had rows for. Under npm 12's
+    # install-scripts policy a dependency with an install script needs
+    # an allow-list entry from every user; none is needed now. Bound
+    # against the lockfile and the installed tree, not the manifest's
+    # word alone: `@types/better-sqlite3` sat in production dependencies
+    # for a release and nothing noticed.
+
   @D48
   Scenario: the store does not grow without bound
     Given a store pushed past its retention caps by continued capture

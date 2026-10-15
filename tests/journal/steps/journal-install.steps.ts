@@ -301,7 +301,11 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
   })
 
   // ── the interpreter install chooses can run this package ────────────
-  reg.define(/^a machine offering several interpreters, only one of which can load the native database binding$/, async (w: InstallWorld) => {
+  // Step text reworded 2026-10-11 (D278): "runs this package" for "loads
+  // the binding". Until the chunk-1 build lands node:sqlite, running this
+  // package IS loading better-sqlite3, so these bodies still probe the
+  // binding; the build replaces the probe with the floor-and-open check.
+  reg.define(/^a machine offering several interpreters, only one of which meets the Node floor and runs this package$/, async (w: InstallWorld) => {
     await openInstallWorld(w, ['.claude'])
     // A `node` that runs but cannot load native modules — the shape of a
     // Homebrew node with no prebuild for this package.
@@ -323,7 +327,7 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
     )
   })
 
-  reg.define(/^the interpreter baked into the wrappers is one that loads the binding$/, (w: InstallWorld) => {
+  reg.define(/^the interpreter baked into the wrappers is one that runs this package$/, (w: InstallWorld) => {
     // Ask the wrapper itself which interpreter it would use, with the
     // non-loading one first on PATH — resolution is the thing under test,
     // so it has to be executed, not read.
@@ -377,13 +381,13 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
     expect(interpreterLoadsBinding(chosen), `the wrapper chose ${chosen}, which cannot load the binding`).toBe(true)
   })
 
-  reg.define(/^the interpreters that cannot load it are not chosen$/, (w: InstallWorld) => {
+  reg.define(/^the interpreters that cannot run it are not chosen$/, (w: InstallWorld) => {
     const wrapper = readFileSync(mcpLauncherIn(w.ihome!), 'utf8')
     expect(wrapper).not.toContain(w.iBadNode!)
   })
 
   // ── a bad interpreter is reported, not tolerated ────────────────────
-  reg.define(/^an installation whose wrappers name an interpreter that cannot load the native database binding$/, async (w: InstallWorld) => {
+  reg.define(/^an installation whose wrappers name an interpreter that cannot run this package$/, async (w: InstallWorld) => {
     await openInstallWorld(w, ['.claude'])
     expect(tcCli(w, ['install', '--yes']).status).toBe(0)
     const badDir = join(w.ihome!, 'badbin')
@@ -642,7 +646,7 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
     w.irun = tcCli(w, ['doctor'])
   })
 
-  reg.define(/^the native database binding is verified by opening a database, not by comparing versions$/, (w: InstallWorld) => {
+  reg.define(/^the database is verified by opening one and reading its SQLite version and FTS5 support, not by comparing versions$/, (w: InstallWorld) => {
     expect(w.irun!.out).toMatch(/better-sqlite3:.*(loaded and working|stale native binding|failed to load)/)
     // What this step does: it reads doctor's report on a healthy install.
     // The match above pins the binding row to one of doctor's three

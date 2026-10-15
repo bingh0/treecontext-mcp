@@ -511,6 +511,7 @@ index is a transcription, not a new decision.
 - a captured tool event's input and output are stored as text, a line a line and a tab a tab, when the client hands them over as an object; an event captured before this rule keeps its stored text [ruled: D270]
 - the bench detector flags a nonzero change over a zero standard error; the bench reports and never gates [ruled: D271]
 - doctor on a machine with nothing wired says so in one line and names `treecontext install`; the README's install section is the two commands as one step [ruled: D276]
+- the database driver is Node's own `node:sqlite`, one driver and no native dependency, behind a Node floor of `>=24.16` the manifest declares and doctor reads; doctor's database row names the SQLite the running Node carries and that FTS5 is compiled in, read by opening a database; install chooses an interpreter that meets the floor and runs the package; the library door is one opener taking a file path or a `DatabaseSync`; a dual driver and a Node 22 floor are declined [ruled: D278]
 
 ## Reading order
 
@@ -616,3 +617,4 @@ newest lines had been prepended out of order.*
   notes the unwired VS Code and Cursor adapters (D226); this section is
   put in date order.
 - **2026-10-10** — the beta.2 recall cut ruled (D260 to D277) after the first beta tester's feedback: tool text and echoes down the ranking, bookmarks findable in a mature store, the client's internal agents marked, the stale server stepping aside; four ruled-structure bullets added here and the checkpoint and subagent bullets amended.
+- **2026-10-11** — the database driver switch ruled (D278, amending D51): `node:sqlite` in place of better-sqlite3, a Node floor of `>=24.16`, one library opener, the dual driver and the Node 22 floor fenced; one ruled-structure bullet added here, the first chunk of `0.1.0-beta.3`.

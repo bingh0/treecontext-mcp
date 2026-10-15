@@ -132,6 +132,27 @@ runFeatures(join(HERE, '../../features'), {
     // would be an entire unbound surface with nobody having decided that is
     // acceptable — which is how 0.0.9-beta shipped.
     ...wholeFeatureWip(),
+    // The driver switch, D278 (2026-10-11), charter first: three @D51
+    // install scenarios reworded from "loads the native database binding"
+    // to "meets the Node floor and runs this package" (fence: Sanctioned
+    // changes, 2026-10-11) keep their bindings, the step text renamed and
+    // the bodies still probing the binding until the chunk-1 build; the
+    // two @D278 doctor rows and the one @D278 storage scenario below are
+    // new and bind at that build, when better-sqlite3 leaves and
+    // node:sqlite arrives.
+    {
+      feature: 'journal-install',
+      scenarios: [
+        "doctor's database row names the SQLite the running Node carries",
+        'doctor holds the package to one Node floor',
+      ],
+    },
+    {
+      feature: 'journal-storage',
+      scenarios: [
+        'the package has no native dependency and no install script',
+      ],
+    },
     // Scenarios added 2026-10-07 to two bound features by the hackathon
     // re-cut (fence: Sanctioned changes, D174/D188/D173/D179/D156);
     // bound at the beta.1 build (D197). The five agent-surface scenarios
