@@ -93,19 +93,26 @@ Feature: Journal install — setup is auditable, reversible, and honest
 
   @D51
   Scenario: the interpreter install chooses can actually run this package
-    Given a machine offering several interpreters, only one of which can load the native database binding
+    Given a machine offering several interpreters, only one of which meets the Node floor and runs this package
     When install runs
-    Then the interpreter baked into the wrappers is one that loads the binding
-    And the interpreters that cannot load it are not chosen
+    Then the interpreter baked into the wrappers is one that runs this package
+    And the interpreters that cannot run it are not chosen
     # Existing and executable is the wrong test, and passing it is how
     # this shipped: on a Mac with Homebrew node first on PATH, the
     # wrappers picked an interpreter with no prebuild for it. Capture
     # wrappers exec node with stderr discarded and the dispatcher never
     # exits non-zero, so every hook "ran" and nothing was ever written.
+    # Reworded 2026-10-11 (D278): the binding is gone with the native
+    # driver. What an interpreter must do now is meet the floor and open
+    # a database with the SQLite it carries — an older Node has no
+    # `node:sqlite`, or one that warns on load and truncates text at a
+    # NUL. The probe stays an exec of the candidate, never a version
+    # compare: a distro Node built against a system SQLite can lack FTS5
+    # at any version, and only opening finds that out.
 
   @D51
-  Scenario: an interpreter that cannot load the binding is reported, not tolerated
-    Given an installation whose wrappers name an interpreter that cannot load the native database binding
+  Scenario: an interpreter that cannot run this package is reported, not tolerated
+    Given an installation whose wrappers name an interpreter that cannot run this package
     When doctor runs
     Then the report names that interpreter as a failure
     And it says that capture would record nothing rather than reporting the hooks healthy
@@ -168,13 +175,42 @@ Feature: Journal install — setup is auditable, reversible, and honest
   Scenario: doctor proves health rather than inferring it
     Given a working installation
     When doctor runs
-    Then the native database binding is verified by opening a database, not by comparing versions
+    Then the database is verified by opening one and reading its SQLite version and FTS5 support, not by comparing versions
     And every failing check is accompanied by the command that fixes it
     # Binding note (2026-07-31, pre-binding): the fix-command clause is
     # universally quantified over the doctor check registry, so its
     # binding must ENUMERATE the registry — walk every registered check
     # and assert each carries a fix command — not sample one or two. A
     # sampled binding rots silently the moment a check is added.
+    # Reworded 2026-10-11 (D278): "the native database binding is
+    # verified by opening a database" became the line above. Proving by
+    # doing is the unchanged claim; what is proved is now the SQLite the
+    # running Node carries.
+
+  @D278
+  Scenario: doctor's database row names the SQLite the running Node carries
+    Given a working installation
+    When doctor runs
+    Then the database row names the SQLite version the running Node carries and says FTS5 is compiled in
+    And both facts are read by opening a database, not from a table of versions
+    And no row names a native binding or a prebuild
+    # The version is not ours to know ahead of time: a distro Node built
+    # against a system SQLite (the Red Hat family's `--shared-sqlite`)
+    # carries whatever that system has, FTS5 or not. So the row asks the
+    # process (`process.versions.sqlite`, the compile options of an open
+    # database), and a Node whose SQLite lacks FTS5 is an error here, at
+    # install time, not a failed CREATE VIRTUAL TABLE at first capture.
+
+  @D278
+  Scenario: doctor holds the package to one Node floor
+    Given a working installation
+    When doctor runs
+    Then the Node row reports the running version against the floor the package's manifest declares
+    And the floor the row names is the manifest's, so the two cannot drift
+    # The binding era kept a list of majors with a prebuild in the
+    # installer and reported "no prebuild for Node N yet"; that list is
+    # gone with the binding. There is one number now, `engines.node`,
+    # and doctor reads it rather than repeating it.
 
   @D276
   Scenario: doctor says in one line that nothing is set up yet

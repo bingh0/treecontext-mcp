@@ -41,6 +41,19 @@ re-decided, and the previous text is in git history.
   D158, a bookmark or a chapter summary, is an entry the agent itself
   writes, not machinery, and the instructions teach it, as the
   sanctioned change below records. (D14, 2026-07-16)
+- **A dual database driver** — better-sqlite3 kept beside `node:sqlite`
+  as a fallback for Nodes below the floor. One driver, zero native
+  dependencies: a fallback keeps the ABI-mismatch failure class, the
+  per-major prebuild chase and a second test surface for the one thing
+  the switch removes. Reopens only if a supported platform ships a Node
+  without `node:sqlite`. (D278, 2026-10-11)
+- **A Node 22 floor for `node:sqlite`** — the 22 line's module warns on
+  every load, a stderr line per hook process and per server start that
+  the reference client's debug log records as an error; its API floor is
+  22.16; and a text read truncated at an embedded NUL there, fixed in
+  24.16 and never on 22. Suppressing the warning in the launcher would
+  hide the line and keep the defect. The floor is `>=24.16` and moves
+  only forward. (D278, 2026-10-11)
 - **Pure-dense retrieval** — no seat at any tier; the ladder is BM25,
   BM25 plus static, BM25 plus int8 ONNX, every tier BM25-anchored, and
   dense enters (if ever) as a fused, opt-in second ranked list.  (D18, 2026-07-23)
@@ -440,6 +453,26 @@ re-decided, and the previous text is in git history.
   acknowledge the warning, as the new words say. Bound scenarios touched:
   those two, titles unchanged. (D229, 2026-10-08)
 
+- **Sanctioned change, 2026-10-11.** journal-install, three @D51
+  scenarios reworded with the driver switch (direction: rewords, one
+  retitles). "the interpreter install chooses can actually run this
+  package": the premise "only one of which can load the native database
+  binding" becomes "only one of which meets the Node floor and runs this
+  package", and its two Then steps say "runs this package" and "cannot
+  run it" for "loads the binding" and "cannot load it". "an interpreter
+  that cannot load the binding is reported, not tolerated" retitles to
+  "an interpreter that cannot run this package is reported, not
+  tolerated", its premise reworded the same way. "doctor proves health
+  rather than inferring it": the step "the native database binding is
+  verified by opening a database, not by comparing versions" becomes
+  "the database is verified by opening one and reading its SQLite
+  version and FTS5 support, not by comparing versions". The claims —
+  install picks an interpreter that can run the package, doctor reports
+  one that cannot, doctor proves by doing — are unchanged; what an
+  interpreter must be able to do changed from loading a binding to
+  carrying a `node:sqlite` at the floor. Two @D278 doctor scenarios and
+  one @D278 storage scenario are additions, not changes. (D278,
+  2026-10-11)
 - **Sanctioned change, 2026-10-08.** journal-capture "a server
   abandoned by its client shuts down instead of spinning": the step "the
   server's next diagnostic write lands on the dead stream" rewords to

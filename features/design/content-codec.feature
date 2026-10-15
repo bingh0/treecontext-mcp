@@ -14,6 +14,10 @@ Feature: content-codec.ts — C1 zstd content codec with flag-byte fallback
     Given a string exactly at the zstd floor and a multi-megabyte string
     When each is encoded
     Then each encodes to a flagged Buffer with the zstd flag byte and decodes back to the original text
+    # "Flagged Buffer" names the encoder's output. What comes back from
+    # the store is the driver's: under `node:sqlite` (D278, 2026-10-11) a
+    # BLOB reads as a `Uint8Array`, not a Buffer, and the decoder accepts
+    # either, dispatching on the leading flag byte as before.
 
   Scenario: non-ASCII and NUL-containing content round-trips exactly
     Given strings containing emoji, CJK characters, and embedded NUL bytes, padded past the zstd floor
