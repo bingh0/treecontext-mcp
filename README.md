@@ -29,17 +29,18 @@ trust contract.
 
 | | |
 | --- | --- |
-| **Node.js** | 22 or newer — check with `node -v` |
+| **Node.js** | 24.16 or newer — check with `node -v` |
 | **Claude Code** | the CLI, the VS Code extension, or both |
 
-`treecontext` has one native dependency (`better-sqlite3`). It ships
-prebuilt binaries for mainstream platforms, so installation normally needs
-no compiler. If your platform has no prebuild, npm falls back to compiling
-it, which needs:
-
-- **Windows** — [Visual Studio Build Tools](https://visualstudio.microsoft.com/downloads/) with the "Desktop development with C++" workload, plus Python 3
-- **macOS** — Xcode Command Line Tools (`xcode-select --install`)
-- **Linux** — `build-essential` and `python3`
+`treecontext` has no native dependency and no install script: the
+database is Node's built-in `node:sqlite`, so installation needs no
+compiler on any platform, and nothing to approve under npm's
+install-scripts policy. The floor is 24.16 because that is the first Node
+whose `node:sqlite` loads without an experimental warning and reads text
+with an embedded NUL intact. A Node built against a system SQLite without
+FTS5 (some distribution packages) cannot run treecontext; `treecontext
+doctor` says so on its SQLite row — install Node from nodejs.org or a
+version manager instead.
 
 ## 2. Install
 
@@ -433,8 +434,9 @@ export TREECONTEXT_QUERY_TELEMETRY=1     # Windows: setx TREECONTEXT_QUERY_TELEM
 
 ## 8. Troubleshooting
 
-Start with `treecontext doctor` — it checks Node, the native binding, the
-store directory, and each agent's configuration, and prints a `fix:` line
+Start with `treecontext doctor` — it checks Node against the floor, the
+SQLite this Node carries (version and FTS5, read by opening a database),
+the store directory, and each agent's configuration, and prints a `fix:` line
 for anything broken. Two rows near the top say which build is which:
 `Command on PATH` names the build your shell runs as `treecontext`
 against the one printing the report, and `Wired build` names the build
@@ -458,12 +460,14 @@ lists them. `treecontext doctor --dump-logs` prints recent hook activity.
 **`node: command not found` in hook output.** Hooks run in a minimal
 environment that may not have your version manager's shims. The installed
 wrappers already try the interpreter install verified (one proven to
-load the native module), then `PATH`, then nvm/fnm locations, then the
-interpreter that ran the install. If you switched Node versions after
-installing, re-run `treecontext install --force`.
+meet the Node floor and run this package), then `PATH`, then nvm/fnm
+locations, then the interpreter that ran the install. If you switched Node
+versions after installing, re-run `treecontext install --force`.
 
-**`better-sqlite3` failed to build.** Install the platform build tools from
-§1 and reinstall. `treecontext doctor` reports this explicitly.
+**`SQLite` row is an error.** Your Node's built-in SQLite lacks FTS5 (a
+Node built against a system SQLite) or is too old. Install Node 24.16 or
+newer from nodejs.org or a version manager; `treecontext doctor` names the
+version it found.
 
 **The MCP server doesn't appear in your agent.** Ask the agent, not the
 file: `claude mcp get treecontext` should report *Connected* at user scope.
@@ -542,12 +546,12 @@ The MCP server is one consumer, not a gatekeeper — any Node program that
 opens the SQLite file gets the same journal:
 
 ```ts
-import BetterSqlite3 from 'better-sqlite3'
 import { FlatStore } from 'treecontext-mcp'
-import { wrapBetterSqlite } from 'treecontext-mcp/persistence/node'
+import { openNodeSqlite } from 'treecontext-mcp/persistence/node'
 
+// A file path, or a `DatabaseSync` you already hold (`node:sqlite`).
 const store = await FlatStore.open({
-  database: wrapBetterSqlite(new BetterSqlite3('journal.db')),
+  database: openNodeSqlite('journal.db'),
   ownsDatabase: true,
 })
 await store.insert('Decision: archive before delete — see retentionSweep')

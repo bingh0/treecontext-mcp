@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import BetterSqlite3 from 'better-sqlite3'
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { DatabaseSync } from 'node:sqlite'
+import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
 import { FlatStore } from '../../src/flat-store.js'
 import { clusterBootstrapSE, queryBootstrapSE, recallAtK, advisoryFloor } from '../../bench/lib/metrics.js'
 import { compareValues, compareSlices, renderReport, sigmasCell, sigmasPhrase, type RunRecord, type SliceResult } from '../../bench/lib/report.js'
@@ -205,7 +205,7 @@ describe('mutations', () => {
 describe('a mutation degrades real retrieval', () => {
   it('indexing only a preview loses answers that live in the tail', async () => {
     const store = await FlatStore.open({
-      database: wrapBetterSqlite(new BetterSqlite3(':memory:')),
+      database: openNodeSqlite(new DatabaseSync(':memory:')),
       maxSessions: Number.MAX_SAFE_INTEGER,
       maxAutoEntries: Number.MAX_SAFE_INTEGER,
       retentionInterval: Number.MAX_SAFE_INTEGER,

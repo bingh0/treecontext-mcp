@@ -8,7 +8,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { vi, expect } from 'vitest'
-import Database from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import type { Registry } from 'gherkin-node-test/vitest'
 import * as shared from '../../src/hooks/shared.js'
 import { extractLastAssistantText, main as stopMain } from '../../src/hooks/stop.js'
@@ -85,7 +85,7 @@ export const stopDefiner = (reg: Registry<World>): void => {
   reg.define(/^a session whose last assistant response is already staged, and a transcript whose final turn is tool_use only$/, (w) => {
     const tmpDir = freshTmp(w, 'tc-stop-refire-')
     w.tempDbPath = join(tmpDir, 'treecontext.db')
-    const db = new Database(w.tempDbPath)
+    const db = new DatabaseSync(w.tempDbPath)
     db.exec(STOP_STAGING_DDL)
     db.close()
     // The transcript the first Stop already captured, now with a
@@ -110,7 +110,7 @@ export const stopDefiner = (reg: Registry<World>): void => {
     })
     w.defer(() => { vi.restoreAllMocks() })
     stopMain() // the first fire — stages the response
-    const check = new Database(w.tempDbPath)
+    const check = new DatabaseSync(w.tempDbPath)
     const n = (check.prepare('SELECT COUNT(*) AS n FROM staging').get() as { n: number }).n
     check.close()
     expect(n, 'fixture precondition: the first fire must stage the response').toBe(1)
@@ -121,7 +121,7 @@ export const stopDefiner = (reg: Registry<World>): void => {
   })
 
   reg.define(/^no second staging row is written for that response$/, (w) => {
-    const db = new Database(w.tempDbPath!)
+    const db = new DatabaseSync(w.tempDbPath!)
     const rows = db.prepare('SELECT content FROM staging').all() as Array<{ content: string }>
     db.close()
     expect(rows).toHaveLength(1)
@@ -153,7 +153,7 @@ export const stopDefiner = (reg: Registry<World>): void => {
   reg.define(/^a hook input with a transcript_path resolving to a real transcript ending in assistant text$/, (w) => {
     const tmpDir = freshTmp(w, 'tc-stop-')
     w.tempDbPath = join(tmpDir, 'treecontext.db')
-    const db = new Database(w.tempDbPath)
+    const db = new DatabaseSync(w.tempDbPath)
     db.exec(STOP_STAGING_DDL)
     db.close()
 
@@ -178,7 +178,7 @@ export const stopDefiner = (reg: Registry<World>): void => {
   })
 
   reg.define(/^a staging row is written with role assistant, no tool_name, and the extracted text as content$/, (w) => {
-    const db = new Database(w.tempDbPath!)
+    const db = new DatabaseSync(w.tempDbPath!)
     const row = db.prepare('SELECT * FROM staging').get() as
       | { role: string; content: string; tool_name: string | null; priority: number }
       | undefined
@@ -194,7 +194,7 @@ export const stopDefiner = (reg: Registry<World>): void => {
   reg.define(/^a hook input with no transcript_path$/, (w) => {
     const tmpDir = freshTmp(w, 'tc-stop-')
     w.tempDbPath = join(tmpDir, 'treecontext.db')
-    const db = new Database(w.tempDbPath)
+    const db = new DatabaseSync(w.tempDbPath)
     db.exec(STOP_STAGING_DDL)
     db.close()
     vi.spyOn(process, 'exit').mockImplementation((() => {}) as never)
@@ -204,7 +204,7 @@ export const stopDefiner = (reg: Registry<World>): void => {
   })
 
   reg.define(/^no staging row is written$/, (w) => {
-    const db = new Database(w.tempDbPath!)
+    const db = new DatabaseSync(w.tempDbPath!)
     const row = db.prepare('SELECT * FROM staging').get()
     db.close()
     expect(row).toBeUndefined()

@@ -16,10 +16,10 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { hostname, tmpdir } from 'node:os'
 import { expect } from 'vitest'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import { Client, InMemoryTransport } from '@modelcontextprotocol/client'
 import { createServer } from '../../src/server/server.js'
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
 import { FlatStore } from '../../src/flat-store.js'
 import { LeaseClient, tryClaim, NS_LEASE_TTL_SECS } from '../../src/persistence/leases.js'
 import type { InsertResult, MediaRef, QueryResult } from '../../src/core/types.js'
@@ -102,7 +102,7 @@ export async function mcpOver(w: World, opts: Parameters<typeof createServer>[1]
  *  error still propagates and fails the call. `pid` is what identifies
  *  the server here: leases never probe pids, so a pid other than this
  *  process's is a genuinely foreign claimant. */
-export function nsClaimHook(db: ReturnType<typeof wrapBetterSqlite>, namespace: string, pid: number): () => void {
+export function nsClaimHook(db: ReturnType<typeof openNodeSqlite>, namespace: string, pid: number): () => void {
   const leases = new LeaseClient(db, { pid, host: hostname(), label: `serve:${namespace}` })
   return () => {
     tryClaim(leases, `ns:${namespace}`, NS_LEASE_TTL_SECS)
@@ -122,7 +122,7 @@ export async function openLiveStore(w: World, opts: Partial<Omit<Parameters<type
   }
   w.dbPath = w.dbPath ?? join(w.dir, 'journal.db')
   const store = await FlatStore.open({
-    database: wrapBetterSqlite(new BetterSqlite3(w.dbPath)),
+    database: openNodeSqlite(new DatabaseSync(w.dbPath)),
     ownsDatabase: true,
     ...opts,
   })
@@ -135,7 +135,7 @@ export async function openLiveStore(w: World, opts: Partial<Omit<Parameters<type
 export async function reopenAsLaterSession(w: World): Promise<FlatStore> {
   w.store!.close()
   const store = await FlatStore.open({
-    database: wrapBetterSqlite(new BetterSqlite3(w.dbPath!)),
+    database: openNodeSqlite(new DatabaseSync(w.dbPath!)),
     ownsDatabase: true,
   })
   w.defer(() => store.close())
@@ -158,7 +158,7 @@ export function mediaOf(node: Record<string, unknown>): MediaRef {
 /** Raw-row inspection (verification rule): read metadata_json through a
  *  separate readonly SQLite handle, never through the store's own API. */
 export function rawMediaOf(w: World, nodeId: string): MediaRef {
-  const raw = new BetterSqlite3(w.dbPath!, { readonly: true })
+  const raw = new DatabaseSync(w.dbPath!, { readOnly: true })
   try {
     const row = raw.prepare('SELECT metadata_json FROM nodes WHERE node_id = ?').get(nodeId) as
       | { metadata_json: string | null }
@@ -187,7 +187,7 @@ export async function insertAttachment(
  *  readonly handle, never the store's own API. One spelling for the whole
  *  suite — the extraction found it re-derived under three names. */
 export function rawAll<T>(w: World, sql: string, ...params: unknown[]): T[] {
-  const raw = new BetterSqlite3(w.dbPath!, { readonly: true })
+  const raw = new DatabaseSync(w.dbPath!, { readOnly: true })
   try {
     return raw.prepare(sql).all(...(params as never[])) as T[]
   } finally {

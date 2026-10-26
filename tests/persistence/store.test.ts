@@ -6,8 +6,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import BetterSqlite3 from 'better-sqlite3'
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { DatabaseSync } from 'node:sqlite'
+import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
 import type { Database } from '../../src/persistence/database.js'
 import { Persistence } from '../../src/persistence/store.js'
 import type { PersistedNode } from '../../src/persistence/store.js'
@@ -70,8 +70,8 @@ let tmpDir: string
 let db: Database
 
 function createDb(): Database {
-  const raw = new BetterSqlite3(join(tmpDir, `test-${Date.now()}.db`))
-  return wrapBetterSqlite(raw)
+  const raw = new DatabaseSync(join(tmpDir, `test-${Date.now()}.db`))
+  return openNodeSqlite(raw)
 }
 
 beforeEach(() => {
@@ -280,8 +280,8 @@ describe('mediaRef persistence roundtrip', () => {
   it('preserves mediaRef metadata across close and reopen', async () => {
     const dbPath = join(tmpDir, 'media-roundtrip.db')
 
-    const raw1 = new BetterSqlite3(dbPath)
-    const db1 = wrapBetterSqlite(raw1)
+    const raw1 = new DatabaseSync(dbPath)
+    const db1 = openNodeSqlite(raw1)
     const ctx1 = await FlatStore.open({ database: db1, ownsDatabase: true })
 
     await ctx1.insert('screenshot of the auth timeout banner', {
@@ -294,8 +294,8 @@ describe('mediaRef persistence roundtrip', () => {
     })
     await ctx1.close()
 
-    const raw2 = new BetterSqlite3(dbPath)
-    const db2 = wrapBetterSqlite(raw2)
+    const raw2 = new DatabaseSync(dbPath)
+    const db2 = openNodeSqlite(raw2)
     const ctx2 = await FlatStore.open({ database: db2, ownsDatabase: true })
 
     const results = await ctx2.query('auth timeout banner screenshot', {

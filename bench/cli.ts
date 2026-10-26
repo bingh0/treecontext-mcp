@@ -12,13 +12,10 @@
  *   npm run bench -- --max 25            quick smoke over a slice
  *   npm run bench -- --no-record         print the report, write nothing
  */
-import { createRequire } from 'node:module'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import { ARMS, findArm } from './arms/index.js'
 import { advisoryFloor, clusterBootstrapSE, mean, queryBootstrapSE } from './lib/metrics.js'
 import { appendRun, codeRevision, readHistory, renderReport, type RunRecord, type SliceResult } from './lib/report.js'
-
-const require = createRequire(import.meta.url)
 
 function parseArgs(argv: string[]): { arm?: string | undefined; max?: number | undefined; record: boolean } {
   const out: { arm?: string | undefined; max?: number | undefined; record: boolean } = { record: true }
@@ -57,8 +54,7 @@ async function main(): Promise<void> {
     process.exit(1)
   }
 
-  const sqliteVersion = new BetterSqlite3(':memory:').prepare('select sqlite_version() v').get() as { v: string }
-  const betterSqliteVersion = (require('better-sqlite3/package.json') as { version: string }).version
+  const sqliteVersion = new DatabaseSync(':memory:').prepare('select sqlite_version() v').get() as { v: string }
   const { sha, dirty } = codeRevision()
   const history = readHistory()
 
@@ -91,7 +87,7 @@ async function main(): Promise<void> {
       slice_rule: arm.sliceRule,
       code_sha: sha,
       code_dirty: dirty,
-      better_sqlite3: betterSqliteVersion,
+      driver: 'node:sqlite',
       sqlite: sqliteVersion.v,
       node: process.version,
       platform: `${process.platform}/${process.arch}`,

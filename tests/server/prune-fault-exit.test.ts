@@ -15,7 +15,7 @@ import { mkdtempSync, mkdirSync, rmSync, chmodSync, existsSync } from 'node:fs'
 import { join, basename } from 'node:path'
 import { tmpdir } from 'node:os'
 import { describe, it, expect, afterAll, vi } from 'vitest'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 
 import { redirectHome, storesDirIn } from '../helpers/home.js'
 import type { CliArgs } from '../../src/server/cli.js'
@@ -24,6 +24,9 @@ const fakeHome = mkdtempSync(join(tmpdir(), 'tc-prune-fault-'))
 const restoreHome = redirectHome(fakeHome)
 const storesDir = storesDirIn(fakeHome)
 
+// After the home redirect: node-sqlite.js imports debug.js, whose LOGS_DIR
+// binds to os.homedir() at import time.
+const { setPragma } = await import('../../src/persistence/node-sqlite.js')
 const { runStores } = await import('../../src/server/cli.js')
 const { maxSupportedVersion } = await import('../../src/persistence/migrations/index.js')
 const { SCHEMA_SQL } = await import('../../src/persistence/schema.js')
@@ -35,9 +38,9 @@ function seedStray(suffix: string): string {
   const name = `${basename(fakeHome)}-${suffix}`
   const dir = join(storesDir, name)
   mkdirSync(dir, { recursive: true })
-  const db = new BetterSqlite3(join(dir, 'treecontext.db'))
+  const db = new DatabaseSync(join(dir, 'treecontext.db'))
   db.exec(SCHEMA_SQL)
-  db.pragma(`user_version = ${maxSupportedVersion}`)
+  setPragma(db, `user_version = ${maxSupportedVersion}`)
   db.close()
   return dir
 }

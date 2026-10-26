@@ -6,12 +6,9 @@
  *
  * argv: <dbPath>
  */
-const { createRequire } = require('node:module')
-const { join } = require('node:path')
-const repoRequire = createRequire(join(__dirname, '..', '..', 'package.json'))
-const BetterSqlite3 = repoRequire('better-sqlite3')
+const { DatabaseSync } = require('node:sqlite')
 
-const db = new BetterSqlite3(process.argv[2], { readonly: true, fileMustExist: true })
+const db = new DatabaseSync(process.argv[2], { readOnly: true })
 process.stdout.write(`open ${process.pid}\n`)
 // Kept reachable, or garbage collection would close the handle.
 globalThis.storeReaderHandle = db

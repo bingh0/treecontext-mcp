@@ -8,8 +8,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import BetterSqlite3 from 'better-sqlite3'
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { DatabaseSync } from 'node:sqlite'
+import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
 import { FlatStore } from '../../src/flat-store.js'
 import { exporterName } from '../../src/handoff.js'
 import { spawnCli } from '../helpers/cli-spawn.js'
@@ -29,7 +29,7 @@ afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
 
 async function storeA(): Promise<string> {
   const path = join(dir, 'a.db')
-  const store = await FlatStore.open({ database: wrapBetterSqlite(new BetterSqlite3(path)), ownsDatabase: true })
+  const store = await FlatStore.open({ database: openNodeSqlite(new DatabaseSync(path)), ownsDatabase: true })
   await store.insert('plan: wire the login form; next: write its tests', { metadata: { next_session: true } })
   await store.insert('$ cat .env\nAPI_KEY=not-a-real-key', { metadata: { source: 'auto-capture', role: 'tool', tool_name: 'Bash', session_id: 's1' } })
   await store.close()
@@ -55,7 +55,7 @@ describe('treecontext export and import', () => {
     expect(first.stdout.trim()).toBe('1 entry landed; 0 were already present.')
     const again = run()
     expect(again.stdout.trim()).toBe('0 entries landed; 1 was already present.')
-    const raw = new BetterSqlite3(b, { readonly: true })
+    const raw = new DatabaseSync(b, { readOnly: true })
     const rows = raw.prepare('SELECT metadata_json, read_only FROM nodes').all() as Array<{ metadata_json: string; read_only: number }>
     raw.close()
     expect(rows).toHaveLength(1)

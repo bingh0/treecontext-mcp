@@ -2,9 +2,9 @@ import { join } from 'node:path'
 import type { Client } from '@modelcontextprotocol/client'
 import { hostname } from 'node:os'
 import { expect } from 'vitest'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import { type Registry } from 'gherkin-node-test/vitest'
-import { wrapBetterSqlite } from '../../../src/persistence/better-sqlite.js'
+import { openNodeSqlite } from '../../../src/persistence/node-sqlite.js'
 import { FlatStore } from '../../../src/flat-store.js'
 import {
   writeNamespaceAnnotation,
@@ -47,7 +47,7 @@ export const sessionNamespaceDefiner = (reg: Registry<SessionNamespaceWorld>): v
   /** The PRODUCTION corroborator, not a stub: these scenarios bind what
    *  actually decides rung 1, so a stub here would pin nothing. */
   const corroborator = (w: SessionNamespaceWorld) => (a: { namespace: string; server_pid: number }): boolean => {
-    const raw = new BetterSqlite3(w.dbPath!, { readonly: true })
+    const raw = new DatabaseSync(w.dbPath!, { readOnly: true })
     try {
       return nsLeaseLiveFor(raw, a.namespace, a.server_pid, hostname())
     } finally {
@@ -59,7 +59,7 @@ export const sessionNamespaceDefiner = (reg: Registry<SessionNamespaceWorld>): v
    *  a scenario can say "still serving" or "expired" in the one term the
    *  ladder actually reads. */
   const seedNsLease = (w: SessionNamespaceWorld, namespace: string, pid: number, heartbeatAgeSecs: number): void => {
-    const raw = new BetterSqlite3(w.dbPath!)
+    const raw = new DatabaseSync(w.dbPath!)
     try {
       raw.prepare(
         'INSERT OR REPLACE INTO leases (role, holder_pid, holder_host, holder_token, holder_label, acquired_at, heartbeat_at, ttl_secs) '
@@ -74,7 +74,7 @@ export const sessionNamespaceDefiner = (reg: Registry<SessionNamespaceWorld>): v
    *  store file — the multi-lane shape §7.8 exists for. */
   async function mcpOverNamespace(w: SessionNamespaceWorld, namespace: string): Promise<Client> {
     const store = await FlatStore.open({
-      database: wrapBetterSqlite(new BetterSqlite3(w.dbPath!)),
+      database: openNodeSqlite(new DatabaseSync(w.dbPath!)),
       ownsDatabase: true,
       namespace,
     })

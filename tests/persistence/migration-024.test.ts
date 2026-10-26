@@ -10,12 +10,12 @@
  * and the anchor rewrite — each pinned below as the failure it would be.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import { mkdtempSync, rmSync, existsSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
 import type { Database } from '../../src/persistence/database.js'
 import { runMigrations, currentSchemaVersion } from '../../src/persistence/migrations.js'
 import { migrations, maxSupportedVersion } from '../../src/persistence/migrations/index.js'
@@ -74,7 +74,7 @@ describe('migration 024_fingerprint_digest', () => {
    *  pre-arbiter, then 021/022/023 run for real (V1 keys, twins resolved
    *  by 023's rule, anchors seeded on V1 keys). */
   function seedV23(name: string, rows: RawRow[]): Database {
-    const db = wrapBetterSqlite(new BetterSqlite3(join(dir, name)))
+    const db = openNodeSqlite(new DatabaseSync(join(dir, name)))
     climbTo(db, 20)
     db.prepare('INSERT INTO trees (tree_id, namespace, ensemble_index, created_at) VALUES (1, ?, 0, 0)')
       .run('project')
@@ -303,7 +303,7 @@ describe('migration 024_fingerprint_digest', () => {
     // The sub-v23 path: 023's whole-store pass AND 024's, under one
     // exclusive lock (§11b's accepted cost). The end state is what
     // matters — no V1 key survives anywhere.
-    const db = wrapBetterSqlite(new BetterSqlite3(join(dir, 'ladder.db')))
+    const db = openNodeSqlite(new DatabaseSync(join(dir, 'ladder.db')))
     climbTo(db, 20)
     db.prepare('INSERT INTO trees (tree_id, namespace, ensemble_index, created_at) VALUES (1, ?, 0, 0)')
       .run('project')

@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import { mkdtempSync, rmSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
 import type { Database } from '../../src/persistence/database.js'
 import { runMigrations, type MigrationReport } from '../../src/persistence/migrations.js'
 import { maxSupportedVersion } from '../../src/persistence/migrations/index.js'
@@ -31,7 +31,7 @@ describe('migration 021_store_as_arbiter', () => {
   })
 
   function openMigrated(name: string): Database {
-    const db = wrapBetterSqlite(new BetterSqlite3(join(dir, name)))
+    const db = openNodeSqlite(new DatabaseSync(join(dir, name)))
     runMigrations(db, { migrate: true })
     db.prepare(
       'INSERT INTO trees (tree_id, namespace, ensemble_index, created_at) VALUES (1, ?, 0, 0)',

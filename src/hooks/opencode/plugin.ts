@@ -1,5 +1,5 @@
 import type { Plugin, Hooks, PluginInput } from '@opencode-ai/plugin'
-import Database from 'better-sqlite3'
+import type { DatabaseSync } from 'node:sqlite'
 import {
   resolveDbPath,
   writeStaging,
@@ -22,7 +22,7 @@ interface PluginState {
   contextLimit: number
 }
 
-function openDb(dbPath: string): InstanceType<typeof Database> {
+function openDb(dbPath: string): DatabaseSync {
   return openHookDb(dbPath)
 }
 

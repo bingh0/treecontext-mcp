@@ -2,8 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import BetterSqlite3 from 'better-sqlite3'
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { DatabaseSync } from 'node:sqlite'
+import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
 import type { Database } from '../../src/persistence/database.js'
 import { Persistence } from '../../src/persistence/store.js'
 
@@ -11,8 +11,8 @@ let tmpDir: string
 let db: Database
 
 function createDb(): Database {
-  const raw = new BetterSqlite3(join(tmpDir, `staging-${Date.now()}.db`))
-  return wrapBetterSqlite(raw)
+  const raw = new DatabaseSync(join(tmpDir, `staging-${Date.now()}.db`))
+  return openNodeSqlite(raw)
 }
 
 beforeEach(() => {

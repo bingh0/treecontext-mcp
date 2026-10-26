@@ -1,15 +1,16 @@
 import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync, existsSync, statSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import { spawn } from 'node:child_process'
+import { createRequire } from 'node:module'
 import { once } from 'node:events'
 import { join } from 'node:path'
 import { hostname, tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { expect } from 'vitest'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import { type Registry } from 'gherkin-node-test/vitest'
 import { decodeContent } from '../../../src/persistence/content-codec.js'
-import { wrapBetterSqlite } from '../../../src/persistence/better-sqlite.js'
+import { openNodeSqlite, pragmaRows, pragmaValue, setPragma } from '../../../src/persistence/node-sqlite.js'
 import {
   runMigrations, currentSchemaVersion, type MigrationReport,
 } from '../../../src/persistence/migrations.js'
@@ -54,6 +55,10 @@ export interface StorageWorld extends World, CaptureWorld {
   /** Poison scenario: staging state once the dead-letter could be written. */
   poisonRetired?: { attempts: number; processed: number; gapNodes: number }
   poisonTicksToRetire?: number
+  /** @D278 package scenario: the manifest, the lockfile's production tree, each package's verdict. */
+  pkgManifest?: { dependencies?: Record<string, string>; optionalDependencies?: Record<string, string>; engines?: { node?: string } }
+  pkgProdTree?: Array<{ path: string; hasInstallScript: boolean }>
+  pkgVerdicts?: Array<{ name: string; installScript: boolean; native: string[] }>
   /** Over-budget scenario: what the failed reclaim actually did. */
   sweepOutcome?: { evicted: number; demoted: number }
   /** Crash scenario: event numbers the victim reported committed pre-kill. */
@@ -72,7 +77,7 @@ export interface StorageWorld extends World, CaptureWorld {
   /** Seeded demotable rows (id → stored byte length) the valve must spare. */
   budgetSeed?: Map<string, number>
   /** The cap-that-bites scenario: its raw handle, sprint shape and sweep. */
-  sprintRaw?: BetterSqlite3.Database
+  sprintRaw?: DatabaseSync
   sprintSessions?: number
   sprintPer?: number
   sprintSweep?: { evicted: number; demoted: number }
@@ -128,8 +133,81 @@ export const storageDefiner = (reg: Registry<StorageWorld>): void => {
   reg.define(/^the stored blob is zstd-compressed at rest$/, (w: StorageWorld) => {
     const [row] = rawAll<{ content: unknown }>(w, 'SELECT content FROM nodes WHERE node_id = ?', w.nodeId!)
     expect(row, 'row missing').toBeTruthy()
-    expect(Buffer.isBuffer(row!.content), 'content stored as plain text, not an encoded blob').toBe(true)
-    expect((row!.content as Buffer)[0], 'codec flag is not zstd').toBe(0x01)
+    // node:sqlite reads a BLOB as a Uint8Array (D278); a Buffer is one too.
+    expect(row!.content instanceof Uint8Array, 'content stored as plain text, not an encoded blob').toBe(true)
+    expect((row!.content as Uint8Array)[0], 'codec flag is not zstd').toBe(0x01)
+  })
+
+  // @D278: the package has no native dependency and no install script.
+  // Bound against the lockfile and the installed tree, never the manifest's
+  // word alone: @types/better-sqlite3 sat in production dependencies for a
+  // release and nothing noticed.
+  reg.define(/^the package's manifest and the dependency tree it resolves$/, (w: StorageWorld) => {
+    const root = fileURLToPath(new URL('../../../', import.meta.url))
+    const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as {
+      dependencies?: Record<string, string>; optionalDependencies?: Record<string, string>; engines?: { node?: string }
+    }
+    const lock = JSON.parse(readFileSync(join(root, 'package-lock.json'), 'utf8')) as {
+      packages: Record<string, { dev?: boolean; hasInstallScript?: boolean; optional?: boolean }>
+    }
+    // The production tree as the lockfile resolves it: every package not
+    // marked dev. (npm's own `--omit=dev` listing reads the same flag.)
+    const prod = Object.entries(lock.packages).filter(([path, p]) => path !== '' && !p.dev)
+    expect(prod.length, 'the lockfile resolves no production packages at all').toBeGreaterThan(0)
+    w.pkgManifest = pkg
+    w.pkgProdTree = prod.map(([path, p]) => ({ path: join(root, path), hasInstallScript: p.hasInstallScript === true }))
+  })
+
+  reg.define(/^every package in that tree is inspected$/, (w: StorageWorld) => {
+    const nativeIn = (dir: string): string[] => {
+      const found: string[] = []
+      const walk = (d: string, depth: number): void => {
+        if (depth > 3) return
+        for (const name of readdirSync(d, { withFileTypes: true })) {
+          if (name.name === 'node_modules') continue
+          const p = join(d, name.name)
+          if (name.isDirectory()) walk(p, depth + 1)
+          else if (name.name === 'binding.gyp' || name.name.endsWith('.node')) found.push(p)
+        }
+      }
+      if (existsSync(dir)) walk(dir, 0)
+      return found
+    }
+    w.pkgVerdicts = w.pkgProdTree!.map((p) => {
+      const manifest = JSON.parse(readFileSync(join(p.path, 'package.json'), 'utf8')) as { name?: string; scripts?: Record<string, string> }
+      const scripts = manifest.scripts ?? {}
+      return {
+        name: manifest.name ?? p.path,
+        installScript: p.hasInstallScript || ['preinstall', 'install', 'postinstall'].some((k) => k in scripts),
+        native: nativeIn(p.path),
+      }
+    })
+    expect(w.pkgVerdicts.length).toBe(w.pkgProdTree!.length)
+  })
+
+  reg.define(/^none carries a native binding or an install script$/, (w: StorageWorld) => {
+    const withScript = w.pkgVerdicts!.filter((v) => v.installScript).map((v) => v.name)
+    const withNative = w.pkgVerdicts!.filter((v) => v.native.length > 0).map((v) => `${v.name}: ${v.native.join(', ')}`)
+    expect(withScript, 'production packages with an install script').toEqual([])
+    expect(withNative, 'production packages carrying a native binding').toEqual([])
+    // The direct dependencies, named: a new native driver could not slip in
+    // under a different name without this line changing.
+    expect(Object.keys(w.pkgManifest!.dependencies ?? {}).sort()).toEqual(['@modelcontextprotocol/server', 'smol-toml', 'zod'])
+    expect(w.pkgManifest!.optionalDependencies ?? {}).toEqual({})
+  })
+
+  reg.define(/^the database driver is the one the running Node carries$/, (w: StorageWorld) => {
+    // node:sqlite is a builtin, not a package: it resolves to itself, and
+    // the SQLite it carries is the process's own.
+    expect(createRequire(import.meta.url).resolve('node:sqlite')).toBe('node:sqlite')
+    expect(process.versions.sqlite).toMatch(/^\d+\.\d+\.\d+$/)
+    const probe = new DatabaseSync(':memory:')
+    try {
+      expect((probe.prepare('SELECT sqlite_version() AS v').get() as { v: string }).v).toBe(process.versions.sqlite)
+    } finally {
+      probe.close()
+    }
+    expect(w.pkgManifest!.engines?.node, 'the floor the driver needs').toMatch(/^>=24\.16/)
   })
 
   // S2: index is a bounded view; the journal is the record.
@@ -264,8 +342,8 @@ export const storageDefiner = (reg: Registry<StorageWorld>): void => {
       }
     }
     // Flush WAL so the main file carries the bulk, then record its size.
-    const raw = new BetterSqlite3(w.dbPath!)
-    raw.pragma('wal_checkpoint(TRUNCATE)')
+    const raw = new DatabaseSync(w.dbPath!)
+    pragmaRows(raw, 'wal_checkpoint(TRUNCATE)')
     raw.close()
     w.descriptions = [String(statSync(w.dbPath!).size)]
   })
@@ -309,7 +387,7 @@ export const storageDefiner = (reg: Registry<StorageWorld>): void => {
     const dir2 = mkdtempSync(join(tmpdir(), 'tc-journal-restore-'))
     w.defer(() => rmSync(dir2, { recursive: true, force: true }))
     const restore = await FlatStore.open({
-      database: wrapBetterSqlite(new BetterSqlite3(join(dir2, 'restore.db'))),
+      database: openNodeSqlite(new DatabaseSync(join(dir2, 'restore.db'))),
       ownsDatabase: true,
     })
     w.defer(() => restore.close())
@@ -351,7 +429,7 @@ export const storageDefiner = (reg: Registry<StorageWorld>): void => {
     const dbPath = join(dir, 'order.db')
     const archiveDir = join(dir, 'archive')
     const store = await FlatStore.open({
-      database: wrapBetterSqlite(new BetterSqlite3(dbPath)),
+      database: openNodeSqlite(new DatabaseSync(dbPath)),
       ownsDatabase: true,
       retentionInterval: 1_000_000,
       maxSessions: 1,
@@ -376,7 +454,7 @@ export const storageDefiner = (reg: Registry<StorageWorld>): void => {
     }
     rmSync(archiveDir, { force: true })
     expect(failed, 'the valve evicted without being able to archive').toBe(true)
-    const raw = new BetterSqlite3(dbPath, { readonly: true })
+    const raw = new DatabaseSync(dbPath, { readOnly: true })
     try {
       const count = (sql: string) => (raw.prepare(sql).get() as { n: number }).n
       expect(count("SELECT COUNT(*) AS n FROM nodes WHERE json_extract(metadata_json,'$._tombstone') = 1")).toBe(0)
@@ -386,7 +464,7 @@ export const storageDefiner = (reg: Registry<StorageWorld>): void => {
     }
     // With the archive writable, the same sweep completes end to end.
     store.retentionSweep()
-    const raw2 = new BetterSqlite3(dbPath, { readonly: true })
+    const raw2 = new DatabaseSync(dbPath, { readOnly: true })
     try {
       const tombs = (raw2.prepare("SELECT COUNT(*) AS n FROM nodes WHERE json_extract(metadata_json,'$._tombstone') = 1").get() as { n: number }).n
       expect(tombs).toBe(1)
@@ -399,7 +477,7 @@ export const storageDefiner = (reg: Registry<StorageWorld>): void => {
   // archiveless in-memory store — no db path ⇒ no default archive dir).
   reg.define(/^a store past its session cap with no archive destination available$/, async (w: StorageWorld) => {
     const store = await FlatStore.open({
-      database: wrapBetterSqlite(new BetterSqlite3(':memory:')),
+      database: openNodeSqlite(new DatabaseSync(':memory:')),
       ownsDatabase: true,
       maxSessions: 1,
       retentionInterval: 1_000_000,
@@ -529,8 +607,8 @@ export const storageDefiner = (reg: Registry<StorageWorld>): void => {
     w.dir = mkdtempSync(join(tmpdir(), 'tc-journal-bind-'))
     w.defer(() => rmSync(w.dir!, { recursive: true, force: true }))
     w.dbPath = join(w.dir, 'journal.db')
-    const raw = new BetterSqlite3(w.dbPath)
-    const store = await FlatStore.open({ database: wrapBetterSqlite(raw), ownsDatabase: true })
+    const raw = new DatabaseSync(w.dbPath)
+    const store = await FlatStore.open({ database: openNodeSqlite(raw), ownsDatabase: true })
     w.defer(() => store.close())
     w.store = store
     w.nodeIds = [
@@ -539,8 +617,8 @@ export const storageDefiner = (reg: Registry<StorageWorld>): void => {
     ]
     // Clamp the page ceiling to the current allocation: the next write that
     // needs a page gets SQLITE_FULL — the same surface a full volume gives.
-    const pages = raw.pragma('page_count', { simple: true }) as number
-    raw.pragma(`max_page_count = ${pages}`)
+    const pages = pragmaValue(raw, 'page_count') as number
+    setPragma(raw, `max_page_count = ${pages}`)
   })
   reg.define(/^a capture attempts to write$/, async (w: StorageWorld) => {
     try {
@@ -585,13 +663,13 @@ export const storageDefiner = (reg: Registry<StorageWorld>): void => {
     // 17 is the modal version among the owner's real stores, and it sits
     // below the destructive #19 — so it exercises both halves of the claim.
     w.oldSchemaVersion = 17
-    const raw = new BetterSqlite3(w.dbPath)
+    const raw = new DatabaseSync(w.dbPath)
     w.defer(() => { try { raw.close() } catch { /* already closed */ } })
-    const db = wrapBetterSqlite(raw)
+    const db = openNodeSqlite(raw)
     for (const m of migrations.filter((x) => x.version <= w.oldSchemaVersion!)) {
       m.up(db)
     }
-    raw.pragma(`user_version = ${w.oldSchemaVersion}`)
+    setPragma(raw, `user_version = ${w.oldSchemaVersion}`)
     expect(currentSchemaVersion(db), 'the fixture did not land at the old version')
       .toBe(w.oldSchemaVersion)
 
@@ -645,18 +723,18 @@ export const storageDefiner = (reg: Registry<StorageWorld>): void => {
       knn.run(`k-${i}`, blob)
       fj.run(`f-${i}`, `tree-era journal row ${i}`, blob)
     }
-    raw.pragma('wal_checkpoint(TRUNCATE)')
+    pragmaRows(raw, 'wal_checkpoint(TRUNCATE)')
     raw.close()
     w.preMigrationBytes = statSync(w.dbPath).size
   })
 
   reg.define(/^a newer binary opens it$/, (w: StorageWorld) => {
-    const raw = new BetterSqlite3(w.dbPath!)
+    const raw = new DatabaseSync(w.dbPath!)
     w.defer(() => { try { raw.close() } catch { /* already closed */ } })
     // No flags. This is the ordinary open a library consumer performs, and
     // the point of the ruling is that it now completes rather than demanding
     // an opt-in nothing but `serve` ever passed.
-    w.migrationReport = runMigrations(wrapBetterSqlite(raw), {})
+    w.migrationReport = runMigrations(openNodeSqlite(raw), {})
     raw.close()
   })
 
@@ -668,12 +746,12 @@ export const storageDefiner = (reg: Registry<StorageWorld>): void => {
     // A real store, not a file that merely exists: it opens, it still reports
     // the OLD schema version — which is what proves it was taken before and
     // not after — and its rows are unchanged.
-    const bak = new BetterSqlite3(report.backupPath!, { readonly: true })
+    const bak = new DatabaseSync(report.backupPath!, { readOnly: true })
     w.defer(() => { try { bak.close() } catch { /* already closed */ } })
     // Raw pragma read, not the write-pragma wrapper: the backup is a
     // VACUUM INTO snapshot (pass-3 fix) in rollback-journal mode, and
     // wrapping it would try to flip journal_mode on a readonly handle.
-    expect(bak.pragma('user_version', { simple: true }), 'the backup was taken AFTER migrating')
+    expect(pragmaValue(bak, 'user_version'), 'the backup was taken AFTER migrating')
       .toBe(w.oldSchemaVersion)
     const inBackup = bak.prepare('SELECT node_id, content FROM nodes ORDER BY node_id').all() as
       Array<{ node_id: string; content: string }>
@@ -698,9 +776,9 @@ export const storageDefiner = (reg: Registry<StorageWorld>): void => {
       migrations.filter((m) => m.version > w.oldSchemaVersion!).map((m) => m.version),
     )
 
-    const raw = new BetterSqlite3(w.dbPath!)
+    const raw = new DatabaseSync(w.dbPath!)
     w.defer(() => { try { raw.close() } catch { /* already closed */ } })
-    expect(currentSchemaVersion(wrapBetterSqlite(raw))).toBe(maxSupportedVersion)
+    expect(currentSchemaVersion(openNodeSqlite(raw))).toBe(maxSupportedVersion)
     const after = raw.prepare('SELECT node_id, content FROM nodes ORDER BY node_id').all() as
       Array<{ node_id: string; content: string }>
     expect(after.map((r) => r.content), 'the migration lost rows')
@@ -709,7 +787,7 @@ export const storageDefiner = (reg: Registry<StorageWorld>): void => {
   })
 
   reg.define(/^the space the dropped tables held is returned to the filesystem$/, (w: StorageWorld) => {
-    const raw = new BetterSqlite3(w.dbPath!)
+    const raw = new DatabaseSync(w.dbPath!)
     w.defer(() => { try { raw.close() } catch { /* already closed */ } })
 
     const dead = raw.prepare(
@@ -722,7 +800,7 @@ export const storageDefiner = (reg: Registry<StorageWorld>): void => {
     // table leaves the file exactly as large as it was, with the freed pages
     // parked for reuse. On the owner's machine that distinction was 65% of
     // 630MB — space a drop-without-VACUUM would not have returned.
-    const free = raw.pragma('freelist_count', { simple: true }) as number
+    const free = pragmaValue(raw, 'freelist_count') as number
     expect(free, 'pages were freed but never vacuumed back').toBe(0)
     expect(statSync(w.dbPath!).size, 'the file never shrank')
       .toBeLessThan(w.preMigrationBytes!)
@@ -736,17 +814,17 @@ export const storageDefiner = (reg: Registry<StorageWorld>): void => {
     // upgraded — which the backup conveniently is.
     const path = join(w.dir!, 'readonly-case.db')
     copyFileSync(w.migrationReport!.backupPath!, path)
-    const raw = new BetterSqlite3(path)
+    const raw = new DatabaseSync(path)
     w.defer(() => { try { raw.close() } catch { /* already closed */ } })
     let err: unknown
     try {
-      runMigrations(wrapBetterSqlite(raw), { migrate: false })
+      runMigrations(openNodeSqlite(raw), { migrate: false })
     } catch (e) { err = e }
     expect(err, 'an opted-out open migrated anyway').toBeInstanceOf(MigrationRequiredError)
     for (const m of migrations.filter((x) => x.version > w.oldSchemaVersion! && x.kind === 'destructive')) {
       expect(String(err)).toContain(`#${m.version}`)
     }
-    expect(currentSchemaVersion(wrapBetterSqlite(raw)), 'the refusal still moved the schema')
+    expect(currentSchemaVersion(openNodeSqlite(raw)), 'the refusal still moved the schema')
       .toBe(w.oldSchemaVersion)
     raw.close()
   })
@@ -772,7 +850,7 @@ export const storageDefiner = (reg: Registry<StorageWorld>): void => {
     w.defer(() => rmSync(w.dir!, { recursive: true, force: true }))
     w.dbPath = join(w.dir, 'poison.db')
     const store = await FlatStore.open({
-      database: wrapBetterSqlite(new BetterSqlite3(w.dbPath)), ownsDatabase: true,
+      database: openNodeSqlite(new DatabaseSync(w.dbPath)), ownsDatabase: true,
     })
     w.defer(() => store.close())
     w.store = store
@@ -799,7 +877,7 @@ export const storageDefiner = (reg: Registry<StorageWorld>): void => {
     // content, so it carries the token too. That is not a trick, it is the
     // shape of the real hazard — a dead-letter that fails for the same reason
     // its subject did.
-    const raw = new BetterSqlite3(w.dbPath)
+    const raw = new DatabaseSync(w.dbPath)
     try {
       raw.exec(
         'CREATE TRIGGER poison_block BEFORE INSERT ON nodes ' +
@@ -822,7 +900,7 @@ export const storageDefiner = (reg: Registry<StorageWorld>): void => {
     // Phase B: the dependency recovers — the capture-gap record can now land,
     // while the poison row itself still cannot. Same trigger idiom the
     // ingestion-fidelity binding uses.
-    const raw = new BetterSqlite3(w.dbPath!)
+    const raw = new DatabaseSync(w.dbPath!)
     try {
       raw.exec('DROP TRIGGER poison_block')
       raw.exec(
@@ -886,9 +964,9 @@ export const storageDefiner = (reg: Registry<StorageWorld>): void => {
     // an older install, pointed at a store a newer server has already
     // upgraded, must still be able to STAGE — its write is the capture that
     // would otherwise be dropped on the floor while the user sees nothing.
-    const raw = new BetterSqlite3(w.dbPath!)
+    const raw = new DatabaseSync(w.dbPath!)
     w.defer(() => { try { raw.close() } catch { /* already closed */ } })
-    expect(currentSchemaVersion(wrapBetterSqlite(raw)), 'this step assumes the store is already upgraded')
+    expect(currentSchemaVersion(openNodeSqlite(raw)), 'this step assumes the store is already upgraded')
       .toBe(maxSupportedVersion)
 
     // The column list an OLDER hook knows about — deliberately NOT the current
@@ -990,7 +1068,7 @@ export const storageDefiner = (reg: Registry<StorageWorld>): void => {
     w.dbPath = join(w.dir, 'crash.db')
     // A real store with a pre-crash committed entry that must survive.
     const pre = await FlatStore.open({
-      database: wrapBetterSqlite(new BetterSqlite3(w.dbPath)), ownsDatabase: true,
+      database: openNodeSqlite(new DatabaseSync(w.dbPath)), ownsDatabase: true,
     })
     await pre.insert('pre-crash sentinel: the journal that existed before the victim ran', {
       metadata: { type: 'note' }, createdAt: T0,
@@ -1036,14 +1114,14 @@ export const storageDefiner = (reg: Registry<StorageWorld>): void => {
   reg.define(/^the next session opens the store$/, async (w: StorageWorld) => {
     // Integrity through a fresh raw connection first — the durable file,
     // not any surviving handle.
-    const raw = new BetterSqlite3(w.dbPath!)
+    const raw = new DatabaseSync(w.dbPath!)
     try {
-      w.crashIntegrity = raw.pragma('integrity_check') as Array<{ integrity_check: string }>
+      w.crashIntegrity = pragmaRows(raw, 'integrity_check') as Array<{ integrity_check: string }>
     } finally {
       raw.close()
     }
     const store = await FlatStore.open({
-      database: wrapBetterSqlite(new BetterSqlite3(w.dbPath!)), ownsDatabase: true,
+      database: openNodeSqlite(new DatabaseSync(w.dbPath!)), ownsDatabase: true,
     })
     w.defer(() => store.close())
     w.store = store
@@ -1090,7 +1168,7 @@ export const storageDefiner = (reg: Registry<StorageWorld>): void => {
     //    entries for rolled-back rows, no unindexed survivors. Checked
     //    through the search path because PRAGMA integrity_check cannot
     //    see a contentless-table desync (third-pass review).
-    const raw = new BetterSqlite3(w.dbPath!, { readonly: true })
+    const raw = new DatabaseSync(w.dbPath!, { readOnly: true })
     let ftsRowids: Set<number>
     let nodeRowids: Set<number>
     try {
@@ -1185,7 +1263,7 @@ export const storageDefiner = (reg: Registry<StorageWorld>): void => {
     w.defer(() => rmSync(w.dir!, { recursive: true, force: true }))
     w.dbPath = join(w.dir, 'concurrent.db')
     const store = await FlatStore.open({
-      database: wrapBetterSqlite(new BetterSqlite3(w.dbPath)), ownsDatabase: true,
+      database: openNodeSqlite(new DatabaseSync(w.dbPath)), ownsDatabase: true,
     })
     w.defer(() => store.close())
     w.store = store
@@ -1314,7 +1392,7 @@ export const storageDefiner = (reg: Registry<StorageWorld>): void => {
 }
 
 function readStagingPoisonRow(dbPath: string): { attempts: number; processed: number } {
-  const raw = new BetterSqlite3(dbPath, { readonly: true })
+  const raw = new DatabaseSync(dbPath, { readOnly: true })
   try {
     const r = raw.prepare(
       "SELECT attempts, processed FROM staging WHERE content LIKE '%POISONROW%'",
@@ -1325,7 +1403,7 @@ function readStagingPoisonRow(dbPath: string): { attempts: number; processed: nu
 }
 
 function countCaptureGapNodes(dbPath: string): number {
-  const raw = new BetterSqlite3(dbPath, { readonly: true })
+  const raw = new DatabaseSync(dbPath, { readOnly: true })
   try {
     const r = raw.prepare(
       "SELECT COUNT(*) c FROM nodes WHERE json_extract(metadata_json, '$.source') = 'capture-gap'",
@@ -1364,8 +1442,8 @@ export const storageStaleServerDefiner = (reg: Registry<StorageWorld>): void => 
     const before = await client.callTool({ name: 'treecontext_status', arguments: {} })
     expect(before.isError, JSON.stringify(before)).toBeFalsy()
     // The newer treecontext migrates the store past this build.
-    const raw = new BetterSqlite3(w.dbPath!)
-    raw.pragma(`user_version = ${maxSupportedVersion + 1}`)
+    const raw = new DatabaseSync(w.dbPath!)
+    setPragma(raw, `user_version = ${maxSupportedVersion + 1}`)
     raw.close()
     w.staleNodesBefore = rawAll<{ n: number }>(w, 'SELECT COUNT(*) AS n FROM nodes')[0]!.n
     // The version read is cached a few seconds; the session carries on past it.
@@ -1410,7 +1488,7 @@ export const storageStaleServerDefiner = (reg: Registry<StorageWorld>): void => 
     expect(staged.filter((r) => r.content.includes('kept-for-the-newer-server') && r.processed === 0)).toHaveLength(1)
     // The newer server drains them: the production open, drain and tools.
     const newer = await FlatStore.open({
-      database: wrapBetterSqlite(new BetterSqlite3(w.dbPath!)), ownsDatabase: true,
+      database: openNodeSqlite(new DatabaseSync(w.dbPath!)), ownsDatabase: true,
       schemaCeiling: maxSupportedVersion + 1,
     })
     w.defer(() => newer.close())
@@ -1433,7 +1511,7 @@ export const storageRefusalDefiner = (reg: Registry<StorageWorld>): void => {
     await openLiveStore(w) // migrations create the schema; FlatStore.open records no mode
     await w.store!.insert('rows written before the backend left')
     w.store!.close()
-    const raw = new BetterSqlite3(w.dbPath!)
+    const raw = new DatabaseSync(w.dbPath!)
     try {
       // What TreeContext.open used to leave behind: an embedding_model row
       // and no backend_mode record — resolution says 'tree'.
@@ -1450,7 +1528,7 @@ export const storageRefusalDefiner = (reg: Registry<StorageWorld>): void => {
     // the database stayed open and Windows would not unlink the directory in
     // teardown. close() is idempotent, so this is a no-op on the path where
     // the store did take it.
-    const db = wrapBetterSqlite(new BetterSqlite3(w.dbPath!))
+    const db = openNodeSqlite(new DatabaseSync(w.dbPath!))
     try {
       await createMemoryStore({ database: db, ownsDatabase: true })
       w.insertError = null
@@ -1468,7 +1546,7 @@ export const storageRefusalDefiner = (reg: Registry<StorageWorld>): void => {
     expect(msg).toContain('untouched')
   })
   reg.define(/^every row and the mode record are untouched by the refusal$/, (w: StorageWorld) => {
-    const raw = new BetterSqlite3(w.dbPath!, { readonly: true })
+    const raw = new DatabaseSync(w.dbPath!, { readOnly: true })
     try {
       const n = (raw.prepare('SELECT COUNT(*) AS n FROM nodes').get() as { n: number }).n
       expect(n).toBeGreaterThan(0)
@@ -1583,8 +1661,8 @@ export const storageBudgetDefiner = (reg: Registry<StorageWorld>): void => {
     // session is absolutely protected): incompressible full-view prose past
     // the demotion floor, the one shape the byte valve shrinks. A zero
     // budget obeyed would strip every one of them on the next sweep.
-    const raw = new BetterSqlite3(w.budgetDb!)
-    const store = await FlatStore.open({ database: wrapBetterSqlite(raw), ownsDatabase: true, migrate: true })
+    const raw = new DatabaseSync(w.budgetDb!)
+    const store = await FlatStore.open({ database: openNodeSqlite(raw), ownsDatabase: true, migrate: true })
     const ids: string[] = []
     try {
       for (let i = 0; i < 4; i++) {
@@ -1595,7 +1673,7 @@ export const storageBudgetDefiner = (reg: Registry<StorageWorld>): void => {
     } finally {
       await store.close()
     }
-    const ro = new BetterSqlite3(w.budgetDb!, { readonly: true })
+    const ro = new DatabaseSync(w.budgetDb!, { readOnly: true })
     try {
       const len = ro.prepare('SELECT LENGTH(CAST(content AS BLOB)) AS n FROM nodes WHERE node_id = ?')
       w.budgetSeed = new Map(ids.map((id) => [id, (len.get(id) as { n: number } | undefined)?.n ?? -1]))
@@ -1639,7 +1717,7 @@ export const storageBudgetDefiner = (reg: Registry<StorageWorld>): void => {
       })
     }
     await w.budgetClient!.close()
-    const ro = new BetterSqlite3(w.budgetDb!, { readonly: true })
+    const ro = new DatabaseSync(w.budgetDb!, { readOnly: true })
     try {
       for (const [id, n] of w.budgetSeed!) {
         const row = ro.prepare('SELECT LENGTH(CAST(content AS BLOB)) AS n, metadata_json FROM nodes WHERE node_id = ?').get(id) as { n: number; metadata_json: string } | undefined
@@ -1710,13 +1788,13 @@ export const storageBudgetDefiner = (reg: Registry<StorageWorld>): void => {
     budgetProject(w, `[retention]\nmax_sessions = ${Number(cap)}\n`)
     const cfg = loadConfigFile(null, w.budgetProject!)
     expect(cfg.retention.maxSessions, 'the loader did not read the cap').toBe(Number(cap))
-    const raw = new BetterSqlite3(w.budgetDb!)
+    const raw = new DatabaseSync(w.budgetDb!)
     // The file's figures as serve hands them over; the amortized sweep is
     // the one setting added — the When drives the valve, so none runs
     // inside the Given's batch transaction. No maxAutoEntries: the store
     // derives its own net from the cap.
     const store = await FlatStore.open({
-      database: wrapBetterSqlite(raw),
+      database: openNodeSqlite(raw),
       ownsDatabase: true,
       ...cfg.retention,
       retentionInterval: 1_000_000,
@@ -1797,7 +1875,7 @@ export const storageAdditiveBackupDefiner = (reg: Registry<StorageWorld>): void 
     const dir = mkdtempSync(join(tmpdir(), 'tc-additive-bak-'))
     w.defer(() => rmSync(dir, { recursive: true, force: true }))
     const path = join(dir, 'treecontext.db')
-    const store = await FlatStore.open({ database: wrapBetterSqlite(new BetterSqlite3(path)), ownsDatabase: true })
+    const store = await FlatStore.open({ database: openNodeSqlite(new DatabaseSync(path)), ownsDatabase: true })
     const seeded: string[] = []
     for (let i = 0; i < 6; i++) {
       seeded.push((await store.insert(`entry ${i} written before the migration`, { metadata: { source: 'auto-capture', role: 'tool', session_id: 'pre' }, createdAt: T0 + i })).nodeId)
@@ -1806,16 +1884,16 @@ export const storageAdditiveBackupDefiner = (reg: Registry<StorageWorld>): void 
     // The ladder from an empty file crossed destructive steps and left
     // their backup; this scenario is about the next one only.
     for (const f of readdirSync(dir)) if (f.includes('.pre-migration-')) rmSync(join(dir, f), { force: true })
-    const raw = new BetterSqlite3(path)
-    raw.pragma(`user_version = ${head.version - 1}`)
-    raw.pragma('wal_checkpoint(TRUNCATE)')
+    const raw = new DatabaseSync(path)
+    setPragma(raw, `user_version = ${head.version - 1}`)
+    pragmaRows(raw, 'wal_checkpoint(TRUNCATE)')
     raw.close()
     w.additive = { path, from: head.version - 1, seeded, late: [] }
   })
   reg.define(/^the store is opened and migrated$/, async (w: StorageWorld) => {
     const a = w.additive!
     const writer = (): void => {
-      const w2 = new BetterSqlite3(a.path)
+      const w2 = new DatabaseSync(a.path)
       try {
         const tree = (w2.prepare("SELECT tree_id FROM trees WHERE namespace = 'project' AND ensemble_index = 0").get() as { tree_id: number }).tree_id
         const ins = w2.prepare("INSERT INTO nodes (node_id, tree_id, content, summary, created_at, updated_at) VALUES (?, ?, ?, '', ?, ?)")
@@ -1828,7 +1906,7 @@ export const storageAdditiveBackupDefiner = (reg: Registry<StorageWorld>): void 
         w2.close()
       }
     }
-    const db = wrapBetterSqlite(new BetterSqlite3(a.path))
+    const db = openNodeSqlite(new DatabaseSync(a.path))
     const watched = new Proxy(db, {
       get(target, prop) {
         if (prop === 'exec') {
@@ -1850,17 +1928,17 @@ export const storageAdditiveBackupDefiner = (reg: Registry<StorageWorld>): void 
     const a = w.additive!
     const bak = a.report!.backupPath!
     expect(existsSync(bak), 'the additive migration ran with no backup beside the store').toBe(true)
-    const b = new BetterSqlite3(bak, { readonly: true })
+    const b = new DatabaseSync(bak, { readOnly: true })
     try {
-      expect(b.pragma('user_version', { simple: true }), 'the backup was taken after the change').toBe(a.from)
+      expect(pragmaValue(b, 'user_version'), 'the backup was taken after the change').toBe(a.from)
       const ids = (b.prepare('SELECT node_id FROM nodes').all() as Array<{ node_id: string }>).map((r) => r.node_id)
       expect(ids.sort()).toEqual([...a.seeded].sort())
     } finally {
       b.close()
     }
-    const live = new BetterSqlite3(a.path, { readonly: true })
+    const live = new DatabaseSync(a.path, { readOnly: true })
     try {
-      expect(live.pragma('user_version', { simple: true })).toBe(maxSupportedVersion)
+      expect(pragmaValue(live, 'user_version')).toBe(maxSupportedVersion)
     } finally {
       live.close()
     }
@@ -1869,7 +1947,7 @@ export const storageAdditiveBackupDefiner = (reg: Registry<StorageWorld>): void 
   reg.define(/^a writer active during the migration costs no row and makes no verdict fail$/, (w: StorageWorld) => {
     const a = w.additive!
     expect(a.late, 'no writer ran in the window').toHaveLength(4)
-    const live = new BetterSqlite3(a.path, { readonly: true })
+    const live = new DatabaseSync(a.path, { readOnly: true })
     try {
       const ids = new Set((live.prepare('SELECT node_id FROM nodes').all() as Array<{ node_id: string }>).map((r) => r.node_id))
       for (const id of [...a.seeded, ...a.late]) expect(ids.has(id), `row ${id} was lost`).toBe(true)

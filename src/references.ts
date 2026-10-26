@@ -18,7 +18,7 @@
  * (FlatStore.insert), never a flag flip on the target.
  *
  * Reads take any handle with `prepare` — a FlatStore's wrapped database
- * and a hook's raw better-sqlite3 handle alike.
+ * and a hook's raw node:sqlite handle alike.
  */
 import { decodeContent } from './persistence/content-codec.js'
 import { sessionOf } from './dedup-identity.js'

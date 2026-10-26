@@ -16,10 +16,10 @@ import { openWorld, type ReorientationWorld } from './journal/steps/journal-reor
 import { rawAll } from './journal/world.js'
 import { TS_ROOT, tsxArgv, killAndWait } from './journal/proc.js'
 import { sandboxedSpawnEnv } from './helpers/cli-spawn.js'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import { SUBAGENT_SUMMARY_KIND } from '../src/handoff.js'
 import { FlatStore } from '../src/flat-store.js'
-import { wrapBetterSqlite } from '../src/persistence/better-sqlite.js'
+import { openNodeSqlite } from '../src/persistence/node-sqlite.js'
 
 type W = ReorientationWorld & { cleanups: Array<() => unknown> }
 function mkWorld(): W {
@@ -89,7 +89,7 @@ describe('SubagentStop: internal only on evidence (D263)', () => {
       expect(code, err).toBe(0)
       expect(Date.now() - t0).toBeGreaterThanOrEqual(2500)
       expect(err).toMatch(/kept as a subagent summary/)
-      const store = await FlatStore.open({ database: wrapBetterSqlite(new BetterSqlite3(w.dbPath!)), ownsDatabase: true })
+      const store = await FlatStore.open({ database: openNodeSqlite(new DatabaseSync(w.dbPath!)), ownsDatabase: true })
       w.defer(() => store.close())
       w.store = store
       await drainStaging(w)

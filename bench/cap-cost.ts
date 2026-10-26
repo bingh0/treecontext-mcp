@@ -26,12 +26,12 @@
  *
  * Reports; never gates; writes nothing to history.jsonl.
  */
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import { createReadStream, existsSync, mkdirSync, rmSync, statSync } from 'node:fs'
 import { createInterface } from 'node:readline'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { wrapBetterSqlite } from '../src/persistence/better-sqlite.js'
+import { openNodeSqlite } from '../src/persistence/node-sqlite.js'
 import { FlatStore } from '../src/flat-store.js'
 import { EXPLICIT_INDEX_LEN_KEY } from '../src/persistence/index-text.js'
 import { resolveCorpus } from './lib/corpus.js'
@@ -143,7 +143,7 @@ async function measure(
   mkdirSync(scratch, { recursive: true })
   const dbPath = join(scratch, 'store.db')
   const store = await FlatStore.open({
-    database: wrapBetterSqlite(new BetterSqlite3(dbPath)),
+    database: openNodeSqlite(new DatabaseSync(dbPath)),
     maxSessions: Number.MAX_SAFE_INTEGER,
     maxAutoEntries: Number.MAX_SAFE_INTEGER,
     retentionInterval: Number.MAX_SAFE_INTEGER,

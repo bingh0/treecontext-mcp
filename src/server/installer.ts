@@ -10,7 +10,7 @@ import {
   unlinkSync, readdirSync, lstatSync, statSync, rmSync,  realpathSync, readlinkSync,
 } from 'node:fs'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { createRequire } from 'node:module'
+import type { DatabaseSync } from 'node:sqlite'
 import { homedir, hostname } from 'node:os'
 import { join, dirname, basename, resolve, isAbsolute, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -248,27 +248,65 @@ function whichNode(): string | null {
   }
 }
 
+/** The Node floor the package declares (`engines.node`, without its `>=`),
+ *  read from the manifest so doctor and install never repeat the number. */
+export function nodeFloor(): string {
+  try {
+    const pkg = JSON.parse(
+      readFileSync(join(import.meta.dirname ?? '.', '../../package.json'), 'utf8'),
+    ) as { engines?: { node?: string } }
+    const m = /(\d+)\.(\d+)(?:\.(\d+))?/.exec(pkg.engines?.node ?? '')
+    return m ? `${m[1]}.${m[2]}.${m[3] ?? '0'}` : NODE_FLOOR_FALLBACK
+  } catch {
+    return NODE_FLOOR_FALLBACK
+  }
+}
+/** What the manifest says today; only read when the manifest cannot be. */
+const NODE_FLOOR_FALLBACK = '24.16.0'
+
+/** True when `version` (a bare `x.y.z`) is at or above `floor`. */
+export function meetsNodeFloor(version: string, floor: string = nodeFloor()): boolean {
+  const parse = (v: string): number[] | null => {
+    const m = /(\d+)\.(\d+)\.(\d+)/.exec(v)
+    return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null
+  }
+  const a = parse(version); const b = parse(floor)
+  if (!a || !b) return false
+  for (let i = 0; i < 3; i++) {
+    if (a[i]! !== b[i]!) return a[i]! > b[i]!
+  }
+  return true
+}
+
+/** What a candidate interpreter runs to prove it can run this package: open
+ *  its built-in SQLite, build an FTS5 table, and say which Node it is. */
+const RUNS_PACKAGE_PROBE =
+  'const {DatabaseSync}=require("node:sqlite");const d=new DatabaseSync(":memory:");'
+  + 'd.exec("CREATE VIRTUAL TABLE t USING fts5(a)");d.close();process.stdout.write(process.versions.node)'
+
 /**
- * True when `candidate` can actually load the native better-sqlite3 binding.
+ * True when `candidate` meets the Node floor and runs this package (D278):
+ * it carries a `node:sqlite` with FTS5 and is at or above `engines.node`.
  *
  * Being executable is not enough, and this is the failure the check exists
- * for: on a Mac with Homebrew node 26 first on PATH, nvm node 24 with a stale
- * binding, and a working node 22 further down, the wrappers picked Homebrew
- * and every capture hook died on `require`. Hooks end in `2>/dev/null; exit 0`,
- * so the whole thing failed silently — hooks "running", nothing ever stored.
+ * for: on a Mac with Homebrew node first on PATH and an nvm node further
+ * down, the wrappers once picked an interpreter that could not run the
+ * package and every capture hook died on its first require. Hooks end in
+ * `2>/dev/null; exit 0`, so the whole thing failed silently — hooks
+ * "running", nothing ever stored. The probe executes the candidate rather
+ * than comparing versions: a distro Node built against a system SQLite can
+ * lack FTS5 at any version, and only opening finds that out.
  */
-function nodeLoadsBinding(candidate: string): boolean {
+function nodeRunsPackage(candidate: string): boolean {
   try {
-    const bindingEntry = createRequire(import.meta.url).resolve('better-sqlite3')
-    // 8s, not 20s: loading a native module takes well under a second, and a
-    // candidate that has not managed it by then is not going to. The timeout
-    // is a hang guard, and with up to MAX_NODE_CANDIDATES of them the worst
-    // case is what a user experiences as a frozen terminal — 64s of silence
-    // rather than 160s, and the progress lines below mean it is not silent.
-    execFileSync(candidate, ['-e', `require(${JSON.stringify(bindingEntry)})`], {
-      stdio: 'ignore', timeout: 8_000,
+    // 8s: opening an in-memory database takes milliseconds, and a candidate
+    // that has not managed it by then is not going to. The timeout is a hang
+    // guard, and with up to MAX_NODE_CANDIDATES of them the worst case is
+    // what a user experiences as a frozen terminal.
+    const out = execFileSync(candidate, ['-e', RUNS_PACKAGE_PROBE], {
+      stdio: ['ignore', 'pipe', 'ignore'], timeout: 8_000, encoding: 'utf8',
     })
-    return true
+    return meetsNodeFloor(out.trim())
   } catch {
     return false
   }
@@ -276,8 +314,8 @@ function nodeLoadsBinding(candidate: string): boolean {
 
 /**
  * The interpreter to bake into the generated wrappers as first choice, or null
- * when none of the candidates can load the binding (in which case the wrappers
- * keep their runtime discovery and doctor reports the binding failure).
+ * when none of the candidates runs this package (in which case the wrappers
+ * keep their runtime discovery and doctor reports the failure).
  *
  * Memoized: a single `install` writes seven wrappers plus the MCP launcher,
  * and each probe spawns a node process.
@@ -289,7 +327,7 @@ export function verifiedNode(): string | null {
     verifiedNodeCache = null
     rejectedInterpreterCache = []
     for (const candidate of nodeCandidates()) {
-      if (nodeLoadsBinding(candidate)) {
+      if (nodeRunsPackage(candidate)) {
         verifiedNodeCache = candidate
         break
       }
@@ -320,8 +358,8 @@ export function resetVerifiedNodeCache(): void {
 /**
  * POSIX-shell snippet that resolves an executable `node` into $TC_NODE.
  *
- * Order: an install-time *verified* interpreter (one proven to load the native
- * binding) → PATH → nvm/fnm version-manager glob → the install-time execPath.
+ * Order: an install-time *verified* interpreter (one proven to meet the Node
+ * floor and run this package) → PATH → nvm/fnm version-manager glob → the install-time execPath.
  *
  * The verified path leads because "first node on PATH" is not the same
  * question as "a node this package works under". The discovery chain stays
@@ -343,14 +381,14 @@ fi`
  * cmd-batch snippet that resolves an executable `node` into %TC_NODE%.
  *
  * The Windows counterpart of posixNodeResolveSnippet, and deliberately in the
- * SAME order: an install-time *verified* interpreter (one proven to load the
- * native binding) first, whatever `node` PATH offers behind it.
+ * SAME order: an install-time *verified* interpreter (one proven to meet the
+ * Node floor and run this package) first, whatever `node` PATH offers behind it.
  *
  * It used to be the inverse —
  *   `where node >nul 2>nul && (node "<cli>" %*) || ("<execPath>" "<cli>" %*)`
  * — which preferred whichever node was on PATH over the one install had
  * actually checked, and pinned `process.execPath` (never probed) as the
- * fallback. A node that cannot load better-sqlite3 therefore won on Windows,
+ * fallback. A node that cannot run this package therefore won on Windows,
  * capture died on require, and `2>nul` swallowed the error. That is precisely
  * the macOS beta-1 failure, reproduced on the platform that had no coverage to
  * notice it.
@@ -1288,7 +1326,7 @@ export function claudeHookCommandsWithoutExec(
  * breakage (the pre-0.0.15 pinned-only .cmd of 0.0.13/0.0.14; the
  * bare-`node` POSIX wrapper), and a pinned verified interpreter that no
  * longer exists — capture survives on the resolution chain, but what
- * runs is no longer what install proved could load the native binding.
+ * runs is no longer what install proved could run this package.
  * The pins are parsed by launcherInterpreter and launcherCliPath, the
  * battle-tested readers for both dialects, and their existence is probed
  * only when the pin's path style matches the host (judging C:\ paths from
@@ -1328,7 +1366,7 @@ export function hookScriptIssue(body: string): string | null {
   // leaves the chain empty-handed and the wrapper dying exactly as before
   // the fallback existed. When the search does land, that is the healthy
   // case by design: unlike an unpinned interpreter there is no
-  // native-binding question to report about which copy of the same package
+  // runs-this-package question to report about which copy of the same package
   // it finds, so warning there would be noise.
   const pinnedCli = launcherCliPath(body)
   if (pinnedCli && hostStylePinMissing(pinnedCli)) {
@@ -2494,13 +2532,13 @@ export async function install(opts: InstallOptions): Promise<AgentInstallResult[
     const chosen = verifiedNode()
     console.log(`Interpreter:`)
     if (chosen) {
-      console.log(`  ${chosen} [verified — loads the native database binding]`)
+      console.log(`  ${chosen} [verified — meets the Node floor and runs this package]`)
     } else {
       console.log(`  none verified — wrappers will resolve node at runtime`)
       console.log(`  capture may not work; run treecontext doctor after installing`)
     }
     for (const skipped of rejectedInterpreters()) {
-      console.log(`  skipped: ${skipped} (cannot load better-sqlite3)`)
+      console.log(`  skipped: ${skipped} (cannot run this package: below the Node floor, or no node:sqlite with FTS5)`)
     }
     console.log()
 
@@ -2984,7 +3022,7 @@ export async function uninstall(opts: {
  * order. Doctor once understood only the POSIX spelling and the whole check
  * was gated off with `process.platform !== 'win32'`, which left Windows in the
  * state the caller's comment describes: a wrapper whose interpreter cannot
- * load better-sqlite3 leaves every capture hook running, storing nothing, and
+ * run this package leaves every capture hook running, storing nothing, and
  * suppressing the error that would say so, while doctor reports the install
  * healthy.
  *
@@ -3005,8 +3043,8 @@ export function launcherInterpreter(body: string): string | null {
   // (`TC_NODE=""`) failed to match, and `m` then found the NEXT line-initial
   // assignment — the discovery chain's own `TC_NODE="$(command -v node ||
   // true)"` — handing doctor a shell fragment as though it were a path. Doctor
-  // probed it, could not load a binding with it, and reported
-  //   [err] $(command -v node || true) cannot load better-sqlite3
+  // probed it, could not run the package with it, and reported
+  //   [err] $(command -v node || true) cannot load the database driver
   // on exactly the machine that verified no interpreter at all, instead of the
   // accurate "no verified interpreter pinned" warning and its --force fix.
   // Matching the empty pin is what makes the first assignment always the
@@ -4166,20 +4204,18 @@ export async function doctor(): Promise<DiagnosticResult[]> {
   console.log(`treecontext doctor v${getVersion()}\n`)
   console.log(`Platform: ${process.platform}/${process.arch}`)
 
-  // Node version — validate against better-sqlite3's supported range
+  // Node version — held to the one floor the manifest declares (D278); the
+  // row names the floor so the two cannot drift.
   const nodeVer = process.version
-  const major = parseInt(nodeVer.slice(1), 10)
-  const supportedMajors = [20, 22, 23, 24, 25]
-  if (supportedMajors.includes(major)) {
-    results.push({ check: 'Node.js', status: 'ok', detail: nodeVer })
-  } else if (major > 25) {
+  const floor = nodeFloor()
+  if (meetsNodeFloor(process.versions.node, floor)) {
+    results.push({ check: 'Node.js', status: 'ok', detail: `${nodeVer} (floor >=${floor})` })
+  } else {
     results.push({
       check: 'Node.js', status: 'error',
-      detail: `${nodeVer} — better-sqlite3 has no prebuild for Node ${major} yet`,
-      fix: `Switch to Node ${supportedMajors[supportedMajors.length - 1]}.x (latest stable with native dep support)`,
+      detail: `${nodeVer} is below the floor this package declares (>=${floor})`,
+      fix: `Install Node.js ${floor} or newer`,
     })
-  } else {
-    results.push({ check: 'Node.js', status: 'error', detail: `${nodeVer} (requires 20+)`, fix: 'Install Node.js 20+' })
   }
 
   // Which build is which: the command the shell runs versus the one printing
@@ -4193,30 +4229,41 @@ export async function doctor(): Promise<DiagnosticResult[]> {
   // does not qualify, or the fix would rewire the agent to that copy.
   const selfCommand = pathRow.reachesThisBuild ? 'treecontext' : selfCommandFor(thisCli)
 
-  // better-sqlite3 — actually open a temp database to catch stale ABI
+  // SQLite — the one the running Node carries, read by opening a database
+  // (D278): the version from the process, FTS5 from the compile options.
+  // Never a table of versions: a distro Node built against a system SQLite
+  // carries whatever that system has.
   try {
-    const Database = (await import('better-sqlite3')).default
-    const testDb = new Database(':memory:')
-    testDb.exec('SELECT 1')
-    testDb.close()
-    results.push({ check: 'better-sqlite3', status: 'ok', detail: 'native binding loaded and working' })
+    const { openRaw, hasFts5, sqliteVersion } = await import('../persistence/node-sqlite.js')
+    const testDb = openRaw(':memory:')
+    let fts5 = false
+    try {
+      testDb.exec('SELECT 1')
+      fts5 = hasFts5(testDb)
+    } finally {
+      testDb.close()
+    }
+    if (fts5) {
+      results.push({ check: 'SQLite', status: 'ok', detail: `${sqliteVersion()} built into this Node, FTS5 compiled in` })
+    } else {
+      results.push({
+        check: 'SQLite', status: 'error',
+        detail: `${sqliteVersion()} built into this Node lacks FTS5 (a Node built against a system SQLite)`,
+        fix: 'Install Node.js from nodejs.org or a version manager; its bundled SQLite has FTS5',
+      })
+    }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
-    const isAbiMismatch = msg.includes('bindings') || msg.includes('NODE_MODULE_VERSION') || msg.includes('was compiled against')
     results.push({
-      check: 'better-sqlite3', status: 'error',
-      detail: isAbiMismatch
-        ? `stale native binding (compiled for different Node version)`
-        : `failed to load: ${msg.slice(0, 100)}`,
-      fix: isAbiMismatch
-        ? 'npm rebuild better-sqlite3'
-        : 'npm install better-sqlite3',
+      check: 'SQLite', status: 'error',
+      detail: `node:sqlite could not open a database: ${msg.slice(0, 100)}`,
+      fix: `Install Node.js ${floor} or newer`,
     })
   }
 
-  // Hook interpreter — the binding check above used the node running doctor,
+  // Hook interpreter — the SQLite check above used the node running doctor,
   // which is not necessarily the node the wrappers pick. When they differ and
-  // the wrappers' choice cannot load the binding, every capture hook dies on
+  // the wrappers' choice cannot run this package, every capture hook dies on
   // require and swallows the error (`2>/dev/null; exit 0`): hooks look like
   // they are running and nothing is ever stored. Probe what they actually run.
   const launcher = mcpLauncherPath()
@@ -4233,12 +4280,12 @@ export async function doctor(): Promise<DiagnosticResult[]> {
       })
     } else if (wrapperNode === process.execPath) {
       results.push({ check: 'Hook interpreter', status: 'ok', detail: `${wrapperNode} (same as this process)` })
-    } else if (nodeLoadsBinding(wrapperNode)) {
-      results.push({ check: 'Hook interpreter', status: 'ok', detail: `${wrapperNode} — binding loads` })
+    } else if (nodeRunsPackage(wrapperNode)) {
+      results.push({ check: 'Hook interpreter', status: 'ok', detail: `${wrapperNode} — runs this package` })
     } else {
       results.push({
         check: 'Hook interpreter', status: 'error',
-        detail: `${wrapperNode} cannot load better-sqlite3 — hooks run but capture nothing (their errors are suppressed)`,
+        detail: `${wrapperNode} cannot run this package (below the Node floor, or no node:sqlite with FTS5) — hooks run but capture nothing (their errors are suppressed)`,
         fix: 'treecontext install --force',
       })
     }
@@ -4305,7 +4352,7 @@ export async function doctor(): Promise<DiagnosticResult[]> {
     }
 
     const { maxSupportedVersion, migrations } = await import('../persistence/migrations/index.js')
-    const Database = (await import('better-sqlite3')).default
+    const { openRaw, pragmaRows, isBusyError } = await import('../persistence/node-sqlite.js')
 
     // Name the store this cwd is bound to — the global-vs-project split is
     // invisible otherwise, and a store that is only reached from one
@@ -4334,28 +4381,34 @@ export async function doctor(): Promise<DiagnosticResult[]> {
       try {
         // A short busy wait: a store another process holds locked must be
         // named as locked (D175), not leave doctor hanging on it.
-        const db = new Database(join(storesDir, name, 'treecontext.db'), { readonly: true, timeout: 1000 })
-        const raw = db.pragma('user_version') as Array<{ user_version: number }> | number
-        // Role holders via the same leaseHolders() the lease client's
-        // tests pin (G4 — closes C-review finding 10): read-only, so
-        // doctor can never take a role away from a running server. Only
-        // a missing table means "pre-arbiter store" — any OTHER failure
-        // is itself a diagnostic, not silence: this line exists exactly
-        // for the user debugging a refusal.
+        const db = openRaw(join(storesDir, name, 'treecontext.db'), { readOnly: true, timeoutMs: 1000 })
+        let raw: Array<{ user_version: number }>
         try {
-          for (const l of leaseHolders(db as unknown as Parameters<typeof leaseHolders>[0])) {
-            roleHolders.push(
-              `${name}: ${l.role} held by pid ${l.holderPid}@${l.holderHost}${l.live ? '' : ' (expired)'}`,
-            )
+          raw = pragmaRows(db, 'user_version') as Array<{ user_version: number }>
+          // Role holders via the same leaseHolders() the lease client's
+          // tests pin (G4 — closes C-review finding 10): read-only, so
+          // doctor can never take a role away from a running server. Only
+          // a missing table means "pre-arbiter store" — any OTHER failure
+          // is itself a diagnostic, not silence: this line exists exactly
+          // for the user debugging a refusal.
+          try {
+            for (const l of leaseHolders(db as unknown as Parameters<typeof leaseHolders>[0])) {
+              roleHolders.push(
+                `${name}: ${l.role} held by pid ${l.holderPid}@${l.holderHost}${l.live ? '' : ' (expired)'}`,
+              )
+            }
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e)
+            if (!/no such table/i.test(msg)) {
+              roleHolders.push(`${name}: leases unreadable (${msg})`)
+            }
           }
-        } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e)
-          if (!/no such table/i.test(msg)) {
-            roleHolders.push(`${name}: leases unreadable (${msg})`)
-          }
+        } finally {
+          // A busy throw above must not leak the read handle for the rest
+          // of doctor's run.
+          db.close()
         }
-        db.close()
-        const v = typeof raw === 'number' ? raw : (raw[0]?.user_version ?? 0)
+        const v = raw[0]?.user_version ?? 0
         if (v > maxSupportedVersion) ahead.push(`${label} at v${v}`)
         else if (v < maxSupportedVersion) {
           const pending = migrations.filter((m) => m.version > v)
@@ -4363,8 +4416,7 @@ export async function doctor(): Promise<DiagnosticResult[]> {
           behind.push(`${label} at v${v}→v${maxSupportedVersion}${destructive > 0 ? `, ${destructive} destructive` : ''}`)
         }
       } catch (e) {
-        const code = (e as { code?: unknown } | null)?.code
-        if (code === 'SQLITE_BUSY' || code === 'SQLITE_LOCKED' || (e instanceof Error && /database is locked/i.test(e.message))) {
+        if (isBusyError(e)) {
           locked.push({ label, path: join(storesDir, name, 'treecontext.db') })
         } else {
           unreadable.push(`${label} (${e instanceof Error ? e.message : String(e)})`)
@@ -4559,7 +4611,7 @@ export async function doctor(): Promise<DiagnosticResult[]> {
   // behind for every directory doctor ran from, and not even
   // lookupStoreName, which derives an identity for one directory: a check
   // describing the whole machine has no directory to derive from). It
-  // opens each store through describeStore — readonly, fileMustExist, no
+  // opens each store through describeStore — readonly, mustExist, no
   // migration — the same idiom the schema section above uses, so a store
   // that is missing or unopenable costs a "?" and never a crash.
   await (async () => {
@@ -4675,8 +4727,8 @@ export async function doctor(): Promise<DiagnosticResult[]> {
   //
   // Machine-wide over the bindings FILE, exactly as the split check is,
   // and read-only by the same two mechanisms: readBindingsSnapshot for
-  // what is written down, and raw better-sqlite3 handles opened
-  // { readonly, fileMustExist } for the stores themselves — no
+  // what is written down, and raw node:sqlite handles opened
+  // { readOnly, mustExist } for the stores themselves — no
   // migration, no lock taken from a running server, and no page
   // written. (SQLite DOES mint -shm/-wal side files for any reader of
   // a WAL store, read-only included — Phase-2 review S5; the database
@@ -4696,7 +4748,7 @@ export async function doctor(): Promise<DiagnosticResult[]> {
     const stores = boundStores(projects)
     if (stores.length === 0) return
 
-    const Database = (await import('better-sqlite3')).default
+    const { openRaw } = await import('../persistence/node-sqlite.js')
     const now = Date.now()
 
     const colliding: string[] = []
@@ -4715,9 +4767,9 @@ export async function doctor(): Promise<DiagnosticResult[]> {
         absent++
         continue
       }
-      let db: import('better-sqlite3').Database | null = null
+      let db: DatabaseSync | null = null
       try {
-        db = new Database(dbPath, { readonly: true, fileMustExist: true })
+        db = openRaw(dbPath, { readOnly: true, mustExist: true })
         // `nodes` must be a real TABLE before any query runs: a crafted
         // store where it is an infinite recursive VIEW wedges the
         // synchronous query forever — no JS timer can rescue a blocked
@@ -4837,16 +4889,16 @@ export async function doctor(): Promise<DiagnosticResult[]> {
 
     const { captureDebt, humanAge, runawayStaging, RUNAWAY_ATTEMPTS_FACTOR } = await import('./store-audit.js')
     const { MAX_INGEST_ATTEMPTS } = await import('../persistence/capture-constants.js')
-    const Database = (await import('better-sqlite3')).default
+    const { openRaw } = await import('../persistence/node-sqlite.js')
     let debt: import('./store-audit.js').CaptureDebt
     let runaway: import('./store-audit.js').RunawayStaging | null = null
     let drainHolder: (ReturnType<typeof leaseHolders>[number]) | null = null
     // D265: "far past the ceiling" is more than ten times the retry
     // ceiling (RUNAWAY_ATTEMPTS_FACTOR × MAX_INGEST_ATTEMPTS).
     const runawayThreshold = RUNAWAY_ATTEMPTS_FACTOR * MAX_INGEST_ATTEMPTS
-    let db: import('better-sqlite3').Database | null = null
+    let db: DatabaseSync | null = null
     try {
-      db = new Database(dbPath, { readonly: true, fileMustExist: true })
+      db = openRaw(dbPath, { readOnly: true, mustExist: true })
       debt = captureDebt(db)
       runaway = runawayStaging(db, runawayThreshold)
       if (runaway) {

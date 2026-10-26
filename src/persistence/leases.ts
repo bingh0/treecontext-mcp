@@ -98,7 +98,7 @@ export function leaseHolders(db: Database): Array<LeaseRow & { live: boolean }> 
  */
 export function nsLeaseLiveFor(
   // Structural, not the persistence `Database`: the hook path holds a
-  // raw better-sqlite3 handle, and this needs exactly one read.
+  // raw node:sqlite handle, and this needs exactly one read.
   db: { prepare(sql: string): { get(...params: unknown[]): unknown } },
   namespace: string,
   pid: number,

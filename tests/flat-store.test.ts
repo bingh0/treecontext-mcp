@@ -9,8 +9,8 @@ import { mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import BetterSqlite3 from 'better-sqlite3'
-import { wrapBetterSqlite } from '../src/persistence/better-sqlite.js'
+import { DatabaseSync } from 'node:sqlite'
+import { openNodeSqlite } from '../src/persistence/node-sqlite.js'
 import type { Database } from '../src/persistence/database.js'
 import { FlatStore, type FlatStoreOptions } from '../src/flat-store.js'
 import { describePosix } from './helpers/platform.js'
@@ -20,7 +20,7 @@ beforeEach(() => { tmpDir = mkdtempSync(join(tmpdir(), 'tc-flat-')) })
 afterEach(() => { rmSync(tmpDir, { recursive: true, force: true }) })
 
 function dbPath(name = 'flat.db'): string { return join(tmpDir, name) }
-function openDb(name = 'flat.db'): Database { return wrapBetterSqlite(new BetterSqlite3(dbPath(name))) }
+function openDb(name = 'flat.db'): Database { return openNodeSqlite(new DatabaseSync(dbPath(name))) }
 function open(opts?: Partial<FlatStoreOptions>, name = 'flat.db'): Promise<FlatStore> {
   return FlatStore.open({ database: openDb(name), ...opts })
 }
@@ -313,7 +313,7 @@ describe('reliance recording exclusions', () => {
   let store: Awaited<ReturnType<typeof FlatStore.open>>
 
   const reliedCount = (nodeId: string): unknown => {
-    const raw = new BetterSqlite3(join(dir, 'journal.db'), { readonly: true })
+    const raw = new DatabaseSync(join(dir, 'journal.db'), { readOnly: true })
     try {
       const row = raw.prepare(
         "SELECT json_extract(metadata_json, '$._relied_count') AS c FROM nodes WHERE node_id = ?",
@@ -327,7 +327,7 @@ describe('reliance recording exclusions', () => {
   beforeEach(async () => {
     dir = mkdtempSync(join(tmpdir(), 'tc-reliance-'))
     store = await FlatStore.open({
-      database: wrapBetterSqlite(new BetterSqlite3(join(dir, 'journal.db'))),
+      database: openNodeSqlite(new DatabaseSync(join(dir, 'journal.db'))),
       ownsDatabase: true,
     })
   })
@@ -376,7 +376,7 @@ describe('reliance recording exclusions', () => {
     store.exportJson({ nodeId })
     store.exportJson({ nodeId })
 
-    const raw = new BetterSqlite3(join(dir, 'journal.db'))
+    const raw = new DatabaseSync(join(dir, 'journal.db'))
     const row = raw.prepare('SELECT * FROM nodes WHERE node_id = ?').get(nodeId) as Record<string, unknown>
     raw.close()
     expect(row['relied_count']).toBe(3)
@@ -400,7 +400,7 @@ describe('reliance recording exclusions', () => {
       metadata: { _relied_count: 1 },
     })
 
-    const after = new BetterSqlite3(join(dir, 'journal.db'), { readonly: true })
+    const after = new DatabaseSync(join(dir, 'journal.db'), { readOnly: true })
     const col = after.prepare('SELECT relied_count FROM nodes WHERE node_id = ?').get(nodeId) as { relied_count: number }
     after.close()
     expect(col.relied_count).toBe(3)
@@ -408,7 +408,7 @@ describe('reliance recording exclusions', () => {
     // And the next bump heals the lagging metadata copy upward from the
     // column instead of resuming from the stale value.
     store.exportJson({ nodeId })
-    const healed = new BetterSqlite3(join(dir, 'journal.db'), { readonly: true })
+    const healed = new DatabaseSync(join(dir, 'journal.db'), { readOnly: true })
     const final = healed.prepare(
       "SELECT relied_count, json_extract(metadata_json, '$._relied_count') AS m FROM nodes WHERE node_id = ?",
     ).get(nodeId) as { relied_count: number; m: number }
@@ -424,7 +424,7 @@ describe('reliance recording exclusions', () => {
     )
     expect(imported.importedCount).toBeGreaterThanOrEqual(0)
     const { nodeId } = await store.insert('writable neighbor')
-    const raw = new BetterSqlite3(join(dir, 'journal.db'))
+    const raw = new DatabaseSync(join(dir, 'journal.db'))
     raw.prepare('UPDATE nodes SET read_only = 1 WHERE node_id = ?').run(nodeId)
     raw.close()
     store.exportJson({ nodeId })
@@ -447,7 +447,7 @@ describe('reliance recording exclusions', () => {
     }
     await store.close()
     store = await FlatStore.open({
-      database: wrapBetterSqlite(new BetterSqlite3(join(dir, 'journal.db'))),
+      database: openNodeSqlite(new DatabaseSync(join(dir, 'journal.db'))),
       ownsDatabase: true, maxSessions: 2, retentionInterval: 1_000_000,
     })
     const relied = await mk('relied', 0)
@@ -456,7 +456,7 @@ describe('reliance recording exclusions', () => {
     store.exportJson({ nodeId: relied[0]! })
 
     store.retentionSweep()
-    const raw = new BetterSqlite3(join(dir, 'journal.db'), { readonly: true })
+    const raw = new DatabaseSync(join(dir, 'journal.db'), { readOnly: true })
     try {
       const bySession = (s: string): number => (raw.prepare(
         "SELECT COUNT(*) AS n FROM nodes WHERE json_extract(metadata_json,'$.session_id') = ?",
@@ -475,7 +475,7 @@ describePosix('retention archives land private by mode (docs/security.md §3)', 
     const dir = mkdtempSync(join(tmpdir(), 'tc-archive-mode-'))
     try {
       const store = await FlatStore.open({
-        database: wrapBetterSqlite(new BetterSqlite3(join(dir, 'journal.db'))),
+        database: openNodeSqlite(new DatabaseSync(join(dir, 'journal.db'))),
         ownsDatabase: true,
         maxSessions: 1,
         retentionInterval: 1_000_000, // manual sweeps only — this test drives the valve
@@ -583,7 +583,7 @@ describe('handoff import: review fixes', () => {
     const s = await open()
     // Closed in a finally: an open handle pins the file on Windows and the
     // temp-dir cleanup fails EPERM.
-    const ro = new BetterSqlite3(dbPath(), { readonly: true })
+    const ro = new DatabaseSync(dbPath(), { readOnly: true })
     try {
       const row = ro.prepare("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'idx_nodes_curated_fp'").get() as { sql: string }
       expect(row.sql).toContain("substr(session_key, 1, 8) != 'handoff:'")

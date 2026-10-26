@@ -29,8 +29,8 @@
  */
 import { createHash } from 'node:crypto'
 import { copyFileSync } from 'node:fs'
-import BetterSqlite3 from 'better-sqlite3'
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { DatabaseSync } from 'node:sqlite'
+import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
 import { decodeContent } from '../../src/persistence/content-codec.js'
 import { FlatStore } from '../../src/flat-store.js'
 import { DEFAULT_RECENCY_WEIGHT } from '../../src/server/query-telemetry.js'
@@ -97,7 +97,7 @@ async function clean(): Promise<{ journal: MatureJournal; file: string; queries:
   const scratch = scratchFile('tc-mature-check-')
   copyFileSync(file, scratch.file)
   const store = await FlatStore.open({
-    database: wrapBetterSqlite(new BetterSqlite3(scratch.file, { readonly: true })), ownsDatabase: true, readOnly: true,
+    database: openNodeSqlite(new DatabaseSync(scratch.file, { readOnly: true })), ownsDatabase: true, readOnly: true,
   })
   try {
     const check = await checkShellOrdering(journal, queries, async (text) => (await store.query(text, { topK: 5, recencyWeight: 0 }))[0]?.nodeId)
@@ -143,7 +143,7 @@ export async function scoreMatureJournal(opts: {
   const scratch = scratchFile('tc-mature-run-')
   copyFileSync(source, scratch.file)
   const store = await FlatStore.open({
-    database: wrapBetterSqlite(new BetterSqlite3(scratch.file, { readonly: true })),
+    database: openNodeSqlite(new DatabaseSync(scratch.file, { readOnly: true })),
     ownsDatabase: true,
     readOnly: true,
   })
@@ -245,7 +245,7 @@ export const matureJournal: Arm = {
 
   async corpus(opts: { max?: number | undefined }): Promise<ArmCorpus> {
     const { journal, file, queries } = await clean()
-    const raw = new BetterSqlite3(file, { readonly: true })
+    const raw = new DatabaseSync(file, { readOnly: true })
     try {
       const rows = raw.prepare('SELECT node_id, content, metadata_json FROM nodes').all() as Array<{
         node_id: string; content: string | Buffer | null; metadata_json: string | null

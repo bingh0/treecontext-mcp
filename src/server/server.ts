@@ -1442,7 +1442,7 @@ export interface StartServerOptions {
 
 /**
  * Per-STEP budget for the shutdown watchdog. It bounds an ASYNC stall
- * only: better-sqlite3 closes synchronously, so a long WAL checkpoint
+ * only: node:sqlite closes synchronously, so a long WAL checkpoint
  * blocks the very loop the timer would have to fire on and is immune by
  * construction — the deadline can only land at an await, which is
  * exactly where a wedge shows itself. Ten seconds with no step

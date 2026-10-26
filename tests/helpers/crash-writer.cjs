@@ -1,33 +1,32 @@
 /**
  * The crash-mid-write scenario's victim process (journal-storage
  * charter). Opens an EXISTING store file with the production pragmas
- * (WAL, synchronous=NORMAL — better-sqlite.ts DEFAULT_PRAGMAS) and
+ * (WAL, synchronous=NORMAL — node-sqlite.ts DEFAULT_PRAGMAS) and
  * hammers capture/ingestion-shaped transactions forever: each commit
  * writes a staging row AND its nodes row atomically, then reports
  * `committed <i>` on stdout. It never exits on its own — the parent
  * SIGKILLs it mid-stream, which is the whole point.
  *
  * Plain CJS on purpose: the victim must need no TS toolchain, so the
- * kill hits a real node process running real better-sqlite3, not a
+ * kill hits a real node process running the real node:sqlite, not a
  * loader.
  *
  * argv: <dbPath> <treeId>
  */
-const { createRequire } = require('node:module')
-const { join } = require('node:path')
-// Resolve better-sqlite3 from the repo the test runs in, not from this
-// helper's directory.
-const repoRequire = createRequire(join(__dirname, '..', '..', 'package.json'))
-const BetterSqlite3 = repoRequire('better-sqlite3')
+const { existsSync } = require('node:fs')
+const { DatabaseSync } = require('node:sqlite')
 
 const [dbPath, treeIdRaw] = process.argv.slice(2)
 const treeId = Number(treeIdRaw)
 
-const db = new BetterSqlite3(dbPath)
-db.pragma('journal_mode = WAL')
-db.pragma('synchronous = NORMAL')
-db.pragma('foreign_keys = ON')
-db.pragma('busy_timeout = 10000')
+if (!existsSync(dbPath)) {
+  process.stderr.write(`crash-writer: no store at ${dbPath}\n`)
+  process.exit(1)
+}
+const db = new DatabaseSync(dbPath, { timeout: 10000 })
+db.exec('PRAGMA journal_mode = WAL')
+db.exec('PRAGMA synchronous = NORMAL')
+db.exec('PRAGMA foreign_keys = ON')
 
 const insertStaging = db.prepare(
   'INSERT INTO staging (session_id, role, content, timestamp) VALUES (?, ?, ?, ?)',
@@ -50,15 +49,24 @@ const insertFts = db.prepare(
 
 // Payload long enough that a torn write would be visible as a truncated
 // row; the END marker is the tear detector.
-const pair = db.transaction((i) => {
-  const content = `crash event ${i} :: ${'payload '.repeat(40)}:: END-${i}`
-  insertStaging.run('crash-session', 'user', content, 1_700_000_000 + i)
-  const r = insertNode.run(
-    `crash-node-${i}`, treeId, content, 1_700_000_000 + i, 1_700_000_000 + i,
-    JSON.stringify({ source: 'auto-capture', role: 'tool', session_id: 'crash-session' }),
-  )
-  insertFts.run(r.lastInsertRowid, content)
-})
+// node:sqlite has no transaction() helper: BEGIN IMMEDIATE / COMMIT by hand,
+// the same shape the adapter emits (node-sqlite.ts transaction()).
+const pair = (i) => {
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    const content = `crash event ${i} :: ${'payload '.repeat(40)}:: END-${i}`
+    insertStaging.run('crash-session', 'user', content, 1_700_000_000 + i)
+    const r = insertNode.run(
+      `crash-node-${i}`, treeId, content, 1_700_000_000 + i, 1_700_000_000 + i,
+      JSON.stringify({ source: 'auto-capture', role: 'tool', session_id: 'crash-session' }),
+    )
+    insertFts.run(r.lastInsertRowid, content)
+    db.exec('COMMIT')
+  } catch (e) {
+    try { db.exec('ROLLBACK') } catch {}
+    throw e
+  }
+}
 
 let i = 0
 for (;;) {

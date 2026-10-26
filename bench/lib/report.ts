@@ -8,7 +8,7 @@
  * Every record carries its own provenance — corpus checksum, slice rule,
  * mapping version, code revision, and the SQLite that actually did the
  * ranking. Without those a number is an anecdote: FTS5 ranking depends on
- * the bundled SQLite, so a better-sqlite3 bump can legitimately move every
+ * the bundled SQLite, so a Node (and so SQLite) bump can legitimately move every
  * figure, and a reader needs to be able to see that rather than deduce it.
  */
 import { appendFileSync, existsSync, readFileSync } from 'node:fs'
@@ -55,7 +55,9 @@ export interface RunRecord {
   slice_rule: string
   code_sha: string | null
   code_dirty: boolean
-  better_sqlite3: string
+  /** The database driver; records before D278 carry `better_sqlite3` instead. */
+  driver?: string
+  better_sqlite3?: string
   sqlite: string
   node: string
   platform: string
@@ -256,7 +258,7 @@ export function renderReport(record: RunRecord, history: RunRecord[]): string {
   lines.push(`- slice rule: ${record.slice_rule}`)
   lines.push(`- mapping version: ${record.mapping_version}`)
   lines.push(`- code: \`${record.code_sha?.slice(0, 12) ?? 'unknown'}\`${record.code_dirty ? ' (dirty working tree)' : ''}`)
-  lines.push(`- better-sqlite3 ${record.better_sqlite3} · SQLite ${record.sqlite} · Node ${record.node} · ${record.platform}`)
+  lines.push(`- ${record.driver ?? `better-sqlite3 ${record.better_sqlite3}`} · SQLite ${record.sqlite} · Node ${record.node} · ${record.platform}`)
   lines.push('')
   lines.push('</details>')
   return lines.join('\n')

@@ -2,14 +2,14 @@
  * Snapshot lifecycle tests. The production snapshot logic lives in the
  * hooks layer (src/hooks/shared.ts): writeSnapshot appends over a fresh
  * connection by path; claimSnapshot claims transactionally over a raw
- * better-sqlite3 handle. Persistence.openLexical only creates the schema.
+ * node:sqlite handle. Persistence.openLexical only creates the schema.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import BetterSqlite3, { type Database as DatabaseType } from 'better-sqlite3'
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { DatabaseSync, type DatabaseSync as DatabaseType } from 'node:sqlite'
+import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
 import { Persistence } from '../../src/persistence/store.js'
 import { writeSnapshot, claimSnapshot } from '../../src/hooks/shared.js'
 
@@ -23,9 +23,9 @@ describe('Snapshots', () => {
     dbPath = join(tmpDir, 'test.db')
     // Create the schema the way the server does, then hand the raw
     // connection to the hooks-layer functions under test.
-    const setup = wrapBetterSqlite(new BetterSqlite3(dbPath))
+    const setup = openNodeSqlite(new DatabaseSync(dbPath))
     Persistence.openLexical(setup).close()
-    db = new BetterSqlite3(dbPath)
+    db = new DatabaseSync(dbPath)
   })
 
   afterEach(() => {

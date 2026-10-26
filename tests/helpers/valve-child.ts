@@ -12,13 +12,13 @@
  * argv: <dbPath> <maxStoreBytes>. stdout: one JSON line
  * { before, after, budget, swept }.
  */
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import { FlatStore } from '../../src/flat-store.js'
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
 
 const [dbPath, budgetRaw] = process.argv.slice(2)
 const store = await FlatStore.open({
-  database: wrapBetterSqlite(new BetterSqlite3(dbPath!)),
+  database: openNodeSqlite(new DatabaseSync(dbPath!)),
   ownsDatabase: true,
   maxStoreBytes: Number(budgetRaw),
   retentionInterval: 1_000_000,

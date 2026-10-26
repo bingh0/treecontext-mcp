@@ -9,8 +9,8 @@
  * prescribes if dense ever earns a seat: "a fused, opt-in second ranked
  * list", not a replacement for BM25.
  */
-import BetterSqlite3 from 'better-sqlite3'
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { DatabaseSync } from 'node:sqlite'
+import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
 import { FlatStore } from '../../src/flat-store.js'
 import { cosine, type Embedder } from '../embedders/types.js'
 
@@ -37,7 +37,7 @@ export class Bm25Retriever implements Retriever {
 
   async index(docs: Doc[]): Promise<void> {
     this.store = await FlatStore.open({
-      database: wrapBetterSqlite(new BetterSqlite3(':memory:')),
+      database: openNodeSqlite(new DatabaseSync(':memory:')),
       maxSessions: Number.MAX_SAFE_INTEGER,
       maxAutoEntries: Number.MAX_SAFE_INTEGER,
       retentionInterval: Number.MAX_SAFE_INTEGER,

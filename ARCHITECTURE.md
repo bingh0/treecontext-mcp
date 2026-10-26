@@ -484,8 +484,9 @@ surfaces, not in the record.
   test closes its stores, and why the full-matrix Windows lane is a
   release gate (it has caught real defects three releases running).
 - **The interpreter is probed, not assumed**: install pins a node that
-  demonstrably loads the native sqlite binding; doctor grades the
-  pinned interpreter, in both shell dialects.
+  demonstrably meets the Node floor and runs this package (its own
+  `node:sqlite` opens a database with FTS5); doctor grades the pinned
+  interpreter, in both shell dialects.
 
 ## 12. Invariants index
 

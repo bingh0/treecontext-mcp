@@ -20,7 +20,7 @@ import { describe, it, expect, afterAll, vi } from 'vitest'
 import { mkdtempSync, rmSync, existsSync, mkdirSync, chmodSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 
 import { spawnNodeTsAsync, spawnCli, CLI_TS } from '../helpers/cli-spawn.js'
 import { storesDirIn } from '../helpers/store-fixtures.js'
@@ -106,10 +106,10 @@ describe('a serving server is silent on stderr when healthy (D258)', () => {
       expect(existsSync(dbPath)).toBe(true)
       // The real shape the drain dead-letters: a recovery snapshot whose
       // content is not JSON, staged straight into the store.
-      const raw = new BetterSqlite3(dbPath)
+      const raw = new DatabaseSync(dbPath)
       let id: number
       try {
-        raw.pragma('busy_timeout = 5000')
+        raw.exec('PRAGMA busy_timeout = 5000')
         id = Number(raw.prepare(
           "INSERT INTO staging (session_id, role, content, timestamp) VALUES (?, 'snapshot', ?, ?)",
         ).run('d258-warn-session', '{"queries": [unterminated', Date.now() / 1000).lastInsertRowid)
@@ -155,9 +155,9 @@ describe('a serving server is silent on stderr when healthy (D258)', () => {
       expect(debug.debugLogFile(), 'the serving sink always ensures its file').toMatch(/debug-.*\.log$/)
       const { FlatStore } = await import('../../src/flat-store.js')
       const { IngestionLoop } = await import('../../src/server/ingestion.js')
-      const { wrapBetterSqlite } = await import('../../src/persistence/better-sqlite.js')
+      const { openNodeSqlite } = await import('../../src/persistence/node-sqlite.js')
       const store = await FlatStore.open({
-        database: wrapBetterSqlite(new BetterSqlite3(join(home, 'sweep.db'))),
+        database: openNodeSqlite(new DatabaseSync(join(home, 'sweep.db'))),
         ownsDatabase: true,
       })
       try {

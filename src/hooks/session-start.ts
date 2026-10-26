@@ -1,5 +1,6 @@
 import { basename, dirname } from 'node:path'
-import type { Database as DatabaseType } from 'better-sqlite3'
+import type { DatabaseSync as DatabaseType } from 'node:sqlite'
+import { isBusyError } from '../persistence/node-sqlite.js'
 import { parseHookInput, resolveDbPath, normalizeSource, buildRehydrationPayload, openHookDb, isDirectInvocation } from './shared.js'
 import { dbg } from '../debug.js'
 import { writeSessionBeacon } from '../session-beacon.js'
@@ -22,9 +23,7 @@ export const UNKNOWN_PREDECESSOR =
 export const CLEAR_READ_TIMEOUT_MS = 1500
 
 function isLocked(err: unknown): boolean {
-  const code = (err as { code?: unknown } | null)?.code
-  return code === 'SQLITE_BUSY' || code === 'SQLITE_LOCKED'
-    || (err instanceof Error && /database is locked|database table is locked/i.test(err.message))
+  return isBusyError(err)
 }
 
 function messageOf(err: unknown): string {

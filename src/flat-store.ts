@@ -2040,10 +2040,11 @@ export class FlatStore implements MemoryStore {
    * namespace merge already relies on is exactly the guarantee required.
    * Do not "fix" this into a two-database commit; there isn't one.
    *
-   * A5 (verified against better-sqlite3 13.0.2 / SQLite 3.53.4 at build
-   * time): the driver is NOT built with SQLITE_OPEN_URI, so
-   * `ATTACH 'file:…?mode=ro'` fails outright with "unable to open
-   * database" and a plain ATTACH is read-WRITE. `PRAGMA query_only`
+   * A5 (measured under better-sqlite3 13.0.2 / SQLite 3.53.4 at build
+   * time, when the driver was not built with SQLITE_OPEN_URI and
+   * `ATTACH 'file:…?mode=ro'` failed outright; node:sqlite honours `file:`
+   * URIs (D278), but this merge still attaches by plain path, and a plain
+   * ATTACH is read-WRITE). `PRAGMA query_only`
    * cannot stand in — it is connection-wide and would block the writes to
    * THIS database too. So read-only is a property of this code, not of
    * the handle: nothing below ever names `<alias>.` on the left of a
@@ -2458,11 +2459,11 @@ export class FlatStore implements MemoryStore {
     // (surfaced by AC2.11 once the store carried one more index: larger
     // content pushed VACUUM's implicit checkpoint past whatever made it
     // "just work" before). Force it explicitly, mirroring
-    // BetterSqliteDatabase.secureWipe()'s same VACUUM + checkpoint pair.
+    // NodeSqliteDatabase.secureWipe()'s same VACUUM + checkpoint pair.
     this.db.pragma('wal_checkpoint(TRUNCATE)')
   }
 
-  /** better-sqlite3 returns pragma reads as [{ <name>: value }]; other
+  /** The node:sqlite adapter returns pragma reads as [{ <name>: value }]; other
    *  Database impls may return a bare number. Parse both. */
   private readPragmaInt(name: string): number {
     const raw = this.db.pragma(name)

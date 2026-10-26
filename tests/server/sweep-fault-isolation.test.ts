@@ -13,11 +13,12 @@
  * (unlink needs write permission on the directory), which chmod cannot
  * arrange on Windows ACLs — and root bypasses it, hence the uid guard.
  */
+import { setPragma } from '../../src/persistence/node-sqlite.js'
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, mkdirSync, rmSync, chmodSync, statSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 
 import { sweepMigrationBackups } from '../../src/tools/stores.js'
 import { writeVerdict } from '../../src/persistence/backup-verdict.js'
@@ -33,12 +34,12 @@ function seedEligible(name: string): string {
   const dir = join(storesDir, name)
   mkdirSync(dir, { recursive: true })
   const dbPath = join(dir, 'treecontext.db')
-  const db = new BetterSqlite3(dbPath)
+  const db = new DatabaseSync(dbPath)
   db.exec(SCHEMA_SQL)
-  db.pragma(`user_version = ${maxSupportedVersion}`)
+  setPragma(db, `user_version = ${maxSupportedVersion}`)
   db.close()
   const bakPath = join(dir, 'treecontext.db.pre-migration-v12.bak')
-  const bak = new BetterSqlite3(bakPath)
+  const bak = new DatabaseSync(bakPath)
   bak.exec('CREATE TABLE pad (x BLOB)')
   bak.close()
   writeVerdict(bakPath, {

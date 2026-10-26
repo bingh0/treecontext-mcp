@@ -10,7 +10,7 @@
  */
 
 import { chmodSync, existsSync } from 'node:fs'
-import { createRequire } from 'node:module'
+import { openRaw, isBusyError } from './node-sqlite.js'
 
 import type { Database } from './database.js'
 import { writeVerdict, type Verdict } from './backup-verdict.js'
@@ -105,9 +105,7 @@ export interface MigrationReport {
 export function recordCompletionVerdict(db: Database, backupPath: string, from: number): Verdict | undefined {
   let backupIds: string[]
   try {
-    const requireNode = createRequire(import.meta.url)
-    const BetterSqlite3 = requireNode('better-sqlite3') as typeof import('better-sqlite3')
-    const bak = new BetterSqlite3(backupPath, { readonly: true, fileMustExist: true })
+    const bak = openRaw(backupPath, { readOnly: true, mustExist: true })
     try {
       backupIds = (bak.prepare('SELECT node_id FROM nodes').all() as Array<{ node_id: unknown }>).map((r) => String(r.node_id))
     } finally {
@@ -164,12 +162,6 @@ export function recordCompletionVerdict(db: Database, backupPath: string, from: 
   return verdict
 }
 
-/** True if `err` looks like a SQLITE_BUSY / SQLITE_LOCKED error. */
-function isBusyError(err: unknown): boolean {
-  if (!(err instanceof Error)) return false
-  const code = (err as Error & { code?: string }).code ?? ''
-  return /SQLITE_BUSY|SQLITE_LOCKED|database is locked/i.test(code + ' ' + err.message)
-}
 
 export function currentSchemaVersion(db: Database): number {
   const raw = db.pragma('user_version')

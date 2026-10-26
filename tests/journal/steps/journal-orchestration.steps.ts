@@ -4,10 +4,10 @@ import { join, basename } from 'node:path'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { expect } from 'vitest'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import { type Registry } from 'gherkin-node-test/vitest'
 import { FlatStore } from '../../../src/flat-store.js'
-import { wrapBetterSqlite } from '../../../src/persistence/better-sqlite.js'
+import { openNodeSqlite, setPragma } from '../../../src/persistence/node-sqlite.js'
 import { writeSessionBeacon } from '../../../src/session-beacon.js'
 import { SUBAGENT_SUMMARY_KIND, INTERNAL_SUMMARY_KIND, CLIENT_WRITER } from '../../../src/handoff.js'
 import { decodeContent } from '../../../src/persistence/content-codec.js'
@@ -296,7 +296,7 @@ async function openGitWorld(w: OrchestrationWorld): Promise<void> {
   // The store as the first hook mints it: the session-start hook of the
   // orchestrator's main checkout, then the library open a server makes.
   sessionStart(w, w.repo)
-  const store = await FlatStore.open({ database: wrapBetterSqlite(new BetterSqlite3(w.dbPath)), ownsDatabase: true })
+  const store = await FlatStore.open({ database: openNodeSqlite(new DatabaseSync(w.dbPath)), ownsDatabase: true })
   w.defer(() => store.close())
   w.store = store
   writeSessionBeacon(w.dbPath, process.pid, w.sessionId, w.repo, { rewrite: true })
@@ -483,12 +483,12 @@ export const orchestrationDefiner = (reg: Registry<OrchestrationWorld>): void =>
     // hook's staging writer filled — then the same drain.
     w.internalId = `a${randomBytes(8).toString('hex')}`
     w.internalReport = compactionSummary()
-    const stage = new BetterSqlite3(w.dbPath!)
+    const stage = new DatabaseSync(w.dbPath!)
     try {
       stage.prepare(
         `INSERT INTO staging (session_id, role, content, tool_name, timestamp, priority, processed, created_at, index_len, preview_len, namespace, agent_id, agent_type, kind)
          VALUES (?, 'assistant', ?, NULL, ?, 1, 0, ?, ?, NULL, NULL, ?, NULL, ?)`,
-      ).run(w.sessionId, w.internalReport, now(), now(), w.internalReport.length, w.internalId, SUBAGENT_SUMMARY_KIND)
+      ).run(w.sessionId!, w.internalReport, now(), now(), w.internalReport.length, w.internalId!, SUBAGENT_SUMMARY_KIND)
     } finally { stage.close() }
     await drainStaging(w)
     const untyped = storedRows(w, "json_extract(metadata_json, '$._writer_agent_id') = ?", w.internalId)
@@ -503,11 +503,11 @@ export const orchestrationDefiner = (reg: Registry<OrchestrationWorld>): void =>
     w.rowsBefore = Object.fromEntries([...untyped, ...typed].map((r) => [r.node_id, { metadata_json: r.metadata_json, content: r.content }]))
     // ...at that treecontext's schema.
     await w.store!.close()
-    const raw = new BetterSqlite3(w.dbPath!)
-    try { raw.pragma('user_version = 28') } finally { raw.close() }
+    const raw = new DatabaseSync(w.dbPath!)
+    try { setPragma(raw, 'user_version = 28') } finally { raw.close() }
   })
   reg.define(/^this treecontext opens the store$/, async (w) => {
-    const store = await FlatStore.open({ database: wrapBetterSqlite(new BetterSqlite3(w.dbPath!)), ownsDatabase: true })
+    const store = await FlatStore.open({ database: openNodeSqlite(new DatabaseSync(w.dbPath!)), ownsDatabase: true })
     w.defer(() => store.close())
     w.store = store
     expect(rawAll<{ v: number }>(w, 'SELECT user_version AS v FROM pragma_user_version')[0]!.v).toBe(29)

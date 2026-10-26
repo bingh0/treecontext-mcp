@@ -10,8 +10,8 @@ import { mkdtempSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { rmTree } from '../helpers/fs.js'
-import BetterSqlite3 from 'better-sqlite3'
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { DatabaseSync } from 'node:sqlite'
+import { openNodeSqlite, pragmaValue, setPragma } from '../../src/persistence/node-sqlite.js'
 import { FlatStore } from '../../src/flat-store.js'
 import { handoffMetadata, SUBAGENT_SUMMARY_KIND } from '../../src/handoff.js'
 import { CLIENT_WRITER, INTERNAL_SUMMARY_KIND, registerSubagent } from '../../src/persistence/session-registry.js'
@@ -23,7 +23,7 @@ describe('migration 029 (D263)', () => {
     const dir = mkdtempSync(join(tmpdir(), 'tc-m029-'))
     try {
       const path = join(dir, 's.db')
-      const open = (): Promise<FlatStore> => FlatStore.open({ database: wrapBetterSqlite(new BetterSqlite3(path)), ownsDatabase: true })
+      const open = (): Promise<FlatStore> => FlatStore.open({ database: openNodeSqlite(new DatabaseSync(path)), ownsDatabase: true })
       const store = await open()
       const S = 'cc-sess'
       const hook = (writer: string, agentId: string): Record<string, unknown> => ({
@@ -56,22 +56,22 @@ describe('migration 029 (D263)', () => {
       // Its own connection, closed before the directory goes: a handle left
       // open here is what made the temp dir unremovable on Windows (the
       // beta.2 matrix, 2026-10-11: EPERM at the final rmSync).
-      const reg = new BetterSqlite3(path)
-      registerSubagent(wrapBetterSqlite(reg), S, 'a-reg', null,
+      const reg = new DatabaseSync(path)
+      registerSubagent(openNodeSqlite(reg), S, 'a-reg', null,
         { worktree: null, branch: null, cwd: dir, toplevel: null, commonDir: null }, 1)
       reg.close()
       await store.close()
 
-      const raw = new BetterSqlite3(path)
+      const raw = new DatabaseSync(path)
       // Metadata that is not an object: JSON that does not parse cannot be
       // stored at all (the expression indexes on metadata_json evaluate it
       // on write and refuse it), so the robust shapes left are a NULL and a
       // JSON array; the migration reads past both.
-      expect(() => raw.prepare('UPDATE nodes SET metadata_json = ? WHERE node_id = ?').run('{not json', ids['invalid'])).toThrow(/malformed JSON/)
-      raw.prepare('UPDATE nodes SET metadata_json = ? WHERE node_id = ?').run('[1,2]', ids['invalid'])
-      raw.prepare('UPDATE nodes SET metadata_json = NULL WHERE node_id = ?').run(ids['nullMeta'])
+      expect(() => raw.prepare('UPDATE nodes SET metadata_json = ? WHERE node_id = ?').run('{not json', ids['invalid']!)).toThrow(/malformed JSON/)
+      raw.prepare('UPDATE nodes SET metadata_json = ? WHERE node_id = ?').run('[1,2]', ids['invalid']!)
+      raw.prepare('UPDATE nodes SET metadata_json = NULL WHERE node_id = ?').run(ids['nullMeta']!)
       raw.prepare("UPDATE session_registry SET stopped_at = 2 WHERE agent_id = 'a-reg'").run()
-      raw.pragma('user_version = 28')
+      setPragma(raw, 'user_version = 28')
       const read = (): Record<string, Raw> => Object.fromEntries(Object.entries(ids).map(([k, id]) => [k,
         raw.prepare('SELECT node_id, metadata_json, content, source_label, session_key FROM nodes WHERE node_id = ?').get(id) as Raw]))
       const before = read()
@@ -88,8 +88,8 @@ describe('migration 029 (D263)', () => {
 
       const reopened = await open() // neither odd row makes the open throw
       await reopened.close()
-      const db = new BetterSqlite3(path, { readonly: true })
-      expect(db.pragma('user_version', { simple: true })).toBe(29)
+      const db = new DatabaseSync(path, { readOnly: true })
+      expect(pragmaValue(db, 'user_version')).toBe(29)
       const after = Object.fromEntries(Object.entries(ids).map(([k, id]) => [k,
         db.prepare('SELECT node_id, metadata_json, content, source_label, session_key FROM nodes WHERE node_id = ?').get(id) as Raw]))
       db.close()

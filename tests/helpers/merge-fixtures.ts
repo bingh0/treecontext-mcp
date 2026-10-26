@@ -12,10 +12,10 @@
  */
 import { mkdirSync, readdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 
 import { FlatStore } from '../../src/flat-store.js'
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
 import { MIGRATION_BACKUP_RE } from '../../src/persistence/backup-verdict.js'
 import type { InsertOptions } from '../../src/core/types.js'
 
@@ -38,8 +38,8 @@ export async function seedJournal(
   const dir = join(storesDir, store)
   mkdirSync(dir, { recursive: true })
   const dbPath = join(dir, 'treecontext.db')
-  const raw = new BetterSqlite3(dbPath)
-  const db = wrapBetterSqlite(raw)
+  const raw = new DatabaseSync(dbPath)
+  const db = openNodeSqlite(raw)
   const flat = await FlatStore.open({ database: db, namespace, ownsDatabase: true })
   try {
     for (const e of entries) await flat.insert(e.content, e.opts)
@@ -77,7 +77,7 @@ export function allNodes(dbPath: string): Array<{
   created_at: number
   metadata_json: string | null
 }> {
-  const db = new BetterSqlite3(dbPath, { readonly: true, fileMustExist: true })
+  const db = new DatabaseSync(dbPath, { readOnly: true })
   try {
     return db.prepare(
       'SELECT n.node_id, n.content, t.namespace, n.read_only, n.decay_exempt, n.created_at, n.metadata_json '

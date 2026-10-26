@@ -9,12 +9,12 @@ import { seedOrphanSidecar, storesDirIn } from '../../helpers/store-fixtures.js'
 import { writeVerdict } from '../../../src/persistence/backup-verdict.js'
 import { TS_ROOT } from '../proc.js'
 import { claudeSessionStartUnwired } from '../../../src/server/installer.js'
-import BetterSqlite3 from 'better-sqlite3'
-import { wrapBetterSqlite } from '../../../src/persistence/better-sqlite.js'
+import { DatabaseSync } from 'node:sqlite'
+import { openNodeSqlite } from '../../../src/persistence/node-sqlite.js'
 import { FlatStore } from '../../../src/flat-store.js'
 import { LeaseClient, DRAIN_LEASE_TTL_SECS } from '../../../src/persistence/leases.js'
 import { MAX_INGEST_ATTEMPTS } from '../../../src/persistence/capture-constants.js'
-import { type InstallWorld, tcCli, agentCli, openInstallWorld, treeOf, pathsMentioned, installedCommands, interpreterLoadsBinding, isBatchBody, toPosix, mcpLauncherIn, agentConfigPath, fakeGlobalInstall } from '../install-harness.js'
+import { type InstallWorld, tcCli, agentCli, openInstallWorld, treeOf, pathsMentioned, installedCommands, interpreterRunsPackage, isBatchBody, toPosix, mcpLauncherIn, agentConfigPath, fakeGlobalInstall } from '../install-harness.js'
 
 export const installDefiner = (reg: Registry<InstallWorld>): void => {
   // ── install wires only the agents that are present ──────────────────
@@ -83,7 +83,7 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
   reg.define(/^the subcommand prints its report$/, (w: InstallWorld) => {
     expect(w.irun!.stdout.trim(), 'the linked command printed nothing at all').not.toBe('')
     expect(w.irun!.stdout).toMatch(/treecontext doctor/)
-    expect(w.irun!.stdout).toMatch(/better-sqlite3/)
+    expect(w.irun!.stdout).toMatch(/SQLite: /)
   })
 
   reg.define(/^the command exits successfully$/, (w: InstallWorld) => {
@@ -302,13 +302,12 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
 
   // ── the interpreter install chooses can run this package ────────────
   // Step text reworded 2026-10-11 (D278): "runs this package" for "loads
-  // the binding". Until the chunk-1 build lands node:sqlite, running this
-  // package IS loading better-sqlite3, so these bodies still probe the
-  // binding; the build replaces the probe with the floor-and-open check.
+  // the binding". Since the node:sqlite build these bodies probe exactly
+  // what install probes: the floor, and an open of node:sqlite with FTS5.
   reg.define(/^a machine offering several interpreters, only one of which meets the Node floor and runs this package$/, async (w: InstallWorld) => {
     await openInstallWorld(w, ['.claude'])
     // A `node` that runs but cannot load native modules — the shape of a
-    // Homebrew node with no prebuild for this package.
+    // Homebrew node below the floor, or one without node:sqlite.
     const badDir = join(w.ihome!, 'badbin')
     mkdirSync(badDir, { recursive: true })
     // A .cmd on Windows, for the reason spelled out in the sibling scenario
@@ -361,7 +360,7 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
       })
       const chosen = (r.stdout ?? '').trim()
       expect(chosen, `the wrapper resolved no interpreter (${r.stderr ?? ''})`).not.toBe('')
-      expect(interpreterLoadsBinding(chosen), `the wrapper chose ${chosen}, which cannot load the binding`).toBe(true)
+      expect(interpreterRunsPackage(chosen), `the wrapper chose ${chosen}, which cannot run this package`).toBe(true)
       return
     }
 
@@ -378,7 +377,7 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
     })
     const chosen = (r.stdout ?? '').trim()
     expect(chosen, 'the wrapper resolved no interpreter').not.toBe('')
-    expect(interpreterLoadsBinding(chosen), `the wrapper chose ${chosen}, which cannot load the binding`).toBe(true)
+    expect(interpreterRunsPackage(chosen), `the wrapper chose ${chosen}, which cannot run this package`).toBe(true)
   })
 
   reg.define(/^the interpreters that cannot run it are not chosen$/, (w: InstallWorld) => {
@@ -392,9 +391,9 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
     expect(tcCli(w, ['install', '--yes']).status).toBe(0)
     const badDir = join(w.ihome!, 'badbin')
     mkdirSync(badDir, { recursive: true })
-    // A .cmd on Windows so it is genuinely spawnable and fails at the binding
+    // A .cmd on Windows so it is genuinely spawnable and fails at the probe
     // rather than failing to start — the claim is about an interpreter that
-    // RUNS and cannot load better-sqlite3.
+    // RUNS and cannot run this package.
     const win = process.platform === 'win32'
     w.iBadNode = join(badDir, win ? 'node.cmd' : 'node')
     writeFileSync(
@@ -647,13 +646,72 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
   })
 
   reg.define(/^the database is verified by opening one and reading its SQLite version and FTS5 support, not by comparing versions$/, (w: InstallWorld) => {
-    expect(w.irun!.out).toMatch(/better-sqlite3:.*(loaded and working|stale native binding|failed to load)/)
     // What this step does: it reads doctor's report on a healthy install.
-    // The match above pins the binding row to one of doctor's three
-    // verdicts; the match below pins this install's verdict as "loaded
-    // and working". No broken-binding world runs here, so the step does
-    // not show the verdict changing when an open fails.
-    expect(w.irun!.out).toMatch(/native binding loaded and working/)
+    // The row names the SQLite version the running Node carries and says
+    // FTS5 is compiled in — both read by opening a database (D278). The
+    // version is pinned to the process's own, so a table of versions could
+    // not pass this. No FTS5-less world runs here, so the step does not
+    // show the verdict changing when the open finds no FTS5.
+    const sqliteRow = /\[ok\]\s+SQLite: (\d+\.\d+\.\d+) built into this Node, FTS5 compiled in/.exec(w.irun!.out)
+    expect(sqliteRow, `no SQLite row in:\n${w.irun!.out}`).not.toBeNull()
+    expect(sqliteRow![1]).toBe(process.versions.sqlite)
+    // "No row names a native binding or a prebuild" is the @D278 database-row
+    // scenario's own clause, bound positively there, not an absence here.
+  })
+
+  // ── @D278: doctor's database row and Node row ───────────────────────
+  const SQLITE_ROW = /\[ok\]\s+SQLite: (\d+\.\d+\.\d+) built into this Node, FTS5 compiled in/
+  const NODE_ROW = /\[ok\]\s+Node\.js: (v\d+\.\d+\.\d+) \(floor >=(\d+\.\d+\.\d+)\)/
+
+  reg.define(/^the database row names the SQLite version the running Node carries and says FTS5 is compiled in$/, (w: InstallWorld) => {
+    const m = SQLITE_ROW.exec(w.irun!.out)
+    expect(m, `no SQLite row in:\n${w.irun!.out}`).not.toBeNull()
+    // Doctor ran under the test's own node (tcCli), so "the running Node"
+    // is this process: the version it names is this process's SQLite.
+    expect(m![1]).toBe(process.versions.sqlite)
+  })
+
+  reg.define(/^both facts are read by opening a database, not from a table of versions$/, (w: InstallWorld) => {
+    // What opening a database on this Node yields, independently of doctor:
+    // the row must agree with it, and it is nothing a table could know.
+    const probe = new DatabaseSync(':memory:')
+    try {
+      const v = (probe.prepare('SELECT sqlite_version() AS v').get() as { v: string }).v
+      const fts5 = (probe.prepare('PRAGMA compile_options').all() as Array<{ compile_options: string }>)
+        .some((r) => r.compile_options === 'ENABLE_FTS5')
+      expect(SQLITE_ROW.exec(w.irun!.out)![1]).toBe(v)
+      expect(fts5, 'this Node has no FTS5; the row above could not have said so honestly').toBe(true)
+    } finally {
+      probe.close()
+    }
+  })
+
+  reg.define(/^no row names a native binding or a prebuild$/, (w: InstallWorld) => {
+    // Every row is accounted for in the positive first: the rows that
+    // replaced the binding row are present and well-formed...
+    expect(w.irun!.out).toMatch(SQLITE_ROW)
+    expect(w.irun!.out).toMatch(NODE_ROW)
+    // ...and the words of the row they replaced are gone. The needle fired
+    // at c227c81, where this report read "better-sqlite3: native binding
+    // loaded and working" and doctor's Node row named prebuilds.
+    // step-lint: allow unearned-absence -- the positive SQLite and Node row matches above pin the rows that replaced the binding row; the needle fired at c227c81 where this report read "better-sqlite3: native binding loaded and working"
+    expect(w.irun!.out).not.toMatch(/better-sqlite3|native binding|prebuild/i)
+  })
+
+  reg.define(/^the Node row reports the running version against the floor the package's manifest declares$/, (w: InstallWorld) => {
+    const m = NODE_ROW.exec(w.irun!.out)
+    expect(m, `no Node row with a floor in:\n${w.irun!.out}`).not.toBeNull()
+    expect(m![1]).toBe(process.version)
+  })
+
+  reg.define(/^the floor the row names is the manifest's, so the two cannot drift$/, (w: InstallWorld) => {
+    // Read the manifest here, independently of the installer's reader: the
+    // row's floor must be exactly what `engines.node` says.
+    const pkg = JSON.parse(readFileSync(join(TS_ROOT, 'package.json'), 'utf8')) as { engines?: { node?: string } }
+    const floor = /(\d+)\.(\d+)(?:\.(\d+))?/.exec(pkg.engines?.node ?? '')
+    expect(floor, 'package.json declares no numeric Node floor').not.toBeNull()
+    const declared = `${floor![1]}.${floor![2]}.${floor![3] ?? '0'}`
+    expect(NODE_ROW.exec(w.irun!.out)![2]).toBe(declared)
   })
 
   reg.define(/^every failing check is accompanied by the command that fixes it$/, (w: InstallWorld) => {
@@ -1077,7 +1135,7 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
     // It exits on its own after a minute should the deferred kill never run.
     const spinner = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1e6); setTimeout(() => process.exit(), 60000)'], { stdio: 'ignore' })
     w.defer(() => { spinner.kill() })
-    const store = await FlatStore.open({ database: wrapBetterSqlite(new BetterSqlite3(dbPath)), ownsDatabase: true })
+    const store = await FlatStore.open({ database: openNodeSqlite(new DatabaseSync(dbPath)), ownsDatabase: true })
     try {
       const id = store.store.insertStaging({ sessionId: 'cc-runaway', role: 'user', content: 'the row the dead-letter path cannot retire', timestamp: Date.now() / 1000 - 3600 })
       let attempts = 0
@@ -1090,7 +1148,7 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
       await store.close()
     }
     // Direct inspection: the row and the holder are what the store says.
-    const raw = new BetterSqlite3(dbPath, { readonly: true })
+    const raw = new DatabaseSync(dbPath, { readOnly: true })
     try {
       expect(raw.prepare('SELECT attempts, processed FROM staging WHERE id = ?').get(w.iRunaway.stagingId))
         .toEqual({ attempts: 10 * MAX_INGEST_ATTEMPTS + 1, processed: 0 })

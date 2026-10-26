@@ -2,8 +2,8 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node
 import { spawn } from 'node:child_process'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import BetterSqlite3 from 'better-sqlite3'
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { DatabaseSync } from 'node:sqlite'
+import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
 import { FlatStore } from '../../src/flat-store.js'
 import type { World } from './world.js'
 import { sandboxedSpawnEnv } from '../helpers/cli-spawn.js'
@@ -145,7 +145,7 @@ export async function openSidecarStore(w: SidecarWorld, opts: { maxStoreBytes?: 
   mkdirSync(w.sDir, { recursive: true })
   w.sDbPath = join(w.sDir, 'treecontext.db')
   const store = await FlatStore.open({
-    database: wrapBetterSqlite(new BetterSqlite3(w.sDbPath)),
+    database: openNodeSqlite(new DatabaseSync(w.sDbPath)),
     ownsDatabase: true,
     ...opts,
   })

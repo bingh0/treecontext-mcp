@@ -7,9 +7,9 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import { FlatStore } from '../src/flat-store.js'
-import { wrapBetterSqlite } from '../src/persistence/better-sqlite.js'
+import { openNodeSqlite } from '../src/persistence/node-sqlite.js'
 import { Client, InMemoryTransport } from '@modelcontextprotocol/client'
 import { createServer } from '../src/server/server.js'
 import { parseToolResult } from './helpers/mcp-result.js'
@@ -47,11 +47,11 @@ describe('searchCheckpointKindOf', () => {
 describe('FlatStore.query: the chapter placed above the bookmark (D275)', () => {
   let dir: string
   let store: FlatStore
-  let raw: BetterSqlite3.Database
+  let raw: DatabaseSync
   beforeEach(async () => {
     dir = mkdtempSync(join(tmpdir(), 'tc-place-'))
-    store = await FlatStore.open({ database: wrapBetterSqlite(new BetterSqlite3(join(dir, 'j.db'))), ownsDatabase: true })
-    raw = new BetterSqlite3(join(dir, 'j.db'))
+    store = await FlatStore.open({ database: openNodeSqlite(new DatabaseSync(join(dir, 'j.db'))), ownsDatabase: true })
+    raw = new DatabaseSync(join(dir, 'j.db'))
   })
   afterEach(async () => {
     raw.close()

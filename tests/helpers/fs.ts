@@ -33,7 +33,7 @@ interface Closeable { close(): unknown }
  * had four such opens and one matching close.
  *
  * Closing is idempotent on both sides (FlatStore.close() early-returns when
- * already closed; the better-sqlite3 wrapper guards on its own `closed` flag,
+ * already closed; the node:sqlite wrapper guards on its own `closed` flag,
  * verified against the driver), so handing over something already closed is
  * safe and nothing here swallows an error — a close that genuinely fails
  * should still fail the run.

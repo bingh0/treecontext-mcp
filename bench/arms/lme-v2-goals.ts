@@ -40,14 +40,14 @@
  * Retrieval is therefore state-level and scored at trajectory level: a
  * trajectory's rank is the rank of its best-placed state.
  */
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import { createHash } from 'node:crypto'
 import { createReadStream, existsSync, mkdirSync, rmSync, statSync } from 'node:fs'
 import { createInterface } from 'node:readline'
 import { pipeline } from 'node:stream/promises'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
 import { FlatStore } from '../../src/flat-store.js'
 import { recallAtK, type Relevance } from '../lib/metrics.js'
 import type { CorpusProvenance } from '../lib/corpus.js'
@@ -217,7 +217,7 @@ export const lmeV2Goals: Arm = {
     mkdirSync(scratch, { recursive: true })
     const dbPath = join(scratch, 'corpus.db')
     const store = await FlatStore.open({
-      database: wrapBetterSqlite(new BetterSqlite3(dbPath)),
+      database: openNodeSqlite(new DatabaseSync(dbPath)),
       maxSessions: Number.MAX_SAFE_INTEGER,
       maxAutoEntries: Number.MAX_SAFE_INTEGER,
       retentionInterval: Number.MAX_SAFE_INTEGER,

@@ -16,16 +16,16 @@
  * `drain lease denied` | `drain lease acquired`, then `staged <i>` per
  * committed capture.
  */
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import { hostname } from 'node:os'
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
 import { LeaseClient, NS_LEASE_TTL_SECS, DRAIN_LEASE_TTL_SECS } from '../../src/persistence/leases.js'
 import { StoreLockedError } from '../../src/errors/index.js'
 
 const [dbPath, countRaw] = process.argv.slice(2)
 const count = Number(countRaw)
 
-const db = wrapBetterSqlite(new BetterSqlite3(dbPath!))
+const db = openNodeSqlite(new DatabaseSync(dbPath!))
 const leases = new LeaseClient(db, { pid: process.pid, host: hostname(), label: 'concurrent-session-b' })
 
 // 1. A second same-namespace writer and a second drain owner must both

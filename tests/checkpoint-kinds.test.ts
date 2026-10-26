@@ -7,9 +7,9 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterEach, expect, it } from 'vitest'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import { FlatStore } from '../src/flat-store.js'
-import { wrapBetterSqlite } from '../src/persistence/better-sqlite.js'
+import { openNodeSqlite } from '../src/persistence/node-sqlite.js'
 
 const dirs: string[] = []
 afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }) })
@@ -17,7 +17,7 @@ afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, f
 it('an unattributed bookmark supersedes the previous unattributed one', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'tc-kinds-'))
   dirs.push(dir)
-  const store = await FlatStore.open({ database: wrapBetterSqlite(new BetterSqlite3(join(dir, 'j.db'))), ownsDatabase: true })
+  const store = await FlatStore.open({ database: openNodeSqlite(new DatabaseSync(join(dir, 'j.db'))), ownsDatabase: true })
   try {
     const a = await store.insert('at: first, no session', { metadata: { kind: 'bookmark' } })
     const b = await store.insert('at: second, no session', { metadata: { kind: 'bookmark' } })

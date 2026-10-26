@@ -21,7 +21,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { expect } from 'vitest'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import { Client, InMemoryTransport } from '@modelcontextprotocol/client'
 import type { Registry } from 'gherkin-node-test/vitest'
 
@@ -30,7 +30,7 @@ import { CLI_TS, spawnNodeTsAsync } from '../helpers/cli-spawn.js'
 import { waitForServeLog } from '../helpers/serve-log.js'
 import { parseToolResult, toolResultText } from '../helpers/mcp-result.js'
 
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
 import { FlatStore } from '../../src/flat-store.js'
 import { createServer } from '../../src/server/server.js'
 import { shieldResponse, defaultShieldConfig } from '../../src/server/shielding.js'
@@ -54,7 +54,7 @@ export const outputShieldingDefiner = (reg: Registry<World>): void => {
   async function servedJournal(w: World, opts: Record<string, unknown>): Promise<void> {
     const dir = mkdtempSync(join(tmpdir(), 'tc-shield-scenario-'))
     w.defer(() => rmSync(dir, { recursive: true, force: true }))
-    const db = wrapBetterSqlite(new BetterSqlite3(join(dir, 'store.db')))
+    const db = openNodeSqlite(new DatabaseSync(join(dir, 'store.db')))
     const store = await FlatStore.open({ database: db, ownsDatabase: true })
     const server = createServer(store, opts)
     const [ct, st] = InMemoryTransport.createLinkedPair()
@@ -74,7 +74,7 @@ export const outputShieldingDefiner = (reg: Registry<World>): void => {
     const dir = mkdtempSync(join(tmpdir(), 'tc-shield-scenario-'))
     w.defer(() => rmSync(dir, { recursive: true, force: true }))
     w.shieldDir = join(dir, 'shield')
-    const db = wrapBetterSqlite(new BetterSqlite3(join(dir, 'store.db')))
+    const db = openNodeSqlite(new DatabaseSync(join(dir, 'store.db')))
     const store = await FlatStore.open({ database: db, ownsDatabase: true })
     const server = createServer(store, { shieldThreshold: 512, shieldDir: w.shieldDir })
     const [ct, st] = InMemoryTransport.createLinkedPair()
@@ -110,7 +110,7 @@ export const outputShieldingDefiner = (reg: Registry<World>): void => {
   reg.define(/^a served journal whose shield threshold is a single byte$/, async (w) => {
     const dir = mkdtempSync(join(tmpdir(), 'tc-shield-scenario-'))
     w.defer(() => rmSync(dir, { recursive: true, force: true }))
-    const db = wrapBetterSqlite(new BetterSqlite3(join(dir, 'store.db')))
+    const db = openNodeSqlite(new DatabaseSync(join(dir, 'store.db')))
     const store = await FlatStore.open({ database: db, ownsDatabase: true })
     const server = createServer(store, { shieldThreshold: 1, shieldDir: join(dir, 'shield') })
     const [ct, st] = InMemoryTransport.createLinkedPair()

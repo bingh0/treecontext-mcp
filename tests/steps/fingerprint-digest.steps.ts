@@ -14,10 +14,10 @@ import { mkdtempSync, rmSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { expect } from 'vitest'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import type { Registry } from 'gherkin-node-test/vitest'
 
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
 import type { Database } from '../../src/persistence/database.js'
 import { runMigrations, currentSchemaVersion, type MigrationReport } from '../../src/persistence/migrations.js'
 import { migrations } from '../../src/persistence/migrations/index.js'
@@ -58,7 +58,7 @@ export const fingerprintDigestDefiner = (reg: Registry<World>): void => {
   }
 
   async function openStore(w: World, name: string): Promise<FlatStore> {
-    const db = wrapBetterSqlite(new BetterSqlite3(join(freshDir(w), name)))
+    const db = openNodeSqlite(new DatabaseSync(join(freshDir(w), name)))
     const store = await FlatStore.open({ database: db, ownsDatabase: true })
     w.defer(() => store.close())
     return store
@@ -89,7 +89,7 @@ export const fingerprintDigestDefiner = (reg: Registry<World>): void => {
   })
 
   reg.define(/^a v23 store where two different tool calls were filed under one dedup key$/, (w) => {
-    const db = wrapBetterSqlite(new BetterSqlite3(join(freshDir(w), 'v23.db')))
+    const db = openNodeSqlite(new DatabaseSync(join(freshDir(w), 'v23.db')))
     w.defer(() => db.close())
     climbTo(db, 20)
     db.prepare('INSERT INTO trees (tree_id, namespace, ensemble_index, created_at) VALUES (1, ?, 0, 0)')
@@ -152,7 +152,7 @@ export const fingerprintDigestDefiner = (reg: Registry<World>): void => {
 
   reg.define(/^a migrated store holding a row whose content could not be decoded$/, (w) => {
     w.dbPath = join(freshDir(w), 'migrated.db')
-    const db = wrapBetterSqlite(new BetterSqlite3(w.dbPath))
+    const db = openNodeSqlite(new DatabaseSync(w.dbPath))
     w.defer(() => db.close())
     climbTo(db, 20)
     db.prepare('INSERT INTO trees (tree_id, namespace, ensemble_index, created_at) VALUES (1, ?, 0, 0)')
@@ -181,7 +181,7 @@ export const fingerprintDigestDefiner = (reg: Registry<World>): void => {
   })
 
   reg.define(/^the self-audit counts collisions and pre-digest keys on it$/, (w) => {
-    const ro = new BetterSqlite3(w.dbPath!, { readonly: true, fileMustExist: true })
+    const ro = new DatabaseSync(w.dbPath!, { readOnly: true })
     try {
       w.counts = fingerprintCollisions(ro as unknown as ReadonlyStoreDb)
     } finally {

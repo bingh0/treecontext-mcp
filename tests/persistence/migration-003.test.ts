@@ -1,13 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
 import { runMigrations } from '../../src/persistence/migrations.js'
 import { maxSupportedVersion } from '../../src/persistence/migrations/index.js'
 
-function seedV2(db: ReturnType<typeof wrapBetterSqlite>): void {
+function seedV2(db: ReturnType<typeof openNodeSqlite>): void {
   db.exec(`
     CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     CREATE TABLE store_config (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -86,8 +86,8 @@ describe('migration 003_modal_embeddings (emptied placeholder)', () => {
   // ladder, 003 holds its rung as a no-op, and no modal machinery is created
   // along the way.
   it('upgrades a v2 store to the max version without creating modal machinery', () => {
-    const raw = new BetterSqlite3(join(dir, 's.db'))
-    const db = wrapBetterSqlite(raw)
+    const raw = new DatabaseSync(join(dir, 's.db'))
+    const db = openNodeSqlite(raw)
     seedV2(db)
 
     const report = runMigrations(db, { migrate: true })

@@ -2,9 +2,9 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { expect } from 'vitest'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import { type Registry } from 'gherkin-node-test/vitest'
-import { wrapBetterSqlite } from '../../../src/persistence/better-sqlite.js'
+import { openNodeSqlite } from '../../../src/persistence/node-sqlite.js'
 import { FlatStore } from '../../../src/flat-store.js'
 import { countNodesIn } from '../../helpers/store-fixtures.js'
 import { mcpOver, parseTool, openLiveStore, reopenAsLaterSession, exportNode } from '../world.js'
@@ -70,7 +70,7 @@ export const libraryDefiner = (reg: Registry<LibraryWorld>): void => {
     // separate consumer of the store, not a wrapper around the library's
     // handle.
     const serverStore = await FlatStore.open({
-      database: wrapBetterSqlite(new BetterSqlite3(w.dbPath!)),
+      database: openNodeSqlite(new DatabaseSync(w.dbPath!)),
       ownsDatabase: true,
     })
     w.defer(() => serverStore.close())
@@ -109,7 +109,7 @@ export const libraryDefiner = (reg: Registry<LibraryWorld>): void => {
   })
   reg.define(/^a library consumer opens the same file read-only$/, async (w: LibraryWorld) => {
     const reader = await FlatStore.open({
-      database: wrapBetterSqlite(new BetterSqlite3(w.dbPath!, { readonly: true })),
+      database: openNodeSqlite(new DatabaseSync(w.dbPath!, { readOnly: true })),
       ownsDatabase: true,
       readOnly: true,
     })
@@ -163,7 +163,7 @@ export const libraryDefiner = (reg: Registry<LibraryWorld>): void => {
     const dir2 = mkdtempSync(join(tmpdir(), 'tc-journal-wholeexp-'))
     w.defer(() => rmSync(dir2, { recursive: true, force: true }))
     const restore = await FlatStore.open({
-      database: wrapBetterSqlite(new BetterSqlite3(join(dir2, 'restore.db'))),
+      database: openNodeSqlite(new DatabaseSync(join(dir2, 'restore.db'))),
       ownsDatabase: true,
     })
     w.defer(() => restore.close())
@@ -189,7 +189,7 @@ export const libraryDefiner = (reg: Registry<LibraryWorld>): void => {
     const dir2 = mkdtempSync(join(tmpdir(), 'tc-import-'))
     w.defer(() => rmSync(dir2, { recursive: true, force: true }))
     const store2 = await FlatStore.open({
-      database: wrapBetterSqlite(new BetterSqlite3(join(dir2, 'second.db'))),
+      database: openNodeSqlite(new DatabaseSync(join(dir2, 'second.db'))),
       ownsDatabase: true,
     })
     w.defer(() => store2.close())
@@ -315,7 +315,7 @@ export const libraryDefiner = (reg: Registry<LibraryWorld>): void => {
   })
   reg.define(/^the store is reopened$/, async (w: LibraryWorld) => {
     const store = await FlatStore.open({
-      database: wrapBetterSqlite(new BetterSqlite3(w.dbPath!)),
+      database: openNodeSqlite(new DatabaseSync(w.dbPath!)),
       ownsDatabase: true,
     })
     w.defer(() => store.close())

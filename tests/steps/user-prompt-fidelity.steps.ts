@@ -11,11 +11,11 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { vi, expect } from 'vitest'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import type { Registry } from 'gherkin-node-test/vitest'
 import * as shared from '../../src/hooks/shared.js'
 import { main as userPromptSubmitMain } from '../../src/hooks/user-prompt-submit.js'
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
 import { FlatStore } from '../../src/flat-store.js'
 import { INDEX_CAP_USER } from '../../src/persistence/index-text.js'
 
@@ -49,7 +49,7 @@ export const userPromptFidelityDefiner = (reg: Registry<World>): void => {
     w.tmpDir = mkdtempSync(join(tmpdir(), 'tc-upsf-'))
     w.defer(() => rmSync(w.tmpDir!, { recursive: true, force: true }))
     w.tempDbPath = join(w.tmpDir, 'treecontext.db')
-    const db = new BetterSqlite3(w.tempDbPath)
+    const db = new DatabaseSync(w.tempDbPath)
     db.exec(UPSF_STAGING_DDL)
     db.close()
     w.message = 'm'.repeat(5000)
@@ -64,7 +64,7 @@ export const userPromptFidelityDefiner = (reg: Registry<World>): void => {
   })
 
   reg.define(/^the staged content is the full 5000-character message, not truncated to 2000$/, (w) => {
-    const db = new BetterSqlite3(w.tempDbPath!)
+    const db = new DatabaseSync(w.tempDbPath!)
     const row = db.prepare('SELECT content FROM staging').get() as { content: string } | undefined
     db.close()
     expect(row).toBeDefined()
@@ -75,7 +75,7 @@ export const userPromptFidelityDefiner = (reg: Registry<World>): void => {
   reg.define(/^a 5000-character message stored as an auto-capture user node without an index marker$/, async (w) => {
     w.tmpDir = mkdtempSync(join(tmpdir(), 'tc-upsf-flat-'))
     w.defer(() => rmSync(w.tmpDir!, { recursive: true, force: true }))
-    const db = wrapBetterSqlite(new BetterSqlite3(join(w.tmpDir, 'flat.db')))
+    const db = openNodeSqlite(new DatabaseSync(join(w.tmpDir, 'flat.db')))
     w.store = await FlatStore.open({ database: db })
     w.defer(() => void w.store!.close())
     w.fullMessage = `withinCapMarker9000 ${'m'.repeat(INDEX_CAP_USER + 2000)} pastCapMarker9000`
@@ -99,7 +99,7 @@ export const userPromptFidelityDefiner = (reg: Registry<World>): void => {
   reg.define(/^the same 5000-character message stored with the expansion's full-length marker$/, async (w) => {
     w.tmpDir = mkdtempSync(join(tmpdir(), 'tc-upsf-post18-'))
     w.defer(() => rmSync(w.tmpDir!, { recursive: true, force: true }))
-    const db = wrapBetterSqlite(new BetterSqlite3(join(w.tmpDir, 'flat.db')))
+    const db = openNodeSqlite(new DatabaseSync(join(w.tmpDir, 'flat.db')))
     w.store = await FlatStore.open({ database: db })
     w.defer(() => void w.store!.close())
     w.fullMessage = `withinCapMarker9000 ${'m'.repeat(INDEX_CAP_USER + 2000)} pastCapMarker9000`

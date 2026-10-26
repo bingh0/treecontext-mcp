@@ -19,7 +19,7 @@
  * captured just the same, whole, but staged with kind `internal-summary`,
  * and the drain stamps it with the writer `claude-code`.
  */
-import type { Database as DatabaseType } from 'better-sqlite3'
+import type { DatabaseSync as DatabaseType } from 'node:sqlite'
 import { parseHookInput, resolveDbPath, writeStaging, openHookDb, isDirectInvocation, payloadWriter, STOP_GUARD_TIMEOUT_MS } from './shared.js'
 import { extractLastAssistantText } from './stop.js'
 import { hasRegistry, retireSubagent, subagentOf, INTERNAL_SUMMARY_KIND } from '../persistence/session-registry.js'

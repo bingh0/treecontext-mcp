@@ -8,7 +8,7 @@ import { describe, expect, it, vi, afterEach } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import Database from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import * as shared from '../../src/hooks/shared.js'
 import { composeToolText, shieldedPointerOf, main as postToolUseMain } from '../../src/hooks/post-tool-use.js'
 
@@ -74,7 +74,7 @@ describe('post-tool-use: a shielded pointer, whatever shape wraps it (D270)', ()
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'compose-shield-'))
     try {
       const dbPath = path.join(dir, 'treecontext.db')
-      const db = new Database(dbPath)
+      const db = new DatabaseSync(dbPath)
       db.exec(`CREATE TABLE staging (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, role TEXT, content TEXT,
         tool_name TEXT, timestamp REAL, priority INTEGER DEFAULT 3, processed INTEGER DEFAULT 0, created_at REAL,
         index_len INTEGER, preview_len INTEGER, attempts INTEGER NOT NULL DEFAULT 0)`)
@@ -86,7 +86,7 @@ describe('post-tool-use: a shielded pointer, whatever shape wraps it (D270)', ()
         tool_response: response,
       })
       postToolUseMain()
-      const check = new Database(dbPath)
+      const check = new DatabaseSync(dbPath)
       const row = check.prepare('SELECT content FROM staging').get() as { content: string }
       check.close()
       expect(row.content).toBe('Tool: mcp__treecontext__treecontext_export\nInput:\nnode_id:\nn\nOutput: [shielded to /tmp/shield.json, 777 bytes]')

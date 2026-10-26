@@ -132,58 +132,14 @@ runFeatures(join(HERE, '../../features'), {
     // would be an entire unbound surface with nobody having decided that is
     // acceptable — which is how 0.0.9-beta shipped.
     ...wholeFeatureWip(),
-    // The driver switch, D278 (2026-10-11), charter first: three @D51
-    // install scenarios reworded from "loads the native database binding"
-    // to "meets the Node floor and runs this package" (fence: Sanctioned
-    // changes, 2026-10-11) keep their bindings, the step text renamed and
-    // the bodies still probing the binding until the chunk-1 build; the
-    // two @D278 doctor rows and the one @D278 storage scenario below are
-    // new and bind at that build, when better-sqlite3 leaves and
-    // node:sqlite arrives.
-    {
-      feature: 'journal-install',
-      scenarios: [
-        "doctor's database row names the SQLite the running Node carries",
-        'doctor holds the package to one Node floor',
-      ],
-    },
-    {
-      feature: 'journal-storage',
-      scenarios: [
-        'the package has no native dependency and no install script',
-      ],
-    },
-    // Scenarios added 2026-10-07 to two bound features by the hackathon
-    // re-cut (fence: Sanctioned changes, D174/D188/D173/D179/D156);
-    // bound at the beta.1 build (D197). The five agent-surface scenarios
-    // (D174, D188, D173, D179, D210) bound 2026-10-08 against the live
-    // handshake.
-    // journal-clients left this list 2026-10-08 at the beta.2 build: the
-    // beta.1 set (the matrix D153, tools-only for a copying client D208,
-    // the teammate on another agent D152) and doctor per client with the
-    // copied-configuration rows (D161, D208) are all bound.
-    // journal-handoff left the register 2026-10-08 — fully bound. The
-    // beta.1 set (the import rule: marked and counted D151, store-wide
-    // identity D164, claims as data D165, the packet's handoff line with
-    // skew disclosed D206/D184) bound at beta.1; the beta.2 set (the
-    // file-bound export and its head, the summaries-only default, the
-    // path door and the shell command: D170, D172, D177, D199) bound at
-    // the beta.2 build, chunk 4.
-    // ('a stop that asks for a bookmark still captures the response' bound
-    // 2026-10-08 with the beta.1 build: the Stop hook captures, then asks.)
-    // journal-reorientation left the register 2026-10-08: its references
-    // scenario bound with the reverse index of beta.2 (D186, D197).
-    // journal-orchestration left this list 2026-10-08 at the last beta.2
-    // chunk, fully bound: the subagent's summary and trail (D147, D148),
-    // scoped subagent search (D150), the worktree's own self (D167), self
-    // registration with server-stamped writers (D190), and the two lane
-    // scenarios (D169), rebound on the writer the store stamps from the
-    // session registry rather than one the writer claims.
-    // journal-capture left the register 2026-08-12 — fully bound. The
-    // 'combined harness' the audit predicted existed on both halves:
-    // hook subprocesses stage with session_id, the MCP server's
-    // ccSessionId option stamps _cc_session_id on the note, and the
-    // window COALESCE proves they read as one conversation.
+    // The driver switch, D278 (2026-10-11): three @D51 install scenarios
+    // reworded from "loads the native database binding" to "meets the Node
+    // floor and runs this package" (fence: Sanctioned changes, 2026-10-11)
+    // kept their bindings through the build; the two @D278 doctor rows and
+    // the @D278 storage scenario sat here from the charter commit (c227c81)
+    // until the chunk-1 build landed node:sqlite the same day, and left the
+    // register with it — bound against doctor's real report, the manifest
+    // and the lockfile's production tree.
     {
       feature: 'journal-search-modes',
       scenarios: [

@@ -14,9 +14,9 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { randomUUID } from 'node:crypto'
 import { expect } from 'vitest'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import type { Registry } from 'gherkin-node-test/vitest'
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
 import type { Database } from '../../src/persistence/database.js'
 import { Persistence } from '../../src/persistence/store.js'
 import type { PersistedNode } from '../../src/persistence/store.js'
@@ -64,7 +64,7 @@ export const ftsDualCapDefiner = (reg: Registry<World>): void => {
   function freshDb(w: World): void {
     const dir = mkdtempSync(join(tmpdir(), 'tc-fts-dual-cap-'))
     w.defer(() => rmSync(dir, { recursive: true, force: true }))
-    const db = wrapBetterSqlite(new BetterSqlite3(join(dir, 'test.db')))
+    const db = openNodeSqlite(new DatabaseSync(join(dir, 'test.db')))
     const persistence = Persistence.openLexical(db)
     w.defer(() => db.close())
     w.db = db
@@ -170,7 +170,7 @@ export const ftsDualCapDefiner = (reg: Registry<World>): void => {
     const dbPath = w.cw!.dbPath!
     const { echo, indexTerm, resultTerm } = w.drained!
     const store = w.cw!.store!
-    const raw = new BetterSqlite3(dbPath, { readonly: true })
+    const raw = new DatabaseSync(dbPath, { readOnly: true })
     let tree: number
     let createdAt: number
     try {
@@ -218,7 +218,7 @@ export const ftsDualCapDefiner = (reg: Registry<World>): void => {
   reg.define(/^a FlatStore with an auto-capture user node whose content exceeds the index cap$/, async (w) => {
     const flatDbDir = mkdtempSync(join(tmpdir(), 'tc-fts-dual-cap-flat-'))
     w.defer(() => rmSync(flatDbDir, { recursive: true, force: true }))
-    const flatDb = wrapBetterSqlite(new BetterSqlite3(join(flatDbDir, 'flat.db')))
+    const flatDb = openNodeSqlite(new DatabaseSync(join(flatDbDir, 'flat.db')))
     const store = await FlatStore.open({ database: flatDb })
     w.defer(() => store.close())
     w.store = store

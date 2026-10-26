@@ -14,7 +14,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import { type CaptureWorld, openCaptureWorld, runHook, drainStaging, rawJournal } from '../journal/capture-harness.js'
 
 type W = CaptureWorld & { cleanups: Array<() => unknown> }
@@ -99,7 +99,7 @@ describe('the Stop hook captures the turn that just ended (D249)', () => {
       const p = payloads()[2]!
       runHook(w, 'stop', sandboxed(w, p, 'an earlier turn'))
       runHook(w, 'stop', sandboxed(w, p, 'an earlier turn'))
-      const raw = new BetterSqlite3(w.dbPath!, { readonly: true })
+      const raw = new DatabaseSync(w.dbPath!, { readOnly: true })
       try {
         const n = (raw.prepare(`SELECT COUNT(*) AS n FROM staging WHERE role = 'assistant' AND tool_name IS NULL`).get() as { n: number }).n
         expect(n, 'the stale-recapture guard compares the payload text').toBe(1)

@@ -25,8 +25,8 @@
  * any of that makes the series incomparable — bump `mappingVersion` if you
  * ever do.
  */
-import BetterSqlite3 from 'better-sqlite3'
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { DatabaseSync } from 'node:sqlite'
+import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
 import { FlatStore } from '../../src/flat-store.js'
 import { recallAtK, type Relevance } from '../lib/metrics.js'
 import { resolveCorpus, type CorpusSpec } from '../lib/corpus.js'
@@ -138,7 +138,7 @@ export const lmeSQuestions: Arm = {
       // Fresh in-memory journal per question — the haystack is per-question.
       // Retention bounds are lifted so no eviction perturbs the corpus.
       const store = await FlatStore.open({
-        database: wrapBetterSqlite(new BetterSqlite3(':memory:')),
+        database: openNodeSqlite(new DatabaseSync(':memory:')),
         maxSessions: Number.MAX_SAFE_INTEGER,
         maxAutoEntries: Number.MAX_SAFE_INTEGER,
         retentionInterval: Number.MAX_SAFE_INTEGER,

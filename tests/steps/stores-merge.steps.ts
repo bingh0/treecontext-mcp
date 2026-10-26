@@ -30,12 +30,12 @@ import { join } from 'node:path'
 import { expect } from 'vitest'
 import type { Registry } from 'gherkin-node-test/vitest'
 
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 
 import { spawnCli } from '../helpers/cli-spawn.js'
 import { seedJournal, entriesOf, allNodes, countsByNamespace } from '../helpers/merge-fixtures.js'
 import { freshHomeDir, seedAuditStore, storesDirIn } from '../helpers/store-fixtures.js'
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { openNodeSqlite, pragmaValue } from '../../src/persistence/node-sqlite.js'
 import { LeaseClient, DRAIN_LEASE_TTL_SECS } from '../../src/persistence/leases.js'
 import { maxSupportedVersion } from '../../src/persistence/migrations/index.js'
 import { mergeBackupName } from '../../src/tools/store-merge.js'
@@ -214,8 +214,8 @@ export const storesMergeDefiner = (reg: Registry<World>): void => {
     // A4: the merge must TAKE the lease, not look for its absence — so
     // the pin is a live lease row, written the way a real holder writes
     // one, still inside its TTL when the CLI runs.
-    const raw = new BetterSqlite3(dbOf(w, DST), { fileMustExist: true })
-    const db = wrapBetterSqlite(raw)
+    const raw = new DatabaseSync(dbOf(w, DST))
+    const db = openNodeSqlite(raw)
     w.holderPid = 424242
     new LeaseClient(db, { pid: w.holderPid, host: 'another-host', label: 'drain owner' })
       .tryAcquire('drain', DRAIN_LEASE_TTL_SECS)
@@ -226,7 +226,7 @@ export const storesMergeDefiner = (reg: Registry<World>): void => {
     freshWorld(w)
     await seedJournal(storesDir(w), SRC, 'project', entriesOf('path-bound', 4))
     await seedJournal(storesDir(w), DST, 'project', entriesOf('git-bound', 2))
-    const raw = new BetterSqlite3(dbOf(w, SRC), { fileMustExist: true })
+    const raw = new DatabaseSync(dbOf(w, SRC))
     raw.prepare('UPDATE nodes SET is_leaf = 0 WHERE node_id = (SELECT node_id FROM nodes LIMIT 1)').run()
     raw.close()
   })
@@ -261,7 +261,7 @@ export const storesMergeDefiner = (reg: Registry<World>): void => {
     await seedJournal(storesDir(w), DST, 'project', entriesOf('git-bound', 2))
     // The copy body reads `nodes` only; a row still in `staging` with
     // processed = 0 is owed work the merge would silently leave behind.
-    const raw = new BetterSqlite3(dbOf(w, SRC), { fileMustExist: true })
+    const raw = new DatabaseSync(dbOf(w, SRC))
     raw.prepare(
       "INSERT INTO staging (session_id, role, content, timestamp, processed) "
       + "VALUES ('sess', 'user', 'an event never drained', 1, 0)",
@@ -281,7 +281,7 @@ export const storesMergeDefiner = (reg: Registry<World>): void => {
     // own log expects them). The unknown flag byte 0xee is exactly what
     // decodeContent throws on — the throw used to abort the whole merge
     // after backups were written.
-    const raw = new BetterSqlite3(dbOf(w, SRC), { fileMustExist: true })
+    const raw = new DatabaseSync(dbOf(w, SRC))
     raw.prepare('UPDATE nodes SET content = ? WHERE node_id = (SELECT node_id FROM nodes LIMIT 1)')
       .run(Buffer.from([0xee, 1, 2, 3]))
     raw.close()
@@ -296,14 +296,14 @@ export const storesMergeDefiner = (reg: Registry<World>): void => {
     // exact state that used to read as "already present" (false).
     const first = runMerge(w, [SRC, DST, '--backup', '--yes'])
     expect(first.status, first.out).toBe(0)
-    const raw = new BetterSqlite3(dbOf(w, SRC), { fileMustExist: true })
+    const raw = new DatabaseSync(dbOf(w, SRC))
     w.conflictId = (raw.prepare('SELECT node_id FROM nodes LIMIT 1').get() as { node_id: string }).node_id
     raw.close()
-    const dst = new BetterSqlite3(dbOf(w, DST), { fileMustExist: true })
+    const dst = new DatabaseSync(dbOf(w, DST))
     dst.prepare('UPDATE nodes SET content = ? WHERE node_id = ?')
       .run('a DIFFERENT row wearing the same id', w.conflictId)
     w.dstContentBefore = String(
-      (dst.prepare('SELECT content FROM nodes WHERE node_id = ?').get(w.conflictId) as { content: string }).content,
+      (dst.prepare('SELECT content FROM nodes WHERE node_id = ?').get(w.conflictId!) as { content: string }).content,
     )
     dst.close()
   })
@@ -312,7 +312,7 @@ export const storesMergeDefiner = (reg: Registry<World>): void => {
     freshWorld(w)
     await seedJournal(storesDir(w), SRC, 'project', entriesOf('path-bound', 4))
     await seedJournal(storesDir(w), DST, 'project', entriesOf('git-bound', 2))
-    const raw = new BetterSqlite3(dbOf(w, SRC), { fileMustExist: true })
+    const raw = new DatabaseSync(dbOf(w, SRC))
     raw.prepare('UPDATE nodes SET depth = 1 WHERE node_id = (SELECT node_id FROM nodes LIMIT 1)').run()
     raw.close()
   })
@@ -594,9 +594,9 @@ export const storesMergeDefiner = (reg: Registry<World>): void => {
   })
 
   reg.define(/^the destination row keeps its own content$/, (w) => {
-    const dst = new BetterSqlite3(dbOf(w, DST), { fileMustExist: true })
+    const dst = new DatabaseSync(dbOf(w, DST))
     const now = String(
-      (dst.prepare('SELECT content FROM nodes WHERE node_id = ?').get(w.conflictId) as { content: string }).content,
+      (dst.prepare('SELECT content FROM nodes WHERE node_id = ?').get(w.conflictId!) as { content: string }).content,
     )
     dst.close()
     expect(now).toBe(w.dstContentBefore)
@@ -627,9 +627,9 @@ export const storesMergeDefiner = (reg: Registry<World>): void => {
 }
 
 function readVersion(dbPath: string): number {
-  const db = new BetterSqlite3(dbPath, { readonly: true, fileMustExist: true })
+  const db = new DatabaseSync(dbPath, { readOnly: true })
   try {
-    return Number(db.pragma('user_version', { simple: true }))
+    return Number(pragmaValue(db, 'user_version'))
   } finally {
     db.close()
   }

@@ -21,9 +21,9 @@ import { mkdtempSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { Client, InMemoryTransport } from '@modelcontextprotocol/client'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
 import { FlatStore } from '../../src/flat-store.js'
 import { createServer } from '../../src/server/server.js'
 import { SessionStats } from '../../src/server/session-stats.js'
@@ -38,7 +38,7 @@ runChildMain(async () => {
   enableDebug()
 
   const dir = mkdtempSync(join(tmpdir(), 'tc-telemetry-fragment-'))
-  const db = wrapBetterSqlite(new BetterSqlite3(join(dir, 'store.db')))
+  const db = openNodeSqlite(new DatabaseSync(join(dir, 'store.db')))
   const store = await FlatStore.open({ database: db, ownsDatabase: true })
   const server = createServer(store, { info: { storePath: join(dir, 'store.db') }, sessionStats: new SessionStats() })
   const [ct, st] = InMemoryTransport.createLinkedPair()

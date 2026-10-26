@@ -13,11 +13,11 @@ import { join } from 'node:path'
 import { hostname, tmpdir } from 'node:os'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { expect, vi } from 'vitest'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import type { Registry } from 'gherkin-node-test/vitest'
 import * as shared from '../../src/hooks/shared.js'
 import { main as postToolUseMain, FULL_TAIL_SEPARATOR } from '../../src/hooks/post-tool-use.js'
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { openNodeSqlite, setPragma } from '../../src/persistence/node-sqlite.js'
 import { FlatStore } from '../../src/flat-store.js'
 import { IngestionLoop } from '../../src/server/ingestion.js'
 import { STORE_SAFETY_CAP } from '../../src/persistence/capture-constants.js'
@@ -58,9 +58,9 @@ interface World {
 
 /** Raw read of the store a scenario serves — its own handle, closed after. */
 function rawRead<T>(dbPath: string, sql: string, ...params: unknown[]): T[] {
-  const db = new BetterSqlite3(dbPath, { readonly: true })
+  const db = new DatabaseSync(dbPath, { readOnly: true })
   try {
-    return db.prepare(sql).all(...params) as T[]
+    return db.prepare(sql).all(...(params as never[])) as T[]
   } finally {
     db.close()
   }
@@ -89,7 +89,7 @@ export const toolEventFidelityDefiner = (reg: Registry<World>): void => {
     const dir = mkdtempSync(join(tmpdir(), 'tc-fidelity-'))
     w.defer(() => rmSync(dir, { recursive: true, force: true }))
     const dbPath = join(dir, 'treecontext.db')
-    const db = new BetterSqlite3(dbPath)
+    const db = new DatabaseSync(dbPath)
     db.exec(ddl)
     db.close()
     return dbPath
@@ -134,7 +134,7 @@ export const toolEventFidelityDefiner = (reg: Registry<World>): void => {
       postToolUseMain()
       vi.restoreAllMocks()
     }
-    const db = new BetterSqlite3(w.dbPath!)
+    const db = new DatabaseSync(w.dbPath!)
     w.rows = db.prepare('SELECT content, index_len FROM staging ORDER BY id').all() as Array<{ content: string; index_len: number | null }>
     db.close()
     w.row = w.rows.at(-1)
@@ -148,7 +148,7 @@ export const toolEventFidelityDefiner = (reg: Registry<World>): void => {
   }
 
   function readRow(dbPath: string): { content: string; index_len: number | null } {
-    const db = new BetterSqlite3(dbPath)
+    const db = new DatabaseSync(dbPath)
     const row = db.prepare('SELECT content, index_len FROM staging ORDER BY id DESC LIMIT 1').get() as {
       content: string
       index_len: number | null
@@ -234,7 +234,7 @@ export const toolEventFidelityDefiner = (reg: Registry<World>): void => {
 
   reg.define(/^the hook stages it and ingestion inserts it$/, async (w) => {
     runHook(w)
-    const db = wrapBetterSqlite(new BetterSqlite3(w.dbPath!))
+    const db = openNodeSqlite(new DatabaseSync(w.dbPath!))
     w.store = await FlatStore.open({ database: db, ownsDatabase: true })
     w.defer(() => void w.store!.close())
     const loop = new IngestionLoop(w.store, { batchSize: 10 })
@@ -314,7 +314,7 @@ export const toolEventFidelityDefiner = (reg: Registry<World>): void => {
 
   reg.define(/^the hook stages an oversized tool event$/, (w) => {
     runHook(w)
-    const db = new BetterSqlite3(w.dbPath!)
+    const db = new DatabaseSync(w.dbPath!)
     w.row = db.prepare('SELECT content FROM staging ORDER BY id DESC LIMIT 1').get() as { content: string } | undefined
     db.close()
   })
@@ -448,7 +448,7 @@ export const toolEventFidelityDefiner = (reg: Registry<World>): void => {
   })
 
   reg.define(/^the ingestion loop inserts it$/, async (w) => {
-    const db = wrapBetterSqlite(new BetterSqlite3(w.dbPath!))
+    const db = openNodeSqlite(new DatabaseSync(w.dbPath!))
     w.store = await FlatStore.open({ database: db, ownsDatabase: true })
     w.defer(() => void w.store!.close())
     const loop = new IngestionLoop(w.store, { batchSize: 10 })
@@ -456,7 +456,7 @@ export const toolEventFidelityDefiner = (reg: Registry<World>): void => {
   })
 
   reg.define(/^the node's metadata _index_len equals the staged index_len$/, async (w) => {
-    const raw = new BetterSqlite3(w.dbPath!)
+    const raw = new DatabaseSync(w.dbPath!)
     const staged = raw.prepare('SELECT index_len FROM staging WHERE tool_name = ?').get('BoundedTool') as { index_len: number }
     raw.close()
     const hits = await w.store!.query('BoundedTool', { topK: 5 })
@@ -497,7 +497,7 @@ export const toolEventFidelityDefiner = (reg: Registry<World>): void => {
     // Same session, seconds apart: the ONLY thing keeping these two rows
     // distinct is that the fingerprint covers the composed content past
     // the identical preview head.
-    const db = wrapBetterSqlite(new BetterSqlite3(w.dbPath!))
+    const db = openNodeSqlite(new DatabaseSync(w.dbPath!))
     w.store = await FlatStore.open({ database: db, ownsDatabase: true })
     w.defer(() => void w.store!.close())
     const loop = new IngestionLoop(w.store, { batchSize: 10 })
@@ -519,7 +519,7 @@ export const toolEventFidelityDefiner = (reg: Registry<World>): void => {
     const dir = mkdtempSync(join(tmpdir(), 'tc-stale-drain-'))
     w.defer(() => rmSync(dir, { recursive: true, force: true }))
     w.dbPath = join(dir, 'treecontext.db')
-    const store = await FlatStore.open({ database: wrapBetterSqlite(new BetterSqlite3(w.dbPath)), ownsDatabase: true })
+    const store = await FlatStore.open({ database: openNodeSqlite(new DatabaseSync(w.dbPath)), ownsDatabase: true })
     w.store = store
     w.defer(() => store.close())
     const staged: string[] = []
@@ -544,8 +544,8 @@ export const toolEventFidelityDefiner = (reg: Registry<World>): void => {
     const claimant = (loop as unknown as { claimant: string }).claimant
     expect(store.store.claimStagingBatch(claimant, 2, 120)).toHaveLength(2)
     // The newer treecontext migrates the store past this build.
-    const raw = new BetterSqlite3(w.dbPath)
-    raw.pragma(`user_version = ${maxSupportedVersion + 1}`)
+    const raw = new DatabaseSync(w.dbPath)
+    setPragma(raw, `user_version = ${maxSupportedVersion + 1}`)
     raw.close()
     w.stale = { loop, staged }
   })
@@ -601,7 +601,7 @@ export const toolEventFidelityDefiner = (reg: Registry<World>): void => {
 
   reg.define(/^a newer server takes the drain on its next tick$/, async (w) => {
     const newer = await FlatStore.open({
-      database: wrapBetterSqlite(new BetterSqlite3(w.dbPath!)), ownsDatabase: true,
+      database: openNodeSqlite(new DatabaseSync(w.dbPath!)), ownsDatabase: true,
       schemaCeiling: maxSupportedVersion + 1,
     })
     w.defer(() => newer.close())

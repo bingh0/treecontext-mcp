@@ -14,9 +14,9 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir, hostname } from 'node:os'
 import { expect } from 'vitest'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import type { Registry } from 'gherkin-node-test/vitest'
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
 import type { Database } from '../../src/persistence/database.js'
 import { Persistence } from '../../src/persistence/store.js'
 import { runMigrations, currentSchemaVersion } from '../../src/persistence/migrations.js'
@@ -56,7 +56,7 @@ export const storeAsArbiterDefiner = (reg: Registry<World>): void => {
   }
 
   function openMigrated(w: World, path: string): Database {
-    const db = wrapBetterSqlite(new BetterSqlite3(path))
+    const db = openNodeSqlite(new DatabaseSync(path))
     w.defer(() => db.close())
     runMigrations(db, { migrate: true })
     return db
@@ -64,8 +64,8 @@ export const storeAsArbiterDefiner = (reg: Registry<World>): void => {
 
   reg.define(/^two library handles on the same namespace through separate connections$/, async (w) => {
     w.dbPath = freshStorePath(w)
-    const a = await FlatStore.open({ database: wrapBetterSqlite(new BetterSqlite3(w.dbPath)), ownsDatabase: true })
-    const b = await FlatStore.open({ database: wrapBetterSqlite(new BetterSqlite3(w.dbPath)), ownsDatabase: true })
+    const a = await FlatStore.open({ database: openNodeSqlite(new DatabaseSync(w.dbPath)), ownsDatabase: true })
+    const b = await FlatStore.open({ database: openNodeSqlite(new DatabaseSync(w.dbPath)), ownsDatabase: true })
     w.defer(() => a.close())
     w.defer(() => b.close())
     w.a = a
@@ -80,7 +80,7 @@ export const storeAsArbiterDefiner = (reg: Registry<World>): void => {
   reg.define(/^one row exists and both writers hold the same survivor id$/, (w) => {
     expect(w.resultB!.deduplicated).toBe(true)
     expect(w.resultB!.nodeId).toBe(w.resultA!.nodeId)
-    const raw = new BetterSqlite3(w.dbPath!, { readonly: true })
+    const raw = new DatabaseSync(w.dbPath!, { readOnly: true })
     try {
       const n = raw.prepare("SELECT COUNT(*) AS n FROM nodes WHERE dedup_class = 'curated'").get() as { n: number }
       expect(n.n).toBe(1)
@@ -94,7 +94,7 @@ export const storeAsArbiterDefiner = (reg: Registry<World>): void => {
     w.pA = Persistence.openLexical(openMigrated(w, path))
     // A genuinely separate connection: the second drain sees only what
     // the store says, never the first drain's process state.
-    const dbB = wrapBetterSqlite(new BetterSqlite3(path))
+    const dbB = openNodeSqlite(new DatabaseSync(path))
     w.defer(() => dbB.close())
     w.pB = Persistence.openLexical(dbB)
     for (let i = 0; i < 8; i++) {
@@ -156,8 +156,8 @@ export const storeAsArbiterDefiner = (reg: Registry<World>): void => {
 
   reg.define(/^the lease table is read through a read-only handle$/, (w) => {
     // The doctor's exact shape (installer.ts): a RAW readonly
-    // better-sqlite3 handle, cast at the boundary — not the wrapper.
-    const ro = new BetterSqlite3(w.dbPath!, { readonly: true })
+    // node:sqlite handle, cast at the boundary — not the wrapper.
+    const ro = new DatabaseSync(w.dbPath!, { readOnly: true })
     try {
       w.seen = leaseHolders(ro as unknown as Parameters<typeof leaseHolders>[0])
     } finally {

@@ -8,9 +8,9 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import { FlatStore } from '../../src/flat-store.js'
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
 import { metadataFilterSql, isFlatFilterEntry } from '../../src/persistence/metadata-filter.js'
 
 describe('metadataFilterSql: which keys the query carries', () => {
@@ -49,7 +49,7 @@ describe('metadataFilterSql: which keys the query carries', () => {
     // json-expression indexes and the reference trigger), so the guard is
     // exercised on a bare table: the predicates as built, over a valid and
     // an invalid row, filtered with no FTS narrowing.
-    const db = new BetterSqlite3(':memory:')
+    const db = new DatabaseSync(':memory:')
     try {
       db.exec('CREATE TABLE nodes (id TEXT, metadata_json TEXT)')
       db.prepare('INSERT INTO nodes VALUES (?, ?)').run('good', '{"kind":"k","n":1,"b":true,"z":null}')
@@ -73,7 +73,7 @@ describe('FlatStore.query: the filter in the query (D268)', () => {
   let store: FlatStore
   beforeEach(async () => {
     dir = mkdtempSync(join(tmpdir(), 'tc-metafilter-'))
-    store = await FlatStore.open({ database: wrapBetterSqlite(new BetterSqlite3(join(dir, 'j.db'))), ownsDatabase: true })
+    store = await FlatStore.open({ database: openNodeSqlite(new DatabaseSync(join(dir, 'j.db'))), ownsDatabase: true })
   })
   afterEach(async () => {
     await store.close()

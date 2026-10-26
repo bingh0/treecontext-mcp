@@ -1,12 +1,14 @@
 /**
  * SQLite Online Backup for treecontext stores.
  *
- * Uses better-sqlite3's `db.backup()` API which wraps the SQLite
+ * Uses node:sqlite's module-level `backup()` which wraps the SQLite
  * Online Backup API. This produces a consistent snapshot even while
  * the source database is being written to.
  */
 
+import { backup as sqliteBackup } from 'node:sqlite'
 import { existsSync, renameSync, chmodSync, unlinkSync } from 'node:fs'
+import { openRaw, pragmaValue, type SqliteError } from './node-sqlite.js'
 import { dirname } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { dbg } from '../debug.js'
@@ -21,7 +23,12 @@ import { dbg } from '../debug.js'
 export async function backupStore(
   srcDbPath: string,
   dstPath: string,
-  opts?: { force?: boolean },
+  opts?: {
+    force?: boolean
+    /** How long to wait for a store another process holds locked before
+     *  reporting it as locked (the raw opener's default when absent). */
+    timeoutMs?: number
+  },
 ): Promise<void> {
   if (existsSync(dstPath) && !opts?.force) {
     throw new Error(
@@ -35,16 +42,27 @@ export async function backupStore(
   }
 
   dbg('backup', 'starting', { src: srcDbPath, dst: dstPath, force: opts?.force })
-  const BetterSqlite3 = (await import('better-sqlite3')).default
-  const db = new BetterSqlite3(srcDbPath, { readonly: true })
-  // better-sqlite3 Database instances have backup() at runtime;
-  // the @types declaration uses a namespace collision that makes
-  // direct typing fragile. Cast to access the method safely.
-  const backupDb = db as unknown as { backup(dst: string): Promise<unknown>; close(): void }
+  const db = openRaw(srcDbPath, { readOnly: true, ...(opts?.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}) })
 
   const tmpPath = dstPath + '.' + randomBytes(4).toString('hex') + '.tmp'
   try {
-    await backupDb.backup(tmpPath)
+    // Touch the source before the copy: node:sqlite's backup() of a store
+    // another process holds exclusively (locking_mode EXCLUSIVE plus an
+    // open write transaction, the D175 shape) rejects with errcode 0 and
+    // the message "not an error" (measured 2026-10-26). A read here waits
+    // out the busy timeout and throws the real SQLITE_BUSY, the error
+    // isBusyError names and the CLI reports as a locked store.
+    pragmaValue(db, 'user_version')
+    try {
+      await sqliteBackup(db, tmpPath)
+    } catch (err) {
+      // A lock taken between the touch and the copy still surfaces as the
+      // driver's empty code; say what it means.
+      if ((err as SqliteError | null)?.errcode === 0) {
+        throw new Error(`database is locked: another process holds ${srcDbPath} exclusively (SQLite's backup reported no error code)`, { cause: err })
+      }
+      throw err
+    }
     chmodSync(tmpPath, 0o600)
     renameSync(tmpPath, dstPath)
     dbg('backup', 'complete', { dst: dstPath })
@@ -55,6 +73,6 @@ export async function backupStore(
     } catch { /* ignore */ }
     throw err
   } finally {
-    backupDb.close()
+    db.close()
   }
 }

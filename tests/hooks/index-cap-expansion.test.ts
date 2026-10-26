@@ -10,7 +10,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import fs from 'fs'
 import { randomBytes } from 'node:crypto'
-import Database from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import path from 'path'
 import os from 'os'
 import * as shared from '../../src/hooks/shared.js'
@@ -23,7 +23,7 @@ import {
   INDEX_CAP_ENV_FLOOR,
   INDEX_CAP_USER,
 } from '../../src/persistence/capture-constants.js'
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
 import { FlatStore } from '../../src/flat-store.js'
 import { IngestionLoop } from '../../src/server/ingestion.js'
 import migration018 from '../../src/persistence/migrations/018_staging_preview_len.js'
@@ -52,7 +52,7 @@ describe('index-cap expansion', () => {
   beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'index-cap-test-'))
     tempDbPath = path.join(tempDir, 'treecontext.db')
-    const db = new Database(tempDbPath)
+    const db = new DatabaseSync(tempDbPath)
     db.exec(STAGING_18)
     db.close()
     vi.spyOn(process, 'exit').mockImplementation((() => {}) as any)
@@ -67,7 +67,7 @@ describe('index-cap expansion', () => {
   })
 
   const readRow = (): any => {
-    const db = new Database(tempDbPath)
+    const db = new DatabaseSync(tempDbPath)
     const row = db.prepare('SELECT * FROM staging').get()
     db.close()
     return row
@@ -182,14 +182,14 @@ describe('index-cap expansion', () => {
   describe('writeStaging pre-018 fallback', () => {
     it('degrades index_len to the preview boundary on a store without preview_len', () => {
       const legacyPath = path.join(tempDir, 'legacy.db')
-      const db = new Database(legacyPath)
+      const db = new DatabaseSync(legacyPath)
       db.exec(STAGING_18.replace('preview_len INTEGER,\n', ''))
       db.close()
       shared.writeStaging(legacyPath, {
         sessionId: 't', role: 'assistant', content: 'preview-part' + 'tail'.repeat(100),
         toolName: 'X', timestamp: 1, priority: 3, indexLen: 250, previewLen: 12,
       })
-      const check = new Database(legacyPath)
+      const check = new DatabaseSync(legacyPath)
       const row = check.prepare('SELECT * FROM staging').get() as any
       check.close()
       // Pre-018 readers treat index_len as BOTH boundaries, so the widened
@@ -199,7 +199,7 @@ describe('index-cap expansion', () => {
 
     it('16/17 fallback: a full-length prose index_len degrades to NULL (legacy caps apply)', () => {
       const legacyPath = path.join(tempDir, 'legacy-prose.db')
-      const db = new Database(legacyPath)
+      const db = new DatabaseSync(legacyPath)
       db.exec(STAGING_18.replace('preview_len INTEGER,\n', ''))
       db.close()
       const content = 'long user message '.repeat(300)
@@ -207,7 +207,7 @@ describe('index-cap expansion', () => {
         sessionId: 't', role: 'user', content,
         timestamp: 1, priority: 1, indexLen: content.length,
       })
-      const check = new Database(legacyPath)
+      const check = new DatabaseSync(legacyPath)
       const row = check.prepare('SELECT * FROM staging').get() as any
       check.close()
       // A full-length marker is not a boundary. Staging it would make the
@@ -219,14 +219,14 @@ describe('index-cap expansion', () => {
 
     it('16/17 fallback: an env-narrowed index_len wins over the preview boundary', () => {
       const legacyPath = path.join(tempDir, 'legacy-env.db')
-      const db = new Database(legacyPath)
+      const db = new DatabaseSync(legacyPath)
       db.exec(STAGING_18.replace('preview_len INTEGER,\n', ''))
       db.close()
       shared.writeStaging(legacyPath, {
         sessionId: 't', role: 'assistant', content: 'p'.repeat(1500) + 't'.repeat(4000),
         toolName: 'X', timestamp: 1, priority: 3, indexLen: 300, previewLen: 1500,
       })
-      const check = new Database(legacyPath)
+      const check = new DatabaseSync(legacyPath)
       const row = check.prepare('SELECT * FROM staging').get() as any
       check.close()
       expect(row.index_len).toBe(300)
@@ -234,7 +234,7 @@ describe('index-cap expansion', () => {
 
     it('pre-16 fallback: prose is stored in FULL even when an env cap stamped index_len', () => {
       const ancientPath = path.join(tempDir, 'ancient.db')
-      const db = new Database(ancientPath)
+      const db = new DatabaseSync(ancientPath)
       db.exec(STAGING_18.replace('preview_len INTEGER,\n', '').replace('index_len INTEGER,\n', ''))
       db.close()
       const content = 'user message that must never be truncated in storage '.repeat(50)
@@ -242,7 +242,7 @@ describe('index-cap expansion', () => {
         sessionId: 't', role: 'user', content,
         timestamp: 1, priority: 1, indexLen: 300,
       })
-      const check = new Database(ancientPath)
+      const check = new DatabaseSync(ancientPath)
       const row = check.prepare('SELECT * FROM staging').get() as any
       check.close()
       // The env cap is an INDEX lever; on a store too old to carry the
@@ -252,7 +252,7 @@ describe('index-cap expansion', () => {
 
     it('pre-16 fallback: a tailed tool event still drops exactly the tail', () => {
       const ancientPath = path.join(tempDir, 'ancient-tool.db')
-      const db = new Database(ancientPath)
+      const db = new DatabaseSync(ancientPath)
       db.exec(STAGING_18.replace('preview_len INTEGER,\n', '').replace('index_len INTEGER,\n', ''))
       db.close()
       const preview = 'preview!'.repeat(100)
@@ -260,7 +260,7 @@ describe('index-cap expansion', () => {
         sessionId: 't', role: 'assistant', content: preview + '\nTAIL'.repeat(500),
         toolName: 'X', timestamp: 1, priority: 3, indexLen: 8000, previewLen: preview.length,
       })
-      const check = new Database(ancientPath)
+      const check = new DatabaseSync(ancientPath)
       const row = check.prepare('SELECT * FROM staging').get() as any
       check.close()
       expect(row.content).toBe(preview)
@@ -277,7 +277,7 @@ describe('index-cap expansion', () => {
         indexLen: Math.min(8000, content.length), previewLen: preview.length,
       })
       const store = await FlatStore.open({
-        database: wrapBetterSqlite(new Database(tempDbPath) as any),
+        database: openNodeSqlite(new DatabaseSync(tempDbPath) as any),
         ownsDatabase: true,
       })
       await new IngestionLoop(store, { batchSize: 10 }).ingestBatch()
@@ -304,7 +304,7 @@ describe('index-cap expansion', () => {
 
     it('a fully-indexed prose row still demotes — to the frozen legacy cap', async () => {
       const store = await FlatStore.open({
-        database: wrapBetterSqlite(new Database(path.join(demotionDir(), 'd.db')) as any),
+        database: openNodeSqlite(new DatabaseSync(path.join(demotionDir(), 'd.db')) as any),
         ownsDatabase: true,
         maxStoreBytes: 1,
         maxSessions: 1_000_000,
@@ -332,7 +332,7 @@ describe('index-cap expansion', () => {
 
     it('a tailed tool row demotes to its display preview, dropping the indexed tail', async () => {
       const store = await FlatStore.open({
-        database: wrapBetterSqlite(new Database(path.join(demotionDir(), 'd.db')) as any),
+        database: openNodeSqlite(new DatabaseSync(path.join(demotionDir(), 'd.db')) as any),
         ownsDatabase: true,
         maxStoreBytes: 1,
         maxSessions: 1_000_000,
@@ -366,7 +366,7 @@ describe('index-cap expansion', () => {
   describe('flat-store read side', () => {
     it('searches the widened index view but displays only the preview', async () => {
       const store = await FlatStore.open({
-        database: wrapBetterSqlite(new Database(':memory:') as any),
+        database: openNodeSqlite(new DatabaseSync(':memory:') as any),
       })
       const preview = 'Tool: Bash\nOutput:\nstarted...'
       const tail = '\n--- FULL ---\nOutput:\nstarted then failed with XERROXQUARK at line 9\n' + 'pad '.repeat(200)
@@ -393,7 +393,7 @@ describe('index-cap expansion', () => {
 
   describe('migration 018', () => {
     it('adds preview_len and tolerates re-application', () => {
-      const db = new Database(':memory:')
+      const db = new DatabaseSync(':memory:')
       db.exec(STAGING_18.replace('preview_len INTEGER,\n', ''))
       migration018.up(db as any)
       migration018.up(db as any)

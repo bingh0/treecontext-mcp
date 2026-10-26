@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import fs from 'fs'
-import Database from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import path from 'path'
 import os from 'os'
 import * as shared from '../../src/hooks/shared.js'
@@ -16,7 +16,7 @@ describe('PreCompact hook (Layer 3)', () => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'precompact-test-'))
     tempDbPath = path.join(tempDir, 'treecontext.db')
 
-    const db = new Database(tempDbPath)
+    const db = new DatabaseSync(tempDbPath)
     db.exec(`
       CREATE TABLE IF NOT EXISTS snapshots (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -62,7 +62,7 @@ describe('PreCompact hook (Layer 3)', () => {
 
     main()
 
-    const db = new Database(tempDbPath)
+    const db = new DatabaseSync(tempDbPath)
     const row = db.prepare('SELECT * FROM snapshots').get() as any
     db.close()
 
@@ -79,7 +79,7 @@ describe('PreCompact hook (Layer 3)', () => {
     main()
     main()
 
-    const db = new Database(tempDbPath)
+    const db = new DatabaseSync(tempDbPath)
     const rows = db.prepare('SELECT * FROM snapshots').all()
     db.close()
 

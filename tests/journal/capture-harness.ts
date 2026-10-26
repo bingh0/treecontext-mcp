@@ -4,9 +4,9 @@ import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { expect } from 'vitest'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import { decodeContent } from '../../src/persistence/content-codec.js'
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
 import { FlatStore } from '../../src/flat-store.js'
 import { IngestionLoop } from '../../src/server/ingestion.js'
 import { sandboxedSpawnEnv } from '../helpers/cli-spawn.js'
@@ -117,7 +117,7 @@ export function openCaptureSandbox(w: CaptureWorld): void {
  *  this is the "server boots after the fact" half of issue #2. */
 export async function adoptCaptureStore(w: CaptureWorld): Promise<void> {
   const store = await FlatStore.open({
-    database: wrapBetterSqlite(new BetterSqlite3(w.dbPath!)),
+    database: openNodeSqlite(new DatabaseSync(w.dbPath!)),
     ownsDatabase: true,
   })
   w.defer(() => store.close())
@@ -321,7 +321,7 @@ export async function drainStaging(w: CaptureWorld): Promise<void> {
     let h = handles.get(ns)
     if (!h) {
       h = await FlatStore.open({
-        database: wrapBetterSqlite(new BetterSqlite3(w.dbPath!)),
+        database: openNodeSqlite(new DatabaseSync(w.dbPath!)),
         ownsDatabase: true,
         namespace: ns,
       })
@@ -349,7 +349,7 @@ export interface RawNode { nodeId: string; content: string; metadata: Record<str
 /** Raw-row read (verification rule): journal rows through a separate
  *  readonly handle, content decoded with the production codec. */
 export function rawJournal(w: CaptureWorld): RawNode[] {
-  const raw = new BetterSqlite3(w.dbPath!, { readonly: true })
+  const raw = new DatabaseSync(w.dbPath!, { readOnly: true })
   try {
     return (raw.prepare('SELECT node_id, content, metadata_json FROM nodes').all() as Array<{ node_id: string; content: string | Buffer; metadata_json: string | null }>)
       .map((r) => ({
