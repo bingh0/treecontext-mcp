@@ -38,13 +38,13 @@ import { fileURLToPath } from 'node:url'
 import { expect, vi } from 'vitest'
 import type { Registry } from 'gherkin-node-test/vitest'
 
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 
 import { spawnCli, spawnNodeTs } from '../helpers/cli-spawn.js'
 import { countNodesIn as countNodes, freshHomeDir, storesDirIn } from '../helpers/store-fixtures.js'
 import { runMigrations, recordCompletionVerdict } from '../../src/persistence/migrations.js'
 import { migrations, maxSupportedVersion } from '../../src/persistence/migrations/index.js'
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { openNodeSqlite, pragmaRows, setPragma } from '../../src/persistence/node-sqlite.js'
 import { writeVerdict, verdictPathFor, readVerdict } from '../../src/persistence/backup-verdict.js'
 import { SCHEMA_SQL } from '../../src/persistence/schema.js'
 
@@ -87,10 +87,10 @@ export const backupLifecycleDefiner = (reg: Registry<World>): void => {
     const dir = join(storesDir(w), name)
     mkdirSync(dir, { recursive: true })
     const dbPath = join(dir, 'treecontext.db')
-    const raw = new BetterSqlite3(dbPath)
-    const db = wrapBetterSqlite(raw)
+    const raw = new DatabaseSync(dbPath)
+    const db = openNodeSqlite(raw)
     for (const m of migrations.filter((x) => x.version <= OLD_VERSION)) m.up(db)
-    raw.pragma(`user_version = ${OLD_VERSION}`)
+    setPragma(raw, `user_version = ${OLD_VERSION}`)
     const treeId = Number(
       raw.prepare('INSERT INTO trees (namespace, ensemble_index, created_at) VALUES (?, ?, ?)')
         .run('project', 0, 0).lastInsertRowid,
@@ -99,7 +99,7 @@ export const backupLifecycleDefiner = (reg: Registry<World>): void => {
       'INSERT INTO nodes (node_id, tree_id, content, created_at, updated_at) VALUES (?, ?, ?, 0, 0)',
     )
     for (let i = 0; i < entries; i++) ins.run(`n-${i}`, treeId, `entry ${i} written before the migration`)
-    raw.pragma('wal_checkpoint(TRUNCATE)')
+    pragmaRows(raw, 'wal_checkpoint(TRUNCATE)')
     raw.close()
     w.storeDir = dir
     return dbPath
@@ -110,9 +110,9 @@ export const backupLifecycleDefiner = (reg: Registry<World>): void => {
     const dir = join(storesDir(w), name)
     mkdirSync(dir, { recursive: true })
     const dbPath = join(dir, 'treecontext.db')
-    const raw = new BetterSqlite3(dbPath)
+    const raw = new DatabaseSync(dbPath)
     raw.exec(SCHEMA_SQL)
-    raw.pragma(`user_version = ${maxSupportedVersion}`)
+    setPragma(raw, `user_version = ${maxSupportedVersion}`)
     raw.close()
     w.storeDir = dir
     return dbPath
@@ -155,9 +155,9 @@ export const backupLifecycleDefiner = (reg: Registry<World>): void => {
     // 'failed' verdict and advise restoring the stale file.
     w.bakPath = `${w.dbPath!}.pre-migration-v${OLD_VERSION}.bak`
     copyFileSync(w.dbPath!, w.bakPath)
-    const stale = new BetterSqlite3(w.bakPath)
+    const stale = new DatabaseSync(w.bakPath)
     stale.prepare("DELETE FROM nodes WHERE node_id IN ('n-0', 'n-1', 'n-2')").run()
-    stale.pragma('wal_checkpoint(TRUNCATE)')
+    pragmaRows(stale, 'wal_checkpoint(TRUNCATE)')
     stale.close()
     expect(countNodes(w.bakPath)).toBe(33)
     w.staleBytes = readFileSync(w.bakPath)
@@ -167,8 +167,8 @@ export const backupLifecycleDefiner = (reg: Registry<World>): void => {
   // backup (staleBytes), and its half asserts the kept path and the
   // withheld verdict; the plain half learns its backup path here.
   reg.define(/^the store is opened and migrates to the current schema version$/, (w) => {
-    const raw = new BetterSqlite3(w.dbPath!)
-    const report = runMigrations(wrapBetterSqlite(raw), {})
+    const raw = new DatabaseSync(w.dbPath!)
+    const report = runMigrations(openNodeSqlite(raw), {})
     raw.close()
     expect(report.to).toBe(maxSupportedVersion)
     if (w.staleBytes) {
@@ -222,14 +222,14 @@ export const backupLifecycleDefiner = (reg: Registry<World>): void => {
   reg.define(/^a destructive migration finished with the migrated store holding 35 of the backup's 36 entries$/, (w) => {
     freshHome(w)
     w.dbPath = seedOldStore(w, 'lectures', 36)
-    const raw = new BetterSqlite3(w.dbPath)
-    runMigrations(wrapBetterSqlite(raw), {})
+    const raw = new DatabaseSync(w.dbPath)
+    runMigrations(openNodeSqlite(raw), {})
     raw.close()
     w.bakPath = `${w.dbPath}.pre-migration-v${OLD_VERSION}.bak`
     // Un-run the comparison and lose one entry: the state this scenario
     // is Given is "migration finished, comparison pending, one row gone".
     rmSync(verdictPathFor(w.bakPath), { force: true })
-    const doctored = new BetterSqlite3(w.dbPath)
+    const doctored = new DatabaseSync(w.dbPath)
     doctored.prepare("DELETE FROM nodes WHERE node_id = 'n-0'").run()
     doctored.close()
     expect(countNodes(w.dbPath)).toBe(35)
@@ -239,9 +239,9 @@ export const backupLifecycleDefiner = (reg: Registry<World>): void => {
   reg.define(/^the completion comparison runs$/, (w) => {
     w.warnings = []
     const errSpy = vi.spyOn(console, 'error').mockImplementation((...a: unknown[]) => { w.warnings!.push(a.join(' ')) })
-    const raw = new BetterSqlite3(w.dbPath!)
+    const raw = new DatabaseSync(w.dbPath!)
     try {
-      const verdict = recordCompletionVerdict(wrapBetterSqlite(raw), w.bakPath!, OLD_VERSION)
+      const verdict = recordCompletionVerdict(openNodeSqlite(raw), w.bakPath!, OLD_VERSION)
       expect(verdict).toBe('failed')
     } finally {
       raw.close()
@@ -266,8 +266,8 @@ export const backupLifecycleDefiner = (reg: Registry<World>): void => {
 
   reg.define(/^the store still opens and serves$/, (w) => {
     expect(countNodes(w.dbPath!)).toBe(35)
-    const raw = new BetterSqlite3(w.dbPath!)
-    const report = runMigrations(wrapBetterSqlite(raw), {})
+    const raw = new DatabaseSync(w.dbPath!)
+    const report = runMigrations(openNodeSqlite(raw), {})
     raw.close()
     expect(report.applied).toEqual([])
   })

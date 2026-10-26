@@ -12,10 +12,10 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { expect } from 'vitest'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import { Client, InMemoryTransport } from '@modelcontextprotocol/client'
 import type { Registry } from 'gherkin-node-test/vitest'
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
 import type { Database } from '../../src/persistence/database.js'
 import { FlatStore } from '../../src/flat-store.js'
 import { createServer } from '../../src/server/server.js'
@@ -62,7 +62,7 @@ export const flatStoreConversationWindowDefiner = (reg: Registry<World>): void =
     // an unclosed store passes on POSIX and fails the whole file on Windows,
     // in teardown, with every assertion green).
     w.defer(() => rmSync(dir, { recursive: true, force: true }))
-    const db = wrapBetterSqlite(new BetterSqlite3(join(dir, name)))
+    const db = openNodeSqlite(new DatabaseSync(join(dir, name)))
     const store = await FlatStore.open({ database: db, ownsDatabase: true })
     w.defer(() => store.close())
     w.db = db

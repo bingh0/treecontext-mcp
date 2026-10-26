@@ -25,9 +25,9 @@
  *
  * The fixture is fiction with a real shape — see bench/fixtures/.
  */
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import { createHash } from 'node:crypto'
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
 import { FlatStore } from '../../src/flat-store.js'
 import { recallAtK, type Relevance } from '../lib/metrics.js'
 import { ENTRIES, QUERIES, type FixtureEntry } from '../fixtures/code-sessions.js'
@@ -107,7 +107,7 @@ export const codeFixture: Arm = {
     const mutate: Mutation = opts.mutation ?? { id: 'identity', description: '', expect: 'no-flag' }
 
     const store = await FlatStore.open({
-      database: wrapBetterSqlite(new BetterSqlite3(':memory:')),
+      database: openNodeSqlite(new DatabaseSync(':memory:')),
       maxSessions: Number.MAX_SAFE_INTEGER,
       maxAutoEntries: Number.MAX_SAFE_INTEGER,
       retentionInterval: Number.MAX_SAFE_INTEGER,

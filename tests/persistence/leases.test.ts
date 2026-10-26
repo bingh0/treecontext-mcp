@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
 import type { Database } from '../../src/persistence/database.js'
 import { runMigrations } from '../../src/persistence/migrations.js'
 import { LeaseClient, leaseHolders, DRAIN_LEASE_TTL_SECS, NS_LEASE_TTL_SECS, SWEEP_LEASE_TTL_SECS, LEASE_RENEW_INTERVAL_MS } from '../../src/persistence/leases.js'
@@ -23,7 +23,7 @@ describe('role leases (G4)', () => {
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'tc-leases-'))
-    db = wrapBetterSqlite(new BetterSqlite3(join(dir, 'store.db')))
+    db = openNodeSqlite(new DatabaseSync(join(dir, 'store.db')))
     runMigrations(db, { migrate: true })
   })
   afterEach(() => {

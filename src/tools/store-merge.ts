@@ -14,15 +14,15 @@
  * check-then-merge would invite a hook to acquire in between.
  */
 import { existsSync, readdirSync, statSync, realpathSync } from 'node:fs'
+import type { DatabaseSync } from 'node:sqlite'
+import { openRaw, pragmaValue } from '../persistence/node-sqlite.js'
 import { join, resolve as resolvePath, dirname, sep } from 'node:path'
 import { hostname } from 'node:os'
-import { createRequire } from 'node:module'
 
 import { isCliAddressableStoreName } from './store-name.js'
 import { MERGE_SRC_ALIAS, mergeTotals, type NamespaceCounts } from '../persistence/merge-source.js'
 import { StoreLockedError } from '../errors/index.js'
 
-const requireNode = createRequire(import.meta.url)
 
 /** The store database file inside a store directory. */
 export const STORE_DB_FILE = 'treecontext.db'
@@ -84,10 +84,9 @@ function dayOf(ms: number): string {
  * verification), or null when the file is not a usable backup.
  */
 export function backupNodeCount(path: string): number | null {
-  const BetterSqlite3 = requireNode('better-sqlite3') as typeof import('better-sqlite3')
-  let db: import('better-sqlite3').Database
+  let db: DatabaseSync
   try {
-    db = new BetterSqlite3(path, { readonly: true, fileMustExist: true })
+    db = openRaw(path, { readOnly: true, mustExist: true })
   } catch {
     return null
   }
@@ -201,10 +200,9 @@ export function resolveStoreDir(
  * entire point of the check.
  */
 export function probeSchemaVersion(dbPath: string): number {
-  const BetterSqlite3 = requireNode('better-sqlite3') as typeof import('better-sqlite3')
-  const db = new BetterSqlite3(dbPath, { readonly: true, fileMustExist: true })
+  const db = openRaw(dbPath, { readOnly: true, mustExist: true })
   try {
-    return Number(db.pragma('user_version', { simple: true }))
+    return Number(pragmaValue(db, 'user_version'))
   } finally {
     db.close()
   }
@@ -217,8 +215,7 @@ export function probeSchemaVersion(dbPath: string): number {
  *  one, and the refusal that claims to guard flatness must see it. Read on
  *  a read-only handle. */
 export function probeFlatness(dbPath: string): { total: number; leaves: number; parented: number; depthed: number } {
-  const BetterSqlite3 = requireNode('better-sqlite3') as typeof import('better-sqlite3')
-  const db = new BetterSqlite3(dbPath, { readonly: true, fileMustExist: true })
+  const db = openRaw(dbPath, { readOnly: true, mustExist: true })
   try {
     const row = db.prepare(
       'SELECT COUNT(*) AS total, '
@@ -242,8 +239,7 @@ export function probeFlatness(dbPath: string): { total: number; leaves: number; 
  * (a shape that never staged) owes nothing.
  */
 export function probeUndrainedStaging(dbPath: string): number {
-  const BetterSqlite3 = requireNode('better-sqlite3') as typeof import('better-sqlite3')
-  const db = new BetterSqlite3(dbPath, { readonly: true, fileMustExist: true })
+  const db = openRaw(dbPath, { readOnly: true, mustExist: true })
   try {
     const has = db
       .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'staging'")
@@ -436,13 +432,13 @@ export async function mergeStores(opts: MergeStoresOptions): Promise<MergeStores
   // correctness — that claimant's writes block on the write lock this
   // transaction already holds — so the cost is a wasted drain attempt,
   // not a race.
-  const BetterSqlite3 = requireNode('better-sqlite3') as typeof import('better-sqlite3')
-  const { wrapBetterSqlite } = await import('../persistence/better-sqlite.js')
+  const { openNodeSqlite } = await import('../persistence/node-sqlite.js')
   const { LeaseClient, DRAIN_LEASE_TTL_SECS } = await import('../persistence/leases.js')
   const { FlatStore } = await import('../flat-store.js')
 
-  const rawDst = new BetterSqlite3(dstDbPath, { fileMustExist: true })
-  const dstDb = wrapBetterSqlite(rawDst)
+  // The wrapped door opens the handle itself, so a throw while it applies
+  // the default pragmas (busy on journal_mode) closes what it opened.
+  const dstDb = openNodeSqlite(dstDbPath, { mustExist: true })
   const leases = new LeaseClient(dstDb, { pid: process.pid, host: hostname(), label: 'stores merge' })
   try {
     leases.tryAcquire('drain', DRAIN_LEASE_TTL_SECS)

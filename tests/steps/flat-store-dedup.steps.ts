@@ -10,9 +10,9 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { expect } from 'vitest'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import type { Registry } from 'gherkin-node-test/vitest'
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
 import { FlatStore } from '../../src/flat-store.js'
 import { DEDUP_WINDOW_SECS } from '../../src/persistence/capture-constants.js'
 
@@ -45,7 +45,7 @@ export const flatStoreDedupDefiner = (reg: Registry<World>): void => {
   }
 
   async function openStore(w: World, path: string): Promise<FlatStore> {
-    const db = wrapBetterSqlite(new BetterSqlite3(path))
+    const db = openNodeSqlite(new DatabaseSync(path))
     const store = await FlatStore.open({ database: db, ownsDatabase: true })
     w.defer(() => store.close())
     return store

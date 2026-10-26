@@ -17,11 +17,12 @@
  * slow-but-progressing close, and a peer-death watch wired ahead of the
  * startup work rather than after it.
  */
+import { pragmaValue } from '../../src/persistence/node-sqlite.js'
 import { describe, it, expect, afterAll, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtempSync, rmSync, readdirSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 
 import { spawnCli, spawnNodeTsAsync, CLI_TS } from '../helpers/cli-spawn.js'
 import { storesDirIn } from '../helpers/store-fixtures.js'
@@ -49,9 +50,9 @@ describe('serve lifecycle (release-diff review pins)', () => {
     const verdict = files.find((f) => f.endsWith('.verdict.json'))
     expect(verdict, `no completion verdict among: ${files.join(', ')}`).toBeDefined()
 
-    const db = new BetterSqlite3(join(storeDir, 'treecontext.db'), { readonly: true })
+    const db = new DatabaseSync(join(storeDir, 'treecontext.db'), { readOnly: true })
     try {
-      const v = db.pragma('user_version', { simple: true }) as number
+      const v = pragmaValue(db, 'user_version') as number
       expect(v).toBeGreaterThanOrEqual(23)
     } finally {
       db.close()

@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
 import { FlatStore } from '../../src/flat-store.js'
 
 // G2 review regressions: the auto-dedup window anchors live in the store
@@ -18,7 +18,7 @@ describe('dedup anchors (G2)', () => {
 
   beforeEach(async () => {
     dir = mkdtempSync(join(tmpdir(), 'tc-anchors-'))
-    const db = wrapBetterSqlite(new BetterSqlite3(join(dir, 'store.db')))
+    const db = openNodeSqlite(new DatabaseSync(join(dir, 'store.db')))
     store = await FlatStore.open({ database: db, ownsDatabase: true })
   })
   afterEach(async () => {

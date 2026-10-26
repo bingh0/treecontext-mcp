@@ -49,7 +49,7 @@ import { createHash } from 'node:crypto'
 import { expect } from 'vitest'
 import type { Registry } from 'gherkin-node-test/vitest'
 
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 
 import { nodeTsArgs, sandboxedSpawnEnv, spawnCli } from '../helpers/cli-spawn.js'
 import { freshHomeDir, seedAuditStore, storesDirIn, COLLIDING_A, COLLIDING_B } from '../helpers/store-fixtures.js'
@@ -791,7 +791,7 @@ export const storeBindingsDefiner = (reg: Registry<World>): void => {
   const seedStore = (w: World, name: string, nodes: number): void => {
     const storeDir = join(storesDir(w), name)
     mkdirSync(storeDir, { recursive: true })
-    const db = new BetterSqlite3(join(storeDir, 'treecontext.db'))
+    const db = new DatabaseSync(join(storeDir, 'treecontext.db'))
     db.exec(SCHEMA_SQL)
     db.prepare("INSERT INTO trees (tree_id, namespace, ensemble_index, created_at) VALUES (1, 'project', 0, 0)").run()
     const insert = db.prepare(

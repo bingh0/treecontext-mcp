@@ -7,8 +7,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import BetterSqlite3 from 'better-sqlite3'
-import { wrapBetterSqlite } from '../src/persistence/better-sqlite.js'
+import { DatabaseSync } from 'node:sqlite'
+import { openNodeSqlite } from '../src/persistence/node-sqlite.js'
 import type { Database } from '../src/persistence/database.js'
 import { FlatStore } from '../src/flat-store.js'
 import { createMemoryStore, resolveBackendMode } from '../src/memory-store-factory.js'
@@ -33,7 +33,7 @@ afterEach(() => {
 })
 
 function openDb(name = 'store.db'): Database {
-  return wrapBetterSqlite(new BetterSqlite3(join(tmpDir, name)))
+  return openNodeSqlite(new DatabaseSync(join(tmpDir, name)))
 }
 
 describe('MemoryStore conformance (AC1.1)', () => {
@@ -83,13 +83,13 @@ describe('mode persistence + legacy detection (AC1.4 / D7)', () => {
     // what TreeContext.open used to leave behind.
     const setupStore = await FlatStore.open({ database: openDb('legacy.db'), ownsDatabase: true })
     await setupStore.close()
-    const dbSetup = wrapBetterSqlite(new BetterSqlite3(join(tmpDir, 'legacy.db')))
+    const dbSetup = openNodeSqlite(new DatabaseSync(join(tmpDir, 'legacy.db')))
     dbSetup.exec(
       "INSERT INTO embedding_model (id, model_name, dim, pooling, normalize) VALUES (1, 'all-MiniLM-L6-v2', 384, 'mean', 1)",
     )
     dbSetup.close()
 
-    const db = wrapBetterSqlite(new BetterSqlite3(join(tmpDir, 'legacy.db')))
+    const db = openNodeSqlite(new DatabaseSync(join(tmpDir, 'legacy.db')))
     expect(getBackendMode(db)).toBeNull()
     expect(storeHasEmbeddingModel(db)).toBe(true)
     expect(resolveBackendMode(db)).toBe('tree')
@@ -126,7 +126,7 @@ describe('mode persistence + legacy detection (AC1.4 / D7)', () => {
 describe('createMemoryStore forwards migrate: to the store it opens', () => {
   /** A store an older build would have left behind at `version`. */
   function seedStoreAt(version: number, name = 'legacy.db'): Database {
-    const db = wrapBetterSqlite(new BetterSqlite3(join(tmpDir, name)))
+    const db = openNodeSqlite(new DatabaseSync(join(tmpDir, name)))
     db.exec(SCHEMA_SQL) // base schema, user_version = 5
     for (const m of migrations.filter((x) => x.version > 5 && x.version <= version)) {
       m.up(db)

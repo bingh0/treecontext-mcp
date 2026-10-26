@@ -9,9 +9,9 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { describe, it, expect } from 'vitest'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
 import { attachedNamespaces, mergeTotals } from '../../src/persistence/merge-source.js'
 import { mergeBackupName, hasBackupFromToday, countsLine } from '../../src/tools/store-merge.js'
 import { FlatStore } from '../../src/flat-store.js'
@@ -24,7 +24,7 @@ describe('stores merge internals', () => {
     const dir = mkdtempSync(join(tmpdir(), 'tc-merge-unit-'))
     try {
       const srcPath = join(dir, 'src.db')
-      const raw = new BetterSqlite3(srcPath)
+      const raw = new DatabaseSync(srcPath)
       raw.exec(
         'CREATE TABLE trees (tree_id INTEGER PRIMARY KEY, namespace TEXT, ensemble_index INTEGER)',
       )
@@ -35,8 +35,8 @@ describe('stores merge internals', () => {
       raw.prepare('INSERT INTO trees VALUES (?, ?, ?)').run(3, 'project', 1)
       raw.close()
 
-      const holder = new BetterSqlite3(join(dir, 'dst.db'))
-      const db = wrapBetterSqlite(holder)
+      const holder = new DatabaseSync(join(dir, 'dst.db'))
+      const db = openNodeSqlite(holder)
       try {
         db.prepare("ATTACH DATABASE ? AS merge_src").run(srcPath)
         // Sorted, so the disclosure reads the same on every run.
@@ -95,7 +95,7 @@ describe('stores merge internals', () => {
       writeFileSync(join(dir, mergeBackupName()), 'a backup')
       expect(hasBackupFromToday(dir)).toBe(false)
       // A real store db under a *.bak name does satisfy it.
-      const real = new BetterSqlite3(join(dir, mergeBackupName(Date.now(), process.pid + 1)))
+      const real = new DatabaseSync(join(dir, mergeBackupName(Date.now(), process.pid + 1)))
       real.exec('CREATE TABLE nodes (node_id TEXT)')
       real.close()
       expect(hasBackupFromToday(dir)).toBe(true)
@@ -115,7 +115,7 @@ describe('stores merge internals', () => {
     const dir = mkdtempSync(join(tmpdir(), 'tc-merge-nosweep-'))
     try {
       const srcPath = join(dir, 'src.db')
-      const src = await FlatStore.open({ database: wrapBetterSqlite(new BetterSqlite3(srcPath)), ownsDatabase: true, retentionInterval: 1_000_000 })
+      const src = await FlatStore.open({ database: openNodeSqlite(new DatabaseSync(srcPath)), ownsDatabase: true, retentionInterval: 1_000_000 })
       const contents: string[] = []
       for (let s = 0; s < 3; s++) {
         for (let i = 0; i < 2; i++) {
@@ -127,7 +127,7 @@ describe('stores merge internals', () => {
       await src.close()
 
       const dstPath = join(dir, 'dst.db')
-      const dstDb = wrapBetterSqlite(new BetterSqlite3(dstPath))
+      const dstDb = openNodeSqlite(new DatabaseSync(dstPath))
       const dst = await FlatStore.open({ database: dstDb, ownsDatabase: false, maxStoreBytes: 1, maxSessions: 1, retentionInterval: 1 })
       const sweep = vi.spyOn(dst, 'retentionSweep')
       dstDb.prepare(`ATTACH DATABASE ? AS ${MERGE_SRC_ALIAS}`).run(srcPath)
@@ -141,7 +141,7 @@ describe('stores merge internals', () => {
       await dst.close()
       dstDb.close()
 
-      const ro = new BetterSqlite3(dstPath, { readonly: true })
+      const ro = new DatabaseSync(dstPath, { readOnly: true })
       try {
         const rows = ro.prepare('SELECT metadata_json FROM nodes').all() as Array<{ metadata_json: string }>
         expect(rows.length).toBe(contents.length)

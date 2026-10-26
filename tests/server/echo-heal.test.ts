@@ -11,8 +11,8 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { describe, it, expect, afterAll } from 'vitest'
-import BetterSqlite3 from 'better-sqlite3'
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { DatabaseSync } from 'node:sqlite'
+import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
 import { FlatStore } from '../../src/flat-store.js'
 import { IngestionLoop } from '../../src/server/ingestion.js'
 import { extractInsertEcho, isInsertEchoTool } from '../../src/server/echo-correlation.js'
@@ -25,7 +25,7 @@ afterAll(() => {
 async function freshStore(): Promise<FlatStore> {
   const dir = mkdtempSync(join(tmpdir(), 'tc-echo-heal-'))
   dirs.push(dir)
-  const db = wrapBetterSqlite(new BetterSqlite3(join(dir, 'echo.db')))
+  const db = openNodeSqlite(new DatabaseSync(join(dir, 'echo.db')))
   return FlatStore.open({ database: db, ownsDatabase: true })
 }
 

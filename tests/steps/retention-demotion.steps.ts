@@ -12,9 +12,9 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { expect } from 'vitest'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import type { Registry } from 'gherkin-node-test/vitest'
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
 import type { Database } from '../../src/persistence/database.js'
 import { FlatStore } from '../../src/flat-store.js'
 import { INDEX_CAP_USER } from '../../src/persistence/index-text.js'
@@ -82,7 +82,7 @@ export const retentionDemotionDefiner = (reg: Registry<World>): void => {
     opts: Omit<Parameters<typeof FlatStore.open>[0], 'database'>,
   ): Promise<FlatStore> {
     const dir = freshDir(w)
-    const db = wrapBetterSqlite(new BetterSqlite3(join(dir, name)))
+    const db = openNodeSqlite(new DatabaseSync(join(dir, name)))
     const store = await FlatStore.open({ database: db, ...opts })
     w.defer(() => store.close())
     w.defer(() => db.close())
@@ -155,7 +155,7 @@ export const retentionDemotionDefiner = (reg: Registry<World>): void => {
 
   reg.define(/^an over-budget in-memory store with no archive destination$/, async (w) => {
     const store = await FlatStore.open({
-      database: wrapBetterSqlite(new BetterSqlite3(':memory:')),
+      database: openNodeSqlite(new DatabaseSync(':memory:')),
       ownsDatabase: true,
       maxStoreBytes: 1,
       maxSessions: 1_000_000,
@@ -187,7 +187,7 @@ export const retentionDemotionDefiner = (reg: Registry<World>): void => {
 
   reg.define(/^an over-budget store whose only candidate stores smaller compressed than its raw stump$/, async (w) => {
     const stumpLen = 400 // under the codec's 512-byte floor: the stump stores raw
-    const db = wrapBetterSqlite(new BetterSqlite3(join(freshDir(w), 's.db')))
+    const db = openNodeSqlite(new DatabaseSync(join(freshDir(w), 's.db')))
     w.defer(() => db.close())
     const store = await FlatStore.open({
       database: db,
@@ -213,7 +213,7 @@ export const retentionDemotionDefiner = (reg: Registry<World>): void => {
   })
 
   reg.define(/^an over-budget store where demoting its newer tool bulk alone satisfies the budget, alongside older prose$/, async (w) => {
-    const db = wrapBetterSqlite(new BetterSqlite3(join(freshDir(w), 'o.db')))
+    const db = openNodeSqlite(new DatabaseSync(join(freshDir(w), 'o.db')))
     w.defer(() => db.close())
     w.db = db
     // Two passes: write the rows first, measure their STORED sizes (the
@@ -269,7 +269,7 @@ export const retentionDemotionDefiner = (reg: Registry<World>): void => {
   reg.define(
     /^an oldest protected authored node and a newer non-protected auto-capture node, both oversized, with a tiny store-byte budget$/,
     async (w) => {
-      const db = wrapBetterSqlite(new BetterSqlite3(join(freshDir(w), 'b.db')))
+      const db = openNodeSqlite(new DatabaseSync(join(freshDir(w), 'b.db')))
       w.defer(() => db.close())
       const store = await FlatStore.open({
         database: db,
@@ -299,7 +299,7 @@ export const retentionDemotionDefiner = (reg: Registry<World>): void => {
   )
 
   reg.define(/^an entry-count-capped store with old and new auto-capture sessions and a tiny store-byte budget$/, async (w) => {
-    const db = wrapBetterSqlite(new BetterSqlite3(join(freshDir(w), 'c.db')))
+    const db = openNodeSqlite(new DatabaseSync(join(freshDir(w), 'c.db')))
     w.defer(() => db.close())
     const store = await FlatStore.open({
       database: db,

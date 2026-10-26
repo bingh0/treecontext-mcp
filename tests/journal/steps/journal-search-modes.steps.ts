@@ -2,9 +2,9 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { expect } from 'vitest'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import { type Registry } from 'gherkin-node-test/vitest'
-import { wrapBetterSqlite } from '../../../src/persistence/better-sqlite.js'
+import { openNodeSqlite } from '../../../src/persistence/node-sqlite.js'
 import { FlatStore } from '../../../src/flat-store.js'
 import { type World, mcpOver, parseTool, openLiveStore } from '../world.js'
 
@@ -96,7 +96,7 @@ export const searchModesDefiner = (reg: Registry<SearchModesWorld>): void => {
     // the reference default ranking — sticky weight state would diverge.
     const refDir = mkdtempSync(join(tmpdir(), 'tc-rw-ref-'))
     const ref = await FlatStore.open({
-      database: wrapBetterSqlite(new BetterSqlite3(join(refDir, 'ref.db'))),
+      database: openNodeSqlite(new DatabaseSync(join(refDir, 'ref.db'))),
       ownsDatabase: true,
     })
     try {

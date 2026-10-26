@@ -1,10 +1,11 @@
+import { pragmaValue, setPragma } from '../../../src/persistence/node-sqlite.js'
 import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { once } from 'node:events'
 import { join } from 'node:path'
 import { expect } from 'vitest'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import { type Registry } from 'gherkin-node-test/vitest'
 import { TOOL_OUTPUT_PREVIEW_CAP } from '../../../src/persistence/capture-constants.js'
 import { INGESTION_TICK_MS } from '../../../src/server/ingestion.js'
@@ -47,7 +48,7 @@ function d270Row(w: CaptureWorld, word: string): RawNode {
 /** Node ids whose FTS row matches `token` as a whole token, read straight
  *  from nodes_fts (the verification rule). */
 function ftsRowsMatching(w: CaptureWorld, token: string): string[] {
-  const raw = new BetterSqlite3(w.dbPath!, { readonly: true })
+  const raw = new DatabaseSync(w.dbPath!, { readOnly: true })
   try {
     return (raw.prepare(
       'SELECT n.node_id FROM nodes_fts JOIN nodes n ON n.rowid = nodes_fts.rowid WHERE nodes_fts MATCH ? ORDER BY n.rowid',
@@ -349,10 +350,10 @@ export const captureDefiner = (reg: Registry<CaptureWorld>): void => {
     )).nodeId
   })
   reg.define(/^the note is stored with role "note" and ranks with full weight in search$/, async (w: CaptureWorld) => {
-    const raw = new BetterSqlite3(w.dbPath!, { readonly: true })
+    const raw = new DatabaseSync(w.dbPath!, { readOnly: true })
     let indexCol: number
     try {
-      indexCol = (raw.prepare('SELECT index_col FROM nodes WHERE node_id = ?').get(w.noteId) as { index_col: number }).index_col
+      indexCol = (raw.prepare('SELECT index_col FROM nodes WHERE node_id = ?').get(w.noteId!) as { index_col: number }).index_col
     } finally {
       raw.close()
     }
@@ -465,7 +466,7 @@ export const captureDefiner = (reg: Registry<CaptureWorld>): void => {
     // the production insert path, no code seams. The trigger aborts any
     // node insert carrying the poison token — except the capture-gap
     // record itself, which is the recovery this scenario exists to pin.
-    const raw = new BetterSqlite3(w.dbPath!)
+    const raw = new DatabaseSync(w.dbPath!)
     try {
       raw.exec(
         `CREATE TRIGGER poison_block BEFORE INSERT ON nodes ` +
@@ -491,9 +492,9 @@ export const captureDefiner = (reg: Registry<CaptureWorld>): void => {
     expect(rows.filter((r) => r.metadata['tool_name'] === 'Bash')).toHaveLength(0)
   })
   reg.define(/^the poisoned payload is retired to a dead-letter record, not deleted$/, (w: CaptureWorld) => {
-    const raw = new BetterSqlite3(w.dbPath!, { readonly: true })
+    const raw = new DatabaseSync(w.dbPath!, { readOnly: true })
     try {
-      const row = raw.prepare(`SELECT processed, attempts, content FROM staging WHERE content LIKE '%' || ? || '%'`).get(w.deepToken) as
+      const row = raw.prepare(`SELECT processed, attempts, content FROM staging WHERE content LIKE '%' || ? || '%'`).get(w.deepToken!) as
         | { processed: number; attempts: number; content: string }
         | undefined
       expect(row, 'poisoned staging row was deleted').toBeTruthy()
@@ -561,7 +562,7 @@ export const captureDefiner = (reg: Registry<CaptureWorld>): void => {
   // dead-stderr exception storm that a closed stdin cannot shut down.
   reg.define(/^a live capture server whose client has abandoned its stderr$/, async (w: CaptureWorld) => {
     const { child, home } = spawnServeChild(w, 'tc-abandon-', 'abandonprobe')
-    // Wait for the transport, not for the db FILE: better-sqlite creates
+    // Wait for the transport, not for the db FILE: node:sqlite creates
     // the file before the migration ladder runs, and a staging row
     // written into that window meets "no such table: staging". The
     // announcement is a diagnostic, so under D258 it is in the log file.
@@ -583,9 +584,9 @@ export const captureDefiner = (reg: Registry<CaptureWorld>): void => {
     // socket buffer and only the next one raises EPIPE — one warning
     // never reaches the storm this scenario exists to rule out.
     const stageMalformed = (): number => {
-      const raw = new BetterSqlite3(w.serveDbPath!)
+      const raw = new DatabaseSync(w.serveDbPath!)
       try {
-        raw.pragma('busy_timeout = 5000')
+        setPragma(raw, 'busy_timeout = 5000')
         return Number(raw.prepare(
           "INSERT INTO staging (session_id, role, content, timestamp) VALUES (?, 'snapshot', ?, ?)",
         ).run('abandon-probe-session', '{"queries": [unterminated', Date.now() / 1000).lastInsertRowid)
@@ -615,9 +616,9 @@ export const captureDefiner = (reg: Registry<CaptureWorld>): void => {
     expect(w.serveChild!.signalCode, 'stdin is still open — the server must still be serving').toBeNull()
     // And the warnings were about real work done: each staged row is
     // retired, and the journal holds its capture-gap tombstone.
-    const db = new BetterSqlite3(w.serveDbPath!, { readonly: true })
+    const db = new DatabaseSync(w.serveDbPath!, { readOnly: true })
     try {
-      db.pragma('busy_timeout = 5000')
+      setPragma(db, 'busy_timeout = 5000')
       for (const id of ids) {
         const row = db.prepare('SELECT processed FROM staging WHERE id = ?').get(id) as { processed: number } | undefined
         expect(row?.processed, `staging row ${id} was not retired`).toBe(1)
@@ -691,9 +692,9 @@ export const captureDefiner = (reg: Registry<CaptureWorld>): void => {
     // is the column the legacy tier cannot write, so a NULL there would
     // name a write that landed under the ladder; a tool event carries
     // one only past the preview cap, so it proves nothing there.
-    const raw = new BetterSqlite3(w.dbPath!, { readonly: true })
+    const raw = new DatabaseSync(w.dbPath!, { readOnly: true })
     try {
-      expect(raw.pragma('user_version', { simple: true })).toBe(maxSupportedVersion)
+      expect(pragmaValue(raw, 'user_version')).toBe(maxSupportedVersion)
       const rows = raw.prepare('SELECT role, content, processed, index_len FROM staging').all() as Array<{ role: string; content: string; processed: number; index_len: number | null }>
       expect(rows).toHaveLength(1)
       expect(rows[0]!.content).toContain(w.prompt)
@@ -730,9 +731,9 @@ export const captureDefiner = (reg: Registry<CaptureWorld>): void => {
     })))
   })
   reg.define(/^every one of them is staged at the current schema with its content intact$/, (w: CaptureWorld) => {
-    const raw = new BetterSqlite3(w.dbPath!, { readonly: true })
+    const raw = new DatabaseSync(w.dbPath!, { readOnly: true })
     try {
-      expect(raw.pragma('user_version', { simple: true })).toBe(maxSupportedVersion)
+      expect(pragmaValue(raw, 'user_version')).toBe(maxSupportedVersion)
       // index_len is the column the legacy tier cannot write (the pre-v16
       // fallback stages only content): a NULL here names a write that
       // landed under the ladder.
@@ -750,10 +751,10 @@ export const captureDefiner = (reg: Registry<CaptureWorld>): void => {
     mkdirSync(dirname(w.dbPath!), { recursive: true })
     // Exactly rc.6's leftover: an open, the WAL pragma, a close — a file
     // with a header and an empty sqlite_master.
-    const shell = new BetterSqlite3(w.dbPath!)
-    shell.pragma('journal_mode = WAL')
+    const shell = new DatabaseSync(w.dbPath!)
+    setPragma(shell, 'journal_mode = WAL')
     shell.close()
-    const raw = new BetterSqlite3(w.dbPath!, { readonly: true })
+    const raw = new DatabaseSync(w.dbPath!, { readOnly: true })
     try {
       expect(raw.prepare('SELECT count(*) AS c FROM sqlite_master').get()).toEqual({ c: 0 })
     } finally {

@@ -9,9 +9,9 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { expect } from 'vitest'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import type { Registry } from 'gherkin-node-test/vitest'
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
 import { FlatStore } from '../../src/flat-store.js'
 import type { QueryResult } from '../../src/core/types.js'
 
@@ -49,7 +49,7 @@ export const flatStoreC4ReadViewDefiner = (reg: Registry<World>): void => {
     const dir = mkdtempSync(join(tmpdir(), 'tc-c4-read-'))
     w.defer(() => rmSync(dir, { recursive: true, force: true }))
     w.dbPath = join(dir, 'flat.db')
-    const db = wrapBetterSqlite(new BetterSqlite3(w.dbPath))
+    const db = openNodeSqlite(new DatabaseSync(w.dbPath))
     const store = await FlatStore.open({ database: db, ownsDatabase: true, ...opts })
     w.defer(() => store.close())
     return store
@@ -214,7 +214,7 @@ export const flatStoreC4ReadViewDefiner = (reg: Registry<World>): void => {
     // posting whose node row is gone never joins — audit run 1), so the
     // observable that can actually fail is the fts5vocab doc count:
     // read the index directly through a second, readonly connection.
-    const raw = new BetterSqlite3(w.dbPath!, { readonly: true })
+    const raw = new DatabaseSync(w.dbPath!, { readOnly: true })
     try {
       raw.exec("CREATE VIRTUAL TABLE temp.ghost_vocab USING fts5vocab(main, 'nodes_fts', 'row')")
       const row = raw

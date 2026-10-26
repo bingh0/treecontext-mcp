@@ -10,9 +10,9 @@ import { mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import { FlatStore } from '../../src/flat-store.js'
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
 import { writeSessionBeacon } from '../../src/session-beacon.js'
 import { type CaptureWorld, openCaptureSandbox, runHook, hookJson } from '../journal/capture-harness.js'
 
@@ -23,7 +23,7 @@ async function world(): Promise<CaptureWorld & { root: string }> {
   const w = { defer: (fn: () => void | Promise<void>) => { cleanups.push(fn) } } as CaptureWorld
   openCaptureSandbox(w)
   mkdirSync(dirname(w.dbPath!), { recursive: true })
-  const store = await FlatStore.open({ database: wrapBetterSqlite(new BetterSqlite3(w.dbPath!)), ownsDatabase: true })
+  const store = await FlatStore.open({ database: openNodeSqlite(new DatabaseSync(w.dbPath!)), ownsDatabase: true })
   cleanups.push(() => store.close())
   w.store = store
   await store.insert('plan: the chapter before the clear; next: its tests', {

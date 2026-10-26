@@ -10,10 +10,10 @@ import { describe, expect, it, beforeEach, afterEach } from 'vitest'
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import { Client, InMemoryTransport } from '@modelcontextprotocol/client'
 import { createServer } from '../../src/server/server.js'
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
 import { FlatStore } from '../../src/flat-store.js'
 import { SHADOW_RECENCY_WEIGHT, recordQueryTelemetry, telemetryPath } from '../../src/server/query-telemetry.js'
 import { itPosix } from '../helpers/platform.js'
@@ -41,7 +41,7 @@ describe('query telemetry (recency-ruling instrument)', () => {
     dir = mkdtempSync(join(tmpdir(), 'tc-telemetry-'))
     dbPath = join(dir, 'journal.db')
     store = await FlatStore.open({
-      database: wrapBetterSqlite(new BetterSqlite3(dbPath)),
+      database: openNodeSqlite(new DatabaseSync(dbPath)),
       ownsDatabase: true,
     })
     const now = Date.now() / 1000
@@ -130,10 +130,10 @@ describe('query telemetry (recency-ruling instrument)', () => {
     await ins('release notes drafted; one line mentions the beacon fix', 'new-1')
     await ins('sprint retro summary; beacon came up briefly', 'new-2')
     await ins('triaged issues; tagged one beacon ticket', 'new-3')
-    const raw = new BetterSqlite3(dbPath)
+    const raw = new DatabaseSync(dbPath)
     const at = raw.prepare('UPDATE nodes SET created_at = ? WHERE node_id = ?')
     const stamps = [T0, T0 + 3600, T0 + 7200, T0 + 30 * 86_400 + 180, T0 + 30 * 86_400 + 60, T0 + 30 * 86_400 + 120]
-    ids.forEach((id, i) => at.run(stamps[i], id))
+    ids.forEach((id, i) => at.run(stamps[i]!, id))
     raw.close()
     const q = async (args: Record<string, unknown>) => {
       const r = await runQuery({ query: 'history of the beacon calibration', top_k: 3, conversation_window: 0, ...args })

@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
 import { Persistence } from '../../src/persistence/store.js'
 import { runMigrations } from '../../src/persistence/migrations.js'
 import { claimSnapshot, writeSnapshot } from '../../src/hooks/shared.js'
@@ -23,7 +23,7 @@ describe('staging claims (G3)', () => {
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'tc-claims-'))
-    const db = wrapBetterSqlite(new BetterSqlite3(join(dir, 'store.db')))
+    const db = openNodeSqlite(new DatabaseSync(join(dir, 'store.db')))
     runMigrations(db, { migrate: true })
     p = Persistence.openLexical(db)
   })
@@ -142,7 +142,7 @@ describe('snapshot claims (G3)', () => {
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'tc-snap-claims-'))
-    const db = wrapBetterSqlite(new BetterSqlite3(join(dir, 'store.db')))
+    const db = openNodeSqlite(new DatabaseSync(join(dir, 'store.db')))
     runMigrations(db, { migrate: true })
     db.close()
   })
@@ -154,8 +154,8 @@ describe('snapshot claims (G3)', () => {
     const path = join(dir, 'store.db')
     writeSnapshot(path, 'writer', ['what was I doing'])
 
-    const a = new BetterSqlite3(path)
-    const b = new BetterSqlite3(path)
+    const a = new DatabaseSync(path)
+    const b = new DatabaseSync(path)
     try {
       const first = claimSnapshot(a, 'reader-a')
       const second = claimSnapshot(b, 'reader-b')

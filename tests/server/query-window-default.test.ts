@@ -20,9 +20,9 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import { Client, InMemoryTransport } from '@modelcontextprotocol/client'
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
 import { FlatStore } from '../../src/flat-store.js'
 import { createServer } from '../../src/server/server.js'
 import { DEFAULT_CONVERSATION_WINDOW } from '../../src/core/types.js'
@@ -48,7 +48,7 @@ function parse(res: unknown): QueryResponseLite {
 }
 
 async function flatHarness(name = 'flat.db') {
-  const db = wrapBetterSqlite(new BetterSqlite3(join(tmpDir, name)))
+  const db = openNodeSqlite(new DatabaseSync(join(tmpDir, name)))
   const store = await FlatStore.open({ database: db, ownsDatabase: true })
   const server = createServer(store, {})
   const [ct, st] = InMemoryTransport.createLinkedPair()
@@ -194,7 +194,7 @@ describe('conversation_window shipped default (AC: query-window-default.feature)
   })
 
   it('namespace exclusion filters hits before window claiming (library level)', async () => {
-    const db = wrapBetterSqlite(new BetterSqlite3(join(tmpDir, 'ns.db')))
+    const db = openNodeSqlite(new DatabaseSync(join(tmpDir, 'ns.db')))
     const store = await FlatStore.open({ database: db, ownsDatabase: true })
     await store.insert('subagent zanzibar finding alpha', { metadata: { session_id: 's1', role: 'assistant', _namespace: 'sub' } })
     await store.insert('project zanzibar finding beta', { metadata: { session_id: 's1', role: 'assistant', _namespace: 'project' } })

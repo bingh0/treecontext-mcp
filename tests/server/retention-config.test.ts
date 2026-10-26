@@ -11,7 +11,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/client/stdio'
 import { CLI_TS, nodeTsArgs, sandboxedSpawnEnv, spawnCli } from '../helpers/cli-spawn.js'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import { randomBytes } from 'node:crypto'
 import { Client, InMemoryTransport } from '@modelcontextprotocol/client'
 import { loadConfigFile } from '../../src/server/config.js'
@@ -19,7 +19,7 @@ import { applyConfigFile, parseArgs, serveOptionsFrom } from '../../src/server/c
 import { MAX_STORE_BYTES_DEFAULT, MAX_SESSIONS_DEFAULT } from '../../src/persistence/capture-constants.js'
 import { FlatStore } from '../../src/flat-store.js'
 import { createMemoryStore } from '../../src/memory-store-factory.js'
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
 import { createServer } from '../../src/server/server.js'
 import { parseToolResult } from '../helpers/mcp-result.js'
 
@@ -33,7 +33,7 @@ describe('the store-byte budget and session cap (D141, D255)', () => {
   it('the default budget is 128 MiB and the default session cap 100', async () => {
     expect(MAX_STORE_BYTES_DEFAULT).toBe(128 * MiB)
     expect(MAX_SESSIONS_DEFAULT).toBe(100)
-    const store = await FlatStore.open({ database: wrapBetterSqlite(new BetterSqlite3(join(dir, 'd.db'))), ownsDatabase: true })
+    const store = await FlatStore.open({ database: openNodeSqlite(new DatabaseSync(join(dir, 'd.db'))), ownsDatabase: true })
     try {
       expect(store.status().retention).toMatchObject({ budgetBytes: 128 * MiB, sessionCap: 100 })
     } finally {
@@ -87,7 +87,7 @@ describe('the store-byte budget and session cap (D141, D255)', () => {
 
   it('the factory forwards both to the store it opens', async () => {
     const store = await createMemoryStore({
-      database: wrapBetterSqlite(new BetterSqlite3(join(dir, 'f.db'))),
+      database: openNodeSqlite(new DatabaseSync(join(dir, 'f.db'))),
       ownsDatabase: true,
       maxStoreBytes: 256 * MiB,
       maxSessions: 12,
@@ -100,7 +100,7 @@ describe('the store-byte budget and session cap (D141, D255)', () => {
   })
 
   it('the over-budget warning names the config key, not the constant', async () => {
-    const store = await FlatStore.open({ database: wrapBetterSqlite(new BetterSqlite3(join(dir, 'o.db'))), ownsDatabase: true, maxStoreBytes: 1_024, retentionInterval: 1_000_000 })
+    const store = await FlatStore.open({ database: openNodeSqlite(new DatabaseSync(join(dir, 'o.db'))), ownsDatabase: true, maxStoreBytes: 1_024, retentionInterval: 1_000_000 })
     await store.insert(`DECISION: protected — ${randomBytes(1200).toString('hex')}`, { metadata: { type: 'decision' } })
     const server = createServer(store, {})
     const [ct, st] = InMemoryTransport.createLinkedPair()
@@ -144,11 +144,11 @@ describe('the entry-count safety net scales with the session cap (D255)', () => 
 
   it('a cap of 3 nets 600: three sessions of 250 entries evict the oldest by the net', async () => {
     const path = join(dir, 'n.db')
-    const store = await FlatStore.open({ database: wrapBetterSqlite(new BetterSqlite3(path)), ownsDatabase: true, maxSessions: 3, retentionInterval: 1_000_000 })
+    const store = await FlatStore.open({ database: openNodeSqlite(new DatabaseSync(path)), ownsDatabase: true, maxSessions: 3, retentionInterval: 1_000_000 })
     await sessions(store, 3, 250)
     store.retentionSweep()
     await store.close()
-    const ro = new BetterSqlite3(path, { readonly: true })
+    const ro = new DatabaseSync(path, { readOnly: true })
     try {
       const n = (ro.prepare("SELECT COUNT(DISTINCT json_extract(metadata_json, '$.session_id')) AS n FROM nodes WHERE json_extract(metadata_json, '$.source') = 'auto-capture'").get() as { n: number }).n
       expect(n, 'the net did not scale down with the cap').toBe(2)
@@ -159,11 +159,11 @@ describe('the entry-count safety net scales with the session cap (D255)', () => 
 
   it('an explicit maxAutoEntries keeps its figure', async () => {
     const path = join(dir, 'e.db')
-    const store = await FlatStore.open({ database: wrapBetterSqlite(new BetterSqlite3(path)), ownsDatabase: true, maxSessions: 3, maxAutoEntries: 1_000_000, retentionInterval: 1_000_000 })
+    const store = await FlatStore.open({ database: openNodeSqlite(new DatabaseSync(path)), ownsDatabase: true, maxSessions: 3, maxAutoEntries: 1_000_000, retentionInterval: 1_000_000 })
     await sessions(store, 3, 250)
     store.retentionSweep()
     await store.close()
-    const ro = new BetterSqlite3(path, { readonly: true })
+    const ro = new DatabaseSync(path, { readOnly: true })
     try {
       expect((ro.prepare('SELECT COUNT(*) AS n FROM nodes').get() as { n: number }).n).toBe(750)
     } finally {
@@ -239,7 +239,7 @@ describe('the [retention] figures at the real doors (D255)', () => {
     writeFileSync(join(project, 'treecontext.toml'), '[retention]\nmax_sessions = 1\n')
     const dbPath = join(root, 'drain.db')
     // Two old sessions already in namespace agent-z.
-    const seed = await FlatStore.open({ database: wrapBetterSqlite(new BetterSqlite3(dbPath)), ownsDatabase: true, namespace: 'agent-z', retentionInterval: 1_000_000 })
+    const seed = await FlatStore.open({ database: openNodeSqlite(new DatabaseSync(dbPath)), ownsDatabase: true, namespace: 'agent-z', retentionInterval: 1_000_000 })
     for (const s of ['z-old-1', 'z-old-2']) {
       await seed.insert(`old ${s} capture ${randomBytes(4).toString('hex')}`, { metadata: { source: 'auto-capture', role: 'tool', session_id: s }, createdAt: 1_700_000_000 + (s.endsWith('1') ? 0 : 10) })
     }
@@ -251,7 +251,7 @@ describe('the [retention] figures at the real doors (D255)', () => {
       writeStaging(dbPath, { role: 'tool_result', toolName: 'Bash', sessionId: 'z-new', namespace: 'agent-z', content: `new capture ${i} ${randomBytes(4).toString('hex')}`, timestamp: Date.now() / 1000 + i })
     }
     {
-      const pre = new BetterSqlite3(dbPath, { readonly: true })
+      const pre = new DatabaseSync(dbPath, { readOnly: true })
       try {
         expect((pre.prepare('SELECT COUNT(*) AS n FROM staging WHERE processed = 0').get() as { n: number }).n, 'nothing was staged').toBe(50)
       } finally {
@@ -261,7 +261,7 @@ describe('the [retention] figures at the real doors (D255)', () => {
     const client = await serve(project, ['--store', dbPath, '--capture'])
     try {
       const ro = (): number => {
-        const db = new BetterSqlite3(dbPath, { readonly: true })
+        const db = new DatabaseSync(dbPath, { readOnly: true })
         try {
           return (db.prepare('SELECT COUNT(*) AS n FROM staging WHERE processed = 0').get() as { n: number }).n
         } finally {
@@ -274,7 +274,7 @@ describe('the [retention] figures at the real doors (D255)', () => {
     } finally {
       await client.close()
     }
-    const db = new BetterSqlite3(dbPath, { readonly: true })
+    const db = new DatabaseSync(dbPath, { readOnly: true })
     try {
       const live = (db.prepare(
         "SELECT DISTINCT json_extract(n.metadata_json,'$.session_id') AS s FROM nodes n JOIN trees t ON t.tree_id = n.tree_id "
@@ -291,7 +291,7 @@ describe('the [retention] figures at the real doors (D255)', () => {
   /** A destination past the default session cap: any sweep would evict. */
   async function crowdedStore(dbPath: string, sessions: number, tag = 'crowd'): Promise<void> {
     mkdirSync(join(dbPath, '..'), { recursive: true })
-    const s = await FlatStore.open({ database: wrapBetterSqlite(new BetterSqlite3(dbPath)), ownsDatabase: true, retentionInterval: 1_000_000, maxSessions: 1_000 })
+    const s = await FlatStore.open({ database: openNodeSqlite(new DatabaseSync(dbPath)), ownsDatabase: true, retentionInterval: 1_000_000, maxSessions: 1_000 })
     for (let i = 0; i < sessions; i++) {
       await s.insert(`crowd ${i} ${randomBytes(4).toString('hex')}`, { metadata: { source: 'auto-capture', role: 'tool', session_id: `${tag}-${i}` }, createdAt: 1_700_000_000 + i })
     }
@@ -299,7 +299,7 @@ describe('the [retention] figures at the real doors (D255)', () => {
     for (const f of readdirSync(join(dbPath, '..'))) if (f.includes('.pre-migration-')) rmSync(join(dbPath, '..', f), { force: true })
   }
   const liveSessions = (dbPath: string): number => {
-    const db = new BetterSqlite3(dbPath, { readonly: true })
+    const db = new DatabaseSync(dbPath, { readOnly: true })
     try {
       return (db.prepare("SELECT COUNT(DISTINCT json_extract(metadata_json,'$.session_id')) AS n FROM nodes WHERE json_extract(metadata_json,'$.source') = 'auto-capture' AND json_extract(metadata_json,'$._tombstone') IS NULL").get() as { n: number }).n
     } finally {

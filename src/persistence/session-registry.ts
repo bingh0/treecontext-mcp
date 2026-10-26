@@ -22,7 +22,7 @@
  * fields and need no lookup.
  *
  * Reads and writes take any handle with `prepare` — a hook's raw
- * better-sqlite3 handle and a FlatStore's wrapped one alike. A store the
+ * node:sqlite handle and a FlatStore's wrapped one alike. A store the
  * registry has not reached yet (no table) reads as unregistered.
  */
 import { createHash } from 'node:crypto'

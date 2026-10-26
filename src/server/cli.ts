@@ -841,14 +841,12 @@ async function openHandoffStore(args: CliArgs, storeName: string, create: boolea
     // An import may be the first thing a project's journal ever holds.
     mkdirSync(join(dbPath, '..'), { recursive: true, mode: 0o700 })
   }
-  const { default: BetterSqlite3 } = await import('better-sqlite3')
-  const { wrapBetterSqlite } = await import('../persistence/better-sqlite.js')
+  const { openNodeSqlite, ensureDbFileMode } = await import('../persistence/node-sqlite.js')
   const { createMemoryStore } = await import('../memory-store-factory.js')
-  const { ensureDbFileMode } = await import('../persistence/better-sqlite.js')
   // The store opens as serve opens it, so the same store and form write
   // the same file through either door.
   const store = await createMemoryStore({
-    database: wrapBetterSqlite(new BetterSqlite3(dbPath)),
+    database: openNodeSqlite(dbPath),
     namespace: args.namespace,
     ownsDatabase: true,
     migrate: true,
@@ -1648,8 +1646,7 @@ async function main(): Promise<void> {
   // BM25 over its rows (the tree backend left in the deletion phase,
   // 2026-07-25 — recover via the pre-deletion-phase tag).
   {
-    const { default: BetterSqlite3 } = await import('better-sqlite3')
-    const { wrapBetterSqlite, ensureDbFileMode } = await import('../persistence/better-sqlite.js')
+    const { openNodeSqlite, ensureDbFileMode } = await import('../persistence/node-sqlite.js')
     const { startServer } = await import('./server.js')
     const { LeaseClient, tryClaim, NS_LEASE_TTL_SECS, DRAIN_LEASE_TTL_SECS, LEASE_RENEW_INTERVAL_MS } = await import(
       '../persistence/leases.js'
@@ -1658,8 +1655,7 @@ async function main(): Promise<void> {
     // One options object for the whole serve path: the wrap below and the
     // startServer call read the SAME seam the D1 ratchet enumerates.
     const serveOpts = serveOptionsFrom(args)
-    const raw = new BetterSqlite3(storePath)
-    const db = wrapBetterSqlite(raw, { secureDelete: serveOpts.secureDelete })
+    const db = openNodeSqlite(storePath, { secureDelete: serveOpts.secureDelete })
     ensureDbFileMode(storePath)
     log(`Lexical journal (FTS5 bm25, no embedder) — store: ${storePath}`)
     // Two writer roles, coordinated through the store's lease table (G4;
@@ -1754,7 +1750,7 @@ async function main(): Promise<void> {
     }
     // The renewal timer is the heartbeat — an idle server never expires
     // while alive; a SIGKILLed one frees its roles within one TTL. On
-    // clean exit the roles release synchronously (better-sqlite3 is
+    // clean exit the roles release synchronously (node:sqlite is
     // sync, so exit handlers CAN write) — delete-if-mine in the write
     // transaction, no unlink race.
     const renewTimer = setInterval(() => {

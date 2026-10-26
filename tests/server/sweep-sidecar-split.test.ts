@@ -11,11 +11,12 @@
  * and a directory-shaped sidecar fails verdict reading and never reaches
  * the delete loop — so rmSync is mocked to fail for sidecar paths only.
  */
+import { setPragma } from '../../src/persistence/node-sqlite.js'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtempSync, mkdirSync, rmSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 
 vi.mock('node:fs', async (importOriginal) => {
   const real = await importOriginal<typeof import('node:fs')>()
@@ -42,12 +43,12 @@ let storesDir: string
 function seedEligible(name: string): { bakPath: string; sidecarPath: string } {
   const dir = join(storesDir, name)
   mkdirSync(dir, { recursive: true })
-  const db = new BetterSqlite3(join(dir, 'treecontext.db'))
+  const db = new DatabaseSync(join(dir, 'treecontext.db'))
   db.exec(SCHEMA_SQL)
-  db.pragma(`user_version = ${maxSupportedVersion}`)
+  setPragma(db, `user_version = ${maxSupportedVersion}`)
   db.close()
   const bakPath = join(dir, 'treecontext.db.pre-migration-v12.bak')
-  const bak = new BetterSqlite3(bakPath)
+  const bak = new DatabaseSync(bakPath)
   bak.exec('CREATE TABLE pad (x BLOB)')
   bak.close()
   writeVerdict(bakPath, {

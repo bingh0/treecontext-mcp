@@ -26,7 +26,7 @@ import { tmpdir } from 'node:os'
 import { pathToFileURL } from 'node:url'
 import { createRequire } from 'node:module'
 import { randomBytes } from 'node:crypto'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import { redirectHome } from '../helpers/home.js'
 import { sandboxedSpawnEnv, spawnCli, CLI_TS } from '../helpers/cli-spawn.js'
 import { type CaptureWorld, openCaptureWorld, hookJson } from '../journal/capture-harness.js'
@@ -152,7 +152,7 @@ describe.skipIf(!POSIX)('hook dispatch through /bin/sh -c keeps the claude pid (
       expect(existsSync(join(w.home!, '.treecontext', 'stores')), 'the hook never reached a store').toBe(true)
       const packet = fire(after, 'clear')
       expect(packet, 'the /clear could not find the session it continues').not.toBe(UNKNOWN_PREDECESSOR)
-      const raw = new BetterSqlite3(w.dbPath!, { readonly: true })
+      const raw = new DatabaseSync(w.dbPath!, { readOnly: true })
       try {
         const link = raw.prepare('SELECT value FROM store_config WHERE key = ?').get(`session_chain:${after}`) as { value: string } | undefined
         expect(link?.value, 'no session_chain link was written').toBe(JSON.stringify(before))

@@ -11,12 +11,12 @@ import { mkdirSync, mkdtempSync, rmSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { expect } from 'vitest'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 
 import { SCHEMA_SQL } from '../../src/persistence/schema.js'
 import { maxSupportedVersion } from '../../src/persistence/migrations/index.js'
 import { runMigrations } from '../../src/persistence/migrations.js'
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { openNodeSqlite, setPragma } from '../../src/persistence/node-sqlite.js'
 import { writeVerdict } from '../../src/persistence/backup-verdict.js'
 import { contentFingerprint, contentFingerprintV1 } from '../../src/fingerprint.js'
 import { FINGERPRINT_DIGEST_VERSION } from '../../src/server/store-audit.js'
@@ -49,9 +49,9 @@ export function seedStoreDir(storesDir: string, name: string): string {
   const dir = join(storesDir, name)
   mkdirSync(dir, { recursive: true })
   const dbPath = join(dir, 'treecontext.db')
-  const db = new BetterSqlite3(dbPath)
+  const db = new DatabaseSync(dbPath)
   db.exec(SCHEMA_SQL)
-  db.pragma(`user_version = ${maxSupportedVersion}`)
+  setPragma(db, `user_version = ${maxSupportedVersion}`)
   db.close()
   return dbPath
 }
@@ -63,7 +63,7 @@ export function seedStoreDir(storesDir: string, name: string): string {
  */
 export function makeSqliteFileOf(path: string, kb: number): void {
   const target = kb * 1024
-  const db = new BetterSqlite3(path)
+  const db = new DatabaseSync(path)
   db.exec('CREATE TABLE pad (x BLOB)')
   const coarse = target - statSync(path).size - 8192
   if (coarse > 0) db.prepare('INSERT INTO pad VALUES (zeroblob(?))').run(coarse)
@@ -174,8 +174,8 @@ export function seedAuditStore(storesDir: string, name: string, seed: AuditSeed 
   const dir = join(storesDir, name)
   mkdirSync(dir, { recursive: true })
   const dbPath = join(dir, 'treecontext.db')
-  const raw = new BetterSqlite3(dbPath)
-  const report = runMigrations(wrapBetterSqlite(raw), { migrate: true })
+  const raw = new DatabaseSync(dbPath)
+  const report = runMigrations(openNodeSqlite(raw), { migrate: true })
   // The ladder from v0 crosses a destructive step and leaves its
   // pre-migration copy beside the store. A fixture must seed only what it
   // claims to seed: left in place, that copy would drive doctor's
@@ -221,7 +221,7 @@ export function seedAuditStore(storesDir: string, name: string, seed: AuditSeed 
       stage.run('an event that never drained', now - ago, now - ago)
     }
     const version = seed.userVersion ?? (seed.preDigest ? FINGERPRINT_DIGEST_VERSION - 1 : undefined)
-    if (version !== undefined) raw.pragma(`user_version = ${version}`)
+    if (version !== undefined) setPragma(raw, `user_version = ${version}`)
     // The fixture proves itself: a pair that stopped colliding would make
     // every collision pin pass by reporting nothing.
     // Unconditional on the PAIR (Phase-3 review C2): a caller seeding
@@ -246,7 +246,7 @@ export function seedAuditStore(storesDir: string, name: string, seed: AuditSeed 
 
 /** Row count of a store's nodes table through a fresh readonly connection. */
 export function countNodesIn(dbPath: string): number {
-  const db = new BetterSqlite3(dbPath, { readonly: true, fileMustExist: true })
+  const db = new DatabaseSync(dbPath, { readOnly: true })
   try {
     return (db.prepare('SELECT COUNT(*) AS c FROM nodes').get() as { c: number }).c
   } finally {

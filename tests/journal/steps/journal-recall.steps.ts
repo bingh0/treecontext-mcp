@@ -2,11 +2,11 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { expect } from 'vitest'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import { type Registry } from 'gherkin-node-test/vitest'
 import { SessionStats } from '../../../src/server/session-stats.js'
 import { FlatStore } from '../../../src/flat-store.js'
-import { wrapBetterSqlite } from '../../../src/persistence/better-sqlite.js'
+import { openNodeSqlite, pragmaValue, setPragma } from '../../../src/persistence/node-sqlite.js'
 import { T0, mcpOver, parseTool, openLiveStore, reopenAsLaterSession, exportNode, rawAll } from '../world.js'
 import { type CaptureWorld, openCaptureWorld, spawnHook, drainStaging } from '../capture-harness.js'
 import { type MatureJournal, MATURE, seedMatureJournal, rawOutranking, ORIENTATION_QUERY, SHELL_ONLY_TERM } from '../../helpers/mature-journal.js'
@@ -41,7 +41,7 @@ export interface RecallWorld extends CaptureWorld {
 
 /** Node ids matching a WHERE over `nodes`, read raw (verification rule). */
 function rawAllIds(w: RecallWorld, where: string, ...params: unknown[]): string[] {
-  const raw = new BetterSqlite3(w.dbPath!, { readonly: true })
+  const raw = new DatabaseSync(w.dbPath!, { readOnly: true })
   try {
     return (raw.prepare(`SELECT node_id FROM nodes WHERE ${where} ORDER BY rowid`).all(...(params as never[])) as Array<{ node_id: string }>)
       .map((r) => r.node_id)
@@ -52,7 +52,7 @@ function rawAllIds(w: RecallWorld, where: string, ...params: unknown[]): string[
 
 /** A row's metadata as SQLite holds it. */
 function rawMetaOf(w: RecallWorld, nodeId: string): Record<string, unknown> {
-  const raw = new BetterSqlite3(w.dbPath!, { readonly: true })
+  const raw = new DatabaseSync(w.dbPath!, { readOnly: true })
   try {
     const row = raw.prepare('SELECT metadata_json FROM nodes WHERE node_id = ?').get(nodeId) as { metadata_json: string | null } | undefined
     expect(row, `no row ${nodeId}`).toBeTruthy()
@@ -72,7 +72,7 @@ async function agentSearch(w: RecallWorld, query: string, topK = 5): Promise<Arr
 async function teammateHandoff(w: RecallWorld, notes: string[]): Promise<string> {
   const dir = mkdtempSync(join(tmpdir(), 'tc-teammate-'))
   w.defer(() => rmSync(dir, { recursive: true, force: true }))
-  const theirs = await FlatStore.open({ database: wrapBetterSqlite(new BetterSqlite3(join(dir, 'theirs.db'))), ownsDatabase: true })
+  const theirs = await FlatStore.open({ database: openNodeSqlite(new DatabaseSync(join(dir, 'theirs.db'))), ownsDatabase: true })
   try {
     for (const n of notes) await theirs.insert(n, { metadata: { type: 'plan' } })
     return theirs.exportJson()
@@ -83,7 +83,7 @@ async function teammateHandoff(w: RecallWorld, notes: string[]): Promise<string>
 
 /** Open the scenario's store file the way a server starting on it would. */
 async function reopenStore(w: RecallWorld): Promise<FlatStore> {
-  const store = await FlatStore.open({ database: wrapBetterSqlite(new BetterSqlite3(w.dbPath!)), ownsDatabase: true })
+  const store = await FlatStore.open({ database: openNodeSqlite(new DatabaseSync(w.dbPath!)), ownsDatabase: true })
   w.defer(() => store.close())
   return store
 }
@@ -104,7 +104,7 @@ function echoOf(w: RecallWorld, tool: string): RawEcho {
  * boundary moves with it).
  */
 async function beta1Drain(w: RecallWorld): Promise<void> {
-  const raw = new BetterSqlite3(w.dbPath!)
+  const raw = new DatabaseSync(w.dbPath!)
   try {
     const rows = raw.prepare('SELECT id, session_id, role, content, tool_name, timestamp, priority, index_len, preview_len FROM staging WHERE processed = 0 ORDER BY id').all() as Array<{
       id: number; session_id: string | null; role: string; content: string; tool_name: string | null
@@ -383,13 +383,13 @@ export const recallDefiner = (reg: Registry<RecallWorld>): void => {
     w.importedIds = rawAllIds(w, "json_extract(metadata_json, '$._handoff_file') = 'handoffs/old-brief.json'")
     // The store is left at the earlier treecontext's schema.
     await w.store!.close()
-    const raw = new BetterSqlite3(w.dbPath!)
-    try { raw.pragma('user_version = 27') } finally { raw.close() }
+    const raw = new DatabaseSync(w.dbPath!)
+    try { setPragma(raw, 'user_version = 27') } finally { raw.close() }
   })
   reg.define(/^this treecontext opens the store$/, async (w: RecallWorld) => {
     w.store = await reopenStore(w)
-    const raw = new BetterSqlite3(w.dbPath!, { readonly: true })
-    try { expect(raw.pragma('user_version', { simple: true })).toBe(29) } finally { raw.close() }
+    const raw = new DatabaseSync(w.dbPath!, { readOnly: true })
+    try { expect(pragmaValue(raw, 'user_version')).toBe(29) } finally { raw.close() }
     w.echoesAfterFirstOpen = rawEchoes(w.dbPath!)
     w.vocabAfterFirstOpen = ftsVocab(w.dbPath!)
   })

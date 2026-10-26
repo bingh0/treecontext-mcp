@@ -22,6 +22,7 @@
  * flag and the needle it rows on (the store names differ: notes vs
  * "notes copy", and 'notes:' does not match 'notes copy:').
  */
+import { setPragma } from '../../src/persistence/node-sqlite.js'
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { expect } from 'vitest'
@@ -31,7 +32,7 @@ import { spawnNodeTs } from '../helpers/cli-spawn.js'
 import { freshHomeDir, seedOrphanSidecar, storesDirIn } from '../helpers/store-fixtures.js'
 import { fileURLToPath } from 'node:url'
 
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import { maxSupportedVersion } from '../../src/persistence/migrations/index.js'
 import { writeVerdict } from '../../src/persistence/backup-verdict.js'
 import { SCHEMA_SQL } from '../../src/persistence/schema.js'
@@ -64,9 +65,9 @@ export const backupVisibilityDefiner = (reg: Registry<World>): void => {
     const dir = join(storesDir(w), name)
     mkdirSync(dir, { recursive: true })
     const dbPath = join(dir, 'treecontext.db')
-    const db = new BetterSqlite3(dbPath)
+    const db = new DatabaseSync(dbPath)
     db.exec(SCHEMA_SQL)
-    db.pragma(`user_version = ${maxSupportedVersion}`)
+    setPragma(db, `user_version = ${maxSupportedVersion}`)
     db.close()
     return dbPath
   }

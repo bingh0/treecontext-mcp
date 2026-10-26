@@ -9,8 +9,8 @@ import { describe, it, expect, afterEach } from 'vitest'
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import BetterSqlite3 from 'better-sqlite3'
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { DatabaseSync } from 'node:sqlite'
+import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
 import { FlatStore } from '../../src/flat-store.js'
 import { INDEX_CAP_USER } from '../../src/persistence/index-text.js'
 
@@ -23,7 +23,7 @@ function tmp(): string {
 }
 async function open(dir: string, opts: Partial<Parameters<typeof FlatStore.open>[0]> = {}, file = 'r.db'): Promise<FlatStore> {
   return FlatStore.open({
-    database: wrapBetterSqlite(new BetterSqlite3(join(dir, file))),
+    database: openNodeSqlite(new DatabaseSync(join(dir, file))),
     ownsDatabase: true,
     maxSessions: 1_000_000,
     maxAutoEntries: 1_000_000,
@@ -103,7 +103,7 @@ describe('round-3 tier-1 regressions', () => {
 
   it('S3: a failed import rolls back the fingerprint maps too — the retry imports the good rows', async () => {
     const dir = tmp()
-    const db = wrapBetterSqlite(new BetterSqlite3(join(dir, 's3.db')))
+    const db = openNodeSqlite(new DatabaseSync(join(dir, 's3.db')))
     const a = await FlatStore.open({ database: db, namespace: 'ns-a', ownsDatabase: false })
     // Payload: one good fresh row, then a row the store refuses mid-loop,
     // which throws and rolls the transaction back. The old code left the
@@ -118,7 +118,7 @@ describe('round-3 tier-1 regressions', () => {
       content: 'good imported row about the flux survey',
       createdAt: nowS(), updatedAt: nowS(), summary: '', metadata: null,
     }
-    const raw = new BetterSqlite3(join(dir, 's3.db'))
+    const raw = new DatabaseSync(join(dir, 's3.db'))
     raw.exec(
       `CREATE TRIGGER poison_import BEFORE INSERT ON nodes ` +
       `WHEN new.content LIKE '%POISONROW%' BEGIN SELECT RAISE(ABORT, 'injected import fault'); END`,
@@ -151,7 +151,7 @@ describe('round-3 tier-1 regressions', () => {
     // full-content fingerprint pointing at the (still-existing) stump —
     // so the next real capture of that content deduplicated onto the
     // stump and was silently swallowed.
-    const raw = new BetterSqlite3(join(dir, 'r.db'))
+    const raw = new DatabaseSync(join(dir, 'r.db'))
     raw.exec(
       `CREATE TRIGGER poison_import BEFORE INSERT ON nodes ` +
       `WHEN new.content LIKE '%POISONROW%' BEGIN SELECT RAISE(ABORT, 'injected import fault'); END`,
@@ -171,12 +171,12 @@ describe('round-3 tier-1 regressions', () => {
 
   it('S7: a failing merge commits nothing — retry after the fault merges the whole branch', async () => {
     const dir = tmp()
-    const db = wrapBetterSqlite(new BetterSqlite3(join(dir, 's7.db')))
+    const db = openNodeSqlite(new DatabaseSync(join(dir, 's7.db')))
     const scout = await FlatStore.open({ database: db, namespace: 'scout', ownsDatabase: false })
     await scout.insert('merge good row about the ledger audit')
     await scout.insert('POISONMERGE second row of the branch')
     const project = await FlatStore.open({ database: db, namespace: 'project', ownsDatabase: false })
-    const raw = new BetterSqlite3(join(dir, 's7.db'))
+    const raw = new DatabaseSync(join(dir, 's7.db'))
     raw.exec(
       `CREATE TRIGGER poison_merge BEFORE INSERT ON nodes ` +
       `WHEN new.content LIKE '%POISONMERGE%' BEGIN SELECT RAISE(ABORT, 'injected merge fault'); END`,

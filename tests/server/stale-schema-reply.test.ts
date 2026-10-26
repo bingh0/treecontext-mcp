@@ -12,11 +12,11 @@ import { describe, it, expect, afterEach } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import { Client, InMemoryTransport } from '@modelcontextprotocol/client'
 import { createServer } from '../../src/server/server.js'
 import { FlatStore } from '../../src/flat-store.js'
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { openNodeSqlite, setPragma } from '../../src/persistence/node-sqlite.js'
 import { maxSupportedVersion } from '../../src/persistence/migrations/index.js'
 import { newerSchemaLine } from '../../src/persistence/migrations.js'
 
@@ -29,7 +29,7 @@ afterEach(async () => {
 async function serve(opts: { lockHook?: () => void } = {}): Promise<{ client: Client; dbPath: string }> {
   const dir = mkdtempSync(join(tmpdir(), 'tc-stale-reply-'))
   const dbPath = join(dir, 'treecontext.db')
-  const store = await FlatStore.open({ database: wrapBetterSqlite(new BetterSqlite3(dbPath)), ownsDatabase: true })
+  const store = await FlatStore.open({ database: openNodeSqlite(new DatabaseSync(dbPath)), ownsDatabase: true })
   const server = createServer(store, opts)
   const [ct, st] = InMemoryTransport.createLinkedPair()
   const client = new Client({ name: 'stale', version: '0' })
@@ -43,8 +43,8 @@ async function serve(opts: { lockHook?: () => void } = {}): Promise<{ client: Cl
 }
 
 function migratePast(dbPath: string): void {
-  const raw = new BetterSqlite3(dbPath)
-  raw.pragma(`user_version = ${maxSupportedVersion + 1}`)
+  const raw = new DatabaseSync(dbPath)
+  setPragma(raw, `user_version = ${maxSupportedVersion + 1}`)
   raw.close()
 }
 

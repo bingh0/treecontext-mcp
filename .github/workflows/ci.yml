@@ -57,11 +57,11 @@ jobs:
         os: ${{ fromJSON(needs.plan.outputs.test-os) }}
         node: ['lts/*']
         include:
-          # package.json says engines >=22, and a claim nothing executes is the
-          # failure mode this repo keeps writing releases about. One lane is
-          # enough: the floor is a runtime question, not an OS one.
+          # package.json says engines >=24.16, and a claim nothing executes is
+          # the failure mode this repo keeps writing releases about. One lane
+          # is enough: the floor is a runtime question, not an OS one.
           - os: ubuntu-latest
-            node: '22'
+            node: '24.16.0'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -70,14 +70,9 @@ jobs:
           cache: npm
       - run: npm ci
 
-      # The dev tree may or may not compile better-sqlite3 from source — npm
-      # decides that, and either way it works. The property worth guarding is
-      # about the ARTIFACT, not this checkout, so it lives in the package job
-      # where a tarball exists to install. Asserting "no build ever happens"
-      # here was wrong: it failed every lane on a true statement about npm.
-      - name: the platform prebuild ships in the package
-        shell: bash
-        run: ls node_modules/better-sqlite3/prebuilds/
+      # No native dependency since D278: the database is node:sqlite. The
+      # property worth guarding is about the ARTIFACT, so the package job
+      # proves the install needs no compiler and no install script.
 
       # journal-install's boundary scenarios ask the agent itself what it can
       # see, and fail loudly rather than skip when it is absent — deliberately,
@@ -126,9 +121,10 @@ jobs:
       # The question a Windows tester actually asks: do I need Visual Studio?
       # better-sqlite3 12.x did — with no prebuild for the running ABI it fell
       # through to node-gyp, and `npm install` exited 1 on a machine without a
-      # toolchain. 13.x carries N-API binaries in the package instead. This
+      # toolchain. Since D278 there is no native dependency at all; this
       # proves that on every platform by making node-gyp unconditionally fail
-      # and requiring the install to succeed anyway.
+      # and requiring the install to succeed anyway, with no install script
+      # approval needed.
       - name: the artifact installs with no compiler available
         shell: bash
         run: |
@@ -144,7 +140,7 @@ jobs:
           BIN="$RUNNER_TEMP/nocompiler/bin/treecontext"
           [ -f "$BIN" ] || BIN="$RUNNER_TEMP/nocompiler/treecontext.cmd"
           "$BIN" doctor 2>&1 | tee doctor.txt
-          grep -q "better-sqlite3: native binding loaded" doctor.txt
+          grep -q "SQLite: .* built into this Node, FTS5 compiled in" doctor.txt
 
       - name: Install the tarball into a clean project
         shell: bash
@@ -154,28 +150,30 @@ jobs:
           npm init -y >/dev/null
           npm install "$GITHUB_WORKSPACE"/treecontext-mcp-*.tgz --no-audit --no-fund
 
-      - name: doctor must load the native binding
+      - name: doctor must open this Node's SQLite with FTS5
         shell: bash
         working-directory: ${{ runner.temp }}/gate
         run: |
           node node_modules/treecontext-mcp/dist/server/cli.js doctor | tee out.txt
-          grep -q "\[ok\]   better-sqlite3" out.txt
+          grep -q "\[ok\]   SQLite: " out.txt
+          grep -q "\[ok\]   Node.js: " out.txt
+          ! grep -q "better-sqlite3" out.txt
 
       - name: Store round-trip against the packaged build
         shell: bash
         working-directory: ${{ runner.temp }}/gate
         run: |
           cat > smoke.mjs <<'EOF'
-          import BetterSqlite3 from 'better-sqlite3'
+          import { DatabaseSync } from 'node:sqlite'
           import { FlatStore } from 'treecontext-mcp'
-          import { wrapBetterSqlite } from 'treecontext-mcp/persistence/node'
+          import { openNodeSqlite } from 'treecontext-mcp/persistence/node'
           import { mkdtempSync } from 'node:fs'
           import { tmpdir } from 'node:os'
           import { join } from 'node:path'
 
           const dbPath = join(mkdtempSync(join(tmpdir(), 'tc-')), 'journal.db')
           const store = await FlatStore.open({
-            database: wrapBetterSqlite(new BetterSqlite3(dbPath)),
+            database: openNodeSqlite(dbPath),
             ownsDatabase: true,
           })
           const { nodeId } = await store.insert('the beta ships as a tarball', { metadata: { role: 'note' } })
@@ -185,7 +183,7 @@ jobs:
           await store.close()
 
           // Inspect SQLite directly — the charter's verification rule.
-          const raw = new BetterSqlite3(dbPath, { readonly: true })
+          const raw = new DatabaseSync(dbPath, { readOnly: true })
           const rows = raw.prepare('SELECT count(*) c FROM nodes').get().c
           raw.close()
 

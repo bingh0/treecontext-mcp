@@ -14,7 +14,7 @@ import { describe, it, expect, beforeEach, afterAll } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 
 import {
   seedAuditStore, COLLIDING_A, COLLIDING_B,
@@ -36,12 +36,12 @@ beforeEach(() => {
 })
 afterAll(() => rmSync(root, { recursive: true, force: true }))
 
-/** Read-only, fileMustExist — the handle doctor itself opens. */
-function open(dbPath: string): BetterSqlite3.Database {
-  return new BetterSqlite3(dbPath, { readonly: true, fileMustExist: true })
+/** Read-only, must exist — the handle doctor itself opens. */
+function open(dbPath: string): DatabaseSync {
+  return new DatabaseSync(dbPath, { readOnly: true })
 }
 
-function withStore<T>(dbPath: string, fn: (db: BetterSqlite3.Database) => T): T {
+function withStore<T>(dbPath: string, fn: (db: DatabaseSync) => T): T {
   const db = open(dbPath)
   try {
     return fn(db)

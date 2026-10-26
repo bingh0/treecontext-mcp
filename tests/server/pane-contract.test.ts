@@ -25,9 +25,9 @@ import { fileURLToPath } from 'node:url'
 import { mkdtempSync, rmSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
 import { FlatStore } from '../../src/flat-store.js'
 import {
   computeSidecarPanes,
@@ -132,7 +132,7 @@ describe('treecontext panes conform to pane-contract v1', () => {
   beforeAll(async () => {
     dir = mkdtempSync(join(tmpdir(), 'tc-pane-contract-'))
     storePath = join(dir, 'treecontext.db')
-    const db = wrapBetterSqlite(new BetterSqlite3(storePath))
+    const db = openNodeSqlite(new DatabaseSync(storePath))
     store = await FlatStore.open({ database: db, ownsDatabase: true })
     // Real content, including a hostile thread topic: the control bytes
     // must be gone from the bytes a consumer reads.

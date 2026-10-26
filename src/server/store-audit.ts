@@ -22,13 +22,13 @@
 import type { BoundProjects } from './split-candidates.js'
 
 /**
- * The narrow slice of a better-sqlite3 handle these helpers use. Narrow
- * on purpose: a module that cannot see `exec` or `run` cannot be talked
+ * The narrow slice of a database handle these helpers use — a raw
+ * node:sqlite DatabaseSync and a wrapped Database both fit. Narrow on
+ * purpose: a module that cannot see `exec` or `run` cannot be talked
  * into writing to a store doctor opened read-only.
  */
 export interface ReadonlyStoreDb {
   prepare(sql: string): { get(...params: unknown[]): unknown }
-  pragma(source: string, options: { simple: true }): unknown
 }
 
 // ── Fingerprint collisions (§9.2, §11a check 2) ────────────────────────
@@ -147,7 +147,7 @@ export interface CollisionCounts {
 export function fingerprintCollisions(db: ReadonlyStoreDb): CollisionCounts {
   const row = db.prepare(FINGERPRINT_COLLISION_SQL).get() as
     { groups_: number; rows_: number } | undefined
-  const version = Number(db.pragma('user_version', { simple: true }) ?? 0)
+  const version = Number((db.prepare('PRAGMA user_version').get() as { user_version?: unknown } | undefined)?.user_version ?? 0)
   let unmigrated: number | null = null
   if (version >= FINGERPRINT_DIGEST_VERSION) {
     const u = db.prepare(UNMIGRATED_FINGERPRINT_SQL).get() as { n: number } | undefined

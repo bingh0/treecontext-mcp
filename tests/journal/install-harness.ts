@@ -1,8 +1,8 @@
 import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, existsSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { meetsNodeFloor } from '../../src/server/installer.js'
 import { spawnSync } from 'node:child_process'
 import { basename, isAbsolute, join, relative, sep } from 'node:path'
 import { homedir, tmpdir } from 'node:os'
-import { createRequire } from 'node:module'
 import { getAgent, getConfigPath } from '../../src/server/agents.js'
 import { mcpLauncherPath } from '../../src/server/installer.js'
 import { sandboxedSpawnEnv, spawnCli, type CliSpawnResult } from '../helpers/cli-spawn.js'
@@ -293,13 +293,17 @@ export function installedCommands(home: string): Array<{ source: string; command
   return found
 }
 
-/** Can this interpreter load the native binding? The question that matters. */
-export function interpreterLoadsBinding(interpreter: string): boolean {
-  const bindingEntry = createRequire(import.meta.url).resolve('better-sqlite3')
-  const r = spawnSync(interpreter, ['-e', `require(${JSON.stringify(bindingEntry)})`], {
+/** Can this interpreter run this package (node:sqlite with FTS5, at the floor)? The question that matters. */
+export function interpreterRunsPackage(interpreter: string): boolean {
+  // The same proof install asks for (D278): the interpreter's own
+  // node:sqlite opens a database and builds an FTS5 table, and it is at or
+  // above the manifest's floor.
+  const r = spawnSync(interpreter, ['-e',
+    'const {DatabaseSync}=require("node:sqlite");const d=new DatabaseSync(":memory:");'
+    + 'd.exec("CREATE VIRTUAL TABLE t USING fts5(a)");d.close();process.stdout.write(process.versions.node)'], {
     encoding: 'utf8', timeout: 60_000,
   })
-  return r.status === 0
+  return r.status === 0 && meetsNodeFloor(r.stdout.trim())
 }
 
 /**

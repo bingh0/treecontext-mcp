@@ -5,8 +5,8 @@ import { describe, it, expect, afterEach } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import BetterSqlite3 from 'better-sqlite3'
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { DatabaseSync } from 'node:sqlite'
+import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
 
 describe('secure-delete', () => {
   let tmpDir: string
@@ -17,8 +17,8 @@ describe('secure-delete', () => {
 
   it('does NOT enable secure_delete by default', () => {
     tmpDir = mkdtempSync(join(tmpdir(), 'tc-sd-'))
-    const raw = new BetterSqlite3(join(tmpDir, 'test.db'))
-    const db = wrapBetterSqlite(raw)
+    const raw = new DatabaseSync(join(tmpDir, 'test.db'))
+    const db = openNodeSqlite(raw)
     const [row] = db.pragma('secure_delete') as Array<{ secure_delete: number }>
     expect(row, 'PRAGMA secure_delete must report a row').toBeDefined()
     expect(row!.secure_delete).toBe(0)
@@ -27,8 +27,8 @@ describe('secure-delete', () => {
 
   it('enables secure_delete when opted in', () => {
     tmpDir = mkdtempSync(join(tmpdir(), 'tc-sd-'))
-    const raw = new BetterSqlite3(join(tmpDir, 'test.db'))
-    const db = wrapBetterSqlite(raw, { secureDelete: true })
+    const raw = new DatabaseSync(join(tmpDir, 'test.db'))
+    const db = openNodeSqlite(raw, { secureDelete: true })
     const [row] = db.pragma('secure_delete') as Array<{ secure_delete: number }>
     expect(row, 'PRAGMA secure_delete must report a row').toBeDefined()
     expect(row!.secure_delete).toBe(1)
@@ -38,8 +38,8 @@ describe('secure-delete', () => {
 
   it('secureWipe() is a no-op when secureDelete is off', () => {
     tmpDir = mkdtempSync(join(tmpdir(), 'tc-sd-'))
-    const raw = new BetterSqlite3(join(tmpDir, 'test.db'))
-    const db = wrapBetterSqlite(raw)
+    const raw = new DatabaseSync(join(tmpDir, 'test.db'))
+    const db = openNodeSqlite(raw)
     // Should not throw
     db.secureWipe?.()
     db.close()
@@ -48,8 +48,8 @@ describe('secure-delete', () => {
   it('secureWipe() runs VACUUM when secureDelete is on', () => {
     tmpDir = mkdtempSync(join(tmpdir(), 'tc-sd-'))
     const path = join(tmpDir, 'test.db')
-    const raw = new BetterSqlite3(path)
-    const db = wrapBetterSqlite(raw, { secureDelete: true })
+    const raw = new DatabaseSync(path)
+    const db = openNodeSqlite(raw, { secureDelete: true })
 
     // Create a table, insert data, delete it, then wipe
     db.exec('CREATE TABLE t (id INTEGER PRIMARY KEY, data TEXT)')

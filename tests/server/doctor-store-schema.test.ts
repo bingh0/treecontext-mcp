@@ -15,7 +15,7 @@ import { describe, it, expect, afterAll, beforeEach } from 'vitest'
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readdirSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 
 import { redirectHome, storesDirIn } from '../helpers/home.js'
 
@@ -29,6 +29,9 @@ const restoreHome = redirectHome(fakeHome)
 const storesDir = storesDirIn(fakeHome)
 const logsDir = join(fakeHome, '.treecontext', 'logs')
 
+// After the home redirect: this module imports debug.js, whose LOGS_DIR is
+// bound to os.homedir() at import time.
+const { pragmaRows, setPragma } = await import('../../src/persistence/node-sqlite.js')
 const { doctor } = await import('../../src/server/installer.js')
 const { maxSupportedVersion } = await import('../../src/persistence/migrations/index.js')
 const { SCHEMA_SQL } = await import('../../src/persistence/schema.js')
@@ -38,9 +41,9 @@ const { FATAL_PREFIX } = await import('../../src/debug.js')
 function seedStore(name: string, version: number): void {
   const dir = join(storesDir, name)
   mkdirSync(dir, { recursive: true })
-  const db = new BetterSqlite3(join(dir, 'treecontext.db'))
+  const db = new DatabaseSync(join(dir, 'treecontext.db'))
   db.exec(SCHEMA_SQL)
-  db.pragma(`user_version = ${version}`)
+  setPragma(db, `user_version = ${version}`)
   db.close()
 }
 
@@ -87,8 +90,8 @@ describe('doctor: store schema', () => {
   it('never migrates the store it inspects — doctor diagnoses, it does not repair', async () => {
     seedStore('untouched', 12)
     await doctor()
-    const db = new BetterSqlite3(join(storesDir, 'untouched', 'treecontext.db'), { readonly: true })
-    const v = (db.pragma('user_version') as Array<{ user_version: number }>)[0]!.user_version
+    const db = new DatabaseSync(join(storesDir, 'untouched', 'treecontext.db'), { readOnly: true })
+    const v = (pragmaRows(db, 'user_version') as Array<{ user_version: number }>)[0]!.user_version
     db.close()
     expect(v).toBe(12)
     // A read-only inspection must not leave WAL sidecars behind either.

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import fs from 'fs'
-import Database from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import path from 'path'
 import os from 'os'
 import * as shared from '../../src/hooks/shared.js'
@@ -18,7 +18,7 @@ describe('Hooks tests', () => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hooks-test-'))
     tempDbPath = path.join(tempDir, 'treecontext.db')
 
-    const db = new Database(tempDbPath)
+    const db = new DatabaseSync(tempDbPath)
     db.exec(`
       CREATE TABLE staging (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -67,7 +67,7 @@ describe('Hooks tests', () => {
       priority: 1
     })
 
-    const db = new Database(tempDbPath)
+    const db = new DatabaseSync(tempDbPath)
     const row = db.prepare('SELECT * FROM staging').get() as any
     db.close()
 
@@ -89,7 +89,7 @@ describe('Hooks tests', () => {
 
     postToolUseMain()
 
-    const db = new Database(tempDbPath)
+    const db = new DatabaseSync(tempDbPath)
     const row = db.prepare('SELECT * FROM staging').get() as any
     db.close()
 
@@ -110,7 +110,7 @@ describe('Hooks tests', () => {
 
     postToolUseMain()
 
-    const db = new Database(tempDbPath)
+    const db = new DatabaseSync(tempDbPath)
     const row = db.prepare('SELECT * FROM staging').get() as any
     db.close()
 
@@ -131,7 +131,7 @@ describe('Hooks tests', () => {
     })
     postToolUseMain()
 
-    const db = new Database(tempDbPath)
+    const db = new DatabaseSync(tempDbPath)
     const rows = db.prepare('SELECT * FROM staging ORDER BY id ASC').all() as any[]
     db.close()
 
@@ -151,7 +151,7 @@ describe('Hooks tests', () => {
 
     postToolUseMain()
 
-    const db = new Database(tempDbPath)
+    const db = new DatabaseSync(tempDbPath)
     const row = db.prepare('SELECT * FROM staging').get() as any
     db.close()
 
@@ -173,7 +173,7 @@ describe('Hooks tests', () => {
 
     postToolUseMain()
 
-    const db = new Database(tempDbPath)
+    const db = new DatabaseSync(tempDbPath)
     const row = db.prepare('SELECT * FROM staging').get() as any
     db.close()
 

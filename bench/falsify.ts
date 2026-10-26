@@ -17,15 +17,12 @@
  *   npm run bench:falsify -- --max 120       # faster, still meaningful
  *   npm run bench:falsify -- --mutation rank-collapse
  */
-import BetterSqlite3 from 'better-sqlite3'
-import { createRequire } from 'node:module'
+import { DatabaseSync } from 'node:sqlite'
 import { ARMS, findArm } from './arms/index.js'
 import { advisoryFloor, clusterBootstrapSE, mean, queryBootstrapSE } from './lib/metrics.js'
 import { compareRuns, compareSlices, sigmasCell, sigmasPhrase, type RunRecord, type SliceResult } from './lib/report.js'
 import { MUTATIONS, expectationFor, findMutation, type Mutation } from './mutations.js'
 import type { Arm } from './arms/types.js'
-
-const require = createRequire(import.meta.url)
 
 interface Outcome {
   mutation: Mutation
@@ -47,7 +44,7 @@ function toRecord(
   arm: Arm,
   values: number[],
   clusters: string[],
-  extra: { sqlite: string; betterSqlite3: string },
+  extra: { sqlite: string; driver: string },
 ): RunRecord {
   const value = mean(values)
   const se = queryBootstrapSE(values)
@@ -72,7 +69,7 @@ function toRecord(
     slice_rule: arm.sliceRule,
     code_sha: null,
     code_dirty: false,
-    better_sqlite3: extra.betterSqlite3,
+    driver: extra.driver,
     sqlite: extra.sqlite,
     node: process.version,
     platform: `${process.platform}/${process.arch}`,
@@ -99,9 +96,8 @@ async function main(): Promise<void> {
     process.exit(1)
   }
 
-  const sqlite = (new BetterSqlite3(':memory:').prepare('select sqlite_version() v').get() as { v: string }).v
-  const betterSqlite3 = (require('better-sqlite3/package.json') as { version: string }).version
-  const extra = { sqlite, betterSqlite3 }
+  const sqlite = (new DatabaseSync(':memory:').prepare('select sqlite_version() v').get() as { v: string }).v
+  const extra = { sqlite, driver: 'node:sqlite' }
 
   process.stderr.write(`falsify: reference run of ${arm.id}${maxArg ? ` (max ${maxArg})` : ''}…\n`)
   const clean = await arm.run({ max: maxArg })

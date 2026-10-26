@@ -793,8 +793,9 @@ Findings against §§3-5 above. A3 is the one that changed the design.
 - **A5 — read-only `ATTACH` needs verifying, not assuming.** §5.1
   assumes the source can be attached read-only; that requires URI
   filenames (`file:…?mode=ro`) and depends on the driver build.
-  Confirm against better-sqlite3 before relying on it; if unavailable,
-  the guarantee must come from the lease and the backup instead.
+  Confirm against the driver before relying on it (node:sqlite honours
+  URI filenames, D278; the merge still attaches by plain path); if
+  unavailable, the guarantee must come from the lease and the backup instead.
 - **A6 — detector false positives.** `^(.*)-[0-9a-f]{6}$` matches a
   project genuinely named e.g. `my-app-abc123`. Harmless (it reports,
   it does not act) but the word "candidate" in the output is doing
@@ -1125,8 +1126,9 @@ old-collision corpus; determinism.
   inside the same immediate transaction, so a concurrent src writer
   costs completeness, never consistency — the disclosure states which
   is promised.
-- **A5 — read-only ATTACH**: verify better-sqlite3 honors
-  `file:…?mode=ro` at build time; if it does not, the lease + backups
+- **A5 — read-only ATTACH**: verify the driver honors
+  `file:…?mode=ro` at build time (node:sqlite does, D278; the merge has
+  not yet moved to it); if it does not, the lease + backups
   carry the guarantee and the code comment says so.
 - **Versions**: both stores at `maxSupportedVersion` (post-024), read
   via a no-migrate version probe; refuse mismatch rather than migrate

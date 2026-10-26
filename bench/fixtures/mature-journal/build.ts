@@ -46,11 +46,11 @@ import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import { Client, InMemoryTransport } from '@modelcontextprotocol/client'
 import { createServer } from '../../../src/server/server.js'
 import { IngestionLoop } from '../../../src/server/ingestion.js'
-import { wrapBetterSqlite } from '../../../src/persistence/better-sqlite.js'
+import { openNodeSqlite, pragmaRows } from '../../../src/persistence/node-sqlite.js'
 import { decodeContent } from '../../../src/persistence/content-codec.js'
 import { FlatStore } from '../../../src/flat-store.js'
 import { composeToolText } from '../../../src/hooks/post-tool-use.js'
@@ -191,7 +191,7 @@ async function spawnAll(sb: Sandbox, events: PlannedEvent[], opts: BuildOptions)
 /** Move every staged row of this session to its synthesized moment. Each
  *  planned event must account for exactly one staged row. */
 function retimeStaged(dbPath: string, events: PlannedEvent[], start: number): void {
-  const raw = new BetterSqlite3(dbPath)
+  const raw = new DatabaseSync(dbPath)
   try {
     const rows = raw.prepare('SELECT id, role, tool_name, content FROM staging WHERE processed = 0').all() as Array<{
       id: number; role: string; tool_name: string | null; content: string
@@ -218,7 +218,7 @@ async function drain(sb: Sandbox): Promise<void> {
   const storeFor = async (ns: string): Promise<FlatStore> => {
     let h = handles.get(ns)
     if (!h) {
-      h = await FlatStore.open({ database: wrapBetterSqlite(new BetterSqlite3(sb.dbPath)), ownsDatabase: true, namespace: ns })
+      h = await FlatStore.open({ database: openNodeSqlite(new DatabaseSync(sb.dbPath)), ownsDatabase: true, namespace: ns })
       handles.set(ns, h)
       extras.push(h)
     }
@@ -381,7 +381,7 @@ async function buildInto(sb: Sandbox, opts: BuildOptions): Promise<MatureJournal
     }
 
     // The curated rows' honest moments, before the drain heals from their echoes.
-    const raw = new BetterSqlite3(sb.dbPath)
+    const raw = new DatabaseSync(sb.dbPath)
     try {
       const set = raw.prepare('UPDATE nodes SET created_at = ? WHERE node_id = ?')
       for (const c of curatedAt) set.run(start + c.at, c.id)
@@ -394,7 +394,7 @@ async function buildInto(sb: Sandbox, opts: BuildOptions): Promise<MatureJournal
     resolveCapturedIds(sb, sessionId, events, ids)
   }
 
-  const raw = new BetterSqlite3(sb.dbPath, { readonly: true })
+  const raw = new DatabaseSync(sb.dbPath, { readOnly: true })
   let counts: MatureJournal['counts']
   let shellOnlyId = ''
   const indexed: Record<string, string> = {}
@@ -433,7 +433,7 @@ async function buildInto(sb: Sandbox, opts: BuildOptions): Promise<MatureJournal
  *  session, role and tool, content carrying the event's signature. Each
  *  must be exactly one row. */
 function resolveCapturedIds(sb: Sandbox, sessionId: string, events: PlannedEvent[], ids: Record<string, string>): void {
-  const raw = new BetterSqlite3(sb.dbPath, { readonly: true })
+  const raw = new DatabaseSync(sb.dbPath, { readOnly: true })
   try {
     const rows = (raw.prepare(
       "SELECT node_id, content, json_extract(metadata_json, '$.role') AS role, json_extract(metadata_json, '$.tool_name') AS tool " +
@@ -463,7 +463,7 @@ async function openSandbox(cleanups: Array<() => void | Promise<void>>): Promise
   mkdirSync(join(proj, '.git'))
   const dbPath = derivedStorePath(home, proj)
   mkdirSync(dirname(dbPath), { recursive: true })
-  const store = await FlatStore.open({ database: wrapBetterSqlite(new BetterSqlite3(dbPath)), ownsDatabase: true })
+  const store = await FlatStore.open({ database: openNodeSqlite(new DatabaseSync(dbPath)), ownsDatabase: true })
   cleanups.push(() => store.close())
   const server = createServer(store, { claudeCwd: proj, info: { storePath: dbPath } })
   const [ct, st] = InMemoryTransport.createLinkedPair()
@@ -487,8 +487,8 @@ export async function buildMatureJournal(file: string, opts: BuildOptions = {}):
     const journal = await buildInto(sb, opts)
     removals = cleanups.splice(0, 2) // the sandbox home and project removals
     for (const fn of cleanups.splice(0).reverse()) await fn()
-    const raw = new BetterSqlite3(sb.dbPath)
-    raw.pragma('wal_checkpoint(TRUNCATE)')
+    const raw = new DatabaseSync(sb.dbPath)
+    pragmaRows(raw, 'wal_checkpoint(TRUNCATE)')
     raw.close()
     copyFileSync(sb.dbPath, file)
     return journal

@@ -26,13 +26,14 @@
  * over world state: scenario-opening (fresh home + bare store) when no
  * sandbox exists yet, a no-op reaffirmation mid-scenario otherwise.
  */
+import { setPragma } from '../../src/persistence/node-sqlite.js'
 import { mkdirSync, existsSync, writeFileSync, readFileSync } from 'node:fs'
 import { join, basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { expect } from 'vitest'
 import type { Registry } from 'gherkin-node-test/vitest'
 
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 
 import { spawnCli, spawnNodeTs } from '../helpers/cli-spawn.js'
 import {
@@ -62,7 +63,7 @@ interface World {
   failRmPath?: string
   /** Explicitly `| undefined`: the defers clear this field by assignment
    *  once the handle is closed, so a present-but-undefined key is legal. */
-  locker?: InstanceType<typeof BetterSqlite3> | undefined
+  locker?: DatabaseSync | undefined
   logs?: string[]
   exitCode?: number
   spawnResult?: { status: number | null; out: string }
@@ -164,8 +165,8 @@ export const backupSweepDefiner = (reg: Registry<World>): void => {
         break
       case 'the live store is below the current schema version': {
         const dbPath = seedStore(w, 'notes')
-        const db = new BetterSqlite3(dbPath)
-        db.pragma(`user_version = ${maxSupportedVersion - 1}`)
+        const db = new DatabaseSync(dbPath)
+        setPragma(db, `user_version = ${maxSupportedVersion - 1}`)
         db.close()
         w.bakPath = seedBackup(w, 'notes', 12, 64, 'success')
         break
@@ -202,8 +203,8 @@ export const backupSweepDefiner = (reg: Registry<World>): void => {
       case 'the live store is locked by another process': {
         const dbPath = seedStore(w, 'notes')
         w.bakPath = seedBackup(w, 'notes', 12, 64, 'success')
-        w.locker = new BetterSqlite3(dbPath)
-        w.locker.pragma('locking_mode = EXCLUSIVE')
+        w.locker = new DatabaseSync(dbPath)
+        setPragma(w.locker, 'locking_mode = EXCLUSIVE')
         w.locker.exec('BEGIN EXCLUSIVE')
         break
       }

@@ -2,7 +2,7 @@
  * Platform-neutral database interface.
  *
  * Adapters:
- * - BetterSqliteDatabase (Node, sync via better-sqlite3)
+ * - NodeSqliteDatabase (Node, sync via node:sqlite — D278)
  * - ExpoSqliteDatabase (React Native, sync via expo-sqlite, phase 10)
  *
  * The MemTree sync core never touches this. Only the Persistence class

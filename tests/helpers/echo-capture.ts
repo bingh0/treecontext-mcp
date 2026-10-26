@@ -11,10 +11,10 @@
  */
 import { mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import type { Client } from '@modelcontextprotocol/client'
 import { decodeContent } from '../../src/persistence/content-codec.js'
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
 import { FlatStore } from '../../src/flat-store.js'
 import { type CaptureWorld, openCaptureSandbox, spawnHook, drainStaging } from '../journal/capture-harness.js'
 import { mcpOver } from '../journal/world.js'
@@ -68,7 +68,7 @@ export interface RawEcho {
 
 /** Every treecontext echo in the store, read raw through a readonly handle. */
 export function rawEchoes(dbPath: string): RawEcho[] {
-  const raw = new BetterSqlite3(dbPath, { readonly: true })
+  const raw = new DatabaseSync(dbPath, { readOnly: true })
   try {
     const rows = raw.prepare(
       'SELECT rowid, node_id, content, metadata_json, index_len, preview_len, index_col FROM nodes ' +
@@ -108,7 +108,7 @@ export function rawEcho(dbPath: string, tool: string): RawEcho {
  *  from nodes_fts (no ranking, no weights, no pruning): what the index
  *  holds, not what a query surface chooses to show. */
 export function ftsNodeIds(dbPath: string, term: string): string[] {
-  const raw = new BetterSqlite3(dbPath, { readonly: true })
+  const raw = new DatabaseSync(dbPath, { readOnly: true })
   try {
     const phrase = `"${term.replace(/"/g, '""')}"`
     return (raw.prepare(
@@ -124,7 +124,7 @@ export function ftsNodeIds(dbPath: string, term: string): string[] {
  *  the index holds the same postings, so it is the ghost-entry check a
  *  JOIN-ed query cannot be (a posting whose row is gone never joins). */
 export function ftsVocab(dbPath: string): string[] {
-  const raw = new BetterSqlite3(dbPath, { readonly: true })
+  const raw = new DatabaseSync(dbPath, { readOnly: true })
   try {
     raw.exec("CREATE VIRTUAL TABLE temp.echo_vocab USING fts5vocab(main, 'nodes_fts', 'col')")
     return (raw.prepare('SELECT term, col, doc, cnt FROM temp.echo_vocab ORDER BY term, col').all() as Array<{
@@ -154,7 +154,7 @@ async function openEchoStore(
   openCaptureSandbox(w)
   mkdirSync(dirname(w.dbPath!), { recursive: true })
   const store = await FlatStore.open({
-    database: wrapBetterSqlite(new BetterSqlite3(w.dbPath!)), ownsDatabase: true, ...storeOpts,
+    database: openNodeSqlite(new DatabaseSync(w.dbPath!)), ownsDatabase: true, ...storeOpts,
   })
   w.defer(() => store.close())
   w.store = store
@@ -182,7 +182,7 @@ export async function drainedDeleteEcho(w: CaptureWorld): Promise<DrainedEcho> {
   const { payload, response } = await callEchoed(w, client, 'treecontext_delete', { node_id: victim })
   // A real delete: the row the call named existed and is gone (the server
   // answers `deleted: true` for any id, so the row itself is the proof).
-  const gone = new BetterSqlite3(w.dbPath!, { readonly: true })
+  const gone = new DatabaseSync(w.dbPath!, { readOnly: true })
   try {
     if (response['deleted'] !== true || gone.prepare('SELECT 1 FROM nodes WHERE node_id = ?').get(victim) !== undefined) {
       throw new Error('the delete did not happen: nothing real to echo')

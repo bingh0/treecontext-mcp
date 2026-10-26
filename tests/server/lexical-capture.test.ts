@@ -22,8 +22,8 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import BetterSqlite3 from 'better-sqlite3'
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { DatabaseSync } from 'node:sqlite'
+import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
 import type { Database } from '../../src/persistence/database.js'
 import { FlatStore } from '../../src/flat-store.js'
 import { IngestionLoop } from '../../src/server/ingestion.js'
@@ -35,7 +35,7 @@ afterEach(() => { rmSync(tmpDir, { recursive: true, force: true }) })
 
 let dbN = 0
 function openDb(): Database {
-  return wrapBetterSqlite(new BetterSqlite3(join(tmpDir, `cap-${dbN++}.db`)))
+  return openNodeSqlite(new DatabaseSync(join(tmpDir, `cap-${dbN++}.db`)))
 }
 
 interface ExportedNode {

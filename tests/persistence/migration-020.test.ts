@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { openNodeSqlite, setPragma } from '../../src/persistence/node-sqlite.js'
 import { runMigrations, currentSchemaVersion } from '../../src/persistence/migrations.js'
 import { maxSupportedVersion } from '../../src/persistence/migrations/index.js'
 import { MigrationRequiredError } from '../../src/errors/index.js'
@@ -25,18 +25,18 @@ describe('migration 020_staging_namespace', () => {
    *  to v19 — 020's guard tolerates the column already existing, so the
    *  replay exercises the real gate logic. */
   function makeV19(path: string): void {
-    const raw = new BetterSqlite3(path)
-    const db = wrapBetterSqlite(raw)
+    const raw = new DatabaseSync(path)
+    const db = openNodeSqlite(raw)
     runMigrations(db, { migrate: true })
-    raw.pragma('user_version = 19')
+    setPragma(raw, 'user_version = 19')
     raw.close()
   }
 
   it('applies additively on a v19 store and lands the namespace column', () => {
     const path = join(dir, 'v19.db')
     makeV19(path)
-    const raw = new BetterSqlite3(path)
-    const db = wrapBetterSqlite(raw)
+    const raw = new DatabaseSync(path)
+    const db = openNodeSqlite(raw)
     const report = runMigrations(db, {})
     expect(report.to).toBe(maxSupportedVersion)
     const cols = raw.prepare('PRAGMA table_info(staging)').all() as Array<{ name: string }>
@@ -47,8 +47,8 @@ describe('migration 020_staging_namespace', () => {
   it('migrate:false refuses a pending additive ladder — an opt-out is an opt-out', () => {
     const path = join(dir, 'optout.db')
     makeV19(path)
-    const raw = new BetterSqlite3(path)
-    const db = wrapBetterSqlite(raw)
+    const raw = new DatabaseSync(path)
+    const db = openNodeSqlite(raw)
     expect(() => runMigrations(db, { migrate: false })).toThrow(MigrationRequiredError)
     expect(currentSchemaVersion(db), 'the refused ladder must not have half-applied').toBe(19)
     raw.close()
@@ -59,8 +59,8 @@ describe('migration 020_staging_namespace', () => {
     makeV19(path)
     // A genuinely read-only connection: any write attempt would be
     // SQLITE_READONLY — the crash the clean refusal replaces.
-    const raw = new BetterSqlite3(path, { readonly: true })
-    const db = wrapBetterSqlite(raw)
+    const raw = new DatabaseSync(path, { readOnly: true })
+    const db = openNodeSqlite(raw)
     await expect(
       FlatStore.open({ database: db, ownsDatabase: true, readOnly: true }),
     ).rejects.toThrow(MigrationRequiredError)

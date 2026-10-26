@@ -16,7 +16,7 @@
  * Emits nothing; a failure is logged and the hook exits 0 as every hook
  * does.
  */
-import type { Database as DatabaseType } from 'better-sqlite3'
+import type { DatabaseSync as DatabaseType } from 'node:sqlite'
 import { parseHookInput, resolveDbPath, openHookDb, isDirectInvocation, payloadWriter } from './shared.js'
 import { gitSelfOf } from './git-self.js'
 import { hasRegistry, registerSubagent, selfOf, type GitSelf } from '../persistence/session-registry.js'

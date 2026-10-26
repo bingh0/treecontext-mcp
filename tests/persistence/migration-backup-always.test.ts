@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import { mkdtempSync, rmSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { openNodeSqlite, pragmaValue, setPragma } from '../../src/persistence/node-sqlite.js'
 import { runMigrations } from '../../src/persistence/migrations.js'
 import { migrations, maxSupportedVersion } from '../../src/persistence/migrations/index.js'
 import { readVerdict } from '../../src/persistence/backup-verdict.js'
@@ -24,31 +24,31 @@ describe('every pending migration runs behind a backup (D59, D256)', () => {
     const lastDestructive = Math.max(...migrations.filter((m) => m.kind === 'destructive').map((m) => m.version))
     expect(lastDestructive, 'no additive migration sits above the newest destructive one').toBeLessThan(maxSupportedVersion)
     const path = join(dir, 'treecontext.db')
-    const raw = new BetterSqlite3(path)
-    const db = wrapBetterSqlite(raw)
+    const raw = new DatabaseSync(path)
+    const db = openNodeSqlite(raw)
     runMigrations(db, { migrate: true })
     for (const f of [`${path}.pre-migration-v0.bak`]) rmSync(f, { force: true })
     raw.prepare("INSERT INTO trees (tree_id, namespace, ensemble_index, created_at) VALUES (1, 'project', 0, 0)").run()
     const ins = raw.prepare("INSERT INTO nodes (node_id, tree_id, content, summary, created_at, updated_at) VALUES (?, 1, ?, '', 0, 0)")
     for (let i = 0; i < 7; i++) ins.run(`n-${i}`, `entry ${i}`)
-    raw.pragma(`user_version = ${lastDestructive}`)
+    setPragma(raw, `user_version = ${lastDestructive}`)
     raw.close()
     return { path, from: lastDestructive }
   }
 
   it('an additive-only pending set is copied aside first, with a success verdict', () => {
     const { path, from } = storeWithAdditiveOnlyPending()
-    const raw = new BetterSqlite3(path)
-    const report = runMigrations(wrapBetterSqlite(raw), { migrate: true })
+    const raw = new DatabaseSync(path)
+    const report = runMigrations(openNodeSqlite(raw), { migrate: true })
     raw.close()
     expect(report.applied.length).toBeGreaterThan(0)
     expect(report.applied.every((a) => a.kind === 'additive')).toBe(true)
     expect(report.backupPath, 'additive runs bare again').toBe(`${path}.pre-migration-v${from}.bak`)
     expect(existsSync(report.backupPath!)).toBe(true)
     // The copy is the PRE-migration state, rows and all.
-    const bak = new BetterSqlite3(report.backupPath!, { readonly: true })
+    const bak = new DatabaseSync(report.backupPath!, { readOnly: true })
     try {
-      expect(bak.pragma('user_version', { simple: true })).toBe(from)
+      expect(pragmaValue(bak, 'user_version')).toBe(from)
       expect((bak.prepare('SELECT COUNT(*) AS c FROM nodes').get() as { c: number }).c).toBe(7)
     } finally {
       bak.close()
@@ -60,13 +60,13 @@ describe('every pending migration runs behind a backup (D59, D256)', () => {
 
   it('a writer active between the backup and the verdict costs no row and fails no verdict', () => {
     const { path, from } = storeWithAdditiveOnlyPending()
-    const raw = new BetterSqlite3(path)
-    const db = wrapBetterSqlite(raw)
+    const raw = new DatabaseSync(path)
+    const db = openNodeSqlite(raw)
     // A second connection writes the moment the backup is taken — the
     // window an additive (non-exclusive) run leaves open.
     let wrote = 0
     const writer = (): void => {
-      const w2 = new BetterSqlite3(path)
+      const w2 = new DatabaseSync(path)
       try {
         const ins = w2.prepare("INSERT INTO nodes (node_id, tree_id, content, summary, created_at, updated_at) VALUES (?, 1, ?, '', 0, 0)")
         for (let i = 0; i < 5; i++) { ins.run(`late-${i}`, `written during the migration ${i}`); wrote++ }
@@ -98,8 +98,8 @@ describe('every pending migration runs behind a backup (D59, D256)', () => {
 
   it('a backup row missing from the migrated store fails the verdict, counts notwithstanding', async () => {
     const { path, from } = storeWithAdditiveOnlyPending()
-    const raw = new BetterSqlite3(path)
-    runMigrations(wrapBetterSqlite(raw), { migrate: true })
+    const raw = new DatabaseSync(path)
+    runMigrations(openNodeSqlite(raw), { migrate: true })
     // One row gone, two others added: equal-or-greater count, not contained.
     raw.prepare("DELETE FROM nodes WHERE node_id = 'n-0'").run()
     raw.prepare("INSERT INTO nodes (node_id, tree_id, content, summary, created_at, updated_at) VALUES ('x-1', 1, 'a', '', 0, 0), ('x-2', 1, 'b', '', 0, 0)").run()
@@ -108,7 +108,7 @@ describe('every pending migration runs behind a backup (D59, D256)', () => {
     const orig = console.error
     console.error = (...a: unknown[]) => { errors.push(a.join(' ')) }
     try {
-      expect(recordCompletionVerdict(wrapBetterSqlite(raw), `${path}.pre-migration-v${from}.bak`, from)).toBe('failed')
+      expect(recordCompletionVerdict(openNodeSqlite(raw), `${path}.pre-migration-v${from}.bak`, from)).toBe('failed')
     } finally {
       console.error = orig
       raw.close()
@@ -120,17 +120,17 @@ describe('every pending migration runs behind a backup (D59, D256)', () => {
 
   it('a store at the head takes no backup', () => {
     const path = join(dir, 'treecontext.db')
-    const raw = new BetterSqlite3(path)
-    runMigrations(wrapBetterSqlite(raw), { migrate: true })
-    const report = runMigrations(wrapBetterSqlite(raw), { migrate: true })
+    const raw = new DatabaseSync(path)
+    runMigrations(openNodeSqlite(raw), { migrate: true })
+    const report = runMigrations(openNodeSqlite(raw), { migrate: true })
     raw.close()
     expect(report.applied).toEqual([])
     expect(report.backupPath).toBeUndefined()
   })
 
   it('an in-memory database has nothing to copy beside and still migrates', () => {
-    const raw = new BetterSqlite3(':memory:')
-    const report = runMigrations(wrapBetterSqlite(raw), { migrate: true })
+    const raw = new DatabaseSync(':memory:')
+    const report = runMigrations(openNodeSqlite(raw), { migrate: true })
     raw.close()
     expect(report.to).toBe(maxSupportedVersion)
     expect(report.backupPath).toBeUndefined()

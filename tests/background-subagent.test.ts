@@ -16,7 +16,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import { join } from 'node:path'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import { runHook, hookJson, drainStaging, bashPayload } from './journal/capture-harness.js'
 import { openWorld, toolEntry, now, clear, type ReorientationWorld } from './journal/steps/journal-reorientation.steps.js'
 import { mcpOver, parseTool, rawAll } from './journal/world.js'
@@ -201,7 +201,7 @@ describe('a background subagent beside its orchestrator (F1, D240)', () => {
       expect(liveBookmarks.map((r) => r.node_id).sort()).toEqual([b2, e].sort())
       // Idempotent: the same echoes drained again change nothing.
       const before = rawAll(w, "SELECT node_id, metadata_json, updated_at FROM nodes WHERE dedup_class != 'auto' ORDER BY node_id")
-      const raw = new BetterSqlite3(w.dbPath!)
+      const raw = new DatabaseSync(w.dbPath!)
       try { raw.prepare("UPDATE staging SET processed = 0, claimed_by = NULL WHERE tool_name = 'mcp__treecontext__treecontext_insert'").run() } finally { raw.close() }
       await drainStaging(w)
       expect(rawAll(w, "SELECT node_id, metadata_json, updated_at FROM nodes WHERE dedup_class != 'auto' ORDER BY node_id")).toEqual(before)

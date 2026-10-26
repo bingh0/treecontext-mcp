@@ -126,8 +126,8 @@ is not bureaucracy:
 - **mapping version** — how a corpus becomes journal entries is authored,
   and every choice moves the score. Bump it on any change; records with
   different mapping versions are not comparable.
-- **SQLite version** — FTS5 ranking lives in SQLite, which
-  `better-sqlite3` bundles. A dependency bump can legitimately move every
+- **SQLite version** — FTS5 ranking lives in SQLite, which the running
+  Node bundles (`node:sqlite`). A Node bump can legitimately move every
   figure, and a reader should be able to see that rather than infer it.
 
 ## Corpora are never committed

@@ -9,9 +9,9 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { randomUUID } from 'node:crypto'
 import { expect } from 'vitest'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import type { Registry } from 'gherkin-node-test/vitest'
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
 import { FlatStore } from '../../src/flat-store.js'
 import type { Database } from '../../src/persistence/database.js'
 import { Persistence } from '../../src/persistence/store.js'
@@ -72,7 +72,7 @@ interface LegacyRow {
  * registered AFTER stageDir's so LIFO teardown closes before it removes.
  */
 function buildLegacyStore(w: World, rows: LegacyRow[]): Database {
-  const db = wrapBetterSqlite(new BetterSqlite3(join(w.dir!, 'legacy.db')))
+  const db = openNodeSqlite(new DatabaseSync(join(w.dir!, 'legacy.db')))
   // The wrapper's close() is idempotent, so the steps that also close by hand
   // (and reopen onto a fresh handle) are unaffected.
   w.defer(() => db.close())
@@ -127,7 +127,7 @@ interface World {
   nodeId?: string
   userNodeId?: string
   noteNodeId?: string
-  raw?: InstanceType<typeof BetterSqlite3>
+  raw?: DatabaseSync
   threeArg?: number
   fourArg?: number
   belowZero?: number
@@ -145,7 +145,7 @@ export const roleWeightedFtsDefiner = (reg: Registry<World>): void => {
 
   function openDb(w: World, name: string): Database {
     const dir = stageDir(w)
-    const db = wrapBetterSqlite(new BetterSqlite3(join(dir, name)))
+    const db = openNodeSqlite(new DatabaseSync(join(dir, name)))
     w.defer(() => db.close())
     return db
   }
@@ -185,7 +185,7 @@ export const roleWeightedFtsDefiner = (reg: Registry<World>): void => {
     Persistence.openLexical(w.db!, { migrate: true }).close()
     const dir = w.dir!
     w.db!.close()
-    w.db = wrapBetterSqlite(new BetterSqlite3(join(dir, 'legacy.db')))
+    w.db = openNodeSqlite(new DatabaseSync(join(dir, 'legacy.db')))
     w.defer(() => w.db!.close())
   })
 
@@ -363,7 +363,7 @@ export const roleWeightedFtsDefiner = (reg: Registry<World>): void => {
   })
 
   reg.define(/^a four-column index and a bm25 call passing only three weights$/, (w) => {
-    const raw = new BetterSqlite3(':memory:')
+    const raw = new DatabaseSync(':memory:')
     w.defer(() => { raw.close() })
     raw.exec("CREATE VIRTUAL TABLE fts USING fts5(user_text, assistant_text, tool_text, note_text, content='')")
     raw.prepare('INSERT INTO fts(rowid, user_text, assistant_text, tool_text, note_text) VALUES (1, ?, ?, ?, ?)').run(
@@ -426,7 +426,7 @@ export const roleWeightedFtsDefiner = (reg: Registry<World>): void => {
     w.aboveTen = 11
     const dir = mkdtempSync(join(tmpdir(), 'tc-role-fts-'))
     w.defer(() => rmSync(dir, { recursive: true, force: true }))
-    const db = wrapBetterSqlite(new BetterSqlite3(join(dir, 'weights.db')))
+    const db = openNodeSqlite(new DatabaseSync(join(dir, 'weights.db')))
     w.defer(() => db.close())
     const store = await FlatStore.open({
       database: db,

@@ -8,8 +8,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import BetterSqlite3 from 'better-sqlite3'
-import { wrapBetterSqlite } from '../src/persistence/better-sqlite.js'
+import { DatabaseSync } from 'node:sqlite'
+import { openNodeSqlite } from '../src/persistence/node-sqlite.js'
 import { FlatStore } from '../src/flat-store.js'
 import { migrations } from '../src/persistence/migrations/index.js'
 import { referencedBy, laneWriterOf, MAIN_LANE } from '../src/references.js'
@@ -21,13 +21,13 @@ beforeEach(() => { tmpDir = mkdtempSync(join(tmpdir(), 'tc-refs-')) })
 afterEach(() => { rmSync(tmpDir, { recursive: true, force: true }) })
 
 const path = (): string => join(tmpDir, 'refs.db')
-const open = (): Promise<FlatStore> => FlatStore.open({ database: wrapBetterSqlite(new BetterSqlite3(path())), retentionInterval: 1_000_000 })
+const open = (): Promise<FlatStore> => FlatStore.open({ database: openNodeSqlite(new DatabaseSync(path())), retentionInterval: 1_000_000 })
 function index(): Array<{ ref_id: string; node_id: string }> {
-  const raw = new BetterSqlite3(path(), { readonly: true })
+  const raw = new DatabaseSync(path(), { readOnly: true })
   try { return raw.prepare('SELECT ref_id, node_id FROM node_refs ORDER BY ref_id, node_id').all() as Array<{ ref_id: string; node_id: string }> } finally { raw.close() }
 }
 function meta(id: string): Record<string, unknown> {
-  const raw = new BetterSqlite3(path(), { readonly: true })
+  const raw = new DatabaseSync(path(), { readOnly: true })
   try { return JSON.parse((raw.prepare('SELECT metadata_json AS m FROM nodes WHERE node_id = ?').get(id) as { m: string }).m) as Record<string, unknown> } finally { raw.close() }
 }
 
@@ -49,7 +49,7 @@ describe('the reverse index (D186)', () => {
     const a = (await s.insert('entry a')).nodeId
     const b = (await s.insert('entry b')).nodeId
     const c = (await s.insert('entry c', { metadata: { refs: [a] } })).nodeId
-    const raw = new BetterSqlite3(path())
+    const raw = new DatabaseSync(path())
     try {
       raw.prepare("UPDATE nodes SET metadata_json = json_set(metadata_json, '$._relied_count', 3) WHERE node_id = ?").run(c)
       expect(index()).toEqual([{ ref_id: a, node_id: c }])
@@ -66,10 +66,10 @@ describe('the reverse index (D186)', () => {
     const a = (await s.insert('entry a')).nodeId
     const c = (await s.insert('entry c', { metadata: { refs: [a] } })).nodeId
     await s.close()
-    const raw = new BetterSqlite3(path())
+    const raw = new DatabaseSync(path())
     try {
       raw.exec('DROP TRIGGER trg_node_refs_insert; DROP TRIGGER trg_node_refs_update; DROP TRIGGER trg_node_refs_delete; DROP TABLE node_refs')
-      migrations.find((m) => m.version === 26)!.up(wrapBetterSqlite(raw))
+      migrations.find((m) => m.version === 26)!.up(openNodeSqlite(raw))
     } finally { raw.close() }
     expect(index()).toEqual([{ ref_id: a, node_id: c }])
   })
@@ -80,7 +80,7 @@ describe('the reverse index (D186)', () => {
     await s.insert('older referrer\nsecond line', { metadata: { refs: a, agent_type: 'tester' }, createdAt: Date.now() / 1000 - 600 })
     const newest = (await s.insert('newest referrer\nits second line', { metadata: { refs: a, _writer: 'reviewer' } })).nodeId
     await s.insert('a referrer of the referrer', { metadata: { refs: newest } })
-    const raw = new BetterSqlite3(path(), { readonly: true })
+    const raw = new DatabaseSync(path(), { readOnly: true })
     try {
       const by = referencedBy(raw, a)!
       expect(by).toMatchObject({ count: 2, newest: { nodeId: newest, writer: 'reviewer', firstLine: 'newest referrer', age: '0 minutes' } })
@@ -91,7 +91,7 @@ describe('the reverse index (D186)', () => {
     const s = await open()
     const a = (await s.insert('entry a')).nodeId
     const b = (await s.insert('entry b, which names nothing')).nodeId
-    const raw = new BetterSqlite3(path())
+    const raw = new DatabaseSync(path())
     try {
       // An index row whose referrer's metadata names nothing: only a reader
       // of the index can see it.
@@ -126,7 +126,7 @@ describe('supersession across lanes (D169)', () => {
   it('another writer\'s target is left untouched and becomes a reference on the new entry', async () => {
     const s = await open()
     const plan = (await s.insert('plan: the orchestrator\'s', { metadata: { next_session: true } })).nodeId
-    const row = (): unknown => { const raw = new BetterSqlite3(path(), { readonly: true }); try { return raw.prepare('SELECT * FROM nodes WHERE node_id = ?').get(plan) } finally { raw.close() } }
+    const row = (): unknown => { const raw = new DatabaseSync(path(), { readOnly: true }); try { return raw.prepare('SELECT * FROM nodes WHERE node_id = ?').get(plan) } finally { raw.close() } }
     const before = row()
     const r = await s.insert('tester: this plan fails', { metadata: { agent_type: 'tester', refs: ['other'] }, supersedes: [plan] })
     expect(r.superseded).toEqual([])
@@ -183,7 +183,7 @@ describe('which referrer is shown, and from where (D186, D187, D196)', () => {
     const c = (await s.insert('plan: the chapter', { metadata: { next_session: true } })).nodeId
     const t = (await s.insert('CSRF blocks the plan', { metadata: { agent_type: 'tester', refs: [c] }, createdAt: Date.now() / 1000 - 600 })).nodeId
     for (let i = 0; i < 3; i++) await s.insert(`orchestrator note ${i}`, { metadata: { refs: [c] } })
-    const raw = new BetterSqlite3(path(), { readonly: true })
+    const raw = new DatabaseSync(path(), { readOnly: true })
     try {
       expect(referencedBy(raw, c)).toMatchObject({ count: 4, newest: { nodeId: t, writer: 'tester', firstLine: 'CSRF blocks the plan' } })
       // With no other-lane referrer, the newest same-lane one is shown.
@@ -195,7 +195,7 @@ describe('which referrer is shown, and from where (D186, D187, D196)', () => {
   })
 
   it('a referrer in another namespace never shows in this one', async () => {
-    const db = wrapBetterSqlite(new BetterSqlite3(path()))
+    const db = openNodeSqlite(new DatabaseSync(path()))
     const x = await FlatStore.open({ database: db, ownsDatabase: false, namespace: 'x', retentionInterval: 1_000_000 })
     const y = await FlatStore.open({ database: db, ownsDatabase: false, namespace: 'y', retentionInterval: 1_000_000 })
     const a = (await x.insert('decision in x: the session cookie')).nodeId

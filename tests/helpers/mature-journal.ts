@@ -11,9 +11,9 @@
 import { copyFileSync, mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import { expect } from 'vitest'
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
 import { FlatStore } from '../../src/flat-store.js'
 import { roleWeightVector } from '../../src/persistence/fts.js'
 import { type MatureJournal, matureTemplate } from '../../bench/fixtures/mature-journal/index.js'
@@ -33,7 +33,7 @@ export async function seedMatureJournal(w: { defer: CaptureWorld['defer']; dir?:
   w.dir = dir
   w.dbPath = join(dir, 'journal.db')
   const journal = await copyMatureJournalTo(w.dbPath)
-  const store = await FlatStore.open({ database: wrapBetterSqlite(new BetterSqlite3(w.dbPath)), ownsDatabase: true })
+  const store = await FlatStore.open({ database: openNodeSqlite(new DatabaseSync(w.dbPath)), ownsDatabase: true })
   w.defer(() => store.close())
   w.store = store
   return journal
@@ -65,7 +65,7 @@ export async function copyMatureJournalTo(dbPath: string): Promise<MatureJournal
  * retired bookmark factor of D262 was 0.25). Positive-oriented scores.
  */
 export function rawOutranking(dbPath: string, words: string[], nodeId: string, factor = 1): { matching: number; better: number; score: number } {
-  const raw = new BetterSqlite3(dbPath, { readonly: true })
+  const raw = new DatabaseSync(dbPath, { readOnly: true })
   try {
     const match = words.map((t) => `"${t.replace(/"/g, '""')}"`).join(' OR ')
     const rows = raw.prepare(

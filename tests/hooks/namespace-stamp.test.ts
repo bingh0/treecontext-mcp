@@ -14,7 +14,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir, hostname } from 'node:os'
-import Database from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import { writeStaging } from '../../src/hooks/shared.js'
 import { writeNamespaceAnnotation } from '../../src/session-beacon.js'
 import { NS_LEASE_TTL_SECS } from '../../src/persistence/leases.js'
@@ -57,7 +57,7 @@ describe('writeStaging namespace stamp (C1)', () => {
   afterEach(() => { rmSync(tempDir, { recursive: true, force: true }) })
 
   function makeDb(path: string, schema: string): void {
-    const db = new Database(path)
+    const db = new DatabaseSync(path)
     db.exec(schema)
     db.close()
   }
@@ -65,7 +65,7 @@ describe('writeStaging namespace stamp (C1)', () => {
   /** Stand in for a serving process: hold `ns:<namespace>` with a
    *  heartbeat `ageSecs` old (default fresh). */
   function holdNsLease(path: string, namespace: string, pid: number, ageSecs = 0): void {
-    const db = new Database(path)
+    const db = new DatabaseSync(path)
     try {
       db.prepare(
         'INSERT OR REPLACE INTO leases (role, holder_pid, holder_host, holder_token, holder_label, acquired_at, heartbeat_at, ttl_secs) '
@@ -77,7 +77,7 @@ describe('writeStaging namespace stamp (C1)', () => {
   }
 
   function readRow(path: string): Record<string, unknown> {
-    const db = new Database(path)
+    const db = new DatabaseSync(path)
     try {
       return db.prepare('SELECT * FROM staging').get() as Record<string, unknown>
     } finally {

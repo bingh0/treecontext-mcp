@@ -94,7 +94,8 @@ describe('normalizeSource', () => {
 import { mkdtempSync as mkdtemp2, rmSync as rm2 } from 'node:fs'
 import { join as join2 } from 'node:path'
 import { tmpdir as tmpdir2 } from 'node:os'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
+import { pragmaValue, setPragma } from '../../src/persistence/node-sqlite.js'
 import { openHookDb, writeStaging } from '../../src/hooks/shared.js'
 import { existsSync } from 'node:fs'
 
@@ -103,7 +104,7 @@ describe('openHookDb readonly', () => {
     const dir = mkdtemp2(join2(tmpdir2(), 'tc-hookdb-ro-'))
     const path = join2(dir, 'store.db')
     try {
-      const seed = new BetterSqlite3(path)
+      const seed = new DatabaseSync(path)
       seed.exec('CREATE TABLE t (v TEXT)')
       seed.prepare('INSERT INTO t (v) VALUES (?)').run('row')
       seed.close()
@@ -130,7 +131,7 @@ import { HOOK_DB_TIMEOUT_MS as HOOK_BUDGET, HOOK_BOOTSTRAP_TIMEOUT_MS } from '..
 import { statSync, writeFileSync as writeFile3 } from 'node:fs'
 import { maxSupportedVersion } from '../../src/persistence/migrations/index.js'
 import { ensureBaseSchema } from '../../src/persistence/migrations.js'
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
 
 describe('openHookDb bootstraps a fresh store', () => {
   const inTemp = (fn: (path: string) => void): void => {
@@ -142,15 +143,15 @@ describe('openHookDb bootstraps a fresh store', () => {
     }
   }
   const versionOf = (path: string): number => {
-    const raw = new BetterSqlite3(path, { readonly: true })
+    const raw = new DatabaseSync(path, { readOnly: true })
     try {
-      return raw.pragma('user_version', { simple: true }) as number
+      return pragmaValue(raw, 'user_version') as number
     } finally {
       raw.close()
     }
   }
   const hasStaging = (path: string): boolean => {
-    const raw = new BetterSqlite3(path, { readonly: true })
+    const raw = new DatabaseSync(path, { readOnly: true })
     try {
       return (raw.prepare("SELECT count(*) AS c FROM sqlite_master WHERE name = 'staging'").get() as { c: number }).c === 1
     } finally {
@@ -160,7 +161,7 @@ describe('openHookDb bootstraps a fresh store', () => {
 
   // The wrapper's constructor sets mmap_size (256MB); a raw open leaves it
   // at SQLite's default 0 — the one pragma that tells the two apart.
-  const mmapOf = (db: ReturnType<typeof openHookDb>): number => db.pragma('mmap_size', { simple: true }) as number
+  const mmapOf = (db: ReturnType<typeof openHookDb>): number => pragmaValue(db, 'mmap_size') as number
 
   it('a path with no file behind it gets the full schema, at the ladder head', () => {
     inTemp((path) => {
@@ -222,8 +223,8 @@ describe('openHookDb bootstraps a fresh store', () => {
 
   it('a versioned store with an empty journal but STAGED rows is the server\'s, not a hook\'s (finding 5)', () => {
     inTemp((path) => {
-      const seed = new BetterSqlite3(path)
-      expect(ensureBaseSchema(wrapBetterSqlite(seed))).toBe(true)
+      const seed = new DatabaseSync(path)
+      expect(ensureBaseSchema(openNodeSqlite(seed))).toBe(true)
       seed.prepare("INSERT INTO staging (role, content, timestamp) VALUES ('user', 'captured, never drained', 1)").run()
       seed.close()
       const db = openHookDb(path)
@@ -239,11 +240,11 @@ describe('openHookDb bootstraps a fresh store', () => {
 
   it('the bootstrap waits at most its own share, and the write inherits the remainder (finding 2)', () => {
     inTemp((path) => {
-      const seed = new BetterSqlite3(path)
-      expect(ensureBaseSchema(wrapBetterSqlite(seed))).toBe(true)
+      const seed = new DatabaseSync(path)
+      expect(ensureBaseSchema(openNodeSqlite(seed))).toBe(true)
       seed.close()
       // Another starter holds the store mid-ladder.
-      const holder = new BetterSqlite3(path)
+      const holder = new DatabaseSync(path)
       holder.exec('BEGIN EXCLUSIVE')
       const t0 = Date.now()
       let db: ReturnType<typeof openHookDb> | undefined
@@ -252,10 +253,10 @@ describe('openHookDb bootstraps a fresh store', () => {
         const waited = Date.now() - t0
         expect(waited).toBeGreaterThanOrEqual(HOOK_BOOTSTRAP_TIMEOUT_MS - 50)
         expect(waited).toBeLessThan(HOOK_BOOTSTRAP_TIMEOUT_MS + 2000)
-        const left = db.pragma('busy_timeout', { simple: true }) as number
+        const left = pragmaValue(db, 'busy_timeout') as number
         expect(left).toBeLessThanOrEqual(HOOK_BUDGET - HOOK_BOOTSTRAP_TIMEOUT_MS + 50)
         expect(left).toBeGreaterThan(HOOK_BUDGET - HOOK_BOOTSTRAP_TIMEOUT_MS - 2000)
-        expect(db.inTransaction).toBe(false)
+        expect(db.isTransaction).toBe(false)
       } finally {
         db?.close()
         holder.exec('ROLLBACK')
@@ -267,8 +268,8 @@ describe('openHookDb bootstraps a fresh store', () => {
 
   it('a schema-less shell file (rc.6\'s leftover) is healed the same way', () => {
     inTemp((path) => {
-      const shell = new BetterSqlite3(path)
-      shell.pragma('journal_mode = WAL')
+      const shell = new DatabaseSync(path)
+      setPragma(shell, 'journal_mode = WAL')
       shell.close()
       const db = openHookDb(path)
       db.close()
@@ -279,7 +280,7 @@ describe('openHookDb bootstraps a fresh store', () => {
 
   it('a v0-era store WITH data is left for the server, untouched', () => {
     inTemp((path) => {
-      const seed = new BetterSqlite3(path)
+      const seed = new DatabaseSync(path)
       seed.exec('CREATE TABLE nodes (id TEXT PRIMARY KEY)')
       seed.prepare('INSERT INTO nodes (id) VALUES (?)').run('legacy-row')
       seed.close()
@@ -297,11 +298,11 @@ describe('openHookDb bootstraps a fresh store', () => {
 
   it('a versioned store behind the ladder WITH journal rows is never migrated by a hook', () => {
     inTemp((path) => {
-      const seed = new BetterSqlite3(path)
+      const seed = new DatabaseSync(path)
       seed.exec('CREATE TABLE nodes (node_id TEXT PRIMARY KEY)')
       seed.exec('CREATE TABLE staging (id INTEGER PRIMARY KEY, content TEXT)')
       seed.prepare('INSERT INTO nodes (node_id) VALUES (?)').run('a-real-row')
-      seed.pragma('user_version = 16')
+      setPragma(seed, 'user_version = 16')
       seed.close()
       const db = openHookDb(path)
       try {
@@ -318,9 +319,9 @@ describe('openHookDb bootstraps a fresh store', () => {
 
   it('a versioned file with no journal table at all is left alone', () => {
     inTemp((path) => {
-      const seed = new BetterSqlite3(path)
+      const seed = new DatabaseSync(path)
       seed.exec('CREATE TABLE something_else (v TEXT)')
-      seed.pragma('user_version = 3')
+      setPragma(seed, 'user_version = 3')
       seed.close()
       const db = openHookDb(path)
       try {
@@ -341,9 +342,9 @@ describe('openHookDb bootstraps a fresh store', () => {
     // no rows anywhere. Left alone, the write would land through the
     // legacy column tier with its stamps and tail dropped.
     inTemp((path) => {
-      const seed = new BetterSqlite3(path)
-      expect(ensureBaseSchema(wrapBetterSqlite(seed))).toBe(true)
-      expect(seed.pragma('user_version', { simple: true })).toBe(5)
+      const seed = new DatabaseSync(path)
+      expect(ensureBaseSchema(openNodeSqlite(seed))).toBe(true)
+      expect(pragmaValue(seed, 'user_version')).toBe(5)
       seed.close()
       const db = openHookDb(path)
       db.close()
@@ -357,7 +358,7 @@ describe('openHookDb bootstraps a fresh store', () => {
       const first = openHookDb(path)
       first.close()
       const stat = (): number => {
-        const raw = new BetterSqlite3(path, { readonly: true })
+        const raw = new DatabaseSync(path, { readOnly: true })
         try {
           return (raw.prepare('SELECT count(*) AS c FROM sqlite_master').get() as { c: number }).c
         } finally {
@@ -382,16 +383,16 @@ describe('openHookDb bootstraps a fresh store', () => {
       try {
         // The write's budget is what the bootstrap left of the hook's —
         // never the wrapper's 10s, never a fresh 8s on top.
-        const left = db.pragma('busy_timeout', { simple: true }) as number
+        const left = pragmaValue(db, 'busy_timeout') as number
         expect(left).toBeLessThanOrEqual(HOOK_BUDGET)
         expect(left).toBeGreaterThan(HOOK_BUDGET - HOOK_BOOTSTRAP_TIMEOUT_MS)
         // And the wrapper's pragma set is gone: FULL sync, no mmap, no
         // memory temp store — a hook's durability does not depend on
         // whether it happened to bootstrap.
-        expect(db.pragma('synchronous', { simple: true })).toBe(2)
+        expect(pragmaValue(db, 'synchronous')).toBe(2)
         expect(mmapOf(db)).toBe(0)
-        expect(db.pragma('temp_store', { simple: true })).toBe(0)
-        expect(db.inTransaction).toBe(false)
+        expect(pragmaValue(db, 'temp_store')).toBe(0)
+        expect(db.isTransaction).toBe(false)
       } finally {
         db.close()
       }
@@ -400,8 +401,8 @@ describe('openHookDb bootstraps a fresh store', () => {
 
   it('a read-only open never bootstraps', () => {
     inTemp((path) => {
-      const seed = new BetterSqlite3(path)
-      seed.pragma('journal_mode = WAL')
+      const seed = new DatabaseSync(path)
+      setPragma(seed, 'journal_mode = WAL')
       seed.close()
       const ro = openHookDb(path, { readonly: true })
       try {

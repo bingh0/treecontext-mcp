@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { wrapBetterSqlite, DEFAULT_PRAGMAS } from '../../src/persistence/better-sqlite.js'
+import { openNodeSqlite, DEFAULT_PRAGMAS } from '../../src/persistence/node-sqlite.js'
 import { runMigrations } from '../../src/persistence/migrations.js'
 
 // design/store-as-arbiter.md accepted ceilings: "BEGIN IMMEDIATE for every
@@ -25,17 +25,17 @@ describe('write-transaction discipline (BEGIN IMMEDIATE by default)', () => {
 
   it('applies a 10s busy_timeout in DEFAULT_PRAGMAS on every open', () => {
     expect(DEFAULT_PRAGMAS).toContainEqual(['busy_timeout', '10000'])
-    const db = wrapBetterSqlite(new BetterSqlite3(join(dir, 'pragmas.db')))
+    const db = openNodeSqlite(new DatabaseSync(join(dir, 'pragmas.db')))
     expect(db.pragma('busy_timeout')).toEqual([{ timeout: 10000 }])
     db.close()
   })
 
   it('transaction() takes the write lock at BEGIN: contention fails at the door, before fn runs', () => {
     const path = join(dir, 'contended.db')
-    const writer = wrapBetterSqlite(new BetterSqlite3(path))
+    const writer = openNodeSqlite(new DatabaseSync(path))
     writer.exec('CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)')
 
-    const holder = new BetterSqlite3(path)
+    const holder = new DatabaseSync(path)
     holder.exec('BEGIN IMMEDIATE')
     try {
       writer.pragma('busy_timeout', 100)
@@ -49,7 +49,8 @@ describe('write-transaction discipline (BEGIN IMMEDIATE by default)', () => {
       } catch (err) {
         thrown = err
       }
-      expect((thrown as { code?: string } | undefined)?.code).toBe('SQLITE_BUSY')
+      // node:sqlite says SQLITE_BUSY as errcode 5 (D278); the string code is ERR_SQLITE_ERROR.
+      expect((thrown as { errcode?: number } | undefined)?.errcode).toBe(5)
       // The immediate BEGIN was refused outright — the body never started,
       // so there is no half-taken read snapshot to fail out of mid-flight.
       expect(fnRan).toBe(false)
@@ -62,11 +63,11 @@ describe('write-transaction discipline (BEGIN IMMEDIATE by default)', () => {
 
   it("mode: 'deferred' remains available for read-only transactions under a concurrent writer", () => {
     const path = join(dir, 'readers.db')
-    const reader = wrapBetterSqlite(new BetterSqlite3(path))
+    const reader = openNodeSqlite(new DatabaseSync(path))
     reader.exec('CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)')
     reader.exec("INSERT INTO t (v) VALUES ('seed')")
 
-    const holder = new BetterSqlite3(path)
+    const holder = new DatabaseSync(path)
     holder.exec('BEGIN IMMEDIATE')
     try {
       reader.pragma('busy_timeout', 100)
@@ -89,7 +90,7 @@ describe('write-transaction discipline (BEGIN IMMEDIATE by default)', () => {
     // non-destructive branch — a fresh v0 store would take BEGIN
     // EXCLUSIVE for its destructive migrations and pass this test
     // without ever reaching the BEGIN IMMEDIATE path.
-    const seed = wrapBetterSqlite(new BetterSqlite3(path))
+    const seed = openNodeSqlite(new DatabaseSync(path))
     runMigrations(seed, { migrate: true })
     seed.pragma('user_version', 19)
     seed.close()
@@ -115,10 +116,10 @@ describe('write-transaction discipline (BEGIN IMMEDIATE by default)', () => {
     // correct throw. Take the class from the same graph that threw it.
     const { StoreBusyError: FreshStoreBusyError } = await import('../../src/errors/index.js')
 
-    const holder = new BetterSqlite3(path)
+    const holder = new DatabaseSync(path)
     holder.exec('BEGIN IMMEDIATE')
     try {
-      const db = wrapBetterSqlite(new BetterSqlite3(path))
+      const db = openNodeSqlite(new DatabaseSync(path))
       db.pragma('busy_timeout', 100)
       try {
         let thrown: unknown

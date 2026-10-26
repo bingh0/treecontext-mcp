@@ -7,7 +7,7 @@ import { Client } from '@modelcontextprotocol/client'
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio'
 import { nodeTsArgs, sandboxedSpawnEnv } from '../../helpers/cli-spawn.js'
 import { parseToolResult } from '../../helpers/mcp-result.js'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import { launcherCliPath } from '../../../src/server/installer.js'
 import { getAgent, getHookSettingsPath } from '../../../src/server/agents.js'
 import { decodeContent } from '../../../src/persistence/content-codec.js'
@@ -390,9 +390,9 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
     const dbs = readdirSync(storesDir, { recursive: true, encoding: 'utf8' })
       .filter(f => f.endsWith('treecontext.db')).map(f => join(storesDir, f))
     expect(dbs, `no store under the teammate's home: ${storesDir}`).toHaveLength(1)
-    const db = new BetterSqlite3(dbs[0]!, { readonly: true })
+    const db = new DatabaseSync(dbs[0]!, { readOnly: true })
     try {
-      const row = db.prepare('SELECT content FROM nodes WHERE node_id = ?').get(w.teammateNodeId) as { content: Buffer | string } | undefined
+      const row = db.prepare('SELECT content FROM nodes WHERE node_id = ?').get(w.teammateNodeId!) as { content: Buffer | string } | undefined
       expect(row, 'the inserted entry is not in the store').toBeDefined()
       expect(decodeContent(row!.content)).toBe('ux: the login form uses the compact layout')
     } finally {

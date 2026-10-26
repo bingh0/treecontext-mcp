@@ -3,12 +3,12 @@ import { hostname, tmpdir, userInfo } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { expect, vi } from 'vitest'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import { type Registry } from 'gherkin-node-test/vitest'
 import { type Client } from '@modelcontextprotocol/client'
 import { FlatStore } from '../../../src/flat-store.js'
 import { writeSessionBeacon } from '../../../src/session-beacon.js'
-import { wrapBetterSqlite } from '../../../src/persistence/better-sqlite.js'
+import { openNodeSqlite } from '../../../src/persistence/node-sqlite.js'
 import { decodeContent } from '../../../src/persistence/content-codec.js'
 import { mcpOver, parseTool, rawAll } from '../world.js'
 import { spawnCli } from '../../helpers/cli-spawn.js'
@@ -104,7 +104,7 @@ async function openA(w: HandoffWorld, project = 'hackathon-app'): Promise<void> 
   w.aRepo = join(w.aDir, 'work', project)
   mkdirSync(w.aRepo, { recursive: true })
   const store = await FlatStore.open({
-    database: wrapBetterSqlite(new BetterSqlite3(join(w.aDir, 'treecontext.db'))),
+    database: openNodeSqlite(new DatabaseSync(join(w.aDir, 'treecontext.db'))),
     ownsDatabase: true,
     retentionInterval: 1_000_000_000,
   })
@@ -120,7 +120,7 @@ async function openB(w: HandoffWorld): Promise<void> {
   openCaptureSandbox(w)
   mkdirSync(dirname(w.dbPath!), { recursive: true })
   const store = await FlatStore.open({
-    database: wrapBetterSqlite(new BetterSqlite3(w.dbPath!)),
+    database: openNodeSqlite(new DatabaseSync(w.dbPath!)),
     ownsDatabase: true,
     retentionInterval: 1_000_000_000,
   })
@@ -140,7 +140,7 @@ async function chapter(client: Client, text: string, extra: Record<string, unkno
 
 /** A's clock wrote this moment: the row's created_at, set in A's file. */
 function dateInA(w: HandoffWorld, nodeId: string, at: number): void {
-  const raw = new BetterSqlite3(join(w.aDir!, 'treecontext.db'))
+  const raw = new DatabaseSync(join(w.aDir!, 'treecontext.db'))
   try { raw.prepare('UPDATE nodes SET created_at = ? WHERE node_id = ?').run(at, nodeId) } finally { raw.close() }
 }
 
@@ -278,7 +278,7 @@ async function fillA(w: HandoffWorld, n: number, at0: number = now() - 86400): P
 
 /** A's lane, read straight off A's SQLite file. */
 function aRows(w: HandoffWorld, sql = 'SELECT node_id, content FROM nodes ORDER BY created_at ASC, node_id ASC'): Array<{ node_id: string; content: Buffer | string | null }> {
-  const raw = new BetterSqlite3(join(w.aDir!, 'treecontext.db'), { readonly: true })
+  const raw = new DatabaseSync(join(w.aDir!, 'treecontext.db'), { readOnly: true })
   try { return raw.prepare(sql).all() as Array<{ node_id: string; content: Buffer | string | null }> } finally { raw.close() }
 }
 
@@ -427,7 +427,7 @@ export const handoffDefiner = (reg: Registry<HandoffWorld>): void => {
     // The tester subagent's lane: a namespace of B's own store, on B's
     // own SQLite file, exported through a server over that lane.
     const lane = await FlatStore.open({
-      database: wrapBetterSqlite(new BetterSqlite3(w.dbPath!)),
+      database: openNodeSqlite(new DatabaseSync(w.dbPath!)),
       ownsDatabase: true, namespace: 'tester', retentionInterval: 1_000_000_000,
     })
     w.defer(() => lane.close())
@@ -562,7 +562,7 @@ export const handoffDefiner = (reg: Registry<HandoffWorld>): void => {
     await openB(w)
     w.bChapterText = 'plan: wire the session store; next: the beacon tests'
     w.bChapterId = await chapter(w.bClient!, w.bChapterText)
-    const raw = new BetterSqlite3(w.dbPath!)
+    const raw = new DatabaseSync(w.dbPath!)
     try { raw.prepare('UPDATE nodes SET created_at = ? WHERE node_id = ?').run(now() - 3600, w.bChapterId) } finally { raw.close() }
     // A's machine: an older chapter, a note, and the newest chapter, whose
     // clock runs ahead of B's.
@@ -667,7 +667,7 @@ export const handoffDefiner = (reg: Registry<HandoffWorld>): void => {
     openCaptureSandbox(w)
     mkdirSync(dirname(w.dbPath!), { recursive: true })
     const store = await FlatStore.open({
-      database: wrapBetterSqlite(new BetterSqlite3(w.dbPath!)), ownsDatabase: true, retentionInterval: 1_000_000_000,
+      database: openNodeSqlite(new DatabaseSync(w.dbPath!)), ownsDatabase: true, retentionInterval: 1_000_000_000,
     })
     w.defer(() => store.close())
     w.store = store

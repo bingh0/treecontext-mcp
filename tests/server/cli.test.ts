@@ -293,7 +293,7 @@ describe('resolveAutoStore', () => {
 describePosix('S11: ensureDbFileMode', () => {
   it('sets DB file to 0o600 on creation', async () => {
     const { statSync, writeFileSync, chmodSync, mkdtempSync: mkdtemp, rmSync: rm } = await import('node:fs')
-    const { ensureDbFileMode } = await import('../../src/persistence/better-sqlite.js')
+    const { ensureDbFileMode } = await import('../../src/persistence/node-sqlite.js')
     const dir = mkdtemp(join(tmpdir(), 'tc-s11-'))
     try {
       const dbPath = join(dir, 'test-mode.db')

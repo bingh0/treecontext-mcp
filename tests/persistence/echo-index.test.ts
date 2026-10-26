@@ -2,11 +2,11 @@ import { describe, expect, it } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import { echoIndexBoundary, echoToolOf, isTreecontextEcho, stampEchoBoundaries } from '../../src/persistence/echo-index.js'
 import { isInsertEchoTool, isStatusEchoTool } from '../../src/server/echo-correlation.js'
 import { indexTextFor } from '../../src/persistence/index-text.js'
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { openNodeSqlite, setPragma } from '../../src/persistence/node-sqlite.js'
 import { FlatStore } from '../../src/flat-store.js'
 import { ftsNodeIds, ftsVocab, rawEchoes } from '../helpers/echo-capture.js'
 import { IngestionLoop } from '../../src/server/ingestion.js'
@@ -102,7 +102,7 @@ describe('migration 028 (D261)', () => {
     const dir = mkdtempSync(join(tmpdir(), 'tc-m028-'))
     try {
       const path = join(dir, 's.db')
-      const open = (): Promise<FlatStore> => FlatStore.open({ database: wrapBetterSqlite(new BetterSqlite3(path)), ownsDatabase: true })
+      const open = (): Promise<FlatStore> => FlatStore.open({ database: openNodeSqlite(new DatabaseSync(path)), ownsDatabase: true })
       let store = await open()
       // Beta.1 shapes: an overflowing echo (both hook boundaries) and a fitting one (none).
       const tail = 'x'.repeat(50)
@@ -113,7 +113,7 @@ describe('migration 028 (D261)', () => {
       expect(ftsNodeIds(path, 'gammaword')).toHaveLength(1)
       expect(ftsNodeIds(path, 'deltaword')).toHaveLength(1)
       await store.close()
-      const rewind = (): void => { const raw = new BetterSqlite3(path); raw.pragma('user_version = 27'); raw.close() }
+      const rewind = (): void => { const raw = new DatabaseSync(path); setPragma(raw, 'user_version = 27'); raw.close() }
       rewind()
       store = await open()
       expect(ftsNodeIds(path, 'gammaword')).toEqual([])
@@ -139,7 +139,7 @@ describe('the echo heal (D265: echoes a still-running beta.1 server drains after
     const dir = mkdtempSync(join(tmpdir(), 'tc-echo-heal-'))
     try {
       const path = join(dir, 's.db')
-      const store = await FlatStore.open({ database: wrapBetterSqlite(new BetterSqlite3(path)), ownsDatabase: true })
+      const store = await FlatStore.open({ database: openNodeSqlite(new DatabaseSync(path)), ownsDatabase: true })
       // The beta.1 drain's way: an echo inserted with no D261 stamp, into a
       // store already at this build's head (migration 028 has run).
       const beta1 = (word: string, session = 'cc-old'): Promise<{ nodeId: string }> => {
@@ -191,7 +191,7 @@ describe('demoting an overflowing query echo (D261)', () => {
     try {
       const path = join(dir, 's.db')
       const store = await FlatStore.open({
-        database: wrapBetterSqlite(new BetterSqlite3(path)), ownsDatabase: true,
+        database: openNodeSqlite(new DatabaseSync(path)), ownsDatabase: true,
         maxStoreBytes: 1, maxSessions: 1_000_000, maxAutoEntries: 1_000_000, retentionInterval: 1_000_000,
       })
       // The hook's composition of an overflowing query echo: preview, then the full tail.

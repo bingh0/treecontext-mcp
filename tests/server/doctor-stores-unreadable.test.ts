@@ -14,7 +14,7 @@ import { mkdtempSync, mkdirSync, rmSync, chmodSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { describe, it, expect, afterAll } from 'vitest'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 
 import { redirectHome, storesDirIn } from '../helpers/home.js'
 
@@ -22,6 +22,9 @@ const fakeHome = mkdtempSync(join(tmpdir(), 'tc-doctor-unread-'))
 const restoreHome = redirectHome(fakeHome)
 const storesDir = storesDirIn(fakeHome)
 
+// After the home redirect: node-sqlite.js imports debug.js, whose LOGS_DIR
+// binds to os.homedir() at import time.
+const { setPragma } = await import('../../src/persistence/node-sqlite.js')
 const { doctor } = await import('../../src/server/installer.js')
 const { maxSupportedVersion } = await import('../../src/persistence/migrations/index.js')
 const { SCHEMA_SQL } = await import('../../src/persistence/schema.js')
@@ -38,9 +41,9 @@ describe.skipIf(!posixNonRoot)('doctor on an unreadable stores directory (findin
   it('errors on the Store-directory row and claims nothing downstream', async () => {
     // A real store exists inside — the machine is NOT empty.
     mkdirSync(join(storesDir, 'notes'), { recursive: true })
-    const db = new BetterSqlite3(join(storesDir, 'notes', 'treecontext.db'))
+    const db = new DatabaseSync(join(storesDir, 'notes', 'treecontext.db'))
     db.exec(SCHEMA_SQL)
-    db.pragma(`user_version = ${maxSupportedVersion}`)
+    setPragma(db, `user_version = ${maxSupportedVersion}`)
     db.close()
     chmodSync(storesDir, 0o000)
 

@@ -21,7 +21,7 @@ import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, existsSync
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { expect } from 'vitest'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import type { Registry } from 'gherkin-node-test/vitest'
 
 import { spawnCli } from '../helpers/cli-spawn.js'
@@ -55,14 +55,14 @@ export const backupCliDefiner = (reg: Registry<World>): void => {
   function seedStore(w: World, name: string): void {
     const dir = join(storesDirIn(w.home!), name)
     mkdirSync(dir, { recursive: true })
-    const db = new BetterSqlite3(join(dir, 'treecontext.db'))
+    const db = new DatabaseSync(join(dir, 'treecontext.db'))
     db.exec('CREATE TABLE rows (v TEXT)')
     db.prepare('INSERT INTO rows (v) VALUES (?), (?), (?)').run('a', 'b', 'c')
     db.close()
   }
 
   function countRows(path: string): number {
-    const db = new BetterSqlite3(path, { readonly: true, fileMustExist: true })
+    const db = new DatabaseSync(path, { readOnly: true })
     try {
       return (db.prepare('SELECT COUNT(*) AS c FROM rows').get() as { c: number }).c
     } finally {

@@ -20,9 +20,9 @@ import { spawnSync } from 'node:child_process'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import { Client, InMemoryTransport } from '@modelcontextprotocol/client'
-import { wrapBetterSqlite } from '../src/persistence/better-sqlite.js'
+import { openNodeSqlite } from '../src/persistence/node-sqlite.js'
 import type { Database } from '../src/persistence/database.js'
 import { FlatStore } from '../src/flat-store.js'
 import { createServer } from '../src/server/server.js'
@@ -255,7 +255,7 @@ describe('getSessionKey (flat-store.ts sessionOf) grouping — hook events, new 
   beforeEach(async () => {
     dir = mkdtempSync(join(tmpdir(), 'tc-sessionkey-'))
     dbPath = join(dir, 'treecontext.db')
-    db = wrapBetterSqlite(new BetterSqlite3(dbPath))
+    db = openNodeSqlite(new DatabaseSync(dbPath))
     store = await FlatStore.open({ database: db, ownsDatabase: true })
   })
   afterEach(async () => {
@@ -337,7 +337,7 @@ describe('end-to-end: treecontext_insert resolves _cc_session_id via the pid bea
   beforeEach(async () => {
     dir = mkdtempSync(join(tmpdir(), 'tc-e2e-'))
     dbPath = join(dir, 'treecontext.db')
-    db = wrapBetterSqlite(new BetterSqlite3(dbPath))
+    db = openNodeSqlite(new DatabaseSync(dbPath))
     store = await FlatStore.open({ database: db, ownsDatabase: true })
   })
   afterEach(async () => {
@@ -515,12 +515,12 @@ describe('namespace annotation (C1): the server writes, hooks resolve — never 
 describe('nsLeaseLiveFor: what corroborates a namespace annotation', () => {
   let dir: string
   let db: Database
-  let raw: BetterSqlite3.Database
+  let raw: DatabaseSync
 
   beforeEach(async () => {
     dir = mkdtempSync(join(tmpdir(), 'tc-ns-lease-'))
-    raw = new BetterSqlite3(join(dir, 'treecontext.db'))
-    db = wrapBetterSqlite(raw)
+    raw = new DatabaseSync(join(dir, 'treecontext.db'))
+    db = openNodeSqlite(raw)
     // Open a store so the migration ladder builds the leases table.
     const store = await FlatStore.open({ database: db, ownsDatabase: false })
     await store.close()

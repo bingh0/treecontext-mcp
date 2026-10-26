@@ -2,10 +2,10 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { hostname, tmpdir } from 'node:os'
 import { expect } from 'vitest'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import { type Registry } from 'gherkin-node-test/vitest'
 import { decodeContent } from '../../../src/persistence/content-codec.js'
-import { wrapBetterSqlite } from '../../../src/persistence/better-sqlite.js'
+import { openNodeSqlite } from '../../../src/persistence/node-sqlite.js'
 import { runMigrations } from '../../../src/persistence/migrations.js'
 import { FlatStore } from '../../../src/flat-store.js'
 import { writeNamespaceAnnotation } from '../../../src/session-beacon.js'
@@ -26,7 +26,7 @@ async function openNamespacePair(w: NamespacesWorld, nsA: string, nsB: string): 
   w.dir = mkdtempSync(join(tmpdir(), 'tc-journal-ns-'))
   w.defer(() => rmSync(w.dir!, { recursive: true, force: true }))
   w.dbPath = join(w.dir, 'journal.db')
-  const db = wrapBetterSqlite(new BetterSqlite3(w.dbPath))
+  const db = openNodeSqlite(new DatabaseSync(w.dbPath))
   const a = await FlatStore.open({ database: db, namespace: nsA, ownsDatabase: false })
   const b = await FlatStore.open({ database: db, namespace: nsB, ownsDatabase: false })
   w.defer(() => { a.close(); b.close(); db.close() })
@@ -38,7 +38,7 @@ async function openNamespacePair(w: NamespacesWorld, nsA: string, nsB: string): 
 /** All decoded rows in a namespace, via a separate readonly connection —
  *  never the store handle under test. */
 function rawNamespaceRows(w: NamespacesWorld, namespace: string): Array<{ content: string; metadata: Record<string, unknown> }> {
-  const raw = new BetterSqlite3(w.dbPath!, { readonly: true })
+  const raw = new DatabaseSync(w.dbPath!, { readOnly: true })
   try {
     const rows = raw
       .prepare('SELECT n.content, n.metadata_json FROM nodes n JOIN trees t ON t.tree_id = n.tree_id WHERE t.namespace = ?')
@@ -56,7 +56,7 @@ function rawNamespaceRows(w: NamespacesWorld, namespace: string): Array<{ conten
  *  attribution column beside the annotation — read through a separate
  *  readonly connection, never through either server's handle. */
 function sharedNamespaceRows(w: NamespacesWorld): Array<{ content: string; sessionKey: string; meta: Record<string, unknown> }> {
-  const raw = new BetterSqlite3(w.dbPath!, { readonly: true })
+  const raw = new DatabaseSync(w.dbPath!, { readOnly: true })
   try {
     const rows = raw
       .prepare(
@@ -83,7 +83,7 @@ function sharedNamespaceRows(w: NamespacesWorld): Array<{ content: string; sessi
  */
 export interface NamespacesWorld extends CaptureWorld {
   /** A raw handle on the store file, for reading the lease table directly. */
-  leaseDb?: ReturnType<typeof wrapBetterSqlite>
+  leaseDb?: ReturnType<typeof openNodeSqlite>
   /** Results of the exclusion query. */
   nsExcluded?: Array<{ content: string; metadata?: Record<string, unknown> }>
   // Two handles over one file
@@ -319,7 +319,7 @@ export const namespacesDefiner = (reg: Registry<NamespacesWorld>): void => {
     w.dir = mkdtempSync(join(tmpdir(), 'tc-nslease-'))
     w.defer(() => rmSync(w.dir!, { recursive: true, force: true }))
     w.dbPath = join(w.dir, 'nslease.db')
-    const db = wrapBetterSqlite(new BetterSqlite3(w.dbPath))
+    const db = openNodeSqlite(new DatabaseSync(w.dbPath))
     runMigrations(db, { migrate: true })
     w.leaseDb = db
     w.defer(() => db.close())
@@ -380,7 +380,7 @@ export const namespacesDefiner = (reg: Registry<NamespacesWorld>): void => {
     w.dbPath = join(w.dir, 'shared-ns.db')
     w.nsShared = []
     for (const [pid, sessionId] of [[81111, 'cc-share-alpha'], [82222, 'cc-share-beta']] as const) {
-      const db = wrapBetterSqlite(new BetterSqlite3(w.dbPath))
+      const db = openNodeSqlite(new DatabaseSync(w.dbPath))
       const store = await FlatStore.open({ database: db, namespace: 'project', ownsDatabase: true })
       w.defer(() => store.close())
       w.store = store
@@ -479,7 +479,7 @@ export const namespacesDefiner = (reg: Registry<NamespacesWorld>): void => {
     await drainStaging(w)
   })
   reg.define(/^those events land in that namespace's journal, created on demand$/, (w: NamespacesWorld) => {
-    const raw = new BetterSqlite3(w.dbPath!, { readonly: true })
+    const raw = new DatabaseSync(w.dbPath!, { readOnly: true })
     try {
       const rows = raw.prepare(
         "SELECT t.namespace AS ns FROM nodes n JOIN trees t ON n.tree_id = t.tree_id WHERE n.content LIKE '%GHOSTFACT5519%'",
@@ -515,7 +515,7 @@ export const namespacesDefiner = (reg: Registry<NamespacesWorld>): void => {
     // 2026-08-16), and without this the scenario would be testing an
     // arrangement the product never produces.
     {
-      const raw = new BetterSqlite3(w.dbPath!)
+      const raw = new DatabaseSync(w.dbPath!)
       try {
         raw.prepare(
           'INSERT OR REPLACE INTO leases (role, holder_pid, holder_host, holder_token, holder_label, acquired_at, heartbeat_at, ttl_secs) '
@@ -534,7 +534,7 @@ export const namespacesDefiner = (reg: Registry<NamespacesWorld>): void => {
     await drainStaging(w)
   })
   reg.define(/^those entries live in the subagent's namespace$/, (w: NamespacesWorld) => {
-    const raw = new BetterSqlite3(w.dbPath!, { readonly: true })
+    const raw = new DatabaseSync(w.dbPath!, { readOnly: true })
     try {
       const rows = raw.prepare(
         "SELECT t.namespace AS ns FROM nodes n JOIN trees t ON n.tree_id = t.tree_id WHERE n.content LIKE '%SUBFACT7731%'",
@@ -576,7 +576,7 @@ export const namespacesDefiner = (reg: Registry<NamespacesWorld>): void => {
     w.defer(() => rmSync(w.dir!, { recursive: true, force: true }))
     w.dbPath = join(w.dir, 'journal.db')
     const agentB = await FlatStore.open({
-      database: wrapBetterSqlite(new BetterSqlite3(w.dbPath)), ownsDatabase: true, namespace: 'agent-b',
+      database: openNodeSqlite(new DatabaseSync(w.dbPath)), ownsDatabase: true, namespace: 'agent-b',
     })
     // Stronger BM25 for the merged row: the token twice — so the
     // baseline ranks it ABOVE the trunk row and the down-weight has a
@@ -587,7 +587,7 @@ export const namespacesDefiner = (reg: Registry<NamespacesWorld>): void => {
     agentB.close()
 
     const trunk = await FlatStore.open({
-      database: wrapBetterSqlite(new BetterSqlite3(w.dbPath)), ownsDatabase: true,
+      database: openNodeSqlite(new DatabaseSync(w.dbPath)), ownsDatabase: true,
     })
     w.defer(() => trunk.close())
     w.store = trunk

@@ -98,7 +98,7 @@ gets *indexed*, not what is sensitive.
 ## 3. Data at rest
 
 **File permissions** (`ensureDbFileMode`,
-`src/persistence/better-sqlite.ts`): store directories are created mode
+`src/persistence/node-sqlite.ts`): store directories are created mode
 `0o700`; database files are chmod'd to `0o600` on create. Broader
 existing permissions produce a stderr warning rather than an auto-fix
 (you may have set group-share deliberately). Every other regular file
@@ -115,7 +115,7 @@ database file.
 **Secure delete** (`--secure-delete`): by default SQLite marks deleted
 pages free without overwriting them. Passing `--secure-delete` to
 `serve` enables `PRAGMA secure_delete = ON`
-(`src/persistence/better-sqlite.ts`); after `clear()` and bulk deletes
+(`src/persistence/node-sqlite.ts`); after `clear()` and bulk deletes
 the server additionally runs `VACUUM` plus
 `wal_checkpoint(TRUNCATE)` to scrub the WAL. This covers only SQLite —
 OS filesystem journals are out of scope; use full-disk encryption

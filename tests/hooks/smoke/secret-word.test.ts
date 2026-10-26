@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import fs from 'fs'
-import Database from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import path from 'path'
 import os from 'os'
 import * as shared from '../../../src/hooks/shared.js'
@@ -16,7 +16,7 @@ describe('Secret word smoke test (round-trip)', () => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'smoke-test-'))
     tempDbPath = path.join(tempDir, 'treecontext.db')
 
-    const db = new Database(tempDbPath)
+    const db = new DatabaseSync(tempDbPath)
     db.exec(`
       CREATE TABLE IF NOT EXISTS staging (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -59,7 +59,7 @@ describe('Secret word smoke test (round-trip)', () => {
 
   it('round-trip: pre-compact writes snapshot, session-start reads it', () => {
     // Seed staging with the secret word
-    const db = new Database(tempDbPath)
+    const db = new DatabaseSync(tempDbPath)
     db.prepare(
       `INSERT INTO staging (session_id, role, content, timestamp, priority, processed, created_at)
        VALUES (?, 'user', ?, ?, 1, 0, ?)`
@@ -75,7 +75,7 @@ describe('Secret word smoke test (round-trip)', () => {
     expect(stdoutSpy).not.toHaveBeenCalled()
 
     // Verify snapshot was written to DB
-    const checkDb = new Database(tempDbPath)
+    const checkDb = new DatabaseSync(tempDbPath)
     const snap = checkDb.prepare('SELECT * FROM snapshots WHERE session_id = ?').get('sess-origin') as any
     checkDb.close()
     expect(snap).toBeDefined()
@@ -97,7 +97,7 @@ describe('Secret word smoke test (round-trip)', () => {
 
   for (const source of sources) {
     it(`source=${source} produces valid JSON with additionalContext`, () => {
-      const db = new Database(tempDbPath)
+      const db = new DatabaseSync(tempDbPath)
       db.prepare(
         `INSERT INTO staging (session_id, role, content, timestamp, priority, processed, created_at)
          VALUES (?, 'user', ?, ?, 1, 0, ?)`
@@ -142,7 +142,7 @@ describe('Secret word smoke test (round-trip)', () => {
       sessionStartMain()
     }
 
-    const db = new Database(tempDbPath)
+    const db = new DatabaseSync(tempDbPath)
     const unclaimed = db.prepare('SELECT COUNT(*) as c FROM snapshots WHERE claimed_by IS NULL').get() as any
     const total = db.prepare('SELECT COUNT(*) as c FROM snapshots').get() as any
     db.close()

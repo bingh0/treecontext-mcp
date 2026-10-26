@@ -6,11 +6,11 @@ import { fileURLToPath } from 'node:url'
 import { randomBytes } from 'node:crypto'
 import { once } from 'node:events'
 import { expect } from 'vitest'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import { type Registry } from 'gherkin-node-test/vitest'
 import { FlatStore } from '../../../src/flat-store.js'
 import { writeSessionBeacon } from '../../../src/session-beacon.js'
-import { wrapBetterSqlite } from '../../../src/persistence/better-sqlite.js'
+import { openNodeSqlite, pragmaValue } from '../../../src/persistence/node-sqlite.js'
 import { mcpOver, parseTool, rawAll } from '../world.js'
 import { TS_ROOT, tsxArgv, killAndWait } from '../proc.js'
 import { spawnCli, sandboxedSpawnEnv, type CliSpawnResult } from '../../helpers/cli-spawn.js'
@@ -88,7 +88,7 @@ export async function openWorld(w: ReorientationWorld): Promise<void> {
   openCaptureSandbox(w)
   mkdirSync(dirname(w.dbPath!), { recursive: true })
   const store = await FlatStore.open({
-    database: wrapBetterSqlite(new BetterSqlite3(w.dbPath!)),
+    database: openNodeSqlite(new DatabaseSync(w.dbPath!)),
     ownsDatabase: true,
     retentionInterval: 1_000_000_000,
   })
@@ -111,7 +111,7 @@ async function openMatureWorld(w: ReorientationWorld): Promise<void> {
   mkdirSync(dirname(w.dbPath!), { recursive: true })
   await copyMatureJournalTo(w.dbPath!)
   const store = await FlatStore.open({
-    database: wrapBetterSqlite(new BetterSqlite3(w.dbPath!)),
+    database: openNodeSqlite(new DatabaseSync(w.dbPath!)),
     ownsDatabase: true,
     retentionInterval: 1_000_000_000,
   })
@@ -190,7 +190,7 @@ export async function mcpCheckpoint(
   }))
   const id = res['node_id'] as string
   if (opts.at !== undefined) {
-    const raw = new BetterSqlite3(w.dbPath!)
+    const raw = new DatabaseSync(w.dbPath!)
     try { raw.prepare('UPDATE nodes SET created_at = ? WHERE node_id = ?').run(opts.at, id) } finally { raw.close() }
   }
   return id
@@ -212,8 +212,8 @@ export async function mcpNote(
     arguments: { content: text, metadata, ...(opts.supersedes ? { supersedes: opts.supersedes } : {}) },
   }))
   if (opts.at !== undefined) {
-    const raw = new BetterSqlite3(w.dbPath!)
-    try { raw.prepare('UPDATE nodes SET created_at = ? WHERE node_id = ?').run(opts.at, res['node_id']) } finally { raw.close() }
+    const raw = new DatabaseSync(w.dbPath!)
+    try { raw.prepare('UPDATE nodes SET created_at = ? WHERE node_id = ?').run(opts.at, res['node_id'] as string) } finally { raw.close() }
   }
   return res
 }
@@ -955,8 +955,8 @@ export const reorientationDefiner = (reg: Registry<ReorientationWorld>): void =>
       expect(r.status, r.stderr).toBe(0)
       await exits
     }
-    const db = new BetterSqlite3(w.dbPath!, { readonly: true, timeout: 2000 })
-    try { expect(db.pragma('user_version', { simple: true })).toBeGreaterThan(0) } finally { db.close() }
+    const db = new DatabaseSync(w.dbPath!, { readOnly: true, timeout: 2000 })
+    try { expect(pragmaValue(db, 'user_version')).toBeGreaterThan(0) } finally { db.close() }
   })
 
   // ── a sprint past the byte budget asks nothing (D178) ──

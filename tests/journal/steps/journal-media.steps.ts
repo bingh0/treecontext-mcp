@@ -2,7 +2,7 @@ import { readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { expect } from 'vitest'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import { type Registry } from 'gherkin-node-test/vitest'
 import { decodeContent } from '../../../src/persistence/content-codec.js'
 import { countNodesIn } from '../../helpers/store-fixtures.js'
@@ -76,7 +76,7 @@ export const mediaDefiner = (reg: Registry<MediaWorld>): void => {
     // …and not smuggled through the content codec either: decode every
     // row and look again. A raw scan alone would miss a compressed copy.
     const marker = w.markerBytes!.toString('utf8')
-    const raw = new BetterSqlite3(w.dbPath!, { readonly: true })
+    const raw = new DatabaseSync(w.dbPath!, { readOnly: true })
     try {
       for (const r of raw.prepare('SELECT content FROM nodes').all() as Array<{ content: unknown }>) {
         expect(

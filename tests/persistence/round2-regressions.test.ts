@@ -10,8 +10,8 @@ import { randomBytes } from 'node:crypto'
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import BetterSqlite3 from 'better-sqlite3'
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { DatabaseSync } from 'node:sqlite'
+import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
 import { FlatStore } from '../../src/flat-store.js'
 import { INDEX_CAP_USER } from '../../src/persistence/index-text.js'
 
@@ -25,7 +25,7 @@ function tmp(): string {
 }
 async function open(dir: string, maxStoreBytes: number, file = 'r.db'): Promise<FlatStore> {
   return FlatStore.open({
-    database: wrapBetterSqlite(new BetterSqlite3(join(dir, file))),
+    database: openNodeSqlite(new DatabaseSync(join(dir, file))),
     ownsDatabase: true,
     maxStoreBytes,
     maxSessions: 1_000_000,
@@ -93,7 +93,7 @@ describe('round-2 tier-1 regressions', () => {
     await seed.close()
     // Reopen 40 bytes over budget (computed, because zstd sets the size).
     const store = await FlatStore.open({
-      database: wrapBetterSqlite(new BetterSqlite3(join(dir, 'r4.db'))),
+      database: openNodeSqlite(new DatabaseSync(join(dir, 'r4.db'))),
       ownsDatabase: true,
       maxStoreBytes: storedBytes - 40,
       maxSessions: 1_000_000,
@@ -137,7 +137,7 @@ describe('round-2 tier-1 regressions', () => {
 
   it('R3: mergeFromNamespace with nodeId merges exactly that entry, label stamped', async () => {
     const dir = tmp()
-    const db = wrapBetterSqlite(new BetterSqlite3(join(dir, 'm.db')))
+    const db = openNodeSqlite(new DatabaseSync(join(dir, 'm.db')))
     const branch = await FlatStore.open({ database: db, ownsDatabase: false, namespace: 'branch', retentionInterval: 1_000_000 })
     const ids: string[] = []
     for (const c of ['branch finding one', 'branch finding two', 'branch finding three']) {

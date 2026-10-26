@@ -13,7 +13,8 @@ start — replacing context compaction as the recall mechanism and
 preserving prompt-cache economics.
 
 Retrieval is lexical (FTS5 BM25, role-weighted). There is no embedder, no
-model download, no tree. Node.js ≥ 22.
+model download, no tree. No native dependency: the database is Node's
+built-in `node:sqlite`. Node.js ≥ 24.16.
 
 The design is the **minimum necessary** to honor that charter, and the
 minimalism is earned rather than aesthetic: hierarchical summary trees, a

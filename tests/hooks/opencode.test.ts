@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import fs from 'fs'
-import Database from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import path from 'path'
 import os from 'os'
 import * as shared from '../../src/hooks/shared.js'
@@ -8,7 +8,7 @@ import { TreecontextPlugin } from '../../src/hooks/opencode/plugin.js'
 import type { PluginInput, Hooks } from '@opencode-ai/plugin'
 
 function setupDb(dbPath: string) {
-  const db = new Database(dbPath)
+  const db = new DatabaseSync(dbPath)
   db.exec(`
     CREATE TABLE IF NOT EXISTS staging (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -81,7 +81,7 @@ describe('opencode plugin (Layers 2 + 3)', () => {
         },
       )
 
-      const db = new Database(tempDbPath)
+      const db = new DatabaseSync(tempDbPath)
       const row = db.prepare('SELECT * FROM staging').get() as any
       db.close()
 
@@ -99,7 +99,7 @@ describe('opencode plugin (Layers 2 + 3)', () => {
         { title: 'Edited a.ts', output: 'done', metadata: {} },
       )
 
-      const db = new Database(tempDbPath)
+      const db = new DatabaseSync(tempDbPath)
       const row = db.prepare('SELECT * FROM staging').get() as any
       db.close()
 
@@ -114,7 +114,7 @@ describe('opencode plugin (Layers 2 + 3)', () => {
         { title: 'Read file', output: 'contents', metadata: {} },
       )
 
-      const db = new Database(tempDbPath)
+      const db = new DatabaseSync(tempDbPath)
       const row = db.prepare('SELECT * FROM staging').get()
       db.close()
 
@@ -131,7 +131,7 @@ describe('opencode plugin (Layers 2 + 3)', () => {
         output,
       )
 
-      const db = new Database(tempDbPath)
+      const db = new DatabaseSync(tempDbPath)
       const snapshot = db.prepare('SELECT * FROM snapshots').get() as any
       db.close()
 
@@ -146,7 +146,7 @@ describe('opencode plugin (Layers 2 + 3)', () => {
 
   describe('Layer 3: system.transform rehydration', () => {
     it('injects rehydration context after session.created event', async () => {
-      const db = new Database(tempDbPath)
+      const db = new DatabaseSync(tempDbPath)
       db.prepare(
         `INSERT INTO staging (session_id, role, content, timestamp, priority, processed, created_at)
          VALUES (?, 'user', ?, ?, 1, 0, ?)`
@@ -198,7 +198,7 @@ describe('opencode plugin (Layers 2 + 3)', () => {
   describe('Layer 3: round-trip', () => {
     it('compacting → system.transform rehydration cycle', async () => {
       // Seed staging
-      const db = new Database(tempDbPath)
+      const db = new DatabaseSync(tempDbPath)
       db.prepare(
         `INSERT INTO staging (session_id, role, content, timestamp, priority, processed, created_at)
          VALUES (?, 'user', ?, ?, 1, 0, ?)`

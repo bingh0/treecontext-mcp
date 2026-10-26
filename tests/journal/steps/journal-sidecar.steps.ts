@@ -3,9 +3,9 @@ import { spawn, spawnSync } from 'node:child_process'
 import { dirname, join } from 'node:path'
 import { hostname, tmpdir } from 'node:os'
 import { expect } from 'vitest'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import { type Registry } from 'gherkin-node-test/vitest'
-import { wrapBetterSqlite } from '../../../src/persistence/better-sqlite.js'
+import { openNodeSqlite } from '../../../src/persistence/node-sqlite.js'
 import { runMigrations } from '../../../src/persistence/migrations.js'
 import { FlatStore } from '../../../src/flat-store.js'
 import { IngestionLoop } from '../../../src/server/ingestion.js'
@@ -178,7 +178,7 @@ export const sidecarDefiner = (reg: Registry<SidecarWorld>): void => {
     spawnSidecarServer(w)
     expect(await waitFor(() => existsSync(w.sDbPath!), 20_000), 'no store').toBe(true)
     await sleep(500)
-    const raw = new BetterSqlite3(w.sDbPath)
+    const raw = new DatabaseSync(w.sDbPath)
     const ins = raw.prepare(
       'INSERT INTO staging (session_id, role, content, tool_name, timestamp, priority, processed) ' +
       'VALUES (?,?,?,?,?,?,0)',
@@ -301,7 +301,7 @@ export const sidecarDefiner = (reg: Registry<SidecarWorld>): void => {
     // G4: hold the drain LEASE from this process — migrate the store
     // first (the lease table is schema), then write the row the spawned
     // server will be refused by.
-    const drainDb = wrapBetterSqlite(new BetterSqlite3(w.sDbPath))
+    const drainDb = openNodeSqlite(new DatabaseSync(w.sDbPath))
     runMigrations(drainDb, { migrate: true })
     const drainHolder = new LeaseClient(drainDb, { pid: process.pid, host: hostname() })
     drainHolder.tryAcquire('drain', DRAIN_LEASE_TTL_SECS)

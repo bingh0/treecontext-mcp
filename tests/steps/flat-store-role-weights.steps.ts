@@ -9,10 +9,10 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { expect } from 'vitest'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import { Client, InMemoryTransport } from '@modelcontextprotocol/client'
 import type { Registry } from 'gherkin-node-test/vitest'
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
 import { FlatStore } from '../../src/flat-store.js'
 import { createServer } from '../../src/server/server.js'
 import { parseToolResult } from '../helpers/mcp-result.js'
@@ -33,8 +33,8 @@ interface World {
   s?: FlatStore
   u1?: string
   u2?: string
-  newDb?: InstanceType<typeof BetterSqlite3>
-  legacyDb?: InstanceType<typeof BetterSqlite3>
+  newDb?: DatabaseSync
+  legacyDb?: DatabaseSync
 }
 
 /** This tier reads tool responses loosely — the shared cast lives in
@@ -49,7 +49,7 @@ export const flatStoreRoleWeightsDefiner = (reg: Registry<World>): void => {
   }
 
   async function freshStore(w: World, dir: string, name = 'flat.db'): Promise<FlatStore> {
-    const db = wrapBetterSqlite(new BetterSqlite3(join(dir, name)))
+    const db = openNodeSqlite(new DatabaseSync(join(dir, name)))
     const store = await FlatStore.open({ database: db, ownsDatabase: true })
     // Registered after the dir's rm defer: defer runs LIFO, so the store
     // closes before its directory unlinks (the Windows constraint).
@@ -84,7 +84,7 @@ export const flatStoreRoleWeightsDefiner = (reg: Registry<World>): void => {
     w.s = store
     // Attribution as stored, read from SQLite: the pair sits in the tool
     // and note columns, so the ranking below is the column weights'.
-    const raw = new BetterSqlite3(join(dir, 'flat.db'), { readonly: true })
+    const raw = new DatabaseSync(join(dir, 'flat.db'), { readOnly: true })
     let cols: Array<{ node_id: string; index_col: number }>
     try {
       cols = raw
@@ -191,11 +191,11 @@ export const flatStoreRoleWeightsDefiner = (reg: Registry<World>): void => {
         { user: '', assistant: '', tool: '', note: 'unrelated filler padding text more filler here' },
       ]
 
-      const newDb = new BetterSqlite3(':memory:')
+      const newDb = new DatabaseSync(':memory:')
       newDb.exec("CREATE VIRTUAL TABLE fts USING fts5(user_text, assistant_text, tool_text, note_text, content='')")
       const insNew = newDb.prepare('INSERT INTO fts(rowid, user_text, assistant_text, tool_text, note_text) VALUES (?, ?, ?, ?, ?)')
 
-      const legacyDb = new BetterSqlite3(':memory:')
+      const legacyDb = new DatabaseSync(':memory:')
       legacyDb.exec("CREATE VIRTUAL TABLE fts USING fts5(content, content='')")
       const insLegacy = legacyDb.prepare('INSERT INTO fts(rowid, content) VALUES (?, ?)')
 

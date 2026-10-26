@@ -7,7 +7,7 @@
  * `next_session = true` — the resume pointer the journal has always had. A
  * BOOKMARK is the same with `kind = "bookmark"`, written by the agent when
  * the Stop hook asks for one. Everything here reads the store through a raw
- * better-sqlite3 handle, because the hooks that call it hold exactly that:
+ * raw node:sqlite handle, because the hooks that call it hold exactly that:
  * no FlatStore, no migrations, nothing a short-lived hook process cannot
  * afford. Content may be zstd-encoded and is always decoded through the
  * production codec.
@@ -15,7 +15,7 @@
  * Nothing in this module decides on the agent's behalf (D187: the packet
  * discloses rather than decides): every count it knows is stated.
  */
-import type { Database as DatabaseType } from 'better-sqlite3'
+import type { SqlHandle as DatabaseType } from './persistence/node-sqlite.js'
 import { decodeContent } from './persistence/content-codec.js'
 import { referencedBy, ageText, plural } from './references.js'
 

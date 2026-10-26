@@ -9,9 +9,9 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import { Client, InMemoryTransport } from '@modelcontextprotocol/client'
-import { wrapBetterSqlite } from '../src/persistence/better-sqlite.js'
+import { openNodeSqlite } from '../src/persistence/node-sqlite.js'
 import { FlatStore } from '../src/flat-store.js'
 import { createServer } from '../src/server/server.js'
 import { laneWriterOf, MAIN_LANE, AMBIGUOUS_LANE } from '../src/references.js'
@@ -25,12 +25,12 @@ beforeEach(() => { tmpDir = mkdtempSync(join(tmpdir(), 'tc-registry-')) })
 afterEach(() => { rmSync(tmpDir, { recursive: true, force: true }) })
 
 const path = (): string => join(tmpDir, 'registry.db')
-const open = (): Promise<FlatStore> => FlatStore.open({ database: wrapBetterSqlite(new BetterSqlite3(path())), retentionInterval: 1_000_000 })
+const open = (): Promise<FlatStore> => FlatStore.open({ database: openNodeSqlite(new DatabaseSync(path())), retentionInterval: 1_000_000 })
 const MAIN: GitSelf = { worktree: null, branch: 'main', cwd: '/repo', toplevel: '/repo', commonDir: '/repo/.git' }
 const WT: GitSelf = { worktree: 'feature-login', branch: 'login-form', cwd: '/feature-login', toplevel: '/feature-login', commonDir: '/repo/.git' }
 
-function withRaw<T>(fn: (db: BetterSqlite3.Database) => T): T {
-  const raw = new BetterSqlite3(path())
+function withRaw<T>(fn: (db: DatabaseSync) => T): T {
+  const raw = new DatabaseSync(path())
   try { return fn(raw) } finally { raw.close() }
 }
 function meta(id: string): Record<string, unknown> {
@@ -232,7 +232,7 @@ describe('the worktree packet lines (F4, F7)', () => {
     await s.insert('plan: a guess', { metadata: { next_session: true, _writer: 'worktree:feature-x', _writer_src: 'ambiguous' } })
     await s.insert('build the search box', { metadata: { brief_for: 'feature-search', _writer: 'main', _writer_src: 'self' } })
     await s.close()
-    const db = new BetterSqlite3(path())
+    const db = new DatabaseSync(path())
     try {
       const at = Date.now() / 1000
       const login = worktreeSelfLines(db, { worktree: 'feature-login', branch: 'login-form' }, at)

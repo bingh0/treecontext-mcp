@@ -9,9 +9,9 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import { Client, InMemoryTransport } from '@modelcontextprotocol/client'
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
 import { FlatStore } from '../../src/flat-store.js'
 import { createServer } from '../../src/server/server.js'
 import { policyAllows, POLICIES, type Policy } from '../../src/server/policy.js'
@@ -20,8 +20,8 @@ async function listToolsForPolicy(
   tmp: string,
   policy: Policy,
 ): Promise<{ tools: string[]; close: () => Promise<void> }> {
-  const raw = new BetterSqlite3(join(tmp, `${policy}.db`))
-  const db = wrapBetterSqlite(raw)
+  const raw = new DatabaseSync(join(tmp, `${policy}.db`))
+  const db = openNodeSqlite(raw)
   const ctx = await FlatStore.open({ database: db, ownsDatabase: true })
   const server = createServer(ctx, { policy })
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()

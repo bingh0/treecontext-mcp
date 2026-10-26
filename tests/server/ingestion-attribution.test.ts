@@ -26,11 +26,12 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import BetterSqlite3 from 'better-sqlite3'
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { DatabaseSync } from 'node:sqlite'
+import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
 import { FlatStore } from '../../src/flat-store.js'
 import { IngestionLoop, type IngestibleStore } from '../../src/server/ingestion.js'
 import { MAX_INGEST_ATTEMPTS } from '../../src/persistence/capture-constants.js'
+import { decodeContent } from '../../src/persistence/content-codec.js'
 
 let tmpDir: string
 beforeEach(() => { tmpDir = mkdtempSync(join(tmpdir(), 'tc-attr-')) })
@@ -41,7 +42,7 @@ let dbPath = ''
 function openServing(namespace?: string): Promise<FlatStore> {
   dbPath = join(tmpDir, `attr-${dbN++}.db`)
   return FlatStore.open({
-    database: wrapBetterSqlite(new BetterSqlite3(dbPath)),
+    database: openNodeSqlite(new DatabaseSync(dbPath)),
     ownsDatabase: true,
     ...(namespace ? { namespace } : {}),
   })
@@ -69,7 +70,7 @@ async function openDrainWorld(
     let h = handles.get(ns)
     if (!h) {
       h = await FlatStore.open({
-        database: wrapBetterSqlite(new BetterSqlite3(dbPath)),
+        database: openNodeSqlite(new DatabaseSync(dbPath)),
         ownsDatabase: true,
         namespace: ns,
       })
@@ -96,12 +97,16 @@ function stage(trunk: FlatStore, content: string, namespace: string | null, sess
 /** All rows of one namespace's tree, raw (verification rule: separate
  *  readonly handle, no production query surface). */
 function treeRows(ns: string): Array<{ content: string; metadata: Record<string, unknown> }> {
-  const raw = new BetterSqlite3(dbPath, { readonly: true })
+  const raw = new DatabaseSync(dbPath, { readOnly: true })
   try {
     return (raw.prepare(
       'SELECT n.content AS content, n.metadata_json AS meta FROM nodes n JOIN trees t ON n.tree_id = t.tree_id WHERE t.namespace = ?',
-    ).all(ns) as Array<{ content: string | Buffer; meta: string | null }>)
-      .map((r) => ({ content: String(r.content), metadata: JSON.parse(r.meta ?? '{}') as Record<string, unknown> }))
+    ).all(ns) as Array<{ content: string | Uint8Array; meta: string | null }>)
+      // Decode, never String(): a zstd blob reads back as a Uint8Array under
+      // node:sqlite, and String() of one is its bytes as decimals. (Under
+      // better-sqlite3 String(Buffer) utf8-decoded the blob, and the needle
+      // happened to sit in zstd's raw literal section.)
+      .map((r) => ({ content: decodeContent(r.content), metadata: JSON.parse(r.meta ?? '{}') as Record<string, unknown> }))
   } finally {
     raw.close()
   }

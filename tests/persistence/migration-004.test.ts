@@ -1,12 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
 import { runMigrations, currentSchemaVersion } from '../../src/persistence/migrations.js'
 
-function seedV3(db: ReturnType<typeof wrapBetterSqlite>): void {
+function seedV3(db: ReturnType<typeof openNodeSqlite>): void {
   db.exec(`
     PRAGMA foreign_keys = ON;
 
@@ -110,8 +110,8 @@ describe('migration 004_decay_rate_and_staging', () => {
   })
 
   it('applies on a fresh database', () => {
-    const raw = new BetterSqlite3(join(dir, 'fresh.db'))
-    const db = wrapBetterSqlite(raw)
+    const raw = new DatabaseSync(join(dir, 'fresh.db'))
+    const db = openNodeSqlite(raw)
 
     const report = runMigrations(db, { migrate: true })
     expect(report.to).toBe(maxSupportedVersion)
@@ -131,8 +131,8 @@ describe('migration 004_decay_rate_and_staging', () => {
   })
 
   it('adds decay_rate and staging without disturbing existing nodes', () => {
-    const raw = new BetterSqlite3(join(dir, 'existing.db'))
-    const db = wrapBetterSqlite(raw)
+    const raw = new DatabaseSync(join(dir, 'existing.db'))
+    const db = openNodeSqlite(raw)
     seedV3(db)
 
     const report = runMigrations(db, { migrate: true })

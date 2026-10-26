@@ -10,9 +10,9 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import { Client, InMemoryTransport } from '@modelcontextprotocol/client'
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
 import { FlatStore } from '../../src/flat-store.js'
 import { createServer } from '../../src/server/server.js'
 import { SECRETS_WARNING, resolveProjectPath } from '../../src/handoff.js'
@@ -32,7 +32,7 @@ afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
 type Res = { isError?: boolean; content: Array<{ text: string }> }
 
 async function harness(): Promise<{ client: Client; close: () => Promise<void> }> {
-  const store = await FlatStore.open({ database: wrapBetterSqlite(new BetterSqlite3(join(dir, 'store.db'))), ownsDatabase: true })
+  const store = await FlatStore.open({ database: openNodeSqlite(new DatabaseSync(join(dir, 'store.db'))), ownsDatabase: true })
   await store.insert('plan: wire the login form; next: write its tests', { metadata: { next_session: true } })
   const server = createServer(store, { projectDir: project })
   const [ct, st] = InMemoryTransport.createLinkedPair()
@@ -177,7 +177,7 @@ describe('the import path rule', () => {
       const r = await h.client.callTool({ name: 'treecontext_import', arguments: { path } }) as Res
       refusedNamingProject(r, 'read')
     }
-    const raw = new BetterSqlite3(join(dir, 'store.db'), { readonly: true })
+    const raw = new DatabaseSync(join(dir, 'store.db'), { readOnly: true })
     expect((raw.prepare('SELECT COUNT(*) AS n FROM nodes').get() as { n: number }).n).toBe(1)
     raw.close()
     await h.close()

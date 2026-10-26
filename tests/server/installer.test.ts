@@ -7,7 +7,6 @@ import { join, basename, isAbsolute } from 'node:path'
 import { homedir, tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { execSync, execFileSync, spawnSync } from 'node:child_process'
-import { createRequire } from 'node:module'
 import { parse as parseToml } from 'smol-toml'
 import type { AgentDefinition } from '../../src/server/agents.js'
 import {
@@ -30,8 +29,7 @@ import {
   installClaudeSkill, removeClaudeSkill, skillFileContent,
   claudeHookScriptPaths,
   AGENT_HOOK_WRAPPER_STEMS, agentHookWrapperPath, agentHookWrapperContent,
-  installAgentHookWrappers, removeAgentHookWrappers, removeClaudeHookScripts,
-} from '../../src/server/installer.js'
+  installAgentHookWrappers, removeAgentHookWrappers, removeClaudeHookScripts, meetsNodeFloor } from '../../src/server/installer.js'
 import { SKILL_REFERENCE_NAME } from '../../src/server/instructions.js'
 import { AGENTS, getAgent, detectAgents, getConfigPath } from '../../src/server/agents.js'
 import { redirectHome } from '../helpers/home.js'
@@ -1794,8 +1792,8 @@ describe('interpreter resolution (AC1.1/AC1.2)', () => {
 })
 
 /**
- * Blank out the interpreter `install` pinned after verifying it can load the
- * native binding, so the wrapper's runtime discovery chain is what executes.
+ * Blank out the interpreter `install` pinned after verifying it meets the Node
+ * floor and runs this package, so the wrapper's runtime discovery chain is what executes.
  *
  * That chain is the upgrade-survival path: it runs when the pinned node no
  * longer exists — exactly what an nvm version bump does when it deletes the
@@ -2062,7 +2060,7 @@ describe('MCP launcher wrapper (upgrade-survivable stdio launch)', () => {
     }
   })
 
-  it('pins an interpreter proven to load the native binding, ahead of PATH', () => {
+  it('pins an interpreter proven to run this package, ahead of PATH', () => {
     // Runs on Windows now. It used to `return` early there — an invisible pass
     // that reported coverage of the claim on the one platform that did not
     // satisfy it: the .cmd asked PATH first and pinned an unverified execPath
@@ -2080,11 +2078,12 @@ describe('MCP launcher wrapper (upgrade-survivable stdio launch)', () => {
     const pathLookup = process.platform === 'win32' ? 'set "TC_NODE=node"' : 'command -v node'
     expect(body.indexOf(pinned!)).toBeLessThan(body.indexOf(pathLookup))
 
-    // And it must genuinely load the binding — the point of the probe.
-    const binding = createRequire(import.meta.url).resolve('better-sqlite3')
-    expect(() => execFileSync(pinned!, ['-e', `require(${JSON.stringify(binding)})`], {
-      stdio: 'ignore', timeout: 20_000,
-    })).not.toThrow()
+    // And it must genuinely run this package — the point of the probe (D278):
+    // its own node:sqlite opens a database with FTS5, at or above the floor.
+    const probe = 'const {DatabaseSync}=require("node:sqlite");const d=new DatabaseSync(":memory:");'
+      + 'd.exec("CREATE VIRTUAL TABLE t USING fts5(a)");d.close();process.stdout.write(process.versions.node)'
+    const reported = execFileSync(pinned!, ['-e', probe], { encoding: 'utf8', timeout: 20_000 }).trim()
+    expect(meetsNodeFloor(reported)).toBe(true)
   }, 60_000)
 
   // itPosix, not an `if (win32) return`: this drives the emitted script through
@@ -2577,7 +2576,7 @@ describe('hookScriptIssue grades wrapper bodies per dialect', () => {
 
   it('a missing module path is NOT flagged when the fallback search would land on a real copy', () => {
     // Silence is the point: with a search that RESOLVES the wrapper recovers,
-    // and unlike an unpinned interpreter there is no native-binding question
+    // and unlike an unpinned interpreter there is no floor-or-FTS5 question
     // about which copy of the same package it lands on. Warning here would
     // train the user to ignore doctor. The copy is seeded in a sandboxed
     // HOME because the grader probes the real managed layouts.

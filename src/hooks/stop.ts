@@ -25,7 +25,7 @@
 import { readFileSync, writeFileSync, accessSync, constants as fsConstants } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
-import type Database from 'better-sqlite3'
+import type { DatabaseSync } from 'node:sqlite'
 import { resolveDbPath, writeStaging, parseHookInput, isDirectInvocation, openHookDb, STOP_GUARD_TIMEOUT_MS } from './shared.js'
 import { STORE_SAFETY_CAP, activeIndexCap } from '../persistence/capture-constants.js'
 import { dbg } from '../debug.js'
@@ -45,7 +45,7 @@ import { checkpointDue, bookmarkRequest, markBookmarkAsked, hookNowSec, type Che
  */
 export function isStaleRecapture(dbPath: string, sessionId: string | undefined, text: string): boolean {
   if (!sessionId) return false
-  let db: InstanceType<typeof Database> | null = null
+  let db: DatabaseSync | null = null
   try {
     // Through the one opener, at the GUARD budget: this hook opens the
     // store twice (this guard, then writeStaging's 8s write), and the
@@ -61,7 +61,7 @@ export function isStaleRecapture(dbPath: string, sessionId: string | undefined, 
   }
 }
 
-function staleOn(db: InstanceType<typeof Database>, sessionId: string, text: string): boolean {
+function staleOn(db: DatabaseSync, sessionId: string, text: string): boolean {
   try {
     const row = db
       .prepare(
@@ -82,7 +82,7 @@ function staleOn(db: InstanceType<typeof Database>, sessionId: string, text: str
 function guardRead(
   dbPath: string, sessionId: string, text: string | null, checkpoint: boolean,
 ): { stale: boolean; due: CheckpointDue | null } {
-  let db: InstanceType<typeof Database> | null = null
+  let db: DatabaseSync | null = null
   try {
     db = openHookDb(dbPath, { readonly: true, timeoutMs: STOP_GUARD_TIMEOUT_MS })
     const stale = text !== null && staleOn(db, sessionId, text)
@@ -256,7 +256,7 @@ export function main(preParsed?: Record<string, unknown>): void {
     if (recordAsk && !asked) {
       // Nothing was captured this stop, so no write connection is open:
       // the ask still gets its mark, or the next stop would ask again.
-      let db: InstanceType<typeof Database> | null = null
+      let db: DatabaseSync | null = null
       try { db = openHookDb(dbPath); recordAsk(db) } catch (err) {
         dbg('hook:stop', 'bookmark ask mark FAILED', { error: err instanceof Error ? err.message : String(err) })
       } finally { if (db) db.close() }

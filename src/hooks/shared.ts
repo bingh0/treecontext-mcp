@@ -1,13 +1,13 @@
 import * as fs from 'fs'
 import { fileURLToPath } from 'node:url'
-import Database, { type Database as DatabaseType } from 'better-sqlite3'
+import type { DatabaseSync as DatabaseType } from 'node:sqlite'
 import { resolveStoreName } from '../server/bindings.js'
 import { armStormProofStdio, resolveStorePath } from '../server/cli.js'
 import { StagingEntry } from '../persistence/store.js'
 import { resolveHookNamespace } from '../session-beacon.js'
 import { nsLeaseLiveFor } from '../persistence/leases.js'
 import { dirname } from 'node:path'
-import { wrapBetterSqlite, ensureDbFileMode } from '../persistence/better-sqlite.js'
+import { openNodeSqlite, openRaw, ensureDbFileMode, pragmaValue, setPragma } from '../persistence/node-sqlite.js'
 import { ensureBaseSchema, runMigrations } from '../persistence/migrations.js'
 import { maxSupportedVersion } from '../persistence/migrations/index.js'
 import { hostname } from 'node:os'
@@ -33,7 +33,7 @@ armStormProofStdio()
 
 /** Busy timeout for every hook-owned store connection. Must stay strictly
  *  below the smallest platform hook kill budget — VS Code registers every
- *  hook with timeoutSec: 10 (installer.ts) — because better-sqlite3's busy
+ *  hook with timeoutSec: 10 (installer.ts) — because SQLite's busy
  *  wait blocks the event loop: a hook killed mid-wait loses its failure
  *  diagnostic and its close(). 8s leaves headroom to fail gracefully. */
 export const HOOK_DB_TIMEOUT_MS = 8000
@@ -75,9 +75,14 @@ export function openHookDb(dbPath: string, opts?: { readonly?: boolean; timeoutM
       fs.mkdirSync(dirname(dbPath), { recursive: true, mode: 0o700 })
     } catch { /* the open reports it */ }
   }
-  const db = new Database(dbPath, { timeout: timeoutMs, readonly })
+  const db = openRaw(dbPath, { timeoutMs, readOnly: readonly })
   if (!readonly) {
-    db.pragma('journal_mode = WAL')
+    setPragma(db, 'journal_mode = WAL')
+    // FULL on purpose (D278): a hook is a short-lived writer of one event
+    // and its row must be on disk when the process exits. node:sqlite's
+    // default happens to be FULL; pinned here so the hooks never inherit
+    // a driver default they did not choose.
+    setPragma(db, 'synchronous = FULL')
     bootstrapFreshStore(db, dbPath, timeoutMs)
   }
   return db
@@ -133,7 +138,7 @@ export const HOOK_BOOTSTRAP_TIMEOUT_MS = 1000
 export function bootstrapFreshStore(db: DatabaseType, dbPath: string, timeoutMs: number): boolean {
   // The cheap gate, on the raw handle: a store at (or beyond) the head is
   // not ours to touch, and the common case pays one pragma read.
-  const version = db.pragma('user_version', { simple: true }) as number
+  const version = pragmaValue(db, 'user_version') as number
   if (version >= maxSupportedVersion) return false
   // Below the head and versioned: only an EMPTY store is bootstrap
   // territory, and empty means empty — nothing in `nodes` AND nothing in
@@ -153,19 +158,19 @@ export function bootstrapFreshStore(db: DatabaseType, dbPath: string, timeoutMs:
   }
   const started = Date.now()
   try {
-    const wrapped = wrapBetterSqlite(db)
+    const wrapped = openNodeSqlite(db)
     // The wrapper's constructor applied the library's default pragmas,
     // busy_timeout 10000 among them. The bootstrap waits at most its own
     // share (HOOK_BOOTSTRAP_TIMEOUT_MS) for a lock; the finally below
     // hands whatever is left of the hook's budget to the write.
-    db.pragma(`busy_timeout = ${Math.min(HOOK_BOOTSTRAP_TIMEOUT_MS, timeoutMs)}`)
+    setPragma(db, `busy_timeout = ${Math.min(HOOK_BOOTSTRAP_TIMEOUT_MS, timeoutMs)}`)
     if (version === 0 && !ensureBaseSchema(wrapped)) {
       // Not fresh after all. Two shapes share this branch: a v0-era store
       // with tables (the server's, behind its backup), and a concurrent
       // starter that committed the base schema while this one waited for
       // the lock — in which case the ladder is still ours to finish, or
       // the write lands on version 5 through the legacy tier.
-      if ((db.pragma('user_version', { simple: true }) as number) === 0) {
+      if ((pragmaValue(db, 'user_version') as number) === 0) {
         dbg('hook', 'v0-era store with data — left for the server to migrate', { dbPath })
         return false
       }
@@ -191,11 +196,11 @@ export function bootstrapFreshStore(db: DatabaseType, dbPath: string, timeoutMs:
     // must not depend on whether it happened to bootstrap. And the write
     // gets what the bootstrap left of the hook's budget, never a fresh
     // one (finding 2).
-    db.pragma('synchronous = FULL')
-    db.pragma('mmap_size = 0')
-    db.pragma('temp_store = DEFAULT')
-    db.pragma('foreign_keys = ON')
-    db.pragma(`busy_timeout = ${Math.max(timeoutMs - (Date.now() - started), 100)}`)
+    setPragma(db, 'synchronous = FULL')
+    setPragma(db, 'mmap_size = 0')
+    setPragma(db, 'temp_store = DEFAULT')
+    setPragma(db, 'foreign_keys = ON')
+    setPragma(db, `busy_timeout = ${Math.max(timeoutMs - (Date.now() - started), 100)}`)
   }
 }
 
@@ -318,7 +323,7 @@ export function writeStaging(dbPath: string, entry: StagingEntry, andThen?: (db:
         db.prepare(
           `INSERT INTO staging (session_id, role, content, tool_name, timestamp, priority, processed, created_at${tier.cols})
            VALUES (@sessionId, @role, @content, @toolName, @timestamp, @priority, 0, @createdAt${tier.vals})`,
-        ).run(tier.run)
+        ).run(tier.run as never)
         if (tier.note) dbg('hook', `staging write: ${tier.note}`, { dbPath })
         break
       } catch (err) {

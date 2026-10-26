@@ -3,9 +3,9 @@ import { spawn } from 'node:child_process'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { expect } from 'vitest'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import { type Registry } from 'gherkin-node-test/vitest'
-import { wrapBetterSqlite } from '../../../src/persistence/better-sqlite.js'
+import { openNodeSqlite } from '../../../src/persistence/node-sqlite.js'
 import { FlatStore } from '../../../src/flat-store.js'
 import { type World, mcpOver, parseTool, openLiveStore } from '../world.js'
 import { sandboxedSpawnEnv } from '../../helpers/cli-spawn.js'
@@ -50,7 +50,7 @@ const observeCaptureUnder = async (policy: 'read_only' | 'contributor' | 'full')
     await sleep(500) // let initCapture finish wiring before staging
 
     const probe = await FlatStore.open({
-      database: wrapBetterSqlite(new BetterSqlite3(dbPath)), ownsDatabase: true,
+      database: openNodeSqlite(new DatabaseSync(dbPath)), ownsDatabase: true,
     })
     try {
       probe.store.insertStaging({

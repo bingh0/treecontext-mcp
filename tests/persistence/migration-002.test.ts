@@ -3,16 +3,16 @@
  * Pre-existing rows must be backfilled to 'project'.
  */
 import { describe, it, expect } from 'vitest'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
 import { runMigrations } from '../../src/persistence/migrations.js'
 import { maxSupportedVersion } from '../../src/persistence/migrations/index.js'
 
 /** Apply only migration #001 to simulate a legacy v1 store. */
-function seedV1(db: ReturnType<typeof wrapBetterSqlite>): void {
+function seedV1(db: ReturnType<typeof openNodeSqlite>): void {
   db.exec(`
     CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     CREATE TABLE store_config (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -62,8 +62,8 @@ describe('migration 002_namespace', () => {
   afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
 
   it('adds namespace column, backfills existing rows to "project"', () => {
-    const raw = new BetterSqlite3(join(dir, 's.db'))
-    const db = wrapBetterSqlite(raw)
+    const raw = new DatabaseSync(join(dir, 's.db'))
+    const db = openNodeSqlite(raw)
     seedV1(db)
 
     const report = runMigrations(db, { migrate: true })
@@ -87,8 +87,8 @@ describe('migration 002_namespace', () => {
   })
 
   it('post-migration allows the same ensemble_index across different namespaces', () => {
-    const raw = new BetterSqlite3(join(dir, 's.db'))
-    const db = wrapBetterSqlite(raw)
+    const raw = new DatabaseSync(join(dir, 's.db'))
+    const db = openNodeSqlite(raw)
     seedV1(db)
     runMigrations(db, { migrate: true })
 
@@ -109,8 +109,8 @@ describe('migration 002_namespace', () => {
 
   it('fresh v2 store (no migration) honors the UNIQUE(namespace, ensemble_index) constraint', async () => {
     const { SCHEMA_SQL } = await import('../../src/persistence/schema.js')
-    const raw = new BetterSqlite3(join(dir, 'fresh.db'))
-    const db = wrapBetterSqlite(raw)
+    const raw = new DatabaseSync(join(dir, 'fresh.db'))
+    const db = openNodeSqlite(raw)
     db.exec(SCHEMA_SQL)
 
     db.prepare("INSERT INTO trees (namespace, ensemble_index, created_at) VALUES ('project', 0, 1)").run()

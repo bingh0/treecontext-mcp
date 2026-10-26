@@ -11,8 +11,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import BetterSqlite3 from 'better-sqlite3'
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { DatabaseSync } from 'node:sqlite'
+import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
 import type { Database } from '../../src/persistence/database.js'
 import { Persistence } from '../../src/persistence/store.js'
 import { FlatStore } from '../../src/flat-store.js'
@@ -22,7 +22,7 @@ let tmpDir: string
 beforeEach(() => { tmpDir = mkdtempSync(join(tmpdir(), 'tc-purge-')) })
 afterEach(() => { rmSync(tmpDir, { recursive: true, force: true }) })
 
-function openDb(): Database { return wrapBetterSqlite(new BetterSqlite3(join(tmpDir, 'purge.db'))) }
+function openDb(): Database { return openNodeSqlite(new DatabaseSync(join(tmpDir, 'purge.db'))) }
 
 function stageRow(p: Persistence, opts: { timestamp: number; processed: boolean }): number {
   const id = p.insertStaging({ sessionId: 's1', role: 'user', content: 'purge fixture', timestamp: opts.timestamp })

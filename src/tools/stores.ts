@@ -9,16 +9,15 @@
  * inventory + cleanup the CLI's `stores` subcommand exposes.
  */
 import { readdirSync, realpathSync, statSync, rmSync, existsSync } from 'node:fs'
+import { openRaw, pragmaRows, pragmaValue } from '../persistence/node-sqlite.js'
 import { join, basename, sep } from 'node:path'
 import { homedir } from 'node:os'
-import { createRequire } from 'node:module'
 
 import {
   listMigrationBackups, listOrphanVerdictSidecars, verdictPathFor, type MigrationBackup,
 } from '../persistence/backup-verdict.js'
 import { maxSupportedVersion } from '../persistence/migrations/index.js'
 
-const requireNode = createRequire(import.meta.url)
 
 export const DEFAULT_STORES_DIR = join(homedir(), '.treecontext', 'stores')
 
@@ -178,8 +177,7 @@ export function describeStore(
 
 function countNodes(dbPath: string): { leaves: number | null; total: number | null } {
   try {
-    const BetterSqlite3 = requireNode('better-sqlite3') as typeof import('better-sqlite3')
-    const db = new BetterSqlite3(dbPath, { readonly: true, fileMustExist: true })
+    const db = openRaw(dbPath, { readOnly: true, mustExist: true })
     try {
       const hasNodes = db
         .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='nodes'")
@@ -416,17 +414,16 @@ function verifyLiveStore(storeDir: string): string | undefined {
   const dbPath = join(storeDir, 'treecontext.db')
   if (!existsSync(dbPath)) return 'live store missing'
   try {
-    const BetterSqlite3 = requireNode('better-sqlite3') as typeof import('better-sqlite3')
     // Fail fast on a locked store: verification is advisory and the sweep
-    // is retryable, so hanging the default 5s per locked store is worse
-    // than refusing quickly.
-    const db = new BetterSqlite3(dbPath, { readonly: true, fileMustExist: true, timeout: 500 })
+    // is retryable, so hanging the raw opener's default 5 s per locked
+    // store is worse than refusing quickly.
+    const db = openRaw(dbPath, { readOnly: true, mustExist: true, timeoutMs: 500 })
     try {
-      const rows = db.pragma('integrity_check') as Array<{ integrity_check: string }>
+      const rows = pragmaRows(db, 'integrity_check') as Array<{ integrity_check: string }>
       if (rows.length !== 1 || rows[0]!.integrity_check !== 'ok') {
         return 'live store fails integrity check'
       }
-      const v = db.pragma('user_version', { simple: true }) as number
+      const v = pragmaValue(db, 'user_version') as number
       if (v !== maxSupportedVersion) return 'live store not at current schema'
       return undefined
     } finally {
@@ -444,13 +441,12 @@ function verifyLiveStore(storeDir: string): string | undefined {
 /** Refusal reason for the backup file itself, or undefined when readable. */
 function verifyBackupReadable(backupPath: string): string | undefined {
   try {
-    const BetterSqlite3 = requireNode('better-sqlite3') as typeof import('better-sqlite3')
-    const db = new BetterSqlite3(backupPath, { readonly: true, fileMustExist: true, timeout: 500 })
+    const db = openRaw(backupPath, { readOnly: true, mustExist: true, timeoutMs: 500 })
     try {
       // quick_check reports many corruptions as ROWS, not a throw —
       // repro'd with freelist corruption. Discarding the rows made the
       // sweep delete backups it could not actually verify.
-      const rows = db.pragma('quick_check') as Array<{ quick_check: string }>
+      const rows = pragmaRows(db, 'quick_check') as Array<{ quick_check: string }>
       if (rows.length !== 1 || rows[0]!.quick_check !== 'ok') return 'backup unreadable'
       return undefined
     } finally {

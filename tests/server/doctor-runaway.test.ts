@@ -14,12 +14,12 @@ import { describe, it, expect, afterEach } from 'vitest'
 import { mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import BetterSqlite3 from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import { spawnCli, spawnNodeTs } from '../helpers/cli-spawn.js'
 import { storesDirIn } from '../helpers/store-fixtures.js'
 import { TS_ROOT } from '../journal/proc.js'
 import { FlatStore } from '../../src/flat-store.js'
-import { wrapBetterSqlite } from '../../src/persistence/better-sqlite.js'
+import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
 import { LeaseClient, DRAIN_LEASE_TTL_SECS } from '../../src/persistence/leases.js'
 import { MAX_INGEST_ATTEMPTS } from '../../src/persistence/capture-constants.js'
 
@@ -36,7 +36,7 @@ async function runawayDoctor(lease: { host: string; expire: boolean }): Promise<
   expect(hook.status, hook.out).toBe(0)
   const bindings = JSON.parse(readFileSync(join(home, '.treecontext', 'bindings.json'), 'utf8')) as { projects: Record<string, { store: string }> }
   const dbPath = join(storesDirIn(home), Object.values(bindings.projects)[0]!.store, 'treecontext.db')
-  const store = await FlatStore.open({ database: wrapBetterSqlite(new BetterSqlite3(dbPath)), ownsDatabase: true })
+  const store = await FlatStore.open({ database: openNodeSqlite(new DatabaseSync(dbPath)), ownsDatabase: true })
   try {
     const id = store.store.insertStaging({ sessionId: 'cc-runaway', role: 'user', content: 'stuck', timestamp: Date.now() / 1000 - 3600 })
     for (let i = 0; i <= 10 * MAX_INGEST_ATTEMPTS; i++) store.store.incrementStagingAttempts(id)

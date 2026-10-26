@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import fs from 'fs'
-import Database from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import path from 'path'
 import os from 'os'
 import * as shared from '../../src/hooks/shared.js'
@@ -8,7 +8,7 @@ import { main } from '../../src/hooks/session-start.js'
 import { readSessionBeacon } from '../../src/session-beacon.js'
 
 function setupDb(dbPath: string) {
-  const db = new Database(dbPath)
+  const db = new DatabaseSync(dbPath)
   db.exec(`
     CREATE TABLE IF NOT EXISTS staging (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -87,7 +87,7 @@ describe('SessionStart hook (Layer 3)', () => {
 
     for (const [source, budget] of Object.entries(budgets)) {
       it(`source=${source} stays within ${budget} chars`, () => {
-        const db = new Database(tempDbPath)
+        const db = new DatabaseSync(tempDbPath)
         for (let i = 0; i < 50; i++) {
           db.prepare(
             `INSERT INTO staging (session_id, role, content, tool_name, timestamp, priority, processed, created_at)
@@ -110,7 +110,7 @@ describe('SessionStart hook (Layer 3)', () => {
   })
 
   it('snapshot-claim only fires on startup', () => {
-    const db = new Database(tempDbPath)
+    const db = new DatabaseSync(tempDbPath)
     db.prepare('INSERT INTO snapshots (session_id, queries) VALUES (?, ?)')
       .run('old-session', JSON.stringify(['what was I doing']))
     db.close()
@@ -121,7 +121,7 @@ describe('SessionStart hook (Layer 3)', () => {
     })
     main()
 
-    const db2 = new Database(tempDbPath)
+    const db2 = new DatabaseSync(tempDbPath)
     const unclaimed = db2.prepare('SELECT * FROM snapshots WHERE claimed_by IS NULL').get()
     db2.close()
     expect(unclaimed).toBeDefined()
@@ -133,7 +133,7 @@ describe('SessionStart hook (Layer 3)', () => {
     })
     main()
 
-    const db3 = new Database(tempDbPath)
+    const db3 = new DatabaseSync(tempDbPath)
     const claimed = db3.prepare('SELECT * FROM snapshots WHERE claimed_by = ?').get('sess-2')
     db3.close()
     expect(claimed).toBeDefined()
@@ -172,7 +172,7 @@ describe('SessionStart hook (Layer 3)', () => {
   })
 
   it('writes snapshot claim to staging for journaling tree', () => {
-    const db = new Database(tempDbPath)
+    const db = new DatabaseSync(tempDbPath)
     db.prepare('INSERT INTO snapshots (session_id, queries) VALUES (?, ?)')
       .run('old-session', JSON.stringify(['what was I doing']))
     db.close()
@@ -183,7 +183,7 @@ describe('SessionStart hook (Layer 3)', () => {
 
     main()
 
-    const db2 = new Database(tempDbPath)
+    const db2 = new DatabaseSync(tempDbPath)
     const stagingRow = db2.prepare(
       "SELECT * FROM staging WHERE role = 'snapshot'"
     ).get() as any
