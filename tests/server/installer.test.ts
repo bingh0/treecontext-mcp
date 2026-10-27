@@ -751,6 +751,50 @@ describe('upsertClaudeSettingsHooks', () => {
       })
     })
 
+    it('a re-install takes our command out of a matcher it does not write', () => {
+      // A hand-merged `startup|clear` group is not one ensureHookEntries is
+      // handed, so its copy of session-start survived every re-run — even
+      // --force — and fired beside the new one on every startup and /clear.
+      const p = join(dir, 'settings.json')
+      withSandboxedHome(() => {
+        const hooksDir = join(homedir(), '.claude', 'hooks')
+        writeFileSync(p, JSON.stringify({
+          hooks: {
+            SessionStart: [
+              {
+                matcher: 'startup|clear',
+                hooks: [
+                  { type: 'command', command: join(hooksDir, 'tc-session-reminder') },
+                  { type: 'command', command: join(hooksDir, 'tc-session-start') },
+                ],
+              },
+              { matcher: 'resume', hooks: [{ type: 'command', command: 'other-tool --resume' }] },
+            ],
+          },
+        }))
+        upsertClaudeSettingsHooks(p, false)
+        const once = readFileSync(p, 'utf8')
+        const hooks = JSON.parse(once).hooks as Record<string, Array<{ matcher?: string; hooks: Array<{ command: string }> }>>
+        const starts = hooks.SessionStart!
+        expect(starts.map(m => m.matcher)).not.toContain('startup|clear')
+        for (const matcher of ['startup', 'resume', 'clear', 'compact']) {
+          const runs = starts.filter(m => m.matcher === matcher)
+            .flatMap(m => m.hooks.map(h => h.command))
+            .filter(c => c.includes('tc-session-start'))
+          expect(runs, `session-start on ${matcher}`).toHaveLength(1)
+        }
+        // Someone else's hook in a group we also write stays where it was.
+        const resume = starts.find(m => m.matcher === 'resume')!.hooks.map(h => h.command)
+        expect(resume[0]).toBe('other-tool --resume')
+        if (process.platform !== 'win32') {
+          expect(claudeHookCommandsWithoutExec(JSON.parse(once))).toEqual([])
+        }
+        // And the sweep converges: a second run writes the same file.
+        upsertClaudeSettingsHooks(p, false)
+        expect(readFileSync(p, 'utf8')).toBe(once)
+      })
+    })
+
     /**
      * 0.0.13-beta fixed Git Bash and broke the other Windows shell. Claude
      * Code uses Git Bash when it is installed and PowerShell when it is not,
