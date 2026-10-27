@@ -1,6 +1,6 @@
 {
   "name": "treecontext-mcp",
-  "version": "0.1.0-beta.2",
+  "version": "0.1.0-beta.3",
   "description": "A searchable chat-session journal for AI coding agents — local, lexical, no model.",
   "keywords": [
     "mcp",
@@ -50,9 +50,9 @@
     "node": ">=24.16.0"
   },
   "dependencies": {
-    "@modelcontextprotocol/server": "^2.0.0",
-    "smol-toml": "^1.8.0",
-    "zod": "^4.5.4"
+    "@modelcontextprotocol/server": "^2.4.0",
+    "smol-toml": "^1.9.1",
+    "zod": "^4.6.7"
   },
   "peerDependenciesMeta": {
     "@opencode-ai/plugin": {
@@ -62,21 +62,22 @@
   "devDependencies": {
     "@bcoe/v8-coverage": "1.0.2",
     "@jridgewell/trace-mapping": "0.3.31",
-    "@modelcontextprotocol/client": "^2.0.0",
-    "@opencode-ai/plugin": "^1.18.26",
+    "@modelcontextprotocol/client": "^2.4.0",
+    "@opencode-ai/plugin": "^1.19.4",
     "@types/istanbul-lib-coverage": "2.0.6",
     "@types/istanbul-lib-report": "3.0.3",
     "@types/istanbul-reports": "3.0.4",
-    "@types/node": "^26.1.2",
-    "@vitest/coverage-v8": "^4.1.11",
+    "@types/node": "^26.6.5",
+    "@vitest/coverage-v8": "^5.0.5",
     "gherkin-node-test": "0.11.0",
     "istanbul-lib-coverage": "3.2.2",
     "istanbul-lib-report": "3.0.1",
     "istanbul-reports": "3.2.0",
-    "oxlint": "^1.81.0",
-    "tsx": "^4.23.13",
+    "oxlint": "^1.90.0",
+    "tsx": "^4.23.15",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.11"
+    "vite": "^8.3.5",
+    "vitest": "^5.0.5"
   },
   "scripts": {
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
