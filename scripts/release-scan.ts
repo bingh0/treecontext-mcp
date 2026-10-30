@@ -55,6 +55,7 @@ const RULES: readonly Rule[] = [
   { name: 'username', re: /linus/gi },
   { name: 'home path', re: /\/home\/(?:biho|linus)/gi },
   { name: 'private name', re: /\bdawn\b/gi },
+  { name: 'private name', re: /larkin/gi },
   { name: 'private project', re: /grocery/gi },
   { name: 'private name', re: /kelleher/gi },
   { name: 'private project', re: /agent-bdd-research/gi },
