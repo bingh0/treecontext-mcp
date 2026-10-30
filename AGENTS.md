@@ -35,7 +35,22 @@ not as a side effect of an implementation change.
 
 **The verification rule:** a capture or storage claim only counts when it
 has been exercised end-to-end — real payloads in, direct SQLite
-inspection out. Reading the source is not verification.
+inspection out. Reading the source is not verification. It covers the
+server's own writes as much as the hooks' captures: the recovery
+snapshot row (D286) compounded for three releases because the rule was
+applied to what came in and never to what the drain wrote.
+
+**Why a green suite can lie.** The review discipline is the failure
+ladder, the `cino:` and `blind:` addresses in gherkin-node-test's
+[docs/failure-ladder.md](https://github.com/bingh0/gherkin-node-test/blob/main/docs/failure-ladder.md):
+hollow green (a scenario that exists and proves nothing) against absent
+(a surface no scenario was ever written for). Two rungs this repo has
+specimens of: half-lighting, a producer-agnostic promise bound through
+one producer only (the bounded preview, D4, reached hook captures and
+not the drain's own rows); and a fence that declared a live writer "out
+of scope" (the compaction lifecycle, D35, amended by D286). A fence may
+decline a promise, never a writer: anything that writes to the store is
+in the charter or out of the build.
 
 ## Architecture
 
