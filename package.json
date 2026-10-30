@@ -82,7 +82,7 @@
   },
   "scripts": {
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
-    "build": "npm run clean && tsc -p tsconfig.build.json",
+    "build": "npm run clean && tsc -p tsconfig.build.json && node -e \"require('node:fs').chmodSync('dist/server/cli.js', 0o755)\"",
     "dev": "tsc -p tsconfig.build.json --watch",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -95,6 +95,7 @@
     "pack:beta": "npm run release-gate && npm run release-scan && npm run typecheck && npm test && npm run build && npm pack && npm run install-smoke",
     "dogfood": "npm run typecheck && npm test && npm run dogfood:now",
     "dogfood:now": "npm pack && node -e \"require('node:child_process').execSync('npm i -g ./treecontext-mcp-'+require('./package.json').version+'.tgz',{stdio:'inherit'})\" && treecontext install --force --agent claude -y",
+    "dogfood:pull": "git pull --ff-only && npm ci --no-audit --no-fund && npm run build && npm run dogfood:now",
     "bench": "tsx bench/cli.ts",
     "bench:falsify": "tsx bench/falsify.ts",
     "bench:compare": "tsx bench/compare.ts",
