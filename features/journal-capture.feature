@@ -189,6 +189,19 @@ Feature: Journal capture — everything worth recalling enters the journal
     # in tool-event-fidelity ("respects the store safety cap"). The
     # journal never claims fidelity capture already dropped.
 
+  @D286
+  Scenario: a recovery snapshot quotes the journal at its preview and never quotes a snapshot
+    Given a journal holding curated notes, an oversized tool event, and an earlier recovery snapshot that matches the recovery queries
+    When the drain processes a claimed snapshot
+    Then the recovery row quotes each hit at its display view, cut at the quote cap and named by its entry
+    And the earlier recovery snapshot is not quoted
+    And the recovery queries sit in the row's metadata, not in its indexed words
+    And the row carries its own display and index boundaries
+    # The snapshot path was fenced as "working mechanics, unspecced" (D35)
+    # while it wrote rows into the store on every compaction. A fence may
+    # decline a promise, never a writer: what the drain writes is in the
+    # charter from here (D286).
+
   @D3
   Scenario: every capture carries the session that produced it
     Given hooks capturing events for a known platform session

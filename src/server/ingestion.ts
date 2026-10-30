@@ -28,6 +28,10 @@ import { dbg, warn } from '../debug.js'
 import { maxSupportedVersion } from '../persistence/migrations/index.js'
 import { newerSchemaLine } from '../persistence/migrations.js'
 import { healEchoIndex } from '../persistence/echo-reindex.js'
+import {
+  buildRecoveryContent, recoverySnapshotBoundaries, RECOVERY_SNAPSHOT_SOURCE, RECOVERY_QUERIES_KEY,
+  RECOVERY_HITS_PER_QUERY, type RecoveryHit,
+} from '../persistence/recovery-snapshot.js'
 import { agentWriterOf, INTERNAL_SUMMARY_KIND, CLIENT_WRITER } from '../persistence/session-registry.js'
 
 /**
@@ -514,26 +518,34 @@ export class IngestionLoop {
           const queries = (snap.queries as string[]) || []
           const origSession = (snap.original_session_id as string) || 'unknown'
 
-          let recoveredText = ''
+          // D286: the recovery row quotes what its queries found — each hit
+          // at its display view, cut at the quote cap, named by its id —
+          // and never another recovery row, so a snapshot cannot quote a
+          // snapshot (the geometric growth that crossed the client's 16 MB
+          // message guard, 2026-10-29). The query text goes to metadata,
+          // not the indexed content, so the row is not the best match for
+          // its own queries next time. Asked for twice the hits so that
+          // dropping recovery rows still leaves the quota.
+          const hitsByQuery: RecoveryHit[][] = []
           for (const q of queries) {
             // Recovery queries run against the row's own namespace — a
             // subagent's snapshot must not be rehydrated from the trunk.
-            const results = await target.query(q, { topK: 3 })
-            recoveredText += `# Recovery Query: ${q}
-
-`
-            for (const r of results) {
-              recoveredText += `## ${r.summary}\n${r.content}\n\n`
-            }
+            const results = await target.query(q, { topK: RECOVERY_HITS_PER_QUERY * 2 })
+            hitsByQuery.push(results.map((r) => ({ nodeId: r.nodeId, content: r.content, metadata: r.metadata })))
           }
+          const recoveredText = buildRecoveryContent(queries, hitsByQuery)
 
           await target.insert(recoveredText, {
             decayRate: this.options.decayRate,
             createdAt: row.timestamp,
             metadata: {
-              source: 'recovery-snapshot',
+              source: RECOVERY_SNAPSHOT_SOURCE,
               original_session_id: origSession,
-              recovered_at: Date.now() / 1000
+              recovered_at: Date.now() / 1000,
+              [RECOVERY_QUERIES_KEY]: queries,
+              // The row's own boundaries: a hit on it is a bounded preview
+              // with the availability marker, like a tool event's (D4).
+              ...recoverySnapshotBoundaries(recoveredText.length),
             }
           })
         } else {

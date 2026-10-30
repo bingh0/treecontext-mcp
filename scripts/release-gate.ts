@@ -63,8 +63,9 @@ function checkVersionConsistency(version: string): string[] {
   const isCopyPasted = /gh release download|npm install|git\+ssh|private beta|public beta/
   readme.forEach((line, i) => {
     if (!isCopyPasted.test(line)) return
-    // The whole prerelease tag: `0.1.0-beta.1` must not read as `0.1.0-beta`.
-    for (const m of line.matchAll(/\d+\.\d+\.\d+-(?:beta|rc)(?:\.\d+)?/g)) {
+    // The whole prerelease tag: `0.1.0-beta.1` must not read as `0.1.0-beta`,
+    // nor a hotfix `0.1.0-beta.2.1` as `0.1.0-beta.2`.
+    for (const m of line.matchAll(/\d+\.\d+\.\d+-(?:beta|rc)(?:\.\d+)*/g)) {
       if (m[0] !== version) problems.push(`README.md:${i + 1} names ${m[0]}, package.json is ${version}`)
     }
   })

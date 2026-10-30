@@ -13,6 +13,7 @@ import { rmTree } from '../helpers/fs.js'
 import { DatabaseSync } from 'node:sqlite'
 import { openNodeSqlite, pragmaValue, setPragma } from '../../src/persistence/node-sqlite.js'
 import { FlatStore } from '../../src/flat-store.js'
+import { maxSupportedVersion } from '../../src/persistence/migrations/index.js'
 import { handoffMetadata, SUBAGENT_SUMMARY_KIND } from '../../src/handoff.js'
 import { CLIENT_WRITER, INTERNAL_SUMMARY_KIND, registerSubagent } from '../../src/persistence/session-registry.js'
 
@@ -89,7 +90,7 @@ describe('migration 029 (D263)', () => {
       const reopened = await open() // neither odd row makes the open throw
       await reopened.close()
       const db = new DatabaseSync(path, { readOnly: true })
-      expect(pragmaValue(db, 'user_version')).toBe(29)
+      expect(pragmaValue(db, 'user_version')).toBe(maxSupportedVersion)
       const after = Object.fromEntries(Object.entries(ids).map(([k, id]) => [k,
         db.prepare('SELECT node_id, metadata_json, content, source_label, session_key FROM nodes WHERE node_id = ?').get(id) as Raw]))
       db.close()
