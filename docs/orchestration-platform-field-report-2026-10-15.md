@@ -1,8 +1,8 @@
-# Bounded-leg subagents: measurements and a field report from DAWN
+# Bounded-leg subagents: measurements and a field report from a multi-role agent orchestration platform
 
-For Bing, from Larkin. 2026-10-15. Against your draft "Bounded-Leg Subagents with Journal-Backed Resume" (treecontext-mcp 0.1.0-beta.2).
+For Bing, from the platform's developer. 2026-10-15. Against your draft "Bounded-Leg Subagents with Journal-Backed Resume" (treecontext-mcp 0.1.0-beta.2).
 
-Two things we can give you today: answers to both Phase 1 unknowns, measured on Claude Code 2.1.299, and a field report from DAWN's dispatcher, which has been running your pattern since 2026-10-13 (fresh agent per hand-off, state held outside the transcript, a script holding the loop).
+Two things we can give you today: answers to both Phase 1 unknowns, measured on Claude Code 2.1.299, and a field report from the platform's dispatcher, which has been running your pattern since 2026-10-13 (fresh agent per hand-off, state held outside the transcript, a script holding the loop).
 
 ## 1. Phase 1 unknown (a): usage in subagent transcripts
 
@@ -58,9 +58,9 @@ Two payload facts that bear on D3 and D4:
 
 One schema note: Haiku twice returned the whole JSON object as a string inside the `answer` field. Validate the parsed value, not just the shape.
 
-## 3. Field report: DAWN's dispatcher
+## 3. Field report: the platform's dispatcher
 
-DAWN runs a workflow script that spawns a Change Manager, parses the one-line hand-off it returns, spawns each role that line names with the line's `input` verbatim as its brief, and loops until a question, a gate, an unparsable line or a spawn cap. Every spawn is fresh. State lives in files in the working tree plus the hand-off line the script carries. No `maxTurns`, no watchdog, no journal lookup.
+The platform runs a workflow script that spawns a Change Manager, parses the one-line hand-off it returns, spawns each role that line names with the line's `input` verbatim as its brief, and loops until a question, a gate, an unparsable line or a spawn cap. Every spawn is fresh. State lives in files in the working tree plus the hand-off line the script carries. No `maxTurns`, no watchdog, no journal lookup.
 
 **It bounds context by construction.** Across one record, 11 runs at a cap of 24 spawns:
 

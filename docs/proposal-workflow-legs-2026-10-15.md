@@ -6,7 +6,7 @@ draft of the same day ("Bounded-Leg Subagents with Journal-Backed
 Resume"), which some testers have already seen; §8 says what changed and
 why. It precedes the scope session that rules on the beta.3 line, and
 exists so that objections arrive before the rulings become feature files.
-The DAWN dispatcher (§3.13) is the reference consumer: a working
+The dispatcher of a multi-role agent orchestration platform (§3.13; "the platform" below) is the reference consumer: a working
 prototype whose author is open to changing it, which this proposal
 treats as a reason to change it as little as possible.
 
@@ -46,7 +46,7 @@ to four small ones, and two of the things it did not notice (a cut leg
 leaves a phantom registration; every leg pays the orchestrator's
 orientation protocol) turn out to be the ones that matter. The owner's direction is that the recipe
 this leaves behind ships as a treecontext skill, descended from the
-DAWN dispatcher, so that any user can run bounded legs without writing
+platform's dispatcher, so that any user can run bounded legs without writing
 a script (§3.14).
 
 ---
@@ -525,10 +525,10 @@ premise was wrong (§1.6) and `decay_exempt` already covers the guard.
 
 No migration anywhere. Everything is additive and reversible.
 
-### 3.13 Fit with the DAWN dispatcher, the reference consumer
+### 3.13 Fit with the platform's dispatcher, the reference consumer
 
-The dawn developer's `dispatch` skill and `workflows/dispatch.js`
-(DD-62, read 2026-10-15 at `~/gitrepos/dawn`) are a working prototype of
+The platform developer's `dispatch` skill and `workflows/dispatch.js`
+(DD-62, read 2026-10-15 in the platform's checkout) are a working prototype of
 bounded legs, built before this proposal and without treecontext in the
 loop. What it does:
 
@@ -544,7 +544,7 @@ loop. What it does:
   script carries the reports between spawns in a variable. The main
   session relays `handoff` and `report` to the human verbatim and "holds
   no draft and no report in context between runs".
-- Every role's `tools:` line allowlists `mcp__dawn__*` and the file
+- Every role's `tools:` line allowlists `mcp__<platform>__*` and the file
   tools. No role can reach a treecontext tool. The repository's
   `CLAUDE.md` carries no treecontext block.
 
@@ -558,9 +558,9 @@ short in exactly the places §1 found:
 | :-- | :-- | :-- |
 | A schema leg's return is captured as tool trail, with no summary row (§1.2) | The Change Manager, the one leg whose return *is* the hand-off, has no summary in the journal; the role legs, which return text, do | Change B |
 | A phantom registration breaks the next subagent's default scope (§1.3) | The dispatcher spawns legs strictly one at a time with the orchestrator waiting, which is the exact condition under which a fresh role's search is scoped to its role's prior trail and the plan it was spawned under (D150). One phantom turns every later leg's search into a whole-store search | Change D |
-| The orientation protocol has no notion of a subagent (§1.4) | No effect today: dawn's roles cannot see the tools and its `CLAUDE.md` has no block. It applies the day a role is given `treecontext_query` | Change E |
-| No metadata-only lookup (§1.5) | No effect: the dispatcher's recovery path is the repository | Change A is not for dawn |
-| No checkpoint ask on `SubagentStop` (§1.8) | No effect: the Change Manager's hand-off line is lint-checked before it is read (its template orders `dawn lint --draft`), which is a stronger guard than a hook | Change C is not for dawn |
+| The orientation protocol has no notion of a subagent (§1.4) | No effect today: the platform's roles cannot see the tools and its `CLAUDE.md` has no block. It applies the day a role is given `treecontext_query` | Change E |
+| No metadata-only lookup (§1.5) | No effect: the dispatcher's recovery path is the repository | Change A is not for the platform |
+| No checkpoint ask on `SubagentStop` (§1.8) | No effect: the Change Manager's hand-off line is lint-checked before it is read (its template orders `<platform> lint --draft`), which is a stronger guard than a hook | Change C is not for the platform |
 
 What the skill could adopt, each optional, each a line or two, none
 required by the above:
@@ -573,7 +573,7 @@ required by the above:
    dispatcher's one-at-a-time spawning the default scope is the role's
    own trail plus the plan, which is what the 2026-09-25 feedback asked
    for ("mine" means the rows the role wrote). The owner's earlier
-   assessment recorded that dawn's roles could not query treecontext
+   assessment recorded that the platform's roles could not query treecontext
    because of their `tools:` lines; that is still the only reason.
 2. **Name the run.** The script already receives `stem` and `date` in
    `args`. If a role writes anything to the journal (it cannot today),
@@ -584,11 +584,11 @@ required by the above:
    Architect reading "everything") compacts, the §3.1 recipe applies
    inside that role: the dispatcher spawns the role's legs with the
    checkpoint carried forward, and the role's checkpoint lives where
-   dawn's state lives, in a scratch file or a draft section, not in the
+   the platform's state lives, in a scratch file or a draft section, not in the
    journal. This is the one change that touches the dispatcher's shape,
    and it waits on Q11.
 
-Where context actually fills in a DAWN revisit is not known from the
+Where context actually fills in a platform revisit is not known from the
 code. Three candidates, in the order of the proposal's guess: the main
 session across runs (each run relays two verbatim strings into the
 human's conversation; a long revisit is many runs, and this is the
@@ -601,8 +601,8 @@ Q11 asks.
 The owner's preferred outcome: a future version of the dispatch skill
 lives in this repository and is installed by `treecontext install`, so
 that any treecontext user can run a long task as bounded legs without
-writing a workflow script. The dawn developer is collaborating and is
-content for treecontext to take the skill. DAWN's own `dispatch` keeps
+writing a workflow script. The platform developer is collaborating and is
+content for treecontext to take the skill. The platform's own `dispatch` keeps
 its grammar and its governance (DD-60 to DD-67); treecontext ships the
 generic ancestor-descendant, and findings flow both ways.
 
@@ -626,8 +626,8 @@ surface. What ships:
   verbatim; a fresh coordinator reads their reports; the loop ends on
   `done`, an `ask`, the spawn cap, or a cut coordinator, whose successor
   is told to recover its checkpoint from the journal (§3.1). The
-  structured return replaces DAWN's hand-off line; DAWN's `parseHandoff`
-  grammar stays DAWN's.
+  structured return replaces the platform's hand-off line; the platform's `parseHandoff`
+  grammar stays the platform's.
 - **`~/.claude/agents/treecontext-leg.md`**, the coordinator's agent
   definition (§3.2): `omitClaudeMd`, a `tools:` line with the four
   treecontext tools, and the contract text. A user's own roles need no
@@ -659,11 +659,11 @@ is advertised for the reference platform only (D30). Two consequences:
    tester has too. The fence's rule that unverified means unadvertised
    (D30) covers it until then.
 
-**Two-way with DAWN.** DAWN's dispatch is in heavy development and
-treecontext mirrors none of it. What flows from DAWN: the leg shapes it
+**Two-way with the platform.** The platform's dispatch is in heavy development and
+treecontext mirrors none of it. What flows from the platform: the leg shapes it
 finds in use (Q11), defects in capture it meets first (§3.13's table),
 and the grammar lessons that survive generalization. What flows to
-DAWN: the shipped script, if DAWN's grammar can be expressed on top of
+The platform: the shipped script, if the platform's grammar can be expressed on top of
 it, and the capture fixes it gets for free. Neither waits on the other.
 
 ---
@@ -680,8 +680,8 @@ it, and the capture fixes it gets for free. Neither waits on the other.
   references others', and retires nothing of the orchestrator's (D169).
 - It does not promise anything on clients other than Claude Code (D30,
   D153). §9.7 (R6) asks whether that moves for a tools-only worker.
-- It does not mirror DAWN. DAWN's dispatch keeps its grammar and its
-  governance; treecontext ships the generic skill and takes DAWN's
+- It does not mirror the platform. The platform's dispatch keeps its grammar and its
+  governance; treecontext ships the generic skill and takes the platform's
   findings as one consumer's among several.
 
 ---
@@ -715,7 +715,7 @@ it, and the capture fixes it gets for free. Neither waits on the other.
   retention guidance.
 - **Q10.** Anything in §1 that does not match what you see on your
   machine, with the Claude Code version.
-- **Q11 (for the dawn developer).** Where does context fill in a
+- **Q11 (for the platform's developer).** Where does context fill in a
   revisit: the main session across dispatcher runs, the Change Manager
   reading the reports, or one role's pass? The query in Appendix A.4
   gives per-leg sizes from your own store; the script in A.3 gives
@@ -725,7 +725,7 @@ it, and the capture fixes it gets for free. Neither waits on the other.
   it as is, with your own roles by `agentType`? What does its `args`
   need beyond `{run, task, targets, cap, date}`? Is a structured
   `{done, next, input, ask, checkpoint}` return enough, or does your
-  coordinator need a free-text line as DAWN's does?
+  coordinator need a free-text line as the platform's does?
 
 ---
 

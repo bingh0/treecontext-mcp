@@ -2024,11 +2024,11 @@ N27 2026-10-29 [I>V] orchestrating-developer 5
 
 N28 2026-10-29 [I>V] harness 4
   need:  with no model in the loop, I need the harness to find by key alone the newest checkpoint of any leg of its run and that leg's return, to tell a live leg from a retired one, and to get an honest nothing rather than a guess when a leg wrote none [I>V]
-# the harness actor's outcome, Phase 1; the visionary's words "it would have to be some flag/metadata tag, the deterministic start/stops should be identifiable without a big llm looking for them"; weight confirmed at Phase 1½ (2026-10-29); DAWN's convergence measure kept apart for coverage (seed C)
+# the harness actor's outcome, Phase 1; the visionary's words "it would have to be some flag/metadata tag, the deterministic start/stops should be identifiable without a big llm looking for them"; weight confirmed at Phase 1½ (2026-10-29); the orchestration platform's convergence measure kept apart for coverage (seed C)
 
 N29 2026-10-29 [V] subagent 5
   need:  at my first moment, fresh or picking up a predecessor's work, I see my brief and the last checkpoint, no query needed [V]
-# the subagent actor's start outcome, Phase 1, the visionary's own words; weight confirmed at Phase 1½ (2026-10-29); the DAWN report measured the mechanism on Claude Code (a checkpoint injected at SubagentStart steered the leg without a query); how a headless worker with no hooks gets the same first moment is a coverage question
+# the subagent actor's start outcome, Phase 1, the visionary's own words; weight confirmed at Phase 1½ (2026-10-29); the orchestration platform's field report measured the mechanism on Claude Code (a checkpoint injected at SubagentStart steered the leg without a query); how a headless worker with no hooks gets the same first moment is a coverage question
 
 D279 2026-10-29 [I>V]
   trig:  a subagent's leg ends, by finishing, by forgetting its checkpoint, or by being cut [I>V]
