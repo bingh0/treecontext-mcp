@@ -1,6 +1,6 @@
 {
   "name": "treecontext-mcp",
-  "version": "0.1.0-beta.2",
+  "version": "0.1.0-beta.2.1",
   "description": "A searchable chat-session journal for AI coding agents — local, lexical, no model.",
   "keywords": [
     "mcp",

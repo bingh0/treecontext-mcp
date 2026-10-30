@@ -18,7 +18,7 @@ is and why it is shaped this way; [ARCHITECTURE.md](ARCHITECTURE.md) is
 how it hangs together; [docs/security.md](docs/security.md) is the
 trust contract.
 
-> **This is a public beta (`0.1.0-beta.2`).** It installs from npm under
+> **This is a public beta (`0.1.0-beta.2.1`).** It installs from npm under
 > the `beta` dist-tag, as `treecontext-mcp@beta`. The store schema may still change between beta
 > releases; migrations are additive, but treat your journal as replaceable
 > for now.
