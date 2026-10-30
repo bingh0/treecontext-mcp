@@ -11,6 +11,11 @@ import { T0, mcpOver, parseTool, openLiveStore, reopenAsLaterSession, exportNode
 import { type CaptureWorld, openCaptureWorld, spawnHook, drainStaging } from '../capture-harness.js'
 import { type MatureJournal, MATURE, seedMatureJournal, rawOutranking, ORIENTATION_QUERY, SHELL_ONLY_TERM } from '../../helpers/mature-journal.js'
 import { type RawEcho, callEchoed, echoTool, ftsNodeIds, ftsVocab, rawEcho, rawEchoes } from '../../helpers/echo-capture.js'
+import { decodeContent } from '../../../src/persistence/content-codec.js'
+import { IngestionLoop } from '../../../src/server/ingestion.js'
+import { maxSupportedVersion } from '../../../src/persistence/migrations/index.js'
+import { RECOVERY_SNAPSHOT_SOURCE, RECOVERY_PREVIEW_LEN, RECOVERY_INDEX_LEN, RECOVERY_QUOTE_CAP } from '../../../src/persistence/recovery-snapshot.js'
+import { REPLY_CEILING_BYTES } from '../../../src/server/reply-ceiling.js'
 
 // ── journal-recall ──────────────────────────────────────────────────────
 
@@ -31,6 +36,10 @@ export interface RecallWorld extends CaptureWorld {
   label?: string
   /** D261: the parsed results of a search the agent ran, in rank order. */
   hits?: Array<{ nodeId: string; content: string }>
+  /** D286: the recovery snapshot under test, its far token and its source entries. */
+  recovery?: { nodeId: string; full: string; farToken: string; previewWord: string; sourceIds: string[]; before?: string }
+  /** D287: the serialized reply of the ceiling scenario and the oversized entry's id. */
+  ceiling?: { text: string; parsed: Record<string, unknown>; bigId: string; bigLen: number }
   /** D261 upgrade: the echoes as the earlier treecontext left them, and as the first open left them. */
   echoesBefore?: RawEcho[]
   echoesAfterFirstOpen?: RawEcho[]
@@ -389,7 +398,7 @@ export const recallDefiner = (reg: Registry<RecallWorld>): void => {
   reg.define(/^this treecontext opens the store$/, async (w: RecallWorld) => {
     w.store = await reopenStore(w)
     const raw = new BetterSqlite3(w.dbPath!, { readonly: true })
-    try { expect(raw.pragma('user_version', { simple: true })).toBe(29) } finally { raw.close() }
+    try { expect(raw.pragma('user_version', { simple: true })).toBe(maxSupportedVersion) } finally { raw.close() }
     w.echoesAfterFirstOpen = rawEchoes(w.dbPath!)
     w.vocabAfterFirstOpen = ftsVocab(w.dbPath!)
   })
@@ -911,6 +920,159 @@ export const recallDefiner = (reg: Registry<RecallWorld>): void => {
     expect(hits.some((r) => r.content.includes('FLOORTAIL2214')), 'a sub-floor cap was obeyed').toBe(true)
   })
 
+
+  // ── D286: the recovery snapshot is bounded like a tool event ─────────
+  const RECOVERY_QUERIES = ['current active plan and next steps', 'recent decisions and their rationale']
+  /** Two note families, one per recovery query, so each query quotes its
+   *  own three: `word` in every sentence, `far` (when given) only at the end. */
+  const planSentence = (word: string): string => `the ${word} plan for the valve rework carries one next step per item. `
+  const decisionSentence = (word: string): string => `the ${word} decision records its rationale for the valve rework. `
+  const longNote = (sentence: (w: string) => string, word: string, far = ''): string =>
+    sentence(word).repeat(Math.ceil((RECOVERY_QUOTE_CAP * 1.5) / sentence(word).length)) + (far ? `closing marker ${far}` : '')
+  async function drainAll(w: RecallWorld): Promise<void> {
+    const loop = new IngestionLoop(w.store!, { batchSize: 10 })
+    for (let i = 0; i < 50 && w.store!.store.countUnprocessedStaging() > 0; i++) await loop.ingestBatch()
+    expect(w.store!.store.countUnprocessedStaging()).toBe(0)
+  }
+  function recoveryRows(w: RecallWorld): Array<{ node_id: string; content: Buffer | string; metadata_json: string; index_len: number | null; preview_len: number | null }> {
+    return rawAll(w, "SELECT node_id, content, metadata_json, index_len, preview_len FROM nodes WHERE json_extract(metadata_json, '$.source') = ? ORDER BY rowid", RECOVERY_SNAPSHOT_SOURCE)
+  }
+  reg.define(/^a recovery snapshot the drain wrote from entries far longer than its display boundary$/, async (w: RecallWorld) => {
+    await openLiveStore(w)
+    // Six notes, three per query: every quote is cut at the cap, so the
+    // row runs past its index boundary; the last note's own word is the
+    // far token, quoted only beyond that boundary.
+    const ids: string[] = []
+    for (let i = 0; i < 3; i++) ids.push((await w.store!.insert(longNote(planSentence, `alpha${i}`), { metadata: { type: 'note', seed: i } })).nodeId)
+    for (let i = 3; i < 6; i++) ids.push((await w.store!.insert(longNote(decisionSentence, `alpha${i}`), { metadata: { type: 'note', seed: i } })).nodeId)
+    const far = 'alpha5'
+    const sourceIds = [ids[5]!]
+    w.store!.store.insertStaging({
+      sessionId: 's-recovery', role: 'snapshot', priority: 0, timestamp: T0 + 10,
+      content: JSON.stringify({ queries: RECOVERY_QUERIES, original_session_id: 's-before-compaction' }),
+    })
+    await drainAll(w)
+    const rows = recoveryRows(w)
+    expect(rows).toHaveLength(1)
+    const full = decodeContent(rows[0]!.content)
+    expect(full.length).toBeGreaterThan(RECOVERY_INDEX_LEN)
+    expect(full.indexOf(far), 'the far word is quoted, and only past the index boundary').toBeGreaterThan(RECOVERY_INDEX_LEN)
+    w.recovery = { nodeId: rows[0]!.node_id, full, farToken: far, previewWord: 'alpha', sourceIds }
+  })
+  reg.define(/^a query matches words inside its preview$/, async (w: RecallWorld) => {
+    // The first quote's words sit inside the preview; the hit is the row itself.
+    const firstQuoted = w.recovery!.full.match(/the (alpha\d) plan/)![1]!
+    w.results = await w.store!.query(`${firstQuoted} plan valve rework`, { topK: 10 })
+    expect(w.results.map((r) => r.nodeId)).toContain(w.recovery!.nodeId)
+  })
+  reg.define(/^its content ends at the display boundary with the availability marker$/, (w: RecallWorld) => {
+    const hit = w.results!.find((r) => r.nodeId === w.recovery!.nodeId)!
+    expect(hit.content).toMatch(/…\[preview; full content \d+ chars via treecontext_export\]$/)
+    expect(hit.content.startsWith(w.recovery!.full.slice(0, RECOVERY_PREVIEW_LEN))).toBe(true)
+    expect(hit.content.indexOf('…[preview;')).toBe(RECOVERY_PREVIEW_LEN)
+  })
+  reg.define(/^words past its index boundary do not find it$/, (w: RecallWorld) => {
+    const ids = ftsNodeIds(w.dbPath!, w.recovery!.farToken)
+    expect(ids, 'control: the source notes still carry the token').toEqual(expect.arrayContaining(w.recovery!.sourceIds))
+    expect(ids).not.toContain(w.recovery!.nodeId)
+  })
+  reg.define(/^export of that entry returns its full content$/, (w: RecallWorld) => {
+    expect(exportNode(w, w.recovery!.nodeId)['content']).toBe(w.recovery!.full)
+  })
+
+  // ── D286: migration 030 heals the rows an earlier treecontext left ────
+  reg.define(/^a store whose recovery snapshots an earlier treecontext wrote without boundaries$/, async (w: RecallWorld) => {
+    await openLiveStore(w)
+    const far = `fartoken${Math.random().toString(16).slice(2, 8)}`
+    const noteId = (await w.store!.insert(longNote(planSentence, 'beta', far), { metadata: { type: 'note' } })).nodeId
+    // The beta.2 shape: the query text in the content, every hit quoted
+    // whole, no boundary of any kind; the far word sits past the index
+    // boundary and nowhere before it.
+    const old = `# Recovery Query: ${RECOVERY_QUERIES[0]}\n\n## \n${longNote(planSentence, 'beta')}\n\n## \n${longNote(planSentence, 'gamma')}\n\n## \n${longNote(planSentence, 'delta', far)}\n\n`
+    expect(old.indexOf(far)).toBeGreaterThan(RECOVERY_INDEX_LEN)
+    expect(old.length).toBeGreaterThan(RECOVERY_INDEX_LEN)
+    const id = (await w.store!.insert(old, { metadata: { source: RECOVERY_SNAPSHOT_SOURCE, original_session_id: 's-old', recovered_at: T0 } })).nodeId
+    expect(ftsNodeIds(w.dbPath!, far), 'before: the whole row is indexed').toContain(id)
+    await w.store!.close()
+    const raw = new BetterSqlite3(w.dbPath!)
+    try { raw.pragma('user_version = 29') } finally { raw.close() }
+    w.recovery = { nodeId: id, full: old, farToken: far, previewWord: 'beta', sourceIds: [noteId], before: old }
+  })
+  reg.define(/^each recovery snapshot carries a display boundary and an index boundary$/, (w: RecallWorld) => {
+    const rows = recoveryRows(w)
+    expect(rows.length).toBeGreaterThan(0)
+    for (const r of rows) {
+      const meta = JSON.parse(r.metadata_json) as Record<string, unknown>
+      const len = decodeContent(r.content).length
+      expect(meta['_preview_len']).toBe(Math.min(RECOVERY_PREVIEW_LEN, len))
+      expect(meta['_index_len']).toBe(Math.min(RECOVERY_INDEX_LEN, len))
+      expect(r.preview_len).toBe(meta['_preview_len'])
+      expect(r.index_len).toBe(meta['_index_len'])
+    }
+    // The indexed view shrank to the boundary: the far token no longer finds the row.
+    const ids = ftsNodeIds(w.dbPath!, w.recovery!.farToken)
+    expect(ids, 'control: the source note still carries the token').toContain(w.recovery!.sourceIds[0])
+    expect(ids).not.toContain(w.recovery!.nodeId)
+  })
+  reg.define(/^a hit on one is a bounded preview$/, async (w: RecallWorld) => {
+    const results = await w.store!.query(`${w.recovery!.previewWord} plan valve rework`, { topK: 10 })
+    const hit = results.find((r) => r.nodeId === w.recovery!.nodeId)
+    expect(hit, 'the row is still findable by the words inside its boundary').toBeTruthy()
+    expect(hit!.content).toMatch(/…\[preview; full content \d+ chars via treecontext_export\]$/)
+    expect(hit!.content.indexOf('…[preview;')).toBe(RECOVERY_PREVIEW_LEN)
+  })
+  reg.define(/^its stored content is unchanged$/, (w: RecallWorld) => {
+    const row = recoveryRows(w).find((r) => r.node_id === w.recovery!.nodeId)!
+    expect(decodeContent(row.content)).toBe(w.recovery!.before)
+    expect(exportNode(w, w.recovery!.nodeId)['content']).toBe(w.recovery!.before)
+  })
+
+  // ── D287: the reply ceiling ──────────────────────────────────────────
+  reg.define(/^a store whose entries, returned whole, would make a reply far over the reply ceiling$/, async (w: RecallWorld) => {
+    await openLiveStore(w)
+    const line = 'ceilingcorpus: the valve rework decision and its rationale, kept whole as a curated note. '
+    // Ten curated notes of ~450 K chars (notes return whole under D47),
+    // and one of ~4.5 M chars that is over the ceiling on its own.
+    const bulk = line.repeat(Math.ceil(450_000 / line.length))
+    for (let i = 0; i < 10; i++) await w.store!.insert(`note ${i} of the ceiling corpus\n${bulk}`, { metadata: { type: 'note', seed: i } })
+    const big = `the oversized entry of the ceiling corpus\n${line.repeat(Math.ceil((REPLY_CEILING_BYTES * 1.1) / line.length))}`
+    const bigId = (await w.store!.insert(big, { metadata: { type: 'note', seed: 'big' } })).nodeId
+    w.ceiling = { text: '', parsed: {}, bigId, bigLen: big.length }
+  })
+  reg.define(/^a broad query returns them$/, async (w: RecallWorld) => {
+    const client = await mcpOver(w)
+    const res = await client.callTool({ name: 'treecontext_query', arguments: { query: 'ceilingcorpus valve rework', top_k: 20 } }) as { content: Array<{ type: string; text: string }> }
+    const text = res.content[0]!.text
+    w.ceiling!.text = text
+    w.ceiling!.parsed = JSON.parse(text) as Record<string, unknown>
+    expect((w.ceiling!.parsed['results'] as unknown[]).length).toBe(11)
+  })
+  reg.define(/^the reply is under the ceiling$/, (w: RecallWorld) => {
+    expect(Buffer.byteLength(w.ceiling!.text, 'utf8')).toBeLessThanOrEqual(REPLY_CEILING_BYTES)
+    const note = w.ceiling!.parsed['_reply_ceiling'] as Record<string, unknown>
+    expect(note).toBeTruthy()
+    expect(note['ceiling_bytes']).toBe(REPLY_CEILING_BYTES)
+    expect(note['cut_entries']).toBeGreaterThan(0)
+  })
+  reg.define(/^each cut entry says so and names the export escape hatch$/, (w: RecallWorld) => {
+    const results = w.ceiling!.parsed['results'] as Array<{ nodeId: string; content: string }>
+    const cut = results.filter((r) => /…\[cut to fit the reply ceiling; full content \d+ chars via treecontext_export\]$/.test(r.content))
+    expect(cut.length).toBe((w.ceiling!.parsed['_reply_ceiling'] as Record<string, number>)['cut_entries'])
+    expect(cut.length).toBeGreaterThan(0)
+    const bigHit = results.find((r) => r.nodeId === w.ceiling!.bigId)!
+    expect(bigHit.content).toContain(`full content ${w.ceiling!.bigLen} chars`)
+  })
+  reg.define(/^export of one entry over the ceiling is refused with its size, never cut$/, async (w: RecallWorld) => {
+    const client = await mcpOver(w)
+    const res = await client.callTool({ name: 'treecontext_export', arguments: { node_id: w.ceiling!.bigId } }) as { isError?: boolean; content: Array<{ type: string; text: string }> }
+    expect(res.isError).toBe(true)
+    const body = JSON.parse(res.content[0]!.text) as { error: string; node_id: string }
+    expect(body.node_id).toBe(w.ceiling!.bigId)
+    expect(body.error).toMatch(/over the reply ceiling of \d+ bytes/)
+    expect(body.error).toMatch(new RegExp(`serializes to \\d+ bytes`))
+    // Never cut: the entry is whole in the store.
+    expect(exportNode(w, w.ceiling!.bigId)['content']).toHaveLength(w.ceiling!.bigLen)
+  })
 }
 
 export const recallNoModelDefiner = (reg: Registry<RecallWorld>): void => {

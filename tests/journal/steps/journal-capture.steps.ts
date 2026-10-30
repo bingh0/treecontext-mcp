@@ -12,6 +12,9 @@ import { WARN_PREFIX } from '../../../src/debug.js'
 import { mcpOver, openLiveStore, exportNode } from '../world.js'
 import { TS_ROOT, sleep } from '../proc.js'
 import { maxSupportedVersion } from '../../../src/persistence/migrations/index.js'
+import { T0 } from '../world.js'
+import { RECOVERY_SNAPSHOT_SOURCE, RECOVERY_QUERIES_KEY, RECOVERY_QUOTE_CAP, RECOVERY_PREVIEW_LEN, RECOVERY_INDEX_LEN } from '../../../src/persistence/recovery-snapshot.js'
+import { ftsNodeIds } from '../../helpers/echo-capture.js'
 import { type CaptureWorld, openCaptureSandbox, adoptCaptureStore, openCaptureWorld, spawnHook, spawnHooksAtOnce, spawnServeChild, waitForServeLog, drainStaging, type RawNode, rawJournal, bashPayload, writeTranscript, seedCheckpointAge, expectBookmarkAsked } from '../capture-harness.js'
 
 /** What the transcript still ends at when Stop fires: the turn before. */
@@ -277,6 +280,85 @@ export const captureDefiner = (reg: Registry<CaptureWorld>): void => {
     const exported = exportNode(w, row.nodeId)['content'] as string
     expect(exported).toContain(`${d.legacyWords![0]!} old first\\n${d.legacyWords![1]!} old second`)
     expect(row.content).toBe(exported)
+  })
+
+  // ── D286: the recovery snapshot quotes the journal at its preview ─────
+  const RECOVERY_QUERY = 'current active plan and next steps'
+  const recoverySeeds = new WeakMap<CaptureWorld, { noteId: string; longNoteId: string; toolId: string; oldId: string; longNote: string; toolPreviewMarker: RegExp }>()
+  reg.define(/^a journal holding curated notes, an oversized tool event, and an earlier recovery snapshot that matches the recovery queries$/, async (w: CaptureWorld) => {
+    await openCaptureWorld(w)
+    const noteId = (await w.store!.insert('the active plan: finish the valve rework, then the next step is the budget report', { metadata: { type: 'plan' } })).nodeId
+    const sentence = 'the plan carries one next step per decision and its rationale, kept for the next session. '
+    const longNote = sentence.repeat(Math.ceil((RECOVERY_QUOTE_CAP * 2) / sentence.length)) + 'closing marker deepquote'
+    const longNoteId = (await w.store!.insert(longNote, { metadata: { type: 'note' } })).nodeId
+    // A tool event with the hook's boundary: its display view is the
+    // preview plus the availability marker, and that is what gets quoted.
+    const toolFull = `Tool: Bash plan step runner\n${'next step of the plan: compiling and emitting diagnostics\n'.repeat(400)}`
+    const toolId = (await w.store!.insert(toolFull, { metadata: { source: 'auto-capture', role: 'tool', session_id: 's-tool', _index_len: 1000 } })).nodeId
+    // An earlier recovery snapshot in the beta.2 shape: the query text in
+    // its content, so it is the best match for the query it answered.
+    const oldId = (await w.store!.insert(`# Recovery Query: ${RECOVERY_QUERY}\n\n## \noldsnapshot quoted the plan and the next steps whole\n\n`, {
+      metadata: { source: RECOVERY_SNAPSHOT_SOURCE, original_session_id: 's-older', recovered_at: T0 },
+    })).nodeId
+    recoverySeeds.set(w, { noteId, longNoteId, toolId, oldId, longNote, toolPreviewMarker: /…\[preview; full content \d+ chars via treecontext_export\]/ })
+  })
+  reg.define(/^the drain processes a claimed snapshot$/, async (w: CaptureWorld) => {
+    w.store!.store.insertStaging({
+      sessionId: 's-after-compaction', role: 'snapshot', priority: 0, timestamp: T0 + 100,
+      content: JSON.stringify({ queries: [RECOVERY_QUERY], original_session_id: 's-before-compaction' }),
+    })
+    await drainStaging(w)
+  })
+  const newRecoveryRow = (w: CaptureWorld): RawNode => {
+    const rows = rawJournal(w).filter((r) => r.metadata['source'] === RECOVERY_SNAPSHOT_SOURCE && r.metadata['original_session_id'] === 's-before-compaction')
+    expect(rows).toHaveLength(1)
+    return rows[0]!
+  }
+  reg.define(/^the recovery row quotes each hit at its display view, cut at the quote cap and named by its entry$/, (w: CaptureWorld) => {
+    const seeds = recoverySeeds.get(w)!
+    const row = newRecoveryRow(w)
+    // The short plan: quoted whole, named.
+    expect(row.content).toContain(`## entry ${seeds.noteId}\nthe active plan: finish the valve rework`)
+    // The long note: cut at the cap, with the marker naming the export door and the entry.
+    expect(row.content).toContain(`## entry ${seeds.longNoteId}\n${seeds.longNote.slice(0, RECOVERY_QUOTE_CAP)}…[quoted to ${RECOVERY_QUOTE_CAP} chars; full content ${seeds.longNote.length} chars via treecontext_export(${seeds.longNoteId})]`)
+    // The needle is proven on the source: the note ends in the marker the cut removed.
+    expect(seeds.longNote).toContain('deepquote')
+    // step-lint: allow unearned-absence -- guarded: the control directly above proves the source note carries the needle; the cut quote is asserted present at the cap just above it
+    expect(row.content).not.toContain('deepquote')
+    // The tool event: its display view, preview plus marker, never its full tail.
+    const toolSection = row.content.split(`## entry ${seeds.toolId}\n`)[1]
+    expect(toolSection, 'the tool event is quoted').toBeTruthy()
+    const toolQuote = toolSection!.split('\n\n')[0]!
+    expect(toolQuote).toMatch(seeds.toolPreviewMarker)
+    expect(toolQuote.length).toBeLessThan(RECOVERY_QUOTE_CAP)
+    // The needle is proven in scope: the long note's quote carries the cut marker; the tool's does not.
+    expect(row.content).toContain('…[quoted to')
+    // step-lint: allow unearned-absence -- guarded: the control directly above proves the same row carries the marker (the long note's quote); the tool's quote is the slice asserted shorter than the cap
+    expect(toolQuote).not.toContain('…[quoted to')
+  })
+  reg.define(/^the earlier recovery snapshot is not quoted$/, (w: CaptureWorld) => {
+    const seeds = recoverySeeds.get(w)!
+    const row = newRecoveryRow(w)
+    // The needle is proven on the earlier row itself, which still holds it.
+    const older = rawJournal(w).find((r) => r.nodeId === seeds.oldId)!
+    expect(older.content).toContain('oldsnapshot')
+    expect(row.content).not.toContain(seeds.oldId)
+    // step-lint: allow unearned-absence -- guarded: the control two lines above proves the earlier row in the same journal carries the needle
+    expect(row.content).not.toContain('oldsnapshot')
+  })
+  reg.define(/^the recovery queries sit in the row's metadata, not in its indexed words$/, (w: CaptureWorld) => {
+    const seeds = recoverySeeds.get(w)!
+    const row = newRecoveryRow(w)
+    expect(row.metadata[RECOVERY_QUERIES_KEY]).toEqual([RECOVERY_QUERY])
+    expect(row.content).not.toContain(RECOVERY_QUERY)
+    const ids = ftsNodeIds(w.dbPath!, RECOVERY_QUERY)
+    expect(ids, 'control: the beta.2-shaped row matches its own query').toContain(seeds.oldId)
+    expect(ids).not.toContain(row.nodeId)
+  })
+  reg.define(/^the row carries its own display and index boundaries$/, (w: CaptureWorld) => {
+    const row = newRecoveryRow(w)
+    expect(row.metadata['_preview_len']).toBe(Math.min(RECOVERY_PREVIEW_LEN, row.content.length))
+    expect(row.metadata['_index_len']).toBe(Math.min(RECOVERY_INDEX_LEN, row.content.length))
   })
 
   // ── an oversized non-re-derivable event keeps its full content ──────

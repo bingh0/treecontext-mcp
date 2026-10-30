@@ -1,4 +1,5 @@
 import { mkdtempSync, realpathSync, rmSync } from 'node:fs'
+import { maxSupportedVersion } from '../../../src/persistence/migrations/index.js'
 import { tmpdir } from 'node:os'
 import { join, basename } from 'node:path'
 import { execFileSync, spawnSync } from 'node:child_process'
@@ -510,7 +511,7 @@ export const orchestrationDefiner = (reg: Registry<OrchestrationWorld>): void =>
     const store = await FlatStore.open({ database: wrapBetterSqlite(new BetterSqlite3(w.dbPath!)), ownsDatabase: true })
     w.defer(() => store.close())
     w.store = store
-    expect(rawAll<{ v: number }>(w, 'SELECT user_version AS v FROM pragma_user_version')[0]!.v).toBe(29)
+    expect(rawAll<{ v: number }>(w, 'SELECT user_version AS v FROM pragma_user_version')[0]!.v).toBe(maxSupportedVersion)
   })
   reg.define(/^the untyped report carries the kind "([^"]+)" and the writer "([^"]+)", its content unchanged$/, (w, kind$, writer$) => {
     const [row] = storedRows(w, 'node_id = ?', w.noteId)

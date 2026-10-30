@@ -156,6 +156,41 @@ Feature: Journal recall — a cold-started agent recovers prior context
     # pays into the reader's context: the display cut and the searchable
     # boundary are separate numbers.
 
+  @D286
+  Scenario: a hit on a recovery snapshot is a bounded preview, like a tool event's
+    Given a recovery snapshot the drain wrote from entries far longer than its display boundary
+    When a query matches words inside its preview
+    Then its content ends at the display boundary with the availability marker
+    And words past its index boundary do not find it
+    And export of that entry returns its full content
+    # A recovery snapshot is machine output quoting the journal, never the
+    # developer's words or the agent's note, so D47's whole-text promise
+    # does not reach it. From beta.1 to beta.2 it carried no boundary and
+    # quoted whole hits, itself among them, so it compounded per
+    # compaction until one reply crossed the client's 16 MB stdio message
+    # guard (2026-10-29, D286).
+
+  @D286
+  Scenario: recovery snapshots a store already holds are bounded when this treecontext opens it
+    Given a store whose recovery snapshots an earlier treecontext wrote without boundaries
+    When this treecontext opens the store
+    Then each recovery snapshot carries a display boundary and an index boundary
+    And a hit on one is a bounded preview
+    And its stored content is unchanged
+    # Migration 030. The words stay; only the display cut and the indexed
+    # view change. Retention never destroys, and this heal keeps to that.
+
+  @D287
+  Scenario: a query reply never approaches the transport's message limit
+    Given a store whose entries, returned whole, would make a reply far over the reply ceiling
+    When a broad query returns them
+    Then the reply is under the ceiling
+    And each cut entry says so and names the export escape hatch
+    And export of one entry over the ceiling is refused with its size, never cut
+    # The ceiling is a quarter of the client's 16 MB guard. The bounded
+    # preview is the first defence; this is the last, for any producer the
+    # preview rule has not reached yet (D287).
+
   @D2
   Scenario: retrieval performance is observable where the agent can act on it
     Given a session that has run queries against a store
