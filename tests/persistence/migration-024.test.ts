@@ -104,7 +104,7 @@ describe('migration 024_fingerprint_digest', () => {
 
     const report = runMigrations(db, { migrate: true })
 
-    expect(report.applied.map((a) => a.version)).toEqual([24, 25, 26, 27, 28, 29])
+    expect(report.applied.map((a) => a.version)).toEqual([24, 25, 26, 27, 28, 29, 30])
     expect(nodeRow(db, 'a').fingerprint).toBe(contentFingerprint(COLLIDING_A))
     expect(nodeRow(db, 'b').fingerprint).toBe(contentFingerprint(COLLIDING_B))
     expect(nodeRow(db, 'a').fingerprint).not.toBe(nodeRow(db, 'b').fingerprint)
@@ -317,7 +317,7 @@ describe('migration 024_fingerprint_digest', () => {
 
     const report = runMigrations(db, { migrate: true })
 
-    expect(report.applied.map((a) => a.version)).toEqual([21, 22, 23, 24, 25, 26, 27, 28, 29])
+    expect(report.applied.map((a) => a.version)).toEqual([21, 22, 23, 24, 25, 26, 27, 28, 29, 30])
     expect(currentSchemaVersion(db)).toBe(maxSupportedVersion)
     expect(nodeRow(db, 'a').fingerprint).toBe(contentFingerprint(COLLIDING_A))
     expect(nodeRow(db, 'b').fingerprint).toBe(contentFingerprint(COLLIDING_B))

@@ -29,6 +29,7 @@ import { NodeNotFoundError } from '../errors/index.js'
 import { INSTRUCTIONS_BRIEF_LEXICAL, resolveInstructions } from './instructions.js'
 import { policyAllows, captureEnabled, effectivePolicy, type Policy } from './policy.js'
 import { shieldResponse, defaultShieldConfig, cleanShieldDir, cleanLegacyShieldDir, type ShieldConfig } from './shielding.js'
+import { serializeUnderCeiling, exceedsCeiling, exportOverCeilingMessage } from './reply-ceiling.js'
 import { SessionStats } from './session-stats.js'
 import { activeIndexCap, envIndexCapOverride, INDEX_CAP_ENV_FLOOR, STORE_BUDGET_CONFIG_KEY } from '../persistence/capture-constants.js'
 import { resolveCcSessionId, writeNamespaceAnnotation, type CcSessionResolution } from '../session-beacon.js'
@@ -837,7 +838,9 @@ export function createServer(
         if (adaptiveMeta) response._adaptive = adaptiveMeta
         if (scopeNote) response.scope = scopeNote
 
-        return maybeShield('treecontext_query', { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] })
+        // D287: the reply ceiling, the last defence under the client's 16 MB
+        // stdio message guard; the bounded preview (D4) is the first.
+        return maybeShield('treecontext_query', { content: [{ type: 'text' as const, text: serializeUnderCeiling(response) }] })
       } catch (err) {
         return toolError(err)
       }
@@ -1131,6 +1134,11 @@ export function createServer(
             recordReliance: policy === 'full',
           }
           const json = resolve().exportJson(exportOpts)
+          // D287: export promises the whole entry, so one that cannot cross
+          // the wire whole is refused with its size, never cut.
+          if (exceedsCeiling(json)) {
+            return { content: [{ type: 'text' as const, text: JSON.stringify({ error: exportOverCeilingMessage(node_id, Buffer.byteLength(json, 'utf8')), node_id }) }], isError: true }
+          }
           const parsed = JSON.parse(json) as { node_count?: number }
           stats.recordExport(parsed.node_count ?? 0)
           return maybeShield('treecontext_export', { content: [{ type: 'text' as const, text: json }] })

@@ -106,6 +106,15 @@ re-decided, and the previous text is in git history.
   now built and specced: the re-orientation packet on the clear chain,
   D216, and the `exec` hook command that lets the hook find its
   predecessor, D251. (D35, 2026-07-24)
+  Amended 2026-10-30 (D286): "working mechanics, unspecced" covered a
+  path that wrote a row into the store on every compaction, and that row
+  compounded until a query reply ended the connection. What the drain
+  WRITES from a snapshot (the recovery snapshot row: what it quotes, how
+  much, and its boundaries) is in the charter now, journal-capture and
+  journal-recall. Only the compaction interaction itself, when and why a
+  compaction happens, stays with ccr. A fence may decline a promise,
+  never a writer: anything that writes to the store is in the charter or
+  out of the build.
 - **`treecontext_feedback`** — dropped from the tool surface: on the
   lexical backend it was an honest no-op that still promised an effect,
   wiring it into ranking is the loop the reference-frequency entry
