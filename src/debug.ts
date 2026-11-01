@@ -264,7 +264,9 @@ export function isLogWriterAlive(name: string): boolean {
 
 /** Remove oldest log files beyond MAX_LOG_FILES, and oversized ones —
  *  never a file whose writer is alive or which was written in the last
- *  few minutes; the count and size budget governs the rest. */
+ *  few minutes; the count and size budget governs the rest. Runs after the
+ *  caller's own file exists, so the newest MAX_LOG_FILES counted here
+ *  include it (slicing at MAX_LOG_FILES - 1 kept only four). */
 function rotateOldLogs(): void {
   try {
     const now = Date.now()
@@ -276,14 +278,14 @@ function rotateOldLogs(): void {
       now - f.mtime < ROTATION_GRACE_MS || isLogWriterAlive(f.name)
 
     // Remove files beyond the limit
-    for (const f of files.slice(MAX_LOG_FILES - 1)) {
+    for (const f of files.slice(MAX_LOG_FILES)) {
       if (isProtected(f)) continue
       try { unlinkSync(join(LOGS_DIR, f.name)) } catch { /* best-effort */ }
     }
 
     // Also remove any oversized file (shouldn't happen normally but
     // protects disk space in runaway scenarios) — a live one excepted.
-    for (const f of files.slice(0, MAX_LOG_FILES - 1)) {
+    for (const f of files.slice(0, MAX_LOG_FILES)) {
       if (isProtected(f)) continue
       try {
         const size = statSync(join(LOGS_DIR, f.name)).size

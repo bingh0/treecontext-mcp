@@ -788,7 +788,7 @@ Findings against §§3-5 above. A3 is the one that changed the design.
   *cannot be written* (symlink refusal, `unreadable`), every subsequent
   fire re-pays the full probe — ancestor walk plus URL variants — on
   top of the two `execSync` git calls already paid unconditionally,
-  inside the 8s budget. Bounded (it needs a persistently unwritable
+  inside the 7s budget. Bounded (it needs a persistently unwritable
   bindings file) but real: skip the probe when the last persist failed.
 - **A5 — read-only `ATTACH` needs verifying, not assuming.** §5.1
   assumes the source can be attached read-only; that requires URI
@@ -1054,7 +1054,7 @@ project-identity fingerprint and `event-processing.ts`'s pending-key
 measured 530 ms on a 4.8k-row store; the dogfood store is now ~10.7k
 rows and the sub-v23 upgrade cost is backup + two passes + VACUUM +
 checkpoint under ONE exclusive lock, during which concurrent hook
-`writeStaging` blocks on its 8 s budget and drops capture beyond it —
+`writeStaging` blocks on its 7 s budget and drops capture beyond it —
 the codebase names this exact mechanism as a capture-loss cause.
 Measure the end-to-end hold on a dogfood-sized fixture before
 release and disclose the expected one-time capture gap in the

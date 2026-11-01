@@ -40,6 +40,27 @@ type Define = (re: RegExp, fn: (w: HooksWorld, ...caps: string[]) => void | Prom
 
 const RUN = 'r1'
 
+/** "No query made": no treecontext_query call was captured into staging, the
+ *  table every hooked tool call lands in. The stand-in world has no agent
+ *  turn that calls tools, so the absence alone could not fail; the control
+ *  makes the needle earn it. After the absence is read, the real PostToolUse
+ *  hook captures one treecontext_query call in this same world and the same
+ *  read must now find exactly it. The primary proof stays where the scenario
+ *  puts it: the checkpoint text is in the SubagentStart hook's own stdout,
+ *  composed before any agent turn. */
+function expectNoQueryMade(w: HooksWorld): void {
+  const queries = (): unknown[] => rawAll(w, "SELECT 1 FROM staging WHERE tool_name LIKE '%treecontext_query%'")
+  expect(queries()).toHaveLength(0)
+  if (w.facts!['query-control'] === true) return
+  runHook(w, 'post-tool-use', {
+    hook_event_name: 'PostToolUse', tool_name: 'mcp__treecontext__treecontext_query',
+    tool_input: { query: 'what was I working on' },
+    tool_response: { content: [{ type: 'text', text: '{"results":[]}' }] },
+  })
+  w.facts!['query-control'] = true
+  expect(queries(), 'the control: a real treecontext_query capture is visible to this read').toHaveLength(1)
+}
+
 /** What a leg was handed at its start (the hook's own stdout). */
 function contextOf(w: HooksWorld, name: string): string {
   const out = w.facts![`start:${name}`] as string | undefined
@@ -300,7 +321,7 @@ export function hooksDoorSteps(define: Define): void {
     expect(c).toContain(`Checkpoint number ${num} under "login-form" (row ${cp.node_id}), written by "${writer}" at ${momentText(at)}`)
     // No query made on its behalf: the first moment is the hook's own
     // composition, and no treecontext call was captured for the leg.
-    expect(rawAll(w, "SELECT 1 FROM staging WHERE tool_name LIKE '%treecontext_query%'")).toHaveLength(0)
+    expectNoQueryMade(w)
     expect(c.length).toBeLessThanOrEqual(HOOK_CONTEXT_CAP)
   })
 
@@ -852,6 +873,9 @@ export function hooksDoorSteps(define: Define): void {
     if (injected!.endsWith('with no query made')) {
       expect(c.length).toBe(chars)
       expect(c).toContain(cp)
+      // "with no query made", read from the staging table as the line-22
+      // scenario reads it, not only from the cut marker's absence below.
+      expectNoQueryMade(w)
       expect(hookCutMarker(w.ids!['cp']!, 1)).toContain('…[cut at')
       // step-lint: allow unearned-absence -- the line above proves the needle fires on the door's own cut marker
       expect(c).not.toContain('…[cut at')

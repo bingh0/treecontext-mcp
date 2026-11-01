@@ -438,6 +438,28 @@ async function gitSelfFor(cwd: string): Promise<{ worktree: string | null; branc
   return self
 }
 
+/**
+ * fsync a directory so the entries created in it are durable. POSIX only:
+ * Windows cannot open a directory as a file descriptor, and its file
+ * fsync already covers the entry. A filesystem that refuses a directory
+ * sync (EINVAL, ENOTSUP, EPERM) is treated as one that cannot offer it;
+ * any other failure (EIO) propagates, so the valve refuses to move rows
+ * on a copy it could not make durable.
+ */
+function syncDirectory(dir: string): void {
+  if (process.platform === 'win32') return
+  let fd: number | null = null
+  try {
+    fd = openSync(dir, 'r')
+    fsyncSync(fd)
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code
+    if (code !== 'EINVAL' && code !== 'ENOTSUP' && code !== 'EPERM') throw err
+  } finally {
+    if (fd !== null) closeSync(fd)
+  }
+}
+
 export class FlatStore implements MemoryStore {
   private readonly db: Database
   private readonly persistence: Persistence
@@ -3437,6 +3459,11 @@ export class FlatStore implements MemoryStore {
     } finally {
       closeSync(fd)
     }
+    // The file's bytes are durable; its directory entry is not until the
+    // directory is. A crash right here could otherwise lose the entry while
+    // the rows it archives are deleted next (D55: archived whole and
+    // fsynced before any row moves).
+    syncDirectory(dirname(path))
   }
 
   /** The tombstone is an ordinary journal entry — findable by search,

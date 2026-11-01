@@ -37,18 +37,37 @@ armStormProofStdio()
  *  below the smallest platform hook kill budget — VS Code registers every
  *  hook with timeoutSec: 10 (installer.ts) — because SQLite's busy
  *  wait blocks the event loop: a hook killed mid-wait loses its failure
- *  diagnostic and its close(). 8s leaves headroom to fail gracefully. */
-export const HOOK_DB_TIMEOUT_MS = 8000
+ *  diagnostic and its close(). The bar is wall time, not the constant: the
+ *  rule is 9 s (the kill minus a second to fail gracefully), and the real
+ *  hooks against a store another process holds whole are held to it by
+ *  tests/hooks/hook-budget-locked.test.ts. At 8 s the Stop hook measured
+ *  9.2 s with process start counted (guard 1 s + write 8 s), over; at 7 s
+ *  it measures 8.2 s and the single-open hooks 7.2 s. */
+export const HOOK_DB_TIMEOUT_MS = 7000
+
+/** When this hook process started, to the millisecond that matters: shared.ts
+ *  loads first in every hook. What a later open may still wait is what is
+ *  left of HOOK_DB_TIMEOUT_MS from here (hookBudgetLeftMs). */
+export const HOOK_STARTED_AT = Date.now()
+
+/** What is left of a hook's write budget, `since` the moment it counts
+ *  from (the hook's start by default), never below 100 ms. A second open
+ *  inside the hook (the wrapper's pragmas, the journal's open) gets this,
+ *  not a fresh budget on top of the first. */
+export function hookBudgetLeftMs(since: number = HOOK_STARTED_AT): number {
+  return Math.max(HOOK_DB_TIMEOUT_MS - (Date.now() - since), 100)
+}
 
 /** The busy budget for the Stop hook's PRE-WRITE guard read. The Stop
  *  hook is the one hook that opens the store twice (guard, then write),
  *  and its budgets SUM against the platform's 10s kill: giving the
- *  guard the full 8s put the worst case at 16s and turned a
+ *  guard the full write budget put the worst case at 16s and turned a
  *  duplicate-capture risk into total capture loss (pass-2 review
  *  2026-08-15). 1s is plenty for a WAL read (readers rarely block at
- *  all) and keeps guard+write at 9s — under the kill budget with the
- *  fail-gracefully second intact. The sum is pinned in
- *  tests/hooks/shared.test.ts. */
+ *  all), and a lookup that cannot read within it is no evidence (D263), so
+ *  it is not cut further: guard+write is 8s, 8.2s with process start. The
+ *  sum is pinned in tests/hooks/shared.test.ts and the wall time in
+ *  tests/hooks/hook-budget-locked.test.ts. */
 export const STOP_GUARD_TIMEOUT_MS = 1000
 
 /** The one place hook code opens the store: shared timeout + WAL. Every
@@ -160,9 +179,9 @@ export function bootstrapFreshStore(db: DatabaseType, dbPath: string, timeoutMs:
   }
   const started = Date.now()
   try {
-    const wrapped = openNodeSqlite(db)
-    // The wrapper's constructor applied the library's default pragmas,
-    // busy_timeout 10000 among them. The bootstrap waits at most its own
+    const wrapped = openNodeSqlite(db, { timeoutMs: Math.min(HOOK_BOOTSTRAP_TIMEOUT_MS, timeoutMs) })
+    // The wrapper's constructor ran its pragmas under the same share, not
+    // its 10 s default. The bootstrap waits at most its own
     // share (HOOK_BOOTSTRAP_TIMEOUT_MS) for a lock; the finally below
     // hands whatever is left of the hook's budget to the write.
     setPragma(db, `busy_timeout = ${Math.min(HOOK_BOOTSTRAP_TIMEOUT_MS, timeoutMs)}`)

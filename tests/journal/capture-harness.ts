@@ -137,7 +137,7 @@ export interface HookRun { status: number | null; stdout: string; stderr: string
  *  stdout. `env` adds to the sandbox (a TZ, say), never replaces it. */
 export function runHook(
   w: CaptureWorld,
-  hook: 'user-prompt-submit' | 'post-tool-use' | 'stop' | 'session-start' | 'subagent-start' | 'subagent-stop',
+  hook: 'user-prompt-submit' | 'post-tool-use' | 'stop' | 'session-start' | 'pre-compact' | 'subagent-start' | 'subagent-stop',
   payload: Record<string, unknown>,
   env: Record<string, string> = {},
 ): HookRun {

@@ -24,7 +24,7 @@ import { maxSupportedVersion } from '../persistence/migrations/index.js'
 import { hasLegColumns } from '../persistence/leg-registry.js'
 import { resolveHookNamespace } from '../session-beacon.js'
 import { nsLeaseLiveFor } from '../persistence/leases.js'
-import { HOOK_DB_TIMEOUT_MS } from './shared.js'
+import { hookBudgetLeftMs } from './shared.js'
 
 /** The hooks door's journal, or why the hook may not write one. */
 export type HookStore =
@@ -38,12 +38,17 @@ export type HookStore =
   }
   | { refused: string }
 
-/** A FlatStore over a hook's connection, or the reason the store is not
+/** (`since`: when the hook's budget began; the hooks pass HOOK_STARTED_AT,
+ *  so the opens here wait what is left of it, never a fresh budget.)
+ *
+ *  A FlatStore over a hook's connection, or the reason the store is not
  *  the door's to write: a store below the leg columns has no legs (null,
  *  as before), and a store at another schema than this build's is that
  *  build's to write (D265), which the caller records as a gap (D314). The
  *  caller closes the raw handle; closing the FlatStore leaves it open. */
-export async function hookStoreOn(db: DatabaseType, dbPath: string, sessionId: string | null): Promise<HookStore | null> {
+export async function hookStoreOn(
+  db: DatabaseType, dbPath: string, sessionId: string | null, since: number = Date.now(),
+): Promise<HookStore | null> {
   if (!hasLegColumns(db)) return null
   const version = pragmaValue(db, 'user_version') as number
   if (version !== maxSupportedVersion) {
@@ -57,7 +62,9 @@ export async function hookStoreOn(db: DatabaseType, dbPath: string, sessionId: s
   } catch { /* unresolved: the default */ }
   try {
     const store = await FlatStore.open({
-      database: openNodeSqlite(db),
+      // The wrapper's pragmas and the journal's open wait what is left of
+      // the hook's budget, not the wrapper's 10 s default.
+      database: openNodeSqlite(db, { timeoutMs: hookBudgetLeftMs(since) }),
       ownsDatabase: false,
       migrate: false,
       retentionInterval: Number.MAX_SAFE_INTEGER,
@@ -69,7 +76,7 @@ export async function hookStoreOn(db: DatabaseType, dbPath: string, sessionId: s
     setPragma(db, 'synchronous = FULL')
     setPragma(db, 'mmap_size = 0')
     setPragma(db, 'temp_store = DEFAULT')
-    setPragma(db, `busy_timeout = ${HOOK_DB_TIMEOUT_MS}`)
+    setPragma(db, `busy_timeout = ${hookBudgetLeftMs(since)}`)
   }
 }
 

@@ -211,7 +211,7 @@ A four-reader review of the G1–G5 landing surfaces (review node
 Its prerequisite finding shipped first as **G0** (@ 47d58f7, own
 adversarial review, nine findings fixed): the `Database` wrapper's
 transactions default to `BEGIN IMMEDIATE` with `deferred` as the
-explicit read-only opt-out, `busy_timeout` is 10 s server-side and 8 s
+explicit read-only opt-out, `busy_timeout` is 10 s server-side and 7 s
 hook-side (`openHookDb`, the single hook opener — hook timeouts are
 capped by platform kill budgets, not by the store's patience), and
 manual-transaction migrations map busy to `StoreBusyError`. The

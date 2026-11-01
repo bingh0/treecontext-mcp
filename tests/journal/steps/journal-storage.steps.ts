@@ -2069,6 +2069,9 @@ function onFsyncUnder(w: { defer: (fn: () => void) => void }, dir: string, obser
     } catch { return null }
   }
   const seen = (fd: number): void => {
+    // A directory's fsync (the archive writer syncs the archive directory
+    // after the file) is not a file becoming durable.
+    try { if (fs.fstatSync(fd).isDirectory()) return } catch { /* judged by the path below */ }
     const path = pathOfFd(fd)
     if (path !== null && path.startsWith(dir)) observe(path)
   }

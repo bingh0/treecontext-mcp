@@ -308,6 +308,17 @@ adds `_insert` and nothing that removes. Details in
 - **Capture is verified only on Claude Code.** A teammate on Codex,
   Gemini, Cursor, VS Code or OpenCode gets the tools: they can search and
   write notes, but nothing of their session is captured for them (§6).
+- **A run as a unit.** When the work ran as legs under a run, `treecontext
+  export handoffs/login-run.json --run login` writes that run: its
+  skeleton, meaning the open and close, every brief, every checkpoint,
+  each leg's first moment and summary, and the legs' registrations, with no
+  captured tool output. `--run login --whole --yes` adds every row of every
+  leg, after the same secrets warning. The agent does the same through the
+  export tool's `run` argument (`form: "whole"` behind the same
+  acknowledgement). Importing it lands the run in a lane of its own as a
+  review of what happened elsewhere, never a replay: an imported brief
+  steers no role and an imported checkpoint takes no number in your
+  sequence.
 
 ## 6. Platform support
 
@@ -507,6 +518,10 @@ silent on stderr when it is healthy (D258): a line there *is* a warning
 or an error, and worth reading. Its diagnostics — the startup facts, the
 drain's ticks, the shutdown — go to the log file under
 `~/.treecontext/logs/`, and `treecontext doctor --dump-logs` prints them.
+The newest five log files are kept, counting the one a process has just
+opened (every server start and every hook opens one); a log written in the
+last five minutes, or by a process still running, is never removed, so
+more than five files can sit on disk inside that window.
 Hooks serve no client, so their diagnostics still go to stderr by design.
 
 **Entries marked `[capture gap]`.** Not a bug: the journal recording its

@@ -26,7 +26,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { DatabaseSync } from 'node:sqlite'
-import { resolveDbPath, writeStaging, parseHookInput, isDirectInvocation, openHookDb, STOP_GUARD_TIMEOUT_MS, storeRefusesWrites, blockOutput } from './shared.js'
+import { resolveDbPath, writeStaging, parseHookInput, isDirectInvocation, openHookDb, STOP_GUARD_TIMEOUT_MS, storeRefusesWrites, blockOutput, HOOK_STARTED_AT } from './shared.js'
 import { STORE_SAFETY_CAP, activeIndexCap } from '../persistence/capture-constants.js'
 import { dbg } from '../debug.js'
 import { checkpointDue, bookmarkRequest, markBookmarkAsked, hookNowSec, type CheckpointDue } from '../checkpoints.js'
@@ -57,9 +57,9 @@ export function isStaleRecapture(dbPath: string, sessionId: string | undefined, 
   let db: DatabaseSync | null = null
   try {
     // Through the one opener, at the GUARD budget: this hook opens the
-    // store twice (this guard, then writeStaging's 8s write), and the
+    // store twice (this guard, then writeStaging's write), and the
     // two busy budgets sum against the platform's 10s kill — the full
-    // 8s here made the worst case 16s, converting a duplicate-capture
+    // write budget here made the worst case 16s, converting a duplicate-capture
     // risk into total capture loss (pass-2 review 2026-08-15).
     db = openHookDb(dbPath, { readonly: true, timeoutMs: STOP_GUARD_TIMEOUT_MS })
     return staleOn(db, sessionId, text)
@@ -285,7 +285,7 @@ async function workerStop(input: Record<string, unknown>, dbPath: string, sessio
   let db: DatabaseSync | null = null
   try {
     db = openHookDb(dbPath)
-    const opened = await hookStoreOn(db, dbPath, sessionId)
+    const opened = await hookStoreOn(db, dbPath, sessionId, HOOK_STARTED_AT)
     if (!opened || 'refused' in opened) {
       if (opened) recordHookGap(dbPath, { hook: 'stop', sessionId, at: Date.now() / 1000, error: opened.refused, lost: 'The worker was owed its one send-back and was not sent back here; its wrapper may send it back at its exit.' })
       return

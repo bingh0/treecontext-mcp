@@ -37,7 +37,7 @@
  * stop this hook cannot write goes to the gap ledger (gap-ledger.ts).
  */
 import type { DatabaseSync as DatabaseType } from 'node:sqlite'
-import { parseHookInput, resolveDbPath, writeStaging, openHookDb, isDirectInvocation, payloadWriter, storeRefusesWrites, blockOutput, STOP_GUARD_TIMEOUT_MS } from './shared.js'
+import { parseHookInput, resolveDbPath, writeStaging, openHookDb, isDirectInvocation, payloadWriter, storeRefusesWrites, blockOutput, STOP_GUARD_TIMEOUT_MS, HOOK_STARTED_AT } from './shared.js'
 import { extractLastAssistantText } from './stop.js'
 import { hookStoreOn, hookTreeOf } from './hook-store.js'
 import { recordHookGap } from './gap-ledger.js'
@@ -303,7 +303,7 @@ async function legStop(
     errors.push(refusedAtStop)
   }
   try {
-    const opened = await hookStoreOn(db, dbPath, ref.sessionId)
+    const opened = await hookStoreOn(db, dbPath, ref.sessionId, HOOK_STARTED_AT)
     if (!opened || 'refused' in opened) {
       if (opened && owesSendBack(leg, checkpointSinceStart) && !lost.includes('sendBack')) { lost.push('sendBack'); errors.push(opened.refused) }
       if (lost.length > 0) gap()

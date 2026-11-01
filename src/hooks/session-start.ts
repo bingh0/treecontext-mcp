@@ -1,7 +1,7 @@
 import { basename, dirname } from 'node:path'
 import type { DatabaseSync as DatabaseType } from 'node:sqlite'
 import { isBusyError } from '../persistence/node-sqlite.js'
-import { parseHookInput, resolveDbPath, normalizeSource, buildRehydrationPayload, openHookDb, isDirectInvocation } from './shared.js'
+import { parseHookInput, resolveDbPath, normalizeSource, buildRehydrationPayload, openHookDb, isDirectInvocation, HOOK_STARTED_AT } from './shared.js'
 import { dbg } from '../debug.js'
 import { writeSessionBeacon } from '../session-beacon.js'
 import { readSessionBeacon } from '../session-beacon.js'
@@ -81,7 +81,7 @@ async function workerStart(db: DatabaseType, dbPath: string, sessionId: string, 
       additionalContext: workerIdentityLine(leg, first?.node_id ?? null),
     }
   }
-  const opened = await hookStoreOn(db, dbPath, sessionId)
+  const opened = await hookStoreOn(db, dbPath, sessionId, HOOK_STARTED_AT)
   if (!opened || 'refused' in opened) {
     // D265, D314: the worker's start is not lost silently.
     const why = opened ? opened.refused : 'its store predates workers (schema 31)'

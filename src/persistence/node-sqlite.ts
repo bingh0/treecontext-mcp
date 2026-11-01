@@ -229,6 +229,18 @@ export class NodeSqliteDatabase implements Database {
     opts?: { secureDelete?: boolean | undefined; readOnly?: boolean | undefined; timeoutMs?: number | undefined },
   ) {
     this.secureDelete = opts?.secureDelete ?? false
+    // busy_timeout FIRST, at the raw opener's wait (or the caller's), for
+    // the pragmas below. A DatabaseSync the caller built with node:sqlite's
+    // own default has a busy timeout of 0, and `journal_mode = WAL` (a lock,
+    // and the first open after a crash or a last-close is WAL recovery) used
+    // to run before any wait was set: with several processes opening one
+    // store at the same instant a loser threw "database is locked" at once
+    // instead of waiting its turn (the checkpoint race stress: 12 of 20
+    // rounds of six writers failed here). The wrapper's own 10 s default is
+    // set LAST, as it always was, so it never lengthens the wait of the
+    // open itself; a caller's busy timeout outranks it.
+    const openWait = opts?.timeoutMs ?? DEFAULT_RAW_TIMEOUT_MS
+    setPragma(this.db, `busy_timeout = ${openWait}`)
     for (const [key, value] of DEFAULT_PRAGMAS) {
       // journal_mode is a write when it changes the mode: a read-only handle
       // on a rollback-journal file would throw here (WAL is already the

@@ -39,7 +39,7 @@
  * failure is logged and the hook exits 0 as every hook does.
  */
 import type { DatabaseSync as DatabaseType } from 'node:sqlite'
-import { parseHookInput, resolveDbPath, openHookDb, isDirectInvocation, payloadWriter } from './shared.js'
+import { parseHookInput, resolveDbPath, openHookDb, isDirectInvocation, payloadWriter, HOOK_STARTED_AT } from './shared.js'
 import { gitSelfOf } from './git-self.js'
 import { hookStoreOn, hookTreeOf, hookNamespaceOf } from './hook-store.js'
 import { recordHookGap } from './gap-ledger.js'
@@ -106,7 +106,7 @@ async function run(preParsed?: Record<string, unknown>): Promise<void> {
       // namespace does not resolve.
       const namespace = hookNamespaceOf(db, dbPath, sessionId)
       if (briefsInEffect(db, hookTreeOf(db, namespace), agentType).length === 0) return
-      const opened = await hookStoreOn(db, dbPath, sessionId)
+      const opened = await hookStoreOn(db, dbPath, sessionId, HOOK_STARTED_AT)
       if (!opened) return
       if ('refused' in opened) {
         // D265, D314: the start is not lost silently; the drain marks it.

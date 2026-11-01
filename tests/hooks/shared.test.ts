@@ -382,7 +382,7 @@ describe('openHookDb bootstraps a fresh store', () => {
       const db = openHookDb(path)
       try {
         // The write's budget is what the bootstrap left of the hook's —
-        // never the wrapper's 10s, never a fresh 8s on top.
+        // never the wrapper's 10s, never a fresh budget on top.
         const left = pragmaValue(db, 'busy_timeout') as number
         expect(left).toBeLessThanOrEqual(HOOK_BUDGET)
         expect(left).toBeGreaterThan(HOOK_BUDGET - HOOK_BOOTSTRAP_TIMEOUT_MS)
@@ -440,6 +440,9 @@ describe('hook db timeout vs platform kill budgets', () => {
       const cfg = JSON.parse(rf(settings, 'utf8')) as { hooks: Record<string, Array<{ timeoutSec?: number }>> }
       const minBudgetMs = Math.min(...Object.values(cfg.hooks).flat().map((e) => e.timeoutSec! * 1000))
       expect(STOP_GUARD_TIMEOUT_MS + HOOK_DB_TIMEOUT_MS).toBeLessThanOrEqual(minBudgetMs - 1000)
+      // The wall-time bar the real hooks are held to (hook-budget-locked.test.ts)
+      // leaves room for process start on top of the summed budgets.
+      expect(STOP_GUARD_TIMEOUT_MS + HOOK_DB_TIMEOUT_MS).toBeLessThanOrEqual(8000)
       // The fresh-store bootstrap (2026-09-02) is a third phase on the
       // write connection; it is a SHARE of HOOK_DB_TIMEOUT_MS, not a
       // fourth term — pinned here so a future budget cannot stack it.

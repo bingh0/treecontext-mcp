@@ -74,7 +74,7 @@ describe('SubagentStop: internal only on evidence (D263)', () => {
       })
       // The hook runs into the lock: its read-only lookup gives up after
       // its 1 s budget; the lock is released after 2.5 s, inside the
-      // staging write's 8 s budget, so the capture itself lands.
+      // staging write's 7 s budget, so the capture itself lands.
       const hook = spawn(process.execPath, tsxArgv(join(TS_ROOT, 'src', 'hooks', 'subagent-stop.ts')), {
         env: sandboxedSpawnEnv(w.home!, { TREECONTEXT_BINDINGS_FILE: join(w.home!, '.treecontext', 'bindings.json'), TREECONTEXT_DEBUG: '1' }),
         cwd: TS_ROOT, stdio: ['pipe', 'pipe', 'pipe'],

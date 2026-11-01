@@ -13,7 +13,7 @@
  */
 
 import { readFileSync, statSync } from 'node:fs'
-import { basename } from 'node:path'
+import { basename, join } from 'node:path'
 import { McpServer } from '@modelcontextprotocol/server'
 import { StdioServerTransport } from '@modelcontextprotocol/server/stdio'
 import { z } from 'zod'
@@ -49,6 +49,22 @@ import {
 import { DEFAULT_RECENCY_WEIGHT, SHADOW_RECENCY_WEIGHT, recordQueryTelemetry, telemetryEnabled } from './query-telemetry.js'
 import { maxSupportedVersion } from '../persistence/migrations/index.js'
 import { newerSchemaLine } from '../persistence/migrations.js'
+
+/**
+ * The version serverInfo reports: the package's own, read once at module
+ * load (same relative path the CLI's --version uses; src/server and
+ * dist/server both sit two levels under the package root).
+ */
+const SERVER_VERSION: string = (() => {
+  try {
+    const pkg = JSON.parse(
+      readFileSync(join(import.meta.dirname ?? '.', '../../package.json'), 'utf8'),
+    ) as { version?: string }
+    return pkg.version ?? '0.0.0-unknown'
+  } catch {
+    return '0.0.0-unknown'
+  }
+})()
 
 /** The insert-time writer stamps the registry could only read, not know
  *  (session-registry.ts resolveWriter); the call's echo makes them exact. */
@@ -250,7 +266,7 @@ export function createServer(
   const server = new McpServer(
     {
       name: 'treecontext',
-      version: '1.0.0',
+      version: SERVER_VERSION,
     },
     {
       // Default: BRIEF. The activation eval (t10, AC1 PASS) showed VERBOSE
