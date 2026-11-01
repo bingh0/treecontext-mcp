@@ -3,11 +3,13 @@ import { DatabaseSync } from 'node:sqlite'
 import { type Registry } from 'gherkin-node-test/vitest'
 import { parseTool, rawAll } from '../world.js'
 import { runHook, bashPayload, drainStaging } from '../capture-harness.js'
-import { RUN_ROWS_SQL } from '../../../src/runs.js'
+import { RUN_ROWS_SQL, charactersOf } from '../../../src/runs.js'
+import { KEY_LOOKUP_PARAM, keyLookupReply, type KeyLookup, type KeyLookupReply } from '../../../src/key-lookup.js'
+import { SUBAGENT_SUMMARY_KIND } from '../../../src/handoff.js'
 import { STORE_WRITER } from '../../../src/persistence/session-registry.js'
 import {
   type RunWorld, openRunWorld, hooksLeg, workerLeg, seedCheckpoints, sessionClient, localMoment, readerOf,
-  rawOne, rawMetaOf, rawContentOf, rawRowOf, rawRegistration, cpLabel, stringSteps,
+  rawOne, rawMetaOf, rawContentOf, rawRowOf, rawRegistration, rawCheckpoints, cpLabel, stringSteps, insertEchoed, subagentStopHook,
 } from '../run-world.js'
 
 // ── journal-runs ────────────────────────────────────────────────────────
@@ -24,13 +26,39 @@ import {
 // registered by the real SubagentStart hook and given its run and key by
 // the registry call the hooks door makes. Every Then reads the store file
 // through a separate read-only handle, the harness's lookup, or the agent's
-// own query tool. The lookup's run facts, its flag in words and the
-// pointer to a leg's return (D296, D301, D312, D336, D337, D344) are the
-// lookup reply's build and stay in the wip register until it lands.
+// own query tool. The lookup's whole reply (D296, D301, D312, D336, D337,
+// D344) is read twice: as the harness receives it through the library
+// (lookupKey, and keyLookupReply for the plain reply), and as an agent
+// receives it through the query tool's key_lookup mode; a leg's return is
+// the summary row the real SubagentStop hook staged and the drain wrote.
 
 export type RunsWorld = RunWorld
 
 type Hit = { nodeId: string; content: string; metadata: Record<string, unknown> | null }
+
+const HOUR = 3600
+
+/** Words a reply that judged a leg's liveness would use (D312: the store
+ *  shows the moments and judges nothing). */
+const VERDICT_NEEDLE = /stuck|hung|stall|idle|slow|unresponsive|timed? ?out/i
+
+/** The harness's one lookup of the scenario, by the run it asked on. */
+function harnessLookup(w: RunsWorld, run = 'r1'): KeyLookup {
+  const l = w.lookups![run]
+  expect(l, `the harness never looked up a key on the run "${run}"`).toBeTruthy()
+  return l!
+}
+
+/** A checkpoint's text of exactly `size` characters. */
+function sized(label: string, size: number): string {
+  const head = `state: ${label}; `
+  return head.length >= size ? head.slice(0, size) : head + 'x'.repeat(size - head.length)
+}
+
+/** The sizes of a key's checkpoints straight from the file, by number. */
+function rawSizes(w: RunsWorld, run: string, key: string): number[] {
+  return rawCheckpoints(w, run, key).sort((a, b) => a.n - b.n).map((c) => charactersOf(rawContentOf(w, c.node_id)))
+}
 
 async function query(w: RunsWorld, q: string, extra: Record<string, unknown> = {}): Promise<Hit[]> {
   await sessionClient(w)
@@ -456,5 +484,318 @@ export const runsDefiner = (reg: Registry<RunsWorld>): void => {
     const middle = w.legs!['middle']!
     expect(open.m['parent_run']).toBe(mid)
     expect(open.m['parent_leg']).toEqual({ session_id: middle.sessionId, agent_id: middle.agentId, role: 'reviewer' })
+  })
+
+  // ── D296: a stranger's checkpoint, flagged against the named checkpointer ──
+
+  define(/^a brief stored on the run "([^"]+)" naming the builder as the checkpointer of the key "([^"]+)"$/, async (w, run, key) => {
+    await openRunWorld(w, { sessionStart: false })
+    const b = await w.store!.writeBrief(`build the ${key}; the builder checkpoints it at the end`, { run: run!, key: key!, role: 'builder', checkpointer: 'builder', by: 'harness' })
+    w.ids!['brief'] = b.nodeId
+    expect(rawMetaOf(w, b.nodeId)['checkpointer']).toBe('builder')
+  })
+
+  define(/^checkpoint number (\d+) under the key "([^"]+)" written by the builder role, and checkpoint number (\d+), the newest in effect, written by the writer "([^"]+)"$/, async (w, num, key, newer, stranger) => {
+    await seedCheckpoints(w, 'r1', key!, Number(num))
+    const r = await w.store!.writeCheckpoint('state: rewritten by another hand; the form is done', {
+      run: 'r1', key: key!, declared: { role: stranger! }, supersedes: [w.cps![cpLabel('r1', key!, Number(num))]!],
+    })
+    expect(r.checkpoint!.number).toBe(Number(newer))
+    w.cps![cpLabel('r1', key!, Number(newer))] = r.nodeId
+  })
+
+  define(/^checkpoint number (\d+) under the key "([^"]+)", the newest in effect, written by the builder role$/, async (w, num, key) => {
+    await seedCheckpoints(w, 'r1', key!, Number(num))
+  })
+
+  define(/^the harness looks up the key "([^"]+)" on the run "([^"]+)"$/, (w, key, run) => {
+    w.lookups![run!] = w.store!.lookupKey({ run: run!, key: key! })
+  })
+
+  define(/^the harness receives checkpoint number (\d+) with the writer "([^"]+)", not number (\d+)$/, (w, num, writer, older) => {
+    const l = harnessLookup(w)
+    expect(l.checkpoints.map((c) => [c.nodeId, c.number, c.writer])).toEqual([[w.cps![cpLabel('r1', l.key, Number(num))], Number(num), writer]])
+    const m = rawMetaOf(w, l.checkpoints[0]!.nodeId)
+    expect([m['_writer'], m['_checkpoint_number']]).toEqual([writer, Number(num)])
+    // Number 5 is there, the builder's, and not what the lookup returned.
+    const old = w.cps![cpLabel('r1', l.key, Number(older))]!
+    expect(rawMetaOf(w, old)['_writer']).toBe('builder')
+    expect(l.checkpoints.map((c) => c.nodeId)).not.toContain(old)
+  })
+
+  define(/^the same reply says its writer is not the checkpointer the brief names$/, (w) => {
+    const reply = keyLookupReply(harnessLookup(w))
+    expect(reply.checkpoints).toHaveLength(1)
+    const cp = reply.checkpoints[0]!
+    expect(cp.flag).toBe(`The writer of checkpoint number ${cp.number}, "${cp.writer}", is not the checkpointer the brief names ("builder").`)
+    expect(reply.named_checkpointer).toEqual({ names: ['builder'], by: 'brief' })
+    // Nothing withheld: the stranger's row is the reply's, whole.
+    expect(cp.content).toBe(rawContentOf(w, cp.node_id))
+  })
+
+  define(/^the harness receives checkpoint number (\d+) with the writer "([^"]+)"$/, (w, num, writer) => {
+    const l = harnessLookup(w)
+    expect(l.checkpoints.map((c) => [c.nodeId, c.number, c.writer])).toEqual([[w.cps![cpLabel('r1', l.key, Number(num))], Number(num), writer]])
+    expect(rawMetaOf(w, l.checkpoints[0]!.nodeId)['_writer']).toBe(writer)
+  })
+
+  define(/^the reply carries no flag about its writer$/, (w) => {
+    const reply = keyLookupReply(harnessLookup(w))
+    // A flag was possible (the brief names a checkpointer), and none is said.
+    expect(reply.named_checkpointer).toEqual({ names: ['builder'], by: 'brief' })
+    expect(reply.checkpoints.map((c) => c.flag)).toEqual([null])
+    // Nor anywhere else in the reply: the phantom pass had nothing to say.
+    expect(reply.notes).toEqual([])
+  })
+
+  // ── D301, D344: the run's facts beside the checkpoint ──
+
+  define(/^a run "([^"]+)" started (\d+) hours ago on which (\d+) legs have run and whose key "([^"]+)" holds (\d+) checkpoints, the last three of (\d+), (\d+) and (\d+) characters$/, async (w, run, hours, legs, key, count, s1, s2, s3) => {
+    await openRunWorld(w, { sessionStart: false })
+    const start = Date.now() / 1000 - Number(hours) * HOUR
+    await w.store!.openRun({ run: run!, by: 'harness', at: start })
+    w.moments!['start'] = start
+    const nLegs = Number(legs)
+    const nCps = Number(count)
+    const sizes = [...Array.from({ length: nCps - 3 }, (_, i) => 400 + i), Number(s1), Number(s2), Number(s3)]
+    for (let i = 0; i < nLegs; i++) {
+      const at = start + (i + 1) * 600
+      const ref = await workerLeg(w, `leg${i}`, { role: 'builder', run: run!, key: key!, at, startCheckpoints: w.store!.checkpointsInEffect(run!, key!).map((c) => c.nodeId) })
+      // The last legs each write one checkpoint; the first ones only worked.
+      const k = i - (nLegs - nCps)
+      if (k >= 0) {
+        const r = await w.store!.writeCheckpoint(sized(`leg ${i} of ${run}`, sizes[k]!), { run: run!, key: key!, leg: ref, at: at + 300 })
+        w.cps![cpLabel(run!, key!, r.checkpoint!.number)] = r.nodeId
+      }
+      expect(w.store!.retireLeg(ref, 'retired', at + 400)).toBe(true)
+    }
+  })
+
+  define(/^the harness receives, beside the checkpoint, the leg count (\d+), the checkpoint count (\d+), the run age of (\d+) hours and the sizes (\d+), (\d+) and (\d+)$/, (w, legs, count, hours, s1, s2, s3) => {
+    const l = harnessLookup(w)
+    expect(l.checkpoints.map((c) => c.number)).toEqual([Number(count)])
+    const f = keyLookupReply(l).facts
+    expect([f.legs_run, f.checkpoints_under_key, f.last_sizes]).toEqual([Number(legs), Number(count), [Number(s1), Number(s2), Number(s3)]])
+    expect(f.run_started_at).toBe(w.moments!['start'])
+    expect(Math.abs(f.run_age_seconds! - Number(hours) * HOUR)).toBeLessThan(120)
+    // The file agrees on every number.
+    expect(rawAll(w, 'SELECT 1 FROM session_registry WHERE run = ?', l.run)).toHaveLength(Number(legs))
+    expect(rawSizes(w, l.run, l.key).slice(-3)).toEqual([Number(s1), Number(s2), Number(s3)])
+    expect(rawCheckpoints(w, l.run, l.key)).toHaveLength(Number(count))
+    expect(rawOne<{ t: number }>(w, "SELECT created_at AS t FROM nodes WHERE json_extract(metadata_json, '$.kind') = 'run-open' AND json_extract(metadata_json, '$.run') = ?", l.run)!.t).toBe(w.moments!['start'])
+  })
+
+  // ── D312: a live leg's start and last write ──
+
+  define(/^a run "([^"]+)" with a live builder leg that started (\d+) hours ago and last wrote a row (\d+) minutes ago$/, async (w, run, hours, minutes) => {
+    await openRunWorld(w, { sessionStart: false })
+    const start = Date.now() / 1000 - Number(hours) * HOUR
+    const last = Date.now() / 1000 - Number(minutes) * 60
+    const ref = await workerLeg(w, 'builder', { role: 'builder', run: run!, key: 'login-form', at: start })
+    await w.store!.insert('npx vitest run login: 3 failing, the submit handler is missing', { leg: ref, createdAt: start + 120 })
+    await w.store!.insert('waiting on the login API to answer the submit', { leg: ref, createdAt: last })
+    w.moments!['start'] = start
+    w.moments!['last'] = last
+  })
+
+  define(/^the harness receives, for the builder leg, its start moment (\d+) hours ago and its last write (\d+) minutes ago$/, (w, hours, minutes) => {
+    const reply = keyLookupReply(harnessLookup(w))
+    const legs = reply.legs.filter((g) => g.role === 'builder')
+    expect(legs).toHaveLength(1)
+    const leg = legs[0]!
+    expect([leg.state, leg.started_at, leg.last_write_at]).toEqual(['live', w.moments!['start'], w.moments!['last']])
+    expect(Math.abs(reply.facts.as_of - leg.started_at - Number(hours) * HOUR)).toBeLessThan(60)
+    expect(Math.abs(reply.facts.as_of - leg.last_write_at! - Number(minutes) * 60)).toBeLessThan(60)
+    // The file: the registration's start, and the newest row of the lane by
+    // its own moment.
+    const r = rawRegistration(w, w.legs!['builder']!)
+    expect([r['started_at'], r['stopped_at'], r['ended']]).toEqual([w.moments!['start'], null, null])
+    expect(rawOne<{ t: number }>(w, 'SELECT MAX(created_at) AS t FROM nodes WHERE session_key = ?', w.legs!['builder']!.sessionId)!.t).toBe(w.moments!['last'])
+  })
+
+  define(/^the reply judges nothing about whether the leg is stuck$/, (w) => {
+    const reply = keyLookupReply(harnessLookup(w))
+    const leg = reply.legs.find((g) => g.role === 'builder')!
+    // Moments and states, no verdict: the leg's fields are the registry's
+    // facts and its last write, and no word of the reply judges it.
+    expect(Object.keys(leg).sort()).toEqual([
+      'agent_id', 'key', 'key_src', 'keyless', 'kind', 'last_write_at', 'noticed_at', 'noticed_by',
+      'opened_runs', 'role', 'session_id', 'started_at', 'state', 'stopped_at',
+    ])
+    expect(leg.state).toBe('live')
+    // Needle liveness first: the verdict words fire on a reply that judges.
+    expect('the builder leg looks stuck; it has been idle for 90 minutes', 'the verdict needle is dead').toMatch(VERDICT_NEEDLE)
+    expect(JSON.stringify(reply)).not.toMatch(VERDICT_NEEDLE)
+  })
+
+  // ── D336: the pointer to the return of the leg that wrote the checkpoint ──
+
+  define(/^a run "([^"]+)" whose key "([^"]+)" holds checkpoint number (\d+), written by a reviewer leg that finished with the report "([^"]+)"$/, async (w, run, key, num, report) => {
+    await openRunWorld(w)
+    const n = Number(num)
+    const ids = await seedCheckpoints(w, run!, key!, n - 1)
+    const leg = await hooksLeg(w, 'reviewer', 'reviewer', { run: run!, key: key!, keySrc: 'inferred', checkpointer: 'reviewer', startCheckpoints: [ids.at(-1)!] })
+    const wrote = await insertEchoed(w, { agentId: leg.agentId, agentType: 'reviewer' }, 'state: original plus review; two fixes asked for', { kind: 'checkpoint', run: run!, key: key! })
+    expect((wrote['checkpoint'] as Record<string, unknown>)['number']).toBe(n)
+    w.cps![cpLabel(run!, key!, n)] = wrote['node_id'] as string
+    w.stops!['reviewer'] = subagentStopHook(w, leg.agentId, 'reviewer', report!)
+    await drainStaging(w)
+  })
+
+  define(/^the harness receives checkpoint number (\d+) with the writer "([^"]+)" and a pointer to the reviewer leg's summary row reading "([^"]+)"$/, (w, num, writer, report) => {
+    const l = harnessLookup(w)
+    expect(l.checkpoints.map((c) => [c.nodeId, c.number, c.writer])).toEqual([[w.cps![cpLabel(l.run, l.key, Number(num))], Number(num), writer]])
+    const ret = l.checkpoints[0]!.legReturn
+    expect(ret.leg).toEqual({ sessionId: w.sessionId, agentId: w.legs!['reviewer']!.agentId, role: 'reviewer', state: 'retired' })
+    expect(ret.summary, ret.line).not.toBeNull()
+    const id = ret.summary!.nodeId
+    expect(ret.line).toBe(`Return of the reviewer leg that wrote checkpoint number ${num}: the summary row ${id} (writer "reviewer", run "${l.run}", key "${l.key}").`)
+    // The row it points at is the reviewer's summary the SubagentStop hook
+    // staged and the drain wrote, carrying the run and the key.
+    expect(rawContentOf(w, id)).toBe(report)
+    const m = rawMetaOf(w, id)
+    expect([m['kind'], m['_writer'], m['_writer_agent_id'], m['run'], m['key']]).toEqual([SUBAGENT_SUMMARY_KIND, 'reviewer', w.legs!['reviewer']!.agentId, l.run, l.key])
+    expect(rawRowOf(w, id)['session_key']).toBe(w.sessionId)
+  })
+
+  define(/^a run "([^"]+)" whose key "([^"]+)" holds checkpoint number (\d+), written by a builder leg that was cut after writing it and left no summary row$/, async (w, run, key, num) => {
+    await openRunWorld(w, { sessionStart: false })
+    const n = Number(num)
+    const ids = await seedCheckpoints(w, run!, key!, n - 1)
+    const ref = await workerLeg(w, 'builder', { role: 'builder', run: run!, key: key!, startCheckpoints: [ids.at(-1)!] })
+    const r = await w.store!.writeCheckpoint('state: half the submit wired; next: the other half', { run: run!, key: key!, leg: ref })
+    expect(r.checkpoint!.number).toBe(n)
+    w.cps![cpLabel(run!, key!, n)] = r.nodeId
+    // The harness's timeout cut it (D292): retired as cut, no summary row.
+    expect(w.store!.retireLeg(ref, 'cut')).toBe(true)
+  })
+
+  define(/^the harness receives checkpoint number (\d+) and a line saying the builder leg left no return$/, (w, num) => {
+    const l = harnessLookup(w)
+    expect(l.checkpoints.map((c) => [c.nodeId, c.number])).toEqual([[w.cps![cpLabel(l.run, l.key, Number(num))], Number(num)]])
+    const ret = l.checkpoints[0]!.legReturn
+    expect(ret.summary).toBeNull()
+    expect(ret.line).toBe(`The builder leg that wrote checkpoint number ${num} left no return: it ended cut, with no summary row.`)
+    // Never guessed: the file holds no summary row in the builder's lane,
+    // and the registration says it was cut.
+    const lane = w.legs!['builder']!.sessionId
+    expect(rawAll(w, "SELECT 1 FROM nodes WHERE session_key = ? AND json_extract(metadata_json, '$.kind') = ?", lane, SUBAGENT_SUMMARY_KIND)).toHaveLength(0)
+    expect(rawRegistration(w, w.legs!['builder']!)['ended']).toBe('cut')
+  })
+
+  // ── D337: the agent's door to the same reply, and to a run's close ──
+
+  define(/^a run "([^"]+)" started (\d+) hours ago whose key "([^"]+)" holds checkpoint number (\d+), written by the writer "([^"]+)" against a brief naming the builder$/, async (w, run, hours, key, num, stranger) => {
+    await openRunWorld(w)
+    const start = Date.now() / 1000 - Number(hours) * HOUR
+    await w.store!.openRun({ run: run!, by: 'harness', at: start })
+    await w.store!.writeBrief(`build the ${key}`, { run: run!, key: key!, role: 'builder', checkpointer: 'builder', by: 'harness', at: start + 60 })
+    const n = Number(num)
+    const ids = await seedCheckpoints(w, run!, key!, n - 1)
+    // The stranger is a subagent of the session, registered under the run
+    // by the hooks door, writing through the tools and stopping with a report.
+    const leg = await hooksLeg(w, 'stranger', stranger!, { run: run!, key: key!, keySrc: 'inferred', startCheckpoints: [ids.at(-1)!] })
+    const wrote = await insertEchoed(w, { agentId: leg.agentId, agentType: stranger! }, 'state: rewritten by another hand; ship it', { kind: 'checkpoint', run: run!, key: key! })
+    expect((wrote['checkpoint'] as Record<string, unknown>)['number']).toBe(n)
+    w.cps![cpLabel(run!, key!, n)] = wrote['node_id'] as string
+    w.stops!['stranger'] = subagentStopHook(w, leg.agentId, stranger!, `${stranger} done: shipped the form`)
+    await drainStaging(w)
+    w.moments!['start'] = start
+  })
+
+  define(/^an agent asks through treecontext's tools for the checkpoint in effect under the key "([^"]+)" on the run "([^"]+)"$/, async (w, key, run) => {
+    await sessionClient(w)
+    const reply = parseTool(await w.client!.callTool({ name: 'treecontext_query', arguments: { [KEY_LOOKUP_PARAM]: { run, key } } }))
+    w.facts!['agent-reply'] = reply
+    w.facts!['agent-asked'] = { run, key }
+  })
+
+  define(/^the agent receives checkpoint number (\d+) with the writer "([^"]+)", the flag that its writer is not the named checkpointer, the run's facts and the pointer to the leg's return, the same as the harness's reply$/, (w, num, writer) => {
+    const agent = w.facts!['agent-reply'] as unknown as KeyLookupReply
+    const asked = w.facts!['agent-asked'] as { run: string; key: string }
+    expect(agent.checkpoints.map((c) => [c.node_id, c.number, c.writer])).toEqual([[w.cps![cpLabel(asked.run, asked.key, Number(num))], Number(num), writer]])
+    const cp = agent.checkpoints[0]!
+    expect(cp.flag).toBe(`The writer of checkpoint number ${num}, "${writer}", is not the checkpointer the brief names ("builder").`)
+    expect(agent.facts.checkpoints_under_key).toBe(Number(num))
+    expect(agent.facts.legs_run).toBe(1)
+    expect(agent.facts.run_started_at).toBe(w.moments!['start'])
+    expect(agent.facts.last_sizes).toEqual(rawSizes(w, asked.run, asked.key).slice(-3))
+    // The pointer names the stranger's summary row, as the file holds it.
+    const id = cp.return.summary_node_id
+    expect(id, cp.return.line).not.toBeNull()
+    const m = rawMetaOf(w, id!)
+    expect([m['kind'], m['_writer'], m['run'], m['key']]).toEqual([SUBAGENT_SUMMARY_KIND, writer, asked.run, asked.key])
+    expect(rawContentOf(w, id!)).toBe(`${writer} done: shipped the form`)
+    // The harness's reply, asked the same thing through the library: the
+    // same object, but for the moment each was read.
+    const harness = keyLookupReply(w.store!.lookupKey(asked))
+    const unclocked = (r: KeyLookupReply): unknown => ({ ...r, facts: { ...r.facts, as_of: 0, run_age_seconds: 0 } })
+    expect(unclocked(agent)).toEqual(unclocked(harness))
+    expect(Math.abs(agent.facts.as_of - harness.facts.as_of)).toBeLessThan(60)
+    expect(Math.abs(agent.facts.run_age_seconds! - 3 * HOUR)).toBeLessThan(120)
+  })
+
+  define(/^a run "([^"]+)" open with (\d+) legs retired$/, async (w, run, n) => {
+    await openRunWorld(w)
+    for (let i = 0; i < Number(n); i++) {
+      const ref = await workerLeg(w, `leg${i}`, { role: i === 0 ? 'builder' : 'reviewer', run: run!, key: 'login-form' })
+      expect(w.store!.retireLeg(ref, 'retired')).toBe(true)
+    }
+    w.ids!['open'] = rawOne<{ node_id: string }>(w, "SELECT node_id FROM nodes WHERE json_extract(metadata_json, '$.kind') = 'run-open' AND json_extract(metadata_json, '$.run') = ?", run)!.node_id
+    expect(rawAll(w, "SELECT 1 FROM nodes WHERE json_extract(metadata_json, '$.kind') = 'run-close' AND json_extract(metadata_json, '$.run') = ?", run)).toHaveLength(0)
+  })
+
+  define(/^the main agent declares the run "([^"]+)" closed through treecontext's tools with the reason "([^"]+)"$/, async (w, run, reason) => {
+    const before = Date.now() / 1000
+    const reply = await insertEchoed(w, null, reason!, { kind: 'run-close', run, reason })
+    w.moments!['before'] = before
+    w.moments!['after'] = Date.now() / 1000
+    w.ids!['close'] = reply['node_id'] as string
+    expect(reply['run']).toEqual({ kind: 'run-close', run, closed_by: 'main', reason })
+    // The call's own echo is drained, as Claude Code's capture would.
+    await drainStaging(w)
+  })
+
+  define(/^a reader with the store file sees the run "([^"]+)" ended at that moment, by the main agent, with the reason "([^"]+)"$/, (w, run, reason) => {
+    const rows = rawAll<{ node_id: string; created_at: number; by: string; why: string; writer: string; src: string; refs: string; door: string }>(w,
+      `SELECT node_id, created_at, json_extract(metadata_json, '$.closed_by') AS by, json_extract(metadata_json, '$.reason') AS why,
+              json_extract(metadata_json, '$._writer') AS writer, json_extract(metadata_json, '$._writer_src') AS src,
+              json_extract(metadata_json, '$.refs') AS refs, json_extract(metadata_json, '$._door') AS door
+         FROM nodes WHERE json_extract(metadata_json, '$.kind') = 'run-close' AND json_extract(metadata_json, '$.run') = ?`, run)
+    expect(rows).toHaveLength(1)
+    const r = rows[0]!
+    expect([r.node_id, r.by, r.why, r.writer, r.door]).toEqual([w.ids!['close'], 'main', reason, 'main', 'tools'])
+    expect(r.created_at).toBeGreaterThanOrEqual(w.moments!['before']!)
+    expect(r.created_at).toBeLessThanOrEqual(w.moments!['after']!)
+    // The harness's record: the line closeRun writes, pointing at the open.
+    expect(JSON.parse(r.refs)).toEqual([w.ids!['open']])
+    expect(rawContentOf(w, r.node_id)).toBe(`run ${run} closed by main: ${reason}`)
+    // The echo confirmed the writer the store stamped.
+    expect(['self', 'echo']).toContain(r.src)
+  })
+
+  // ── D344: the sizes of the last {3} ──
+
+  define(/^a run "([^"]+)" whose key "([^"]+)" holds (\d+) checkpoints$/, async (w, run, key, count) => {
+    await openRunWorld(w, { sessionStart: false })
+    let prev: string | null = null
+    for (let i = 1; i <= Number(count); i++) {
+      const r = await w.store!.writeCheckpoint(sized(`after leg ${i}`, 100 + i * 7), {
+        run: run!, key: key!, declared: { role: 'builder' }, ...(prev ? { supersedes: [prev] } : {}),
+      })
+      expect(r.checkpoint!.number).toBe(i)
+      prev = r.nodeId
+    }
+  })
+
+  define(/^the harness receives the sizes of the last (\d+) checkpoints under the key, newest last$/, (w, shown) => {
+    const l = harnessLookup(w)
+    const all = rawSizes(w, l.run, l.key)
+    const n = Number(shown)
+    expect(l.facts.lastSizes).toEqual(all.slice(all.length - n))
+    expect(l.facts.lastSizes).toHaveLength(n)
+    // Newest last: the sizes grow with the number, so the order shows.
+    expect([...l.facts.lastSizes].sort((a, b) => a - b)).toEqual(l.facts.lastSizes)
+    expect(keyLookupReply(l).facts.last_sizes).toEqual(l.facts.lastSizes)
   })
 }

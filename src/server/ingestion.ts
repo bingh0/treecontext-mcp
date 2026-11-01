@@ -33,6 +33,7 @@ import {
   RECOVERY_HITS_PER_QUERY, type RecoveryHit,
 } from '../persistence/recovery-snapshot.js'
 import { agentWriterOf, INTERNAL_SUMMARY_KIND, CLIENT_WRITER } from '../persistence/session-registry.js'
+import { SUBAGENT_SUMMARY_KIND } from '../handoff.js'
 
 /**
  * What the IngestionLoop needs from a backend: the MemoryStore surface
@@ -598,6 +599,19 @@ export class IngestionLoop {
           // D147: the row's kind, as the hook staged it (the subagent's
           // summary).
           if (row.kind != null) meta.kind = row.kind
+          // D284, D309, D329: a leg's summary row is a row of its run,
+          // carrying the run and the key read from the leg's registration
+          // (leg-registry.ts legReturnStamp), never from the report's text;
+          // the key lookup's pointer to the leg's return finds it in the
+          // leg's lane (D336). A subagent with no run stays as today (D305).
+          // Non-fatal: a failed read leaves the summary as it always was.
+          if (row.kind === SUBAGENT_SUMMARY_KIND && row.agentId != null && row.sessionId) {
+            try {
+              Object.assign(meta, this.ctx.store.legReturnStamp({ sessionId: row.sessionId, agentId: row.agentId }))
+            } catch (err) {
+              dbg('ingest', 'leg return stamp failed (summary lands without its run)', { error: err instanceof Error ? err.message : String(err) })
+            }
+          }
 
           // Intent classification (user messages only)
           if (row.role === 'user') {

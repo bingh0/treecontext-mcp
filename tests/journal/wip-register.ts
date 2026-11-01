@@ -42,7 +42,7 @@ export const WHOLE_FEATURE_WIP: WholeFeatureWipRuling[] = [
   // name any still here as acceptable for `0.1.0-beta.3`.
   {
     feature: 'journal-legs',
-    reason: 'scoped 2026-10-31 before its build (D279–D285, D299, D305, D314, D320, D321); on 2026-11-01 unit 1 bound the store half of the leg contract (numbering, supersession named or stamped from the leg, two in effect, the walk back, the key settled by the leg\'s own write, the keyless subagent unchanged); leaves the register when the send-back, the recovery leg and the key lookup bind against real hook subprocesses',
+    reason: 'scoped 2026-10-31 before its build (D279–D285, D299, D305, D314, D320, D321); on 2026-11-01 unit 1 bound the store half of the leg contract (numbering, supersession named or stamped from the leg, two in effect, the walk back, the key settled by the leg\'s own write, the keyless subagent unchanged); on 2026-11-01 unit 2 bound the key lookup\'s reply for legs (the main agent\'s checkpoint flagged against the brief\'s checkpointer beside the one before it, a keyless leg counted in the run\'s facts, a silent leg live with its start and last write); leaves the register when the send-back, the recovery leg and the key lookup bind against real hook subprocesses',
     ruledOn: '2026-11-01',
     // Bound on 2026-11-01 with the leg's facts given by registerLeg, the
     // registry call the hooks door makes, after the real SubagentStart hook
@@ -54,6 +54,12 @@ export const WHOLE_FEATURE_WIP: WholeFeatureWipRuling[] = [
     //   'a checkpoint that names another checkpoint is taken at its word'
     //   'an inferred key gives way to the key the leg first writes under'
     //   "the leg's first write under a key settles an ambiguous registration"
+    //   "a leg that writes under no key stays keyless, stops unblocked, and the run's facts count it as such" (unit 2)
+    // and one bound on 2026-11-01 by unit 2 with the leg registered through
+    // the library door at its own moment two hours back (registerLeg with
+    // `at`; a hook subprocess cannot be started in the past), to be
+    // re-bound when the hooks door's registration lands (unit 4) —
+    //   'until its session restarts, a silent leg reads as live with its ages shown'
     // and "the builder's stop is not blocked" in the first of those is a
     // forward guard: today's SubagentStop hook never blocks; it holds once
     // the send-back lands (unit 4), since a checkpoint newer than the start
@@ -94,12 +100,6 @@ export const WHOLE_FEATURE_WIP: WholeFeatureWipRuling[] = [
       "every first moment says in treecontext's own words that a checkpoint is state, not history",
       'a leg that ended without a checkpoint after its one send-back is followed by a recovery leg',
       'a leg whose start was dropped stops unasked and its summary still lands',
-      // unit 2, the lookup reply: the flag in words (D296), the run's
-      // facts counting a keyless leg and showing a live leg's ages
-      // (D301, D312, D320)
-      "a checkpoint the main agent writes under a leg's key comes back flagged, never withheld",
-      "a leg that writes under no key stays keyless, stops unblocked, and the run's facts count it as such",
-      'until its session restarts, a silent leg reads as live with its ages shown',
       // unit 5, the checkpoint cap (D299, D321, D332)
       'a checkpoint of <chars> characters is <verdict> on its first write and <verdict2> on the second',
       'a second over-cap write by another leg or under another key is refused again',
@@ -154,23 +154,15 @@ export const WHOLE_FEATURE_WIP: WholeFeatureWipRuling[] = [
   },
   {
     feature: 'journal-runs',
-    reason: 'scoped 2026-10-31 before its build (D289, D296, D300–D302, D309–D312, D318); on 2026-11-01 unit 1 bound the plain-SQL read-back, the open and close, the run found by name, nested runs and the harness\'s lookup by run and key; leaves the register when the key lookup with run facts and the run export forms bind against the store file',
+    reason: 'scoped 2026-10-31 before its build (D289, D296, D300–D302, D309–D312, D318); on 2026-11-01 unit 1 bound the plain-SQL read-back, the open and close, the run found by name, nested runs and the harness\'s lookup by run and key; on 2026-11-01 unit 2 bound the key lookup\'s whole reply (the flag in words against the brief\'s checkpointer, the run\'s facts and the sizes of the last three, a live leg\'s start and last write, the pointer to the writing leg\'s return or the line that it left none) and the agent\'s door to it and to a run\'s close through the tools; leaves the register when a run found by time binds through the first-moment and summary rows the doors write (units 3 and 4), and the run export forms and the run come back by the handoff (D343) bind against the store file (unit 6)',
     ruledOn: '2026-11-01',
     // Bound on 2026-11-01 through run-world.ts hooksLeg (the real
     // SubagentStart hook, then registerLeg): to be re-bound through the
     // SubagentStart hook's own inference in unit 4 —
     //   "a run's rows read back by plain SQL in the order of their own moments, each naming its writer and moment, each leg naming its run and key"
+    //   'the lookup reply carries the pointer to the return of the leg that wrote the checkpoint' (unit 2)
+    //   'an agent gets the same lookup reply as the harness through the tools' (unit 2)
     scenarios: [
-      // unit 2: the lookup reply (D296, D301, D312, D336, D337, D344)
-      "a stranger's checkpoint comes back as the one in effect, flagged against the named checkpointer",
-      'a checkpoint by the named checkpointer comes back with no flag',
-      "every key lookup carries the run's facts beside the checkpoint",
-      "the run's facts show each live leg's start and last write",
-      'the lookup reply carries the pointer to the return of the leg that wrote the checkpoint',
-      'a leg that left no return is said so, never guessed',
-      'an agent gets the same lookup reply as the harness through the tools',
-      "an agent closes a run through the tools and the record is the same as the harness's",
-      'a key with <count> checkpoints returns the sizes of the last <shown>',
       // units 3 and 4: first-moment rows and summary rows carrying the run (D309)
       'an agent finds a run by time with no id in hand',
       // unit 6: run export forms and the handoff back (D300, D318, D343)

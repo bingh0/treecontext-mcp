@@ -35,8 +35,11 @@ import type { Database } from './database.js'
 import { laneWriterOf } from '../references.js'
 import { sessionOf, NO_SESSION } from '../dedup-identity.js'
 import { agentWriterOf, selfOf, selfWriterOf } from './session-registry.js'
-import { legOf, legWriterOf, workerOfSession, settleLegKey, unsettleLegKey, WORKER_AGENT_ID } from './leg-registry.js'
-import { storeSupersedesFor } from '../runs.js'
+import { legOf, legWriterOf, workerOfSession, settleLegKey, unsettleLegKey, recordOpenedRun, WORKER_AGENT_ID } from './leg-registry.js'
+import {
+  storeSupersedesFor, runOpenLine, runCloseLine, BY_SRC_KEY, BY_PENDING, BY_ECHO, RUN_OPEN_KIND, RUN_CLOSE_KIND,
+  OPENED_BY_KEY, CLOSED_BY_KEY, REASON_KEY, PARENT_RUN_KEY, PARENT_LEG_KEY,
+} from '../runs.js'
 
 const BOOKMARK = 'bookmark'
 
@@ -51,6 +54,8 @@ export interface WriterHealResult {
   unretired?: string
   /** Supersessions of the true lane performed at the heal. */
   retired?: string[]
+  /** A run open's or close's `by`, pending at insert, set by this echo. */
+  runBy?: string
 }
 
 function parse(json: string | null): Record<string, unknown> | null {
@@ -142,6 +147,9 @@ export function healWriterFromEcho(db: Database, opts: {
   agentId: string | null
   agentType: string | null
   windowSecs: number
+  /** Rewrites a row's content where it starts with `from` (the store's
+   *  FTS-aware writer, Persistence); used for a run row's line. */
+  rewriteContent?: (nodeId: string, from: string, to: string) => void
 }): WriterHealResult {
   return db.transaction((): WriterHealResult => {
     const row = db.prepare('SELECT tree_id, created_at, dedup_class, metadata_json FROM nodes WHERE node_id = ?').get(opts.nodeId) as
@@ -273,6 +281,38 @@ export function healWriterFromEcho(db: Database, opts: {
     }
     if (leg && typeof next['run'] === 'string' && typeof next['key'] === 'string' && next['key'].trim() !== '') {
       settleLegKey(db, { sessionId: leg.sessionId, agentId: leg.agentId }, next['run'], next['key'], opts.nodeId)
+    }
+    // D283, D293, D302, D311: a run's open or close the tools door wrote
+    // while it could only read its writer names nobody yet; the echo's
+    // writer is who opened or closed it, and only now does the line name
+    // them, an inner run name the leg that opened it, and that leg's
+    // registration name the run back. Nothing here is set at insert from a
+    // guess, so there is nothing to undo.
+    const runKind = next['kind']
+    if ((runKind === RUN_OPEN_KIND || runKind === RUN_CLOSE_KIND) && next[BY_SRC_KEY] === BY_PENDING && typeof next['run'] === 'string') {
+      const run = next['run']
+      const parentRun = typeof next[PARENT_RUN_KEY] === 'string' ? next[PARENT_RUN_KEY] : null
+      const reason = typeof next[REASON_KEY] === 'string' ? next[REASON_KEY] : ''
+      let from: string
+      let to: string
+      if (runKind === RUN_OPEN_KIND) {
+        next[OPENED_BY_KEY] = writer
+        let parentRole: string | null | undefined
+        if (parentRun && leg) {
+          next[PARENT_LEG_KEY] = { session_id: leg.sessionId, agent_id: leg.agentId, role: leg.role }
+          recordOpenedRun(db, { sessionId: leg.sessionId, agentId: leg.agentId }, run)
+          parentRole = leg.role
+        }
+        from = runOpenLine(run, null, parentRun)
+        to = runOpenLine(run, writer, parentRun, parentRole)
+      } else {
+        next[CLOSED_BY_KEY] = writer
+        from = runCloseLine(run, null, reason)
+        to = runCloseLine(run, writer, reason)
+      }
+      next[BY_SRC_KEY] = BY_ECHO
+      opts.rewriteContent?.(opts.nodeId, from, to)
+      result.runBy = writer
     }
     // A replayed echo that changes nothing writes nothing.
     if (JSON.stringify(next) !== JSON.stringify(meta)) {

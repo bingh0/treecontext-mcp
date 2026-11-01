@@ -48,18 +48,19 @@ import { AMBIGUOUS_LANE, laneWriterOf, referencedBy, refIdsOf } from './referenc
 import { resolveWriter, selfOf, selfWriterOf, agentWriterOf, MAIN_WRITER, STORE_WRITER, type WriterStamp } from './persistence/session-registry.js'
 import {
   legOf, legsOfRun, workersOfParent, registerSubagentLeg, registerWorkerLeg, recordWorkerProcess, recordOpenedRun, recordSendBack,
-  retireLeg, retirePhantoms, settleLegKey, legWriterOf, hasLegColumns, mintWorkerSessionId,
+  retireLeg, retirePhantoms, settleLegKey, legWriterOf, hasLegColumns, mintWorkerSessionId, legReturnStamp,
   type LegRef, type LegFacts, type LegDoor, type LegIdentity, type LegRegistration, type LegEnding, type WorkerStart,
   type WorkerProcess, type PhantomPass,
 } from './persistence/leg-registry.js'
 import type { ProcessProbe } from './persistence/process-probe.js'
 import {
   CHECKPOINT_KIND, BRIEF_KIND, RUN_OPEN_KIND, RUN_CLOSE_KIND, runRowKindOf, nextCheckpointNumber, checkpointsInEffect, briefsInEffect,
-  runOpenOf, lookupKey, storeSupersedesFor, CHECKPOINT_NUMBER_KEY, SUPERSEDES_KEY, SUPERSEDES_SRC_KEY, SUPERSEDES_BY_WRITER, SUPERSEDES_BY_STORE,
+  runOpenOf, storeSupersedesFor, CHECKPOINT_NUMBER_KEY, SUPERSEDES_KEY, SUPERSEDES_SRC_KEY, SUPERSEDES_BY_WRITER, SUPERSEDES_BY_STORE,
   SUPERSEDES_PENDING, RESTS_ON_KEY, CHECKPOINTER_KEY, CHECKPOINTED_BY_KEY, BRIEF_FOR_KEY, OPENED_BY_KEY, OPENED_VIA_KEY,
-  PARENT_RUN_KEY, PARENT_LEG_KEY, CLOSED_BY_KEY, REASON_KEY, DOOR_KEY, IDENTITY_KEY, CWD_KEY, PARENT_KEY, PARENT_SRC_KEY,
-  type CheckpointRecord, type BriefRecord, type KeyLookup,
+  PARENT_RUN_KEY, PARENT_LEG_KEY, CLOSED_BY_KEY, REASON_KEY, BY_SRC_KEY, BY_PENDING, runOpenLine, runCloseLine, DOOR_KEY, IDENTITY_KEY, CWD_KEY, PARENT_KEY, PARENT_SRC_KEY,
+  type CheckpointRecord, type BriefRecord,
 } from './runs.js'
+import { lookupKey, keyLookupReply, type KeyLookup, type KeyLookupReply } from './key-lookup.js'
 import { retireMeta } from './persistence/writer-heal.js'
 import {
   DEDUP_WINDOW_SECS,
@@ -355,6 +356,20 @@ function withForeign(
 function idsIn(v: unknown): string[] {
   if (typeof v === 'string' && v !== '') return [v]
   return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && x !== '') : []
+}
+
+/** The writer a door's own stamp names, if it names one. */
+function stampedWriter(stamped: Record<string, unknown> | undefined): string | null {
+  const w = stamped?.['_writer']
+  return typeof w === 'string' && w.trim() !== '' ? w : null
+}
+
+/** A run's open or close line, with the caller's own words after it when
+ *  they say more than the line already does (D337: an agent's open or
+ *  close through the tools is the harness's record, its words kept). */
+function withNote(line: string, note: string | undefined): string {
+  const n = note?.trim() ?? ''
+  return n === '' || line.endsWith(n) ? line : `${line}\n\n${n}`
 }
 
 /** The library door's read of where a declared writer runs (D293): git's
@@ -694,46 +709,74 @@ export class FlatStore implements MemoryStore {
     parentLeg?: LegRef
     at?: number
     cwd?: string
-  }): Promise<{ nodeId: string; opened: boolean; createdAt: number }> {
+    /** A door that stamped the row itself (the tools door, D337): its
+     *  writer stamp, trace and the caller's own descriptive keys. Used in
+     *  place of `leg` or `declared`; `by` defaults to its writer. */
+    stamped?: Record<string, unknown>
+    /** The door read its writer provisionally, concurrently or
+     *  ambiguously (D283, D293): the row names nobody yet, records no
+     *  parent leg and no opened run on any registration, and is marked
+     *  pending; the call's echo sets them (writer-heal.ts). */
+    pendingBy?: boolean
+    /** The caller's own words, kept after the record's line. */
+    note?: string
+  }): Promise<{ nodeId: string; opened: boolean; createdAt: number; by: string | null }> {
     this.ensureOpen()
     const existing = runOpenOf(this.db, this.treeId, opts.run)
-    if (existing) return { nodeId: existing.nodeId, opened: false, createdAt: existing.createdAt }
+    if (existing) {
+      const was = existing.metadata[OPENED_BY_KEY]
+      return { nodeId: existing.nodeId, opened: false, createdAt: existing.createdAt, by: typeof was === 'string' ? was : null }
+    }
     const at = opts.at ?? Date.now() / 1000
-    const parentLeg = opts.parentLeg ? legOf(this.db, opts.parentLeg) : null
-    const by = opts.leg ? legWriterOf(legOf(this.db, opts.leg) ?? { role: null, agentId: opts.leg.agentId }) : (opts.by ?? 'unnamed')
-    const inside = opts.parentRun
-      ? `, inside the run ${opts.parentRun}${opts.parentLeg ? ` by its ${parentLeg?.role ?? 'unnamed'} leg` : ''}`
-      : ''
-    const r = await this.insert(`run ${opts.run} opened by ${by}${inside}`, {
+    const pending = opts.pendingBy === true
+    const parentLegRef = pending ? undefined : opts.parentLeg
+    const parentLeg = parentLegRef ? legOf(this.db, parentLegRef) : null
+    const by = pending ? null
+      : opts.leg ? legWriterOf(legOf(this.db, opts.leg) ?? { role: null, agentId: opts.leg.agentId }) : (opts.by ?? stampedWriter(opts.stamped) ?? 'unnamed')
+    const line = runOpenLine(opts.run, by, opts.parentRun ?? null, parentLegRef ? (parentLeg?.role ?? null) : undefined)
+    const r = await this.insert(withNote(line, opts.note), {
       createdAt: at,
-      ...(opts.leg ? { leg: opts.leg } : { declared: { role: by, ...(opts.cwd ? { cwd: opts.cwd } : {}) } }),
+      ...(opts.stamped ? {} : opts.leg ? { leg: opts.leg } : { declared: { role: by ?? 'unnamed', ...(opts.cwd ? { cwd: opts.cwd } : {}) } }),
       metadata: {
-        kind: RUN_OPEN_KIND, run: opts.run, [OPENED_BY_KEY]: by, [OPENED_VIA_KEY]: 'explicit',
+        ...opts.stamped,
+        kind: RUN_OPEN_KIND, run: opts.run, [OPENED_VIA_KEY]: 'explicit',
+        ...(by !== null ? { [OPENED_BY_KEY]: by } : { [BY_SRC_KEY]: BY_PENDING }),
         ...(opts.parentRun ? { [PARENT_RUN_KEY]: opts.parentRun } : {}),
-        ...(opts.parentLeg ? { [PARENT_LEG_KEY]: { session_id: opts.parentLeg.sessionId, agent_id: opts.parentLeg.agentId, role: parentLeg?.role ?? null } } : {}),
+        ...(parentLegRef ? { [PARENT_LEG_KEY]: { session_id: parentLegRef.sessionId, agent_id: parentLegRef.agentId, role: parentLeg?.role ?? null } } : {}),
       },
     })
-    if (opts.parentLeg) recordOpenedRun(this.db, opts.parentLeg, opts.run)
-    return { nodeId: r.nodeId, opened: true, createdAt: at }
+    if (parentLegRef) recordOpenedRun(this.db, parentLegRef, opts.run)
+    return { nodeId: r.nodeId, opened: true, createdAt: at, by }
   }
 
   /** Close a run with a reason (D302): who and why, recorded as a journal
    *  row naming the run and pointing at its open. A run nobody closes
-   *  stays open and readable (D308). */
-  async closeRun(opts: { run: string; reason: string; by?: string; leg?: LegRef; at?: number; cwd?: string }): Promise<{ nodeId: string; createdAt: number }> {
+   *  stays open and readable (D308). The close ends the run's briefs
+   *  (D327). A door that stamped the row itself passes `stamped` (see
+   *  openRun): the tools door's close is the same record (D337), its `by`
+   *  pending until the echo when the door could not read the writer
+   *  exactly (`pendingBy`). */
+  async closeRun(opts: {
+    run: string; reason: string; by?: string; leg?: LegRef; at?: number; cwd?: string
+    stamped?: Record<string, unknown>; pendingBy?: boolean; note?: string
+  }): Promise<{ nodeId: string; createdAt: number; by: string | null }> {
     this.ensureOpen()
     const at = opts.at ?? Date.now() / 1000
     const open = runOpenOf(this.db, this.treeId, opts.run)
-    const by = opts.leg ? legWriterOf(legOf(this.db, opts.leg) ?? { role: null, agentId: opts.leg.agentId }) : (opts.by ?? 'unnamed')
-    const r = await this.insert(`run ${opts.run} closed by ${by}: ${opts.reason}`, {
+    const by = opts.pendingBy === true ? null
+      : opts.leg ? legWriterOf(legOf(this.db, opts.leg) ?? { role: null, agentId: opts.leg.agentId }) : (opts.by ?? stampedWriter(opts.stamped) ?? 'unnamed')
+    const refs = [...new Set([...(open ? [open.nodeId] : []), ...idsIn(opts.stamped?.['refs'])])]
+    const r = await this.insert(withNote(runCloseLine(opts.run, by, opts.reason), opts.note), {
       createdAt: at,
-      ...(opts.leg ? { leg: opts.leg } : { declared: { role: by, ...(opts.cwd ? { cwd: opts.cwd } : {}) } }),
+      ...(opts.stamped ? {} : opts.leg ? { leg: opts.leg } : { declared: { role: by ?? 'unnamed', ...(opts.cwd ? { cwd: opts.cwd } : {}) } }),
       metadata: {
-        kind: RUN_CLOSE_KIND, run: opts.run, [CLOSED_BY_KEY]: by, [REASON_KEY]: opts.reason,
-        ...(open ? { refs: [open.nodeId] } : {}),
+        ...opts.stamped,
+        kind: RUN_CLOSE_KIND, run: opts.run, [REASON_KEY]: opts.reason,
+        ...(by !== null ? { [CLOSED_BY_KEY]: by } : { [BY_SRC_KEY]: BY_PENDING }),
+        ...(refs.length > 0 ? { refs } : {}),
       },
     })
-    return { nodeId: r.nodeId, createdAt: at }
+    return { nodeId: r.nodeId, createdAt: at, by }
   }
 
   /** Write a brief for a role under a run's key (D281, D327): who
@@ -790,10 +833,27 @@ export class FlatStore implements MemoryStore {
   }
 
   /** The harness's lookup by run and key (D289), the phantom pass first
-   *  (D297). See runs.ts lookupKey. */
-  lookupKey(opts: { run: string; key: string; probe?: ProcessProbe; noticedBy?: string; at?: number }): KeyLookup {
+   *  (D297): the checkpoints in effect with their flags and the pointers to
+   *  their legs' returns, the run's facts and each leg's state (D296, D301,
+   *  D312, D336, D344). See key-lookup.ts. */
+  lookupKey(opts: { run: string; key: string; probe?: ProcessProbe; noticedBy?: string; at?: number; phantomPass?: boolean }): KeyLookup {
     this.ensureOpen()
     return lookupKey(this.db, this.treeId, opts)
+  }
+
+  /** The same lookup as the reply both doors hand over (D337): what the
+   *  query tool's key_lookup mode returns to an agent. */
+  lookupKeyReply(opts: { run: string; key: string; probe?: ProcessProbe; noticedBy?: string; at?: number; phantomPass?: boolean }): KeyLookupReply {
+    return keyLookupReply(this.lookupKey(opts))
+  }
+
+  /** What a leg's summary row carries of its run (D284, D309): the run and
+   *  key from the leg's registration. The drain stamps the SubagentStop
+   *  summary with it; the ticket door's summary at a worker's exit takes
+   *  the same stamp. See leg-registry.ts legReturnStamp. */
+  legReturnStamp(ref: LegRef): Record<string, string> {
+    this.ensureOpen()
+    return legReturnStamp(this.db, ref)
   }
 
   /** Rows with `content` decoded to plaintext (C1: the column may hold a

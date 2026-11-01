@@ -12,6 +12,7 @@
  * consequences and gets measured, not assumed
  * (journal-agent-surface.feature).
  */
+import { KEY_LOOKUP_PARAM, LAST_SIZES_SHOWN } from '../key-lookup.js'
 
 /**
  * TRIGGER_CORE — the canonical session-start orientation protocol.
@@ -179,6 +180,20 @@ export const SKILL_REFERENCE_BODY: string = [
   '- In a git worktree, treecontext_status lists that worktree\'s own',
   '  pointers (scope: "all" for every lane), and a fresh start is handed',
   '  the worktree\'s own newest chapter.',
+  '',
+  '## Runs: the key lookup',
+  'When work runs as legs or workers under a run and keys, ask the store for',
+  'the checkpoint to start from; never judge it from search hits.',
+  `treecontext_query with ${KEY_LOOKUP_PARAM}: { run, key } returns the harness's own reply:`,
+  'the checkpoint(s) in effect under the key with writer and number (two come',
+  'back as two), a flag in words when the writer is not the checkpointer the',
+  'brief named or it arrived by import, the pointer to the summary row of the',
+  'leg that wrote it (or a line saying it left none), and the run\'s facts:',
+  `legs run, keyless legs, checkpoints under the key, the run's age, the sizes`,
+  `of the last ${LAST_SIZES_SHOWN}, each leg live or ended, a live leg with its start and last`,
+  'write. The store judges none of it. Open or close a run with',
+  'treecontext_insert, metadata.kind "run-open" or "run-close" and metadata.run;',
+  'a close takes metadata.reason (else the content) and ends the run\'s briefs.',
   '',
   '## When something looks wrong',
   'If capture or recall looks wrong — entries missing, a search that should',

@@ -36,15 +36,22 @@ export {
   CHECKPOINT_NUMBER_KEY, SUPERSEDES_KEY, SUPERSEDES_SRC_KEY, SUPERSEDES_BY_WRITER, SUPERSEDES_BY_STORE, SUPERSEDES_PENDING,
   RESTS_ON_KEY, CHECKPOINTER_KEY, CHECKPOINTED_BY_KEY, BRIEF_FOR_KEY, OPENED_BY_KEY, OPENED_VIA_KEY, PARENT_RUN_KEY,
   PARENT_LEG_KEY, CLOSED_BY_KEY, REASON_KEY, DOOR_KEY, IDENTITY_KEY, CWD_KEY, PARENT_KEY, PARENT_SRC_KEY,
-  RUN_ROWS_SQL, checkpointsUnder, checkpointsInEffect, nextCheckpointNumber, inEffectLine, briefsInEffect,
-  runOpenOf, runClosesOf, legStateOf, lookupKey,
+  RUN_ROWS_SQL, checkpointsUnder, checkpointsInEffect, inEffectAmong, nextCheckpointNumber, inEffectLine, briefsInEffect,
+  briefsOfKey, runOpenOf, runClosesOf, HANDOFF_CLAIMS_KEY,
 } from './runs.js'
-export type { CheckpointRecord, BriefRecord, LegState, KeyLookup, RunReadHandle } from './runs.js'
+export type { CheckpointRecord, BriefRecord, RunReadHandle } from './runs.js'
+// The key lookup, the harness's and the agent's one reply (D289, D296,
+// D301, D312, D336, D337, D343, D344).
+export {
+  LAST_SIZES_SHOWN, KEY_LOOKUP_PARAM, lookupKey, keyLookupReply, legStateOf, isKeylessLeg, lastWriteOf,
+  namedCheckpointerOf, isNamedCheckpointer, checkpointerFlag, importFlag, legReturnOf, checkpointName,
+} from './key-lookup.js'
+export type { LegState, KeyLookup, KeyLookupReply, LookupCheckpoint, LegReturn, RunFacts, NamedCheckpointer } from './key-lookup.js'
 export {
   WORKER_AGENT_ID, NOTICED_BY_LOOKUP, NOTICED_BY_STATUS, NOTICED_BY_SESSION_START,
   hasLegColumns, isLiveLeg, legWriterOf, legOf, legsOfRun, workersOfParent, workerOfSession,
   registerSubagentLeg, registerWorkerLeg, recordWorkerProcess, retireLeg, recordSendBack, settleLegKey,
-  recordOpenedRun, mintWorkerSessionId, retirePhantoms,
+  recordOpenedRun, mintWorkerSessionId, retirePhantoms, legReturnStamp,
 } from './persistence/leg-registry.js'
 export type {
   LegKind, LegDoor, LegIdentity, KeySource, LegEnding, LegRef, DeclaredParent, WorkerProcess, KeyCandidate,

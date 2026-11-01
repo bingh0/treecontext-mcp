@@ -1,10 +1,11 @@
 import { expect } from 'vitest'
 import { type Registry } from 'gherkin-node-test/vitest'
 import { parseTool, rawAll } from '../world.js'
-import { drainStaging } from '../capture-harness.js'
+import { drainStaging, runHook, bashPayload } from '../capture-harness.js'
 import { SUBAGENT_SUMMARY_KIND } from '../../../src/handoff.js'
+import { keyLookupReply } from '../../../src/key-lookup.js'
 import {
-  type RunWorld, openRunWorld, hooksLeg, seedCheckpoints, sessionClient, insertEchoed, subagentStopHook, blocks,
+  type RunWorld, openRunWorld, hooksLeg, workerLeg, seedCheckpoints, sessionClient, insertEchoed, subagentStopHook, blocks,
   rawOne, rawMetaOf, rawRowOf, rawRegistration, rawCheckpoints, cpLabel, stringSteps, subagentStartHook,
 } from '../run-world.js'
 
@@ -337,7 +338,8 @@ export const legsDefiner = (reg: Registry<LegsWorld>): void => {
     expect(rawRegistration(w, w.legs!['builder']!)['key_src']).toBe('inferred')
   })
 
-  define(/^a builder subagent registered with an ambiguous key between "([^"]+)" and "([^"]+)"$/, async (w, a, b) => {
+  define(/^a builder subagent registered (?:on the run "([^"]+)" )?with an ambiguous key between "([^"]+)" and "([^"]+)"$/, async (w, run, a, b) => {
+    if (run) expect(run).toBe(RUN)
     await openRunWorld(w)
     await hooksLeg(w, 'builder', 'builder', {
       run: RUN, key: null, keySrc: 'ambiguous',
@@ -346,6 +348,14 @@ export const legsDefiner = (reg: Registry<LegsWorld>): void => {
     await sessionClient(w)
     const r = rawRegistration(w, w.legs!['builder']!)
     expect([r['key_src'], r['run_key']]).toEqual(['ambiguous', null])
+    if (run) {
+      // A keyed control in the same run, ended as the builder will be: a
+      // reviewer worker whose ticket declared the key, which wrote under it
+      // and was retired. The run's facts must not count it as keyless.
+      const control = await workerLeg(w, 'control', { role: 'reviewer', run: RUN, key: a! })
+      await w.store!.writeCheckpoint('state: the form reviewed; two fixes asked for', { run: RUN, key: a!, leg: control })
+      expect(w.store!.retireLeg(control, 'retired')).toBe(true)
+    }
   })
 
   define(/^the builder writes its first row under the key "([^"]+)"$/, async (w, key) => {
@@ -357,5 +367,123 @@ export const legsDefiner = (reg: Registry<LegsWorld>): void => {
   define(/^the builder's registration carries the key "([^"]+)", marked as the leg's own$/, (w, key) => {
     const r = rawRegistration(w, w.legs!['builder']!)
     expect([r['run_key'], r['key_src'], r['run']]).toEqual([key, 'own', RUN])
+  })
+
+  // ── D296: the main agent's checkpoint under a leg's key, flagged ──
+
+  define(/^a brief naming the builder as the checkpointer of the key "([^"]+)", and checkpoint number (\d+) under it$/, async (w, key, num) => {
+    await openRunWorld(w)
+    const b = await w.store!.writeBrief(`build the ${key}; the builder checkpoints it`, { run: RUN, key, role: 'builder', checkpointer: 'builder', by: 'harness' })
+    w.ids!['brief'] = b.nodeId
+    await seedCheckpoints(w, RUN, key, Number(num))
+  })
+
+  define(/^the main agent inserts a checkpoint under the key "([^"]+)"$/, async (w, key) => {
+    // Through the tools on the session's connection, with no agent fields
+    // on its echo: the session's own agent.
+    const reply = await insertEchoed(w, null, 'state: the main agent wired the submit itself', { kind: 'checkpoint', run: RUN, key })
+    w.ids!['main-checkpoint'] = reply['node_id'] as string
+    await drainStaging(w)
+  })
+
+  define(/^the harness looking up the key "([^"]+)" receives that checkpoint as number (\d+) with the writer "([^"]+)"$/, (w, key, num, writer) => {
+    const l = lookup(w, key)
+    const mine = l.checkpoints.find((c) => c.nodeId === w.ids!['main-checkpoint'])
+    expect(mine, 'the main agent\'s checkpoint is not withheld').toBeTruthy()
+    expect([mine!.number, mine!.writer]).toEqual([Number(num), writer])
+    // The main agent is no leg: nothing it supersedes was named or stamped,
+    // so it comes back beside the one before it, two in effect.
+    expect(l.checkpoints.map((c) => c.number)).toEqual([Number(num) - 1, Number(num)])
+    expect(l.line).toMatch(/^2 checkpoints are in effect/)
+    const m = rawMetaOf(w, mine!.nodeId)
+    expect([m['_writer'], m['_checkpoint_number'], m['_writer_agent_id'], m['supersedes']]).toEqual([writer, Number(num), undefined, undefined])
+  })
+
+  define(/^the same reply says its writer is not the checkpointer the brief names$/, (w) => {
+    const reply = keyLookupReply(w.lookups![RUN]!)
+    expect(reply.named_checkpointer).toEqual({ names: ['builder'], by: 'brief' })
+    const flags = reply.checkpoints.map((c) => [c.node_id, c.flag])
+    const main = reply.checkpoints.find((c) => c.node_id === w.ids!['main-checkpoint'])!
+    // The main agent's is flagged in words; the builder's beside it is not.
+    expect(flags).toEqual(reply.checkpoints.map((c) => [c.node_id, c === main
+      ? `The writer of checkpoint number ${main.number}, "main", is not the checkpointer the brief names ("builder").`
+      : null]))
+    expect(rawMetaOf(w, w.ids!['brief']!)['checkpointer']).toBe('builder')
+  })
+
+  // ── D320, D326: a keyless leg counted as such ──
+
+  define(/^the builder stops having written under no key$/, async (w) => {
+    stop(w, 'builder', 'builder', 'looked at the form; nothing to write')
+    await drainStaging(w)
+  })
+
+  define(/^the harness looking up the key "([^"]+)" on the run "([^"]+)" counts one keyless leg among the run's facts$/, (w, key, run) => {
+    const l = lookup(w, key, run)
+    expect(l.facts.keylessLegs).toBe(1)
+    expect(l.facts.legsRun).toBe(2)
+    const builder = l.legs.find((g) => g.agentId === w.legs!['builder']!.agentId)!
+    expect([builder.state, builder.keyless]).toEqual(['retired', true])
+    // The keyed control, ended too, is not counted.
+    const control = l.legs.find((g) => g.sessionId === w.legs!['control']!.sessionId)!
+    expect([control.state, control.keySrc, control.keyless]).toEqual(['retired', 'declared', false])
+    expect(keyLookupReply(l).facts.keyless_legs).toBe(1)
+    // The file: the registration never settled a key, the leg wrote no row
+    // carrying one, and its summary carries the run alone.
+    const r = rawRegistration(w, w.legs!['builder']!)
+    expect(r['run_key']).toBeNull()
+    expect(['inferred', 'ambiguous']).toContain(r['key_src'])
+    expect(r['stopped_at']).not.toBeNull()
+    expect(rawAll(w, "SELECT 1 FROM nodes WHERE json_extract(metadata_json, '$._writer_agent_id') = ? AND json_extract(metadata_json, '$.key') IS NOT NULL", w.legs!['builder']!.agentId)).toHaveLength(0)
+    const summary = rawOne<{ m: string }>(w, "SELECT metadata_json AS m FROM nodes WHERE json_extract(metadata_json, '$.kind') = ? AND json_extract(metadata_json, '$._writer_agent_id') = ?", SUBAGENT_SUMMARY_KIND, w.legs!['builder']!.agentId)
+    expect(summary, 'the builder\'s summary landed').toBeTruthy()
+    const sm = JSON.parse(summary!.m) as Record<string, unknown>
+    expect([sm['run'], sm['key']]).toEqual([run, undefined])
+  })
+
+  // ── D312, D328: a silent leg reads live, with its ages ──
+
+  define(/^a builder leg under the key "([^"]+)" registered live (\d+) hours ago, whose last row is (\d+) minutes old, in a session still running$/, async (w, key, hours, minutes) => {
+    await openRunWorld(w)
+    const start = Date.now() / 1000 - Number(hours) * 3600
+    const last = Date.now() / 1000 - Number(minutes) * 60
+    // Registered through the library door at its own moment (the hooks
+    // door's clock is the hook's: a subprocess cannot be started two hours
+    // ago), and writing through it, each row at the moment it was written.
+    const agentId = `abuilder${Math.random().toString(16).slice(2, 10)}`
+    await w.store!.registerLeg({ sessionId: w.sessionId!, agentId, role: 'builder', run: RUN, key, keySrc: 'inferred', at: start, door: 'library', identity: 'declared' })
+    const ref = { sessionId: w.sessionId!, agentId }
+    w.legs!['builder'] = ref
+    await w.store!.insert('npx vitest run login: 2 failing, the submit handler is missing', { leg: ref, createdAt: start + 300 })
+    await w.store!.insert('waiting on the login API; no answer yet', { leg: ref, createdAt: last })
+    // The session still running: its own agent is busy, and the real
+    // PostToolUse hook captures a newer row of the session, the main
+    // agent's, which is no write of the builder's lane.
+    runHook(w, 'post-tool-use', bashPayload(w, 'git status --short', ' M src/login/Form.tsx (heronfeather)'))
+    await drainStaging(w)
+    const mainRow = rawOne<{ t: number; a: string | null }>(w,
+      "SELECT created_at AS t, json_extract(metadata_json, '$._writer_agent_id') AS a FROM nodes WHERE content LIKE '%heronfeather%'")
+    expect(mainRow, 'the main agent\'s capture was drained').toBeTruthy()
+    expect([mainRow!.a, mainRow!.t > last]).toEqual([null, true])
+    w.moments!['start'] = start
+    w.moments!['last'] = last
+    w.moments!['main'] = mainRow!.t
+  })
+
+  define(/^the harness sees the builder leg as live, with its start (\d+) hours ago and its last write (\d+) minutes ago$/, (w, hours, minutes) => {
+    const l = w.lookups![RUN]!
+    const leg = l.legs.find((g) => g.agentId === w.legs!['builder']!.agentId)!
+    expect([leg.state, leg.startedAt, leg.lastWriteAt]).toEqual(['live', w.moments!['start'], w.moments!['last']])
+    expect(Math.abs(l.facts.asOf - leg.startedAt - Number(hours) * 3600)).toBeLessThan(60)
+    expect(Math.abs(l.facts.asOf - leg.lastWriteAt! - Number(minutes) * 60)).toBeLessThan(60)
+    // The file: still live (no session restart retired it), and the lane's
+    // newest row is the 90-minute-old one, by its own moment.
+    const r = rawRegistration(w, w.legs!['builder']!)
+    expect([r['started_at'], r['stopped_at'], r['ended']]).toEqual([w.moments!['start'], null, null])
+    expect(rawOne<{ t: number }>(w, "SELECT MAX(created_at) AS t FROM nodes WHERE session_key = ? AND json_extract(metadata_json, '$._writer_agent_id') = ?",
+      w.sessionId, w.legs!['builder']!.agentId)!.t).toBe(w.moments!['last'])
+    // The session's own newest row is the main agent's, newer than the
+    // builder's last write: the lane, not the session, is what was read.
+    expect(rawOne<{ t: number }>(w, 'SELECT MAX(created_at) AS t FROM nodes WHERE session_key = ?', w.sessionId)!.t).toBe(w.moments!['main'])
   })
 }

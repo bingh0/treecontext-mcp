@@ -102,7 +102,10 @@ export const WRITER_STAMP_KEYS = ['_writer', '_writer_src', '_writer_agent_id', 
   // the identity was registered by a hook or declared, the parent as
   // declared or linked. And a run's numbering and supersession marks
   // (D329, D331): the store's, never a caller's.
-  '_cwd', '_door', '_identity', '_parent', '_parent_src', '_checkpoint_number', '_supersedes_src'] as const
+  '_cwd', '_door', '_identity', '_parent', '_parent_src', '_checkpoint_number', '_supersedes_src',
+  // Whether a run open's or close's `by` waits for the echo (runs.ts
+  // BY_SRC_KEY): the store's, never a caller's.
+  '_by_src'] as const
 
 interface Prepared { get(...p: unknown[]): unknown; all(...p: unknown[]): unknown[]; run(...p: unknown[]): unknown }
 /** The one capability the registry needs from a database handle. */

@@ -37,7 +37,11 @@ import { dbg, warn } from '../debug.js'
 import type { FlatStore } from '../flat-store.js'
 import { selfWriterOf, stampMetadata, WRITER_STAMP_KEYS, type WriterStamp } from '../persistence/session-registry.js'
 import { NOTICED_BY_STATUS } from '../persistence/leg-registry.js'
-import { DOOR_KEY, IDENTITY_KEY } from '../runs.js'
+import {
+  DOOR_KEY, IDENTITY_KEY, RUN_OPEN_KIND, RUN_CLOSE_KIND, OPENED_BY_KEY, OPENED_VIA_KEY, CLOSED_BY_KEY, REASON_KEY,
+  PARENT_RUN_KEY, PARENT_LEG_KEY, BY_SRC_KEY, BY_PENDING, BY_CALLER, runRowKindOf,
+} from '../runs.js'
+import { KEY_LOOKUP_PARAM } from '../key-lookup.js'
 import {
   INLINE_EXPORT_CAP, SECRETS_WARNING, buildHandoff, importToldMessage, resolveProjectPath, writeHandoffFile,
   type HandoffForm,
@@ -45,6 +49,10 @@ import {
 import { DEFAULT_RECENCY_WEIGHT, SHADOW_RECENCY_WEIGHT, recordQueryTelemetry, telemetryEnabled } from './query-telemetry.js'
 import { maxSupportedVersion } from '../persistence/migrations/index.js'
 import { newerSchemaLine } from '../persistence/migrations.js'
+
+/** The insert-time writer stamps the registry could only read, not know
+ *  (session-registry.ts resolveWriter); the call's echo makes them exact. */
+const NON_EXACT_STAMPS: ReadonlySet<string> = new Set(['provisional', 'concurrent', 'ambiguous'])
 
 /** D265: how long a tool call trusts the last read of the store's schema
  *  version. One PRAGMA at most this often, never a lock; a tool ERROR
@@ -341,7 +349,8 @@ export function createServer(
   // the hooks keep (persistence/session-registry.ts). A session whose own
   // identity is ambiguous here is not looked up: its stamp would be a
   // guess about a guess.
-  type Stamping = MemoryStore & Partial<Pick<FlatStore, 'writerStampFor' | 'subagentScopeFor' | 'selfOfSession' | 'retirePhantoms'>>
+  type Stamping = MemoryStore & Partial<Pick<FlatStore, 'writerStampFor' | 'subagentScopeFor' | 'selfOfSession' | 'retirePhantoms'
+    | 'openRun' | 'closeRun' | 'legOf' | 'lookupKeyReply'>>
   const writerStamp = (ctx: MemoryStore, cc: CcSessionResolution): WriterStamp => {
     const store = ctx as Stamping
     if (typeof store.writerStampFor !== 'function' || cc.ccSessionId === null || cc.ambiguous) return { src: 'unregistered' }
@@ -374,7 +383,11 @@ export function createServer(
         + 'brief_for: a worktree name or subagent role this entry briefs; a '
         + 'session starting in that worktree is handed it, and a subagent of '
         + 'that role finds it in its default search. The writer is stamped '
-        + 'by the store and said back as writer.',
+        + 'by the store and said back as writer. kind "checkpoint" with run and '
+        + 'key is numbered by the store when it lands. kind "run-open" or '
+        + '"run-close" with run records the run\'s open or close as the harness '
+        + 'does, by this writer; a close takes its reason from reason, else '
+        + 'from content.',
       ),
       supersedes: z.array(z.string().min(1)).max(100).optional().describe(
         'Node IDs whose resume-pointer flags this insert supersedes (e.g. a '
@@ -482,7 +495,65 @@ export function createServer(
           if (media_ref.extracted !== undefined) mappedMediaRef.extracted = media_ref.extracted
           opts.mediaRef = mappedMediaRef
         }
-        const result = await resolve().insert(content, opts)
+        // D302, D337: kind "run-open" or "run-close" naming a run is the
+        // agent's door to a run's open and close: the same record the
+        // harness's openRun and closeRun leave, by the writer the store
+        // stamped (the caller's own word only when no stamp could be read,
+        // the row's trace then naming the tools door and no identity behind
+        // it, D293), with its reason; the close ends
+        // the run's briefs (D327). Opening a run already open records
+        // nothing new and says so.
+        const live = resolve() as Stamping
+        const marker = runRowKindOf(opts.metadata ?? null)
+        let result: Awaited<ReturnType<MemoryStore['insert']>>
+        let runReply: Record<string, unknown> | undefined
+        if ((marker === RUN_OPEN_KIND || marker === RUN_CLOSE_KIND) && typeof live.openRun === 'function' && typeof live.closeRun === 'function') {
+          const m: Record<string, unknown> = { ...opts.metadata }
+          const run = String(m['run'])
+          const said = (k: string): string | undefined => (typeof m[k] === 'string' && (m[k] as string).trim() !== '' ? m[k] as string : undefined)
+          const declaredBy = said(marker === RUN_OPEN_KIND ? OPENED_BY_KEY : CLOSED_BY_KEY)
+          const reason = said(REASON_KEY) ?? content
+          const parentRun = said(PARENT_RUN_KEY)
+          for (const k of ['kind', 'run', OPENED_BY_KEY, OPENED_VIA_KEY, CLOSED_BY_KEY, REASON_KEY, PARENT_RUN_KEY, PARENT_LEG_KEY]) delete m[k]
+          const by = typeof m['_writer'] === 'string' ? undefined : declaredBy
+          // D293: a `by` the store did not stamp is the caller's word, kept
+          // and marked as such on the row.
+          if (by !== undefined) m[BY_SRC_KEY] = BY_CALLER
+          // D283, D293: a writer the registry read provisionally,
+          // concurrently or ambiguously is not yet known, so the row records
+          // nothing that depends on who until the call's echo names it.
+          const pendingBy = typeof m['_writer_src'] === 'string' && NON_EXACT_STAMPS.has(m['_writer_src'])
+          const pendingNote = 'The writer could not be told apart at insert, so who this is by is pending: the call\'s own echo sets it when it is captured.'
+          const at = Date.now() / 1000
+          if (marker === RUN_OPEN_KIND) {
+            // An inner run opened by a registered leg names that leg as the
+            // one that opened it, and the leg's facts name the run (D311);
+            // known exactly only from an exact stamp, else at the echo.
+            const agentId = typeof m['_writer_agent_id'] === 'string' ? m['_writer_agent_id'] : null
+            const session = ccResolution.ccSessionId
+            const parentLeg = !pendingBy && parentRun && agentId && session && typeof live.legOf === 'function' && live.legOf({ sessionId: session, agentId })?.kind
+              ? { sessionId: session, agentId } : undefined
+            const r = await live.openRun({
+              run, at, stamped: m, note: content, pendingBy, ...(by ? { by } : {}),
+              ...(parentRun ? { parentRun } : {}), ...(parentLeg ? { parentLeg } : {}),
+            })
+            result = { nodeId: r.nodeId, path: [r.nodeId], depth: 0, deduplicated: !r.opened, driftDetected: false, staleNodes: [] }
+            runReply = {
+              kind: RUN_OPEN_KIND, run, [OPENED_BY_KEY]: r.by, opened: r.opened,
+              ...(r.opened ? (r.by === null ? { [BY_SRC_KEY]: BY_PENDING, note: pendingNote } : by !== undefined ? { [BY_SRC_KEY]: BY_CALLER } : {})
+                : { note: `The run "${run}" was already open (entry ${r.nodeId}); nothing new was recorded.` }),
+            }
+          } else {
+            const r = await live.closeRun({ run, reason, at, stamped: m, note: content, pendingBy, ...(by ? { by } : {}) })
+            result = { nodeId: r.nodeId, path: [r.nodeId], depth: 0, deduplicated: false, driftDetected: false, staleNodes: [] }
+            runReply = {
+              kind: RUN_CLOSE_KIND, run, [CLOSED_BY_KEY]: r.by, [REASON_KEY]: reason,
+              ...(r.by === null ? { [BY_SRC_KEY]: BY_PENDING, note: pendingNote } : by !== undefined ? { [BY_SRC_KEY]: BY_CALLER } : {}),
+            }
+          }
+        } else {
+          result = await live.insert(content, opts)
+        }
         const source = metadata?.source === 'auto-capture' ? 'auto-capture' : 'manual'
         stats.recordInsert(source, Date.now() - t0)
 
@@ -518,6 +589,7 @@ export function createServer(
               + 'corrects the writer when it is captured.'
           }
         }
+        if (runReply) response.run = runReply
         // D329, D331: a checkpoint under a run's key is numbered by the
         // store when it lands; what it supersedes, and who named that,
         // said back as stored.
@@ -562,10 +634,21 @@ export function createServer(
   server.registerTool(
     'treecontext_query',
     {
-      description: 'Recall stored observations, decisions, findings, or passages from working memory.',
+      description: 'Recall stored observations, decisions, findings, or passages from working memory; '
+        + 'with key_lookup, the checkpoint in effect under a run\'s key.',
       inputSchema: z.object({
-      query: z.string().min(1).max(5000).describe(
-        'Natural language query, topic, or keyword phrase.',
+      query: z.string().min(1).max(5000).optional().describe(
+        'Natural language query, topic, or keyword phrase. Required, unless key_lookup is given instead.',
+      ),
+      [KEY_LOOKUP_PARAM]: z.object({
+        run: z.string().min(1).max(1000).describe('The run.'),
+        key: z.string().min(1).max(1000).describe('One of its keys.'),
+      }).optional().describe(
+        'The run-and-key lookup, the reply a harness gets from the library: the checkpoint(s) in '
+        + 'effect under the key with writer and number (two come back as two), a flag in words when '
+        + 'the writer is not the checkpointer the brief named or it arrived by import, the pointer '
+        + 'to the return of the leg that wrote it, the run\'s facts, and each leg live or ended. '
+        + 'Returns that reply instead of hits; not combined with query.',
       ),
       top_k: z.number().int().min(1).max(20).default(3).describe(
         'Number of results to return.',
@@ -651,11 +734,28 @@ export function createServer(
     // unknown keys from old callers are stripped at the MCP layer, so a
     // legacy call degrades to plain BM25 instead of erroring. Teaching
     // prose lives in the reference skill; schemas carry the contract.
-    async ({ query, top_k, metadata_filter, media_filter, namespace_weights, exclude_namespaces, adaptive, adaptive_max, recency_weight, time_range, sort_by, role_weights, conversation_window, scope }) => {
+    async ({ query, key_lookup, top_k, metadata_filter, media_filter, namespace_weights, exclude_namespaces, adaptive, adaptive_max, recency_weight, time_range, sort_by, role_weights, conversation_window, scope }) => {
       const t0 = Date.now()
       try {
         await ensureReady()
         const liveCtx = resolve()
+        // D337 (ratified D349), the carrier [chosen]: the agent's door to
+        // the harness's key lookup. The reply is the library's, built by
+        // the one serializer (key-lookup.ts keyLookupReply); a read-only
+        // server reads without the phantom pass's registry write.
+        // A key lookup is not a search: given both, the call says so
+        // rather than answering one and dropping the other.
+        if (key_lookup && query !== undefined) {
+          throw new Error(`query and ${KEY_LOOKUP_PARAM} were both given: ${KEY_LOOKUP_PARAM} returns the key lookup's reply, not hits, so pass one or the other.`)
+        }
+        if (key_lookup) {
+          const looker = liveCtx as Stamping
+          if (typeof looker.lookupKeyReply !== 'function') throw new Error('This store has no runs to look up (it is not a journal store).')
+          const reply = looker.lookupKeyReply({ run: key_lookup.run, key: key_lookup.key, phantomPass: policy !== 'read_only' })
+          stats.recordQuery('key_lookup', Date.now() - t0, reply.checkpoints.length)
+          return maybeShield('treecontext_query', { content: [{ type: 'text' as const, text: serializeUnderCeiling(reply as unknown as Record<string, unknown>) }] })
+        }
+        if (query === undefined) throw new Error(`query is required unless ${KEY_LOOKUP_PARAM} names a run and a key.`)
         const queryOpts: import('../core/types.js').QueryOptions = {
           topK: top_k,
         }

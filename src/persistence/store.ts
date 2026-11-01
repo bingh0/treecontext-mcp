@@ -17,6 +17,7 @@ import { attributeColumn, columnForIndex, columnIndex, ftsColumnValues, FTS_COLU
 import { runMigrations, currentSchemaVersion, ensureBaseSchema, type MigrationOptions } from './migrations.js'
 import { ECHO_HEAL_WINDOW_SECS } from './capture-constants.js'
 import { healWriterFromEcho as healWriter, type WriterHealResult } from './writer-heal.js'
+import { legReturnStamp, type LegRef } from './leg-registry.js'
 import { dbg } from '../debug.js'
 import { CURATED_INDEX_WHERE } from './curated-index.js'
 
@@ -455,7 +456,38 @@ export class Persistence {
     nodeId: string; echoSessionId: string; echoTs: number; deduplicated: boolean
     agentId: string | null; agentType: string | null; windowSecs?: number
   }): WriterHealResult {
-    return healWriter(this.db, { ...opts, windowSecs: opts.windowSecs ?? ECHO_HEAL_WINDOW_SECS })
+    return healWriter(this.db, {
+      ...opts, windowSecs: opts.windowSecs ?? ECHO_HEAL_WINDOW_SECS,
+      rewriteContent: (nodeId, from, to) => this.rewriteContentPrefixInTxn(nodeId, from, to),
+    })
+  }
+
+  /** Replace the start of a row's content, `from` with `to`, keeping the
+   *  rest (a run row's line, set by the echo heal; D302): the content, its
+   *  fingerprint and its FTS entry move together, inside the caller's
+   *  transaction. A row whose content does not start with `from` is left
+   *  as it is. */
+  private rewriteContentPrefixInTxn(nodeId: string, from: string, to: string): void {
+    const rowid = this.resolveRowid(nodeId)
+    const row = this.getContentAndMetaStmt().get(nodeId) as
+      | { content: unknown; metadata_json: string | null; index_col: number | null; index_len: number | null; preview_len: number | null }
+      | undefined
+    if (rowid == null || !row) return
+    const old = decodeContent(row.content as string | Buffer | null)
+    if (!old.startsWith(from) || from === to) return
+    const content = to + old.slice(from.length)
+    const meta = applyLiftedBoundaries(parseMetadata(row.metadata_json), row.index_len, row.preview_len)
+    const col = columnForIndex(row.index_col)
+    this.db.prepare('UPDATE nodes SET content = ?, fingerprint = ? WHERE node_id = ?').run(encodeContent(content), contentFingerprint(content), nodeId)
+    this.getDeleteFtsStmt().run(rowid, ...ftsColumnValues(col, indexTextFor(old, meta)))
+    this.getInsertFtsStmt().run(rowid, ...ftsColumnValues(col, indexTextFor(content, meta)))
+  }
+
+  /** What a leg's summary row carries of its run (D284, D309): the run
+   *  and key read from the leg's registration (leg-registry.ts). The drain
+   *  stamps a SubagentStop summary with it. */
+  legReturnStamp(ref: LegRef): Record<string, string> {
+    return legReturnStamp(this.db, ref)
   }
 
   healCuratedSessionIdentity(opts: {

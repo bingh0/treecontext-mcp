@@ -109,7 +109,7 @@
 {"file":"features/journal-legs.feature","title":"a checkpoint of 300000 characters is refused with the reason and the shape asked for on its first write and accepted and marked over the cap on the second [4]","status":"unbound"}
 {"file":"features/journal-legs.feature","title":"a checkpoint that names another checkpoint is taken at its word","status":"passed"}
 {"file":"features/journal-legs.feature","title":"a checkpoint that names nothing as superseded is stamped from the leg's start, marked as the store's","status":"passed"}
-{"file":"features/journal-legs.feature","title":"a checkpoint the main agent writes under a leg's key comes back flagged, never withheld","status":"unbound"}
+{"file":"features/journal-legs.feature","title":"a checkpoint the main agent writes under a leg's key comes back flagged, never withheld","status":"passed"}
 {"file":"features/journal-legs.feature","title":"a cut leg leaves its trail and the next leg of its role starts as a recovery leg","status":"unbound"}
 {"file":"features/journal-legs.feature","title":"a cut leg leaves no checkpoint the store wrote","status":"unbound"}
 {"file":"features/journal-legs.feature","title":"a first moment of 10000 characters through the hooks door is the brief and the checkpoint whole, with no query made [2]","status":"unbound"}
@@ -126,7 +126,7 @@
 {"file":"features/journal-legs.feature","title":"a leg starting while two checkpoints are in effect is handed both, flagged","status":"unbound"}
 {"file":"features/journal-legs.feature","title":"a leg that ended without a checkpoint after its one send-back is followed by a recovery leg","status":"unbound"}
 {"file":"features/journal-legs.feature","title":"a leg that finishes with no checkpoint is sent back once with the missing checkpoint named","status":"unbound"}
-{"file":"features/journal-legs.feature","title":"a leg that writes under no key stays keyless, stops unblocked, and the run's facts count it as such","status":"unbound"}
+{"file":"features/journal-legs.feature","title":"a leg that writes under no key stays keyless, stops unblocked, and the run's facts count it as such","status":"passed"}
 {"file":"features/journal-legs.feature","title":"a leg through the hooks door starts cold when the store is unreachable, and the gap is marked","status":"unbound"}
 {"file":"features/journal-legs.feature","title":"a leg whose brief names another role as checkpointer is never sent back","status":"unbound"}
 {"file":"features/journal-legs.feature","title":"a leg whose start was dropped stops unasked and its summary still lands","status":"unbound"}
@@ -154,7 +154,7 @@
 {"file":"features/journal-legs.feature","title":"two briefs in effect for one role make the key ambiguous and name the candidates","status":"unbound"}
 {"file":"features/journal-legs.feature","title":"two checkpoints in effect under one key come back as two, never a silent pick","status":"passed"}
 {"file":"features/journal-legs.feature","title":"two legs that started from one checkpoint write 4 and 5, never two 4s, and both stay in effect","status":"passed"}
-{"file":"features/journal-legs.feature","title":"until its session restarts, a silent leg reads as live with its ages shown","status":"unbound"}
+{"file":"features/journal-legs.feature","title":"until its session restarts, a silent leg reads as live with its ages shown","status":"passed"}
 {"file":"features/journal-library.feature","title":"a plain Node program journals without any server","status":"passed"}
 {"file":"features/journal-library.feature","title":"a reader can watch a live store without stopping the writer","status":"passed"}
 {"file":"features/journal-library.feature","title":"an import holding more nodes than the count guardrail is refused whole","status":"passed"}
@@ -266,31 +266,31 @@
 {"file":"features/journal-reorientation.feature","title":"the tail keeps its shape with 10000 turns since the bookmark [4]","status":"passed"}
 {"file":"features/journal-reorientation.feature","title":"the tail keeps its shape with 5 turns since the bookmark [2]","status":"passed"}
 {"file":"features/journal-reorientation.feature","title":"the tail keeps its shape with 6 turns since the bookmark [3]","status":"passed"}
-{"file":"features/journal-runs.feature","title":"a checkpoint by the named checkpointer comes back with no flag","status":"unbound"}
+{"file":"features/journal-runs.feature","title":"a checkpoint by the named checkpointer comes back with no flag","status":"passed"}
 {"file":"features/journal-runs.feature","title":"a harness may open a run explicitly before any leg","status":"passed"}
 {"file":"features/journal-runs.feature","title":"a key that holds no checkpoint yet comes back as an honest nothing","status":"passed"}
-{"file":"features/journal-runs.feature","title":"a key with 0 checkpoints returns the sizes of the last 0 [1]","status":"unbound"}
-{"file":"features/journal-runs.feature","title":"a key with 1 checkpoints returns the sizes of the last 1 [2]","status":"unbound"}
-{"file":"features/journal-runs.feature","title":"a key with 3 checkpoints returns the sizes of the last 3 [3]","status":"unbound"}
-{"file":"features/journal-runs.feature","title":"a key with 40 checkpoints returns the sizes of the last 3 [4]","status":"unbound"}
+{"file":"features/journal-runs.feature","title":"a key with 0 checkpoints returns the sizes of the last 0 [1]","status":"passed"}
+{"file":"features/journal-runs.feature","title":"a key with 1 checkpoints returns the sizes of the last 1 [2]","status":"passed"}
+{"file":"features/journal-runs.feature","title":"a key with 3 checkpoints returns the sizes of the last 3 [3]","status":"passed"}
+{"file":"features/journal-runs.feature","title":"a key with 40 checkpoints returns the sizes of the last 3 [4]","status":"passed"}
 {"file":"features/journal-runs.feature","title":"a leg opens a run of its own and both runs reach each other","status":"passed"}
-{"file":"features/journal-runs.feature","title":"a leg that left no return is said so, never guessed","status":"unbound"}
+{"file":"features/journal-runs.feature","title":"a leg that left no return is said so, never guessed","status":"passed"}
 {"file":"features/journal-runs.feature","title":"a leg that ran on another machine comes back into the run by the handoff, and its claim is believed, flagged","status":"unbound"}
 {"file":"features/journal-runs.feature","title":"a run opens on its first leg's registration","status":"passed"}
 {"file":"features/journal-runs.feature","title":"a run's default export is its skeleton, with no captured tool output","status":"unbound"}
 {"file":"features/journal-runs.feature","title":"a run's open and close are journal rows the query reaches","status":"passed"}
 {"file":"features/journal-runs.feature","title":"a run's rows read back by plain SQL in the order of their own moments, each naming its writer and moment, each leg naming its run and key","status":"passed"}
-{"file":"features/journal-runs.feature","title":"a stranger's checkpoint comes back as the one in effect, flagged against the named checkpointer","status":"unbound"}
-{"file":"features/journal-runs.feature","title":"an agent closes a run through the tools and the record is the same as the harness's","status":"unbound"}
+{"file":"features/journal-runs.feature","title":"a stranger's checkpoint comes back as the one in effect, flagged against the named checkpointer","status":"passed"}
+{"file":"features/journal-runs.feature","title":"an agent closes a run through the tools and the record is the same as the harness's","status":"passed"}
 {"file":"features/journal-runs.feature","title":"an agent finds a run by its name","status":"passed"}
 {"file":"features/journal-runs.feature","title":"an agent finds a run by time with no id in hand","status":"unbound"}
-{"file":"features/journal-runs.feature","title":"an agent gets the same lookup reply as the harness through the tools","status":"unbound"}
-{"file":"features/journal-runs.feature","title":"every key lookup carries the run's facts beside the checkpoint","status":"unbound"}
+{"file":"features/journal-runs.feature","title":"an agent gets the same lookup reply as the harness through the tools","status":"passed"}
+{"file":"features/journal-runs.feature","title":"every key lookup carries the run's facts beside the checkpoint","status":"passed"}
 {"file":"features/journal-runs.feature","title":"nesting is not limited to one level","status":"passed"}
 {"file":"features/journal-runs.feature","title":"the harness asks by run and key with no model and receives the one checkpoint in effect","status":"passed"}
 {"file":"features/journal-runs.feature","title":"the harness closes a run with a reason and plain SQL shows who ended it and why","status":"passed"}
-{"file":"features/journal-runs.feature","title":"the lookup reply carries the pointer to the return of the leg that wrote the checkpoint","status":"unbound"}
-{"file":"features/journal-runs.feature","title":"the run's facts show each live leg's start and last write","status":"unbound"}
+{"file":"features/journal-runs.feature","title":"the lookup reply carries the pointer to the return of the leg that wrote the checkpoint","status":"passed"}
+{"file":"features/journal-runs.feature","title":"the run's facts show each live leg's start and last write","status":"passed"}
 {"file":"features/journal-runs.feature","title":"the skeleton carries first moments whole and its reply says they are the spawners' prompts as written","status":"unbound"}
 {"file":"features/journal-runs.feature","title":"the whole form adds every row of every leg behind the secrets acknowledgement","status":"unbound"}
 {"file":"features/journal-search-modes.feature","title":"a chronological listing never receives the served default","status":"passed"}

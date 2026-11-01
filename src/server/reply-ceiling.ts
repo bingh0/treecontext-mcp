@@ -24,8 +24,15 @@ export interface CeilingNote {
   ceiling_bytes: number
   /** Chars each cut entry keeps. */
   cut_at: number
-  /** Entries (hits and window entries) that were cut. */
+  /** Entries that were cut: hits and window entries of a search, the
+   *  checkpoints of a key lookup. */
   cut_entries: number
+  /** The ids of the cut entries that carry one, so each can be fetched
+   *  whole by export. */
+  cut_ids: string[]
+  /** Present, and true, only when even the shortest cut left the reply
+   *  over the ceiling: said, never hidden. */
+  still_over?: true
 }
 
 function cutText(text: string, cap: number): string {
@@ -39,10 +46,13 @@ function byteLength(s: string): number {
 
 /**
  * Serialize a query response, cutting entry contents when the whole would
- * exceed the ceiling. `response.results` is read as the tool shapes it
- * (hits with `content`, optional `window.before/after[].content` and
- * `window.anchor.content`); the response is cloned before any cut, and a
- * cut response carries `_reply_ceiling`.
+ * exceed the ceiling. Every producer of the query tool is read as it
+ * shapes its reply: a search's `results` (hits with `content`, optional
+ * `window.before/after[].content` and `window.anchor.content`) and a key
+ * lookup's `checkpoints` (each with `content`, D337), so no producer's
+ * reply approaches the transport's limit (D287). The response is cloned
+ * before any cut, and a cut response carries `_reply_ceiling`, which
+ * names what was cut and says so when even the shortest cut did not fit.
  */
 export function serializeUnderCeiling(response: Record<string, unknown>, ceiling: number = REPLY_CEILING_BYTES): string {
   const whole = JSON.stringify(response, null, 2)
@@ -53,13 +63,21 @@ export function serializeUnderCeiling(response: Record<string, unknown>, ceiling
     // a cut of a cut would carry the wrong full length in its marker.
     clone = JSON.parse(whole) as Record<string, unknown>
     const results = Array.isArray(clone['results']) ? (clone['results'] as Array<Record<string, unknown>>) : []
+    const checkpoints = Array.isArray(clone['checkpoints']) ? (clone['checkpoints'] as Array<Record<string, unknown>>) : []
     let cut = 0
+    const ids: string[] = []
     const cutField = (o: Record<string, unknown> | null | undefined): void => {
       if (!o || typeof o['content'] !== 'string') return
       const before = o['content'] as string
       const after = cutText(before, cap)
-      if (after !== before) { o['content'] = after; cut++ }
+      if (after !== before) {
+        o['content'] = after
+        cut++
+        const id = o['node_id'] ?? o['nodeId']
+        if (typeof id === 'string') ids.push(id)
+      }
     }
+    for (const c of checkpoints) cutField(c)
     for (const r of results) {
       cutField(r)
       const w = r['window'] as Record<string, unknown> | undefined
@@ -71,12 +89,14 @@ export function serializeUnderCeiling(response: Record<string, unknown>, ceiling
         cutField(w['anchor'] as Record<string, unknown> | undefined)
       }
     }
-    const note: CeilingNote = { ceiling_bytes: ceiling, cut_at: cap, cut_entries: cut }
+    const note: CeilingNote = { ceiling_bytes: ceiling, cut_at: cap, cut_entries: cut, cut_ids: ids }
     clone['_reply_ceiling'] = note
     const text = JSON.stringify(clone, null, 2)
     if (byteLength(text) <= ceiling) return text
     // Over still: the next rung cuts shorter.
   }
+  const last = clone['_reply_ceiling'] as CeilingNote
+  last.still_over = true
   return JSON.stringify(clone, null, 2)
 }
 

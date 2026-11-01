@@ -7,6 +7,7 @@ import { INSTRUCTIONS_BRIEF_LEXICAL, SKILL_REFERENCE_BODY, SKILL_REFERENCE_NAME,
 import { SESSION_REMINDER_TEXT, INSTRUCTIONS_CONTENT } from '../../../src/server/installer.js'
 import { DEFAULT_ROLE_WEIGHTS } from '../../../src/persistence/fts.js'
 import { DEFAULT_RECENCY_WEIGHT } from '../../../src/server/query-telemetry.js'
+import { KEY_LOOKUP_PARAM } from '../../../src/key-lookup.js'
 import { mcpOver, openLiveStore, exportNode, mediaOf, rawMediaOf, insertAttachment } from '../world.js'
 import { type InstallWorld, tcCli } from '../install-harness.js'
 
@@ -359,11 +360,15 @@ export const agentSurfaceDefiner = (reg: Registry<AgentSurfaceWorld>): void => {
     const query = (await w.client!.listTools()).tools.find((t) => t.name === 'treecontext_query')!
     const props = Object.keys((query.inputSchema as { properties: Record<string, unknown> }).properties).sort()
     // The parameter set as committed before D264 (HEAD f1be050): the
-    // ruling declined an orientation parameter, so the set is unchanged.
+    // ruling declined an orientation parameter, so the set is unchanged
+    // but for the one parameter a later ruling added that is no
+    // orientation: the run-and-key lookup, D337's carrier (ratified D349,
+    // the carrier [chosen] in DESIGN.md), which returns the key lookup's
+    // reply instead of hits and is named by its constant.
     expect(props).toEqual([
-      'adaptive', 'adaptive_max', 'conversation_window', 'exclude_namespaces', 'media_filter', 'metadata_filter',
+      'adaptive', 'adaptive_max', 'conversation_window', 'exclude_namespaces', KEY_LOOKUP_PARAM, 'media_filter', 'metadata_filter',
       'namespace_weights', 'query', 'recency_weight', 'role_weights', 'scope', 'sort_by', 'time_range', 'top_k',
-    ])
+    ].sort())
   })
 
   // S: installing the AGENTS.md block twice yields one block.
@@ -428,7 +433,14 @@ export const agentSurfaceSchemaDefiner = (reg: Registry<AgentSurfaceWorld>): voi
     // label", "tree statistics". Structure the backend lacks is machinery
     // the backend lacks. (branch_diverse stays: a compat-kept enum value
     // whose own description discloses its status.)
-    const forbidden = /drills into subtrees|different subtrees|pure cosine|embedding fusion|multimodal model|BIRCH|dual-tree|checkpoint|internal \(summary\) nodes inherit|subtree|memory tree|full tree|primary tree|tree statistics|exported tree|source tree|graft|branch label|labeled branch/i
+    // The tree era's checkpoint MACHINERY is named, never the bare word
+    // (narrowed 2026-11-01, unit 2 of the beta.3 build): a checkpoint is
+    // the beta.3 contract's own term now, the state of a key's work (D280),
+    // and the query tool's key_lookup and the insert tool describe it in
+    // that word. The needle is the one the handshake scenario proves live.
+    const forbidden = new RegExp(`drills into subtrees|different subtrees|pure cosine|embedding fusion|multimodal model|BIRCH|dual-tree|${CHECKPOINT_NEEDLE.source}|internal \\(summary\\) nodes inherit|subtree|memory tree|full tree|primary tree|tree statistics|exported tree|source tree|graft|branch label|labeled branch`, 'i')
+    expect('Run treecontext_checkpoint_all to summarize stale nodes.', 'the narrowed checkpoint needle is dead').toMatch(forbidden)
+    expect('the checkpoint in effect under a run\'s key').not.toMatch(forbidden)
     for (const t of tools) {
       const schema = JSON.stringify(t.inputSchema)
       expect(schema, `${t.name} schema advertises deleted machinery`).not.toMatch(forbidden)

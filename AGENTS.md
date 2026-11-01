@@ -91,14 +91,20 @@ in the charter or out of the build.
   (migration 031): run, key and its source, door and identity, the
   checkpointer, the start checkpoint(s), the parent linked or declared,
   a worker's host, process and OS start moment, re-runs, send-backs, how
-  a leg ended; the phantom pass any reader of the registry runs
+  a leg ended; the phantom pass any reader of the registry runs; the run
+  and key a leg's summary row is stamped with
 - `src/persistence/process-probe.ts` — what this host's OS says about a
   process (exists, start moment) for the phantom pass
 - `src/run-kinds.ts` — the row kinds a run is made of (checkpoint, brief,
   run-open, run-close, first-moment), a leaf the dedup identity reads
-- `src/runs.ts` — a run's reads: checkpoints in effect, the store's
-  numbering, briefs in effect, a run's open and close, the harness's key
-  lookup floor, and `RUN_ROWS_SQL`, the plain-SQL read-back
+- `src/runs.ts` — a run's reads: checkpoints in effect (an imported
+  one's supersedes claim believed), the store's numbering, briefs in
+  effect and of a key, a run's open and close, and `RUN_ROWS_SQL`, the
+  plain-SQL read-back
+- `src/key-lookup.ts` — the key lookup's whole reply, the harness's
+  through the library and the agent's through the query tool's
+  `key_lookup` mode: the checkpoint(s) in effect, the flag in words, the
+  pointer to the writing leg's return, the run's facts, each leg's state
 - `src/persistence/writer-heal.ts` — the echo heal that sets a
   tool-written row's writer exactly at the drain, and undoes what a wrong
   first stamp did across lanes
@@ -164,6 +170,12 @@ node dist/server/cli.js doctor      # after a build
 
 ## Things to watch for
 
+- A run's open or close row written through the tools while the writer
+  stamp was not exact (provisional, concurrent, ambiguous) names nobody:
+  `_by_src` is `pending` until the call's echo heal sets `opened_by` /
+  `closed_by`, the line, and an inner run's parent leg. Never fill them
+  from the insert-time stamp; `_by_src` `caller` marks a `by` taken from
+  the caller's metadata when no stamp could be read at all
 - Content in `nodes.content` may be zstd-encoded — decode with
   `persistence/content-codec.ts`, never assume plain text
 - `metadata.created_at` is the event's moment; `ingested_at` is the

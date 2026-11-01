@@ -2652,3 +2652,10 @@ D356 2026-11-01 [V] ratifies D354
   serves: N28 N32
   touches: D354 D302 D283
 # the visionary, 2026-11-01, at unit 1's gate, the same "Ratify both" as D355
+
+D357 2026-11-01 [I] amends D264
+  resp:  the query tool keeps its promise of no new parameter for orientation, and carries the one parameter the agent's door to a run needs, `key_lookup`, a run and a key together, which returns the harness's lookup reply in place of hits and is no orientation parameter; with it the free-text query may be omitted, without it an empty or missing query is refused as before, and a call that gives both is refused naming both; the handshake's second session-start step, the ranking order the skill reference states, and the orientation query's own reply are unchanged [I]
+  ->     structural
+  serves: N31 N28 N14
+  touches: D264 D337 D349 D309 D261 D272 D287
+# the build, 2026-11-01, unit 2's failure-ladder review (finding 4): D264's declined alternative was "an orientation parameter on the query tool, new surface overlapping what the defaults now deliver", and its scenario pins "no parameter for orientation"; D337 (ratified D349) hands the agent's door to the design pass, which chose "a run-and-key lookup mode on the query tool" (DESIGN.md, [chosen]), and D309 declines a ninth tool; a mode needs a selector, and the selectors already in the record (a hidden mode in the query text, or metadata_filter) would be a worse surface than one honest parameter. The pin in the agent-surface steps admits exactly this one parameter by its constant. Resolved from the record under D333 and awaiting ratification

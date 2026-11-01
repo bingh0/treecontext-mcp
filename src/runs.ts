@@ -18,7 +18,9 @@
  *
  * Reads take any handle with `prepare` (a FlatStore's wrapped database, a
  * hook's raw node:sqlite handle) and a tree id, or null for every
- * namespace, as a hook that does not know its namespace reads.
+ * namespace, as a hook that does not know its namespace reads. The key
+ * lookup built over these reads, the harness's and the agent's one reply,
+ * is key-lookup.ts.
  */
 import { decodeContent } from './persistence/content-codec.js'
 import { writerOf } from './references.js'
@@ -27,11 +29,6 @@ import { HANDOFF_LANE_PREFIX } from './handoff.js'
 import {
   CHECKPOINT_KIND, BRIEF_KIND, RUN_OPEN_KIND, RUN_CLOSE_KIND, RUN_META_KEY, KEY_META_KEY,
 } from './run-kinds.js'
-import {
-  legsOfRun, retirePhantoms, isLiveLeg, NOTICED_BY_LOOKUP, type LegRegistration, type PhantomPass,
-} from './persistence/leg-registry.js'
-import type { RegistryHandle } from './persistence/session-registry.js'
-import type { ProcessProbe } from './persistence/process-probe.js'
 
 export {
   CHECKPOINT_KIND, BRIEF_KIND, RUN_OPEN_KIND, RUN_CLOSE_KIND, FIRST_MOMENT_KIND, RUN_META_KEY, KEY_META_KEY,
@@ -86,6 +83,56 @@ export const PARENT_LEG_KEY = 'parent_leg'
 /** A run's close names who closed it and why (D302). */
 export const CLOSED_BY_KEY = 'closed_by'
 export const REASON_KEY = 'reason'
+
+/** Whether a run open's or close's `by` is known (D283, D293, D302):
+ *  store-only. Absent when the door's stamp was exact at insert (a self
+ *  with no subagent live, a declared writer, a worker, a leg named
+ *  through the library); `pending` when the tools door read the writer
+ *  provisionally, concurrently or ambiguously, so the row names nobody yet
+ *  and records no fact that depends on who (no `by` in its line, no
+ *  parent leg, no opened run on any registration); `echo` once the call's
+ *  own echo named the writer and the heal set them (writer-heal.ts);
+ *  `caller` when no stamp could be read and the caller's own word is kept. */
+export const BY_SRC_KEY = '_by_src'
+export const BY_PENDING = 'pending'
+export const BY_ECHO = 'echo'
+/** No stamp could be read (an unregistered session): `by` is the caller's
+ *  own word from its metadata, kept and said to be the caller's (D293). */
+export const BY_CALLER = 'caller'
+
+/** The line a run's open row reads (D302, D311): who opened it when that
+ *  is known, and the outer run, with the leg that opened it when there is
+ *  one (`parentRole` undefined: no parent leg named). */
+export function runOpenLine(run: string, by: string | null, parentRun?: string | null, parentRole?: string | null): string {
+  const inside = parentRun ? `, inside the run ${parentRun}${parentRole !== undefined ? ` by its ${parentRole ?? 'unnamed'} leg` : ''}` : ''
+  return `run ${run} opened${by !== null ? ` by ${by}` : ''}${inside}`
+}
+
+/** The line a run's close row reads (D302): who closed it when that is
+ *  known, and why. */
+export function runCloseLine(run: string, by: string | null, reason: string): string {
+  return `run ${run} closed${by !== null ? ` by ${by}` : ''}: ${reason}`
+}
+
+/**
+ * A text's size in characters, the unit D299 and D344 count in: Unicode
+ * code points, so ten emoji are ten characters, never the twenty UTF-16
+ * units a JavaScript string's length reports. One counter for every size
+ * a run reports or caps: the lookup's sizes here, and the checkpoint cap
+ * (unit 5 of the build) counts with this same function.
+ */
+export function charactersOf(text: string): number {
+  let n = 0
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i)
+    if (c >= 0xd800 && c <= 0xdbff && i + 1 < text.length) {
+      const d = text.charCodeAt(i + 1)
+      if (d >= 0xdc00 && d <= 0xdfff) i++
+    }
+    n++
+  }
+  return n
+}
 
 /** The trace every row a door writes carries (D293), store-only: the
  *  door, whether the identity was registered by a hook or declared, the
@@ -179,21 +226,35 @@ export interface CheckpointRecord {
   writerAgentId: string | null
   createdAt: number
   content: string
+  /** In characters, code points (charactersOf; D299, D344). */
   size: number
   supersedes: string[]
   supersedesSrc: string | null
   restsOn: string[]
   /** Arrived by import, under a handoff lane (D343). */
   imported: boolean
+  /** The file an imported checkpoint came from (the importer's mark). */
+  importedFrom: string | null
+  /** What an imported checkpoint's file claims it supersedes (D343): the
+   *  claim kept under `_handoff_claims`, never promoted to identity, and
+   *  believed by the reads of what is in effect. Empty for a local row. */
+  claimedSupersedes: string[]
   metadata: Record<string, unknown>
 }
 
 interface RawRow { node_id: string; created_at: number; content: unknown; metadata_json: string | null; session_key: string | null }
 
+/** Where an imported row keeps its file's claims (handoff.ts, D165). */
+export const HANDOFF_CLAIMS_KEY = '_handoff_claims'
+
 function toCheckpoint(r: RawRow): CheckpointRecord {
   const meta = parseMeta(r.metadata_json) ?? {}
   const content = decodeContent(r.content as string | Buffer | null)
   const n = Number(meta[CHECKPOINT_NUMBER_KEY])
+  const imported = (r.session_key ?? '').startsWith(HANDOFF_LANE_PREFIX)
+  const claims = meta[HANDOFF_CLAIMS_KEY]
+  const claimed = imported && claims !== null && typeof claims === 'object' && !Array.isArray(claims)
+    ? idsOf((claims as Record<string, unknown>)[SUPERSEDES_KEY]) : []
   return {
     nodeId: r.node_id,
     number: Number.isFinite(n) && meta[CHECKPOINT_NUMBER_KEY] !== undefined && meta[CHECKPOINT_NUMBER_KEY] !== null ? n : null,
@@ -205,11 +266,13 @@ function toCheckpoint(r: RawRow): CheckpointRecord {
     writerAgentId: typeof meta['_writer_agent_id'] === 'string' ? meta['_writer_agent_id'] : null,
     createdAt: r.created_at,
     content,
-    size: content.length,
+    size: charactersOf(content),
     supersedes: idsOf(meta[SUPERSEDES_KEY]),
     supersedesSrc: typeof meta[SUPERSEDES_SRC_KEY] === 'string' ? meta[SUPERSEDES_SRC_KEY] : null,
     restsOn: idsOf(meta[RESTS_ON_KEY]),
-    imported: (r.session_key ?? '').startsWith(HANDOFF_LANE_PREFIX),
+    imported,
+    importedFrom: imported && typeof meta['_handoff_file'] === 'string' ? meta['_handoff_file'] : null,
+    claimedSupersedes: claimed,
     metadata: meta,
   }
 }
@@ -229,11 +292,19 @@ export function checkpointsUnder(db: RunReadHandle, treeId: number | null, run: 
 
 /** The checkpoints in effect under a run's key (D280, D329): those no
  *  other checkpoint of the key names as superseded, in number order. Two
- *  in effect come back as two, never a silent pick. */
+ *  in effect come back as two, never a silent pick. An imported
+ *  checkpoint's claim that it supersedes one of the key's checkpoints is
+ *  believed here (D343): the claim stays under the file's claims and the
+ *  local checkpoint is untouched, no longer in effect, still readable. */
 export function checkpointsInEffect(db: RunReadHandle, treeId: number | null, run: string, key: string): CheckpointRecord[] {
-  const all = checkpointsUnder(db, treeId, run, key)
+  return inEffectAmong(checkpointsUnder(db, treeId, run, key))
+}
+
+/** The in-effect rule over a key's checkpoints already read (see
+ *  checkpointsInEffect), for a reader that needs them all as well. */
+export function inEffectAmong(all: CheckpointRecord[]): CheckpointRecord[] {
   const superseded = new Set<string>()
-  for (const c of all) for (const id of c.supersedes) if (id !== c.nodeId) superseded.add(id)
+  for (const c of all) for (const id of [...c.supersedes, ...c.claimedSupersedes]) if (id !== c.nodeId) superseded.add(id)
   return all.filter((c) => !superseded.has(c.nodeId))
 }
 
@@ -325,6 +396,30 @@ export interface BriefRecord {
   supersedes: string[]
 }
 
+function toBrief(r: RawRow): BriefRecord {
+  const meta = parseMeta(r.metadata_json) ?? {}
+  return {
+    nodeId: r.node_id, run: String(meta[RUN_META_KEY]), key: String(meta[KEY_META_KEY]), role: String(meta[BRIEF_FOR_KEY]),
+    checkpointer: typeof meta[CHECKPOINTER_KEY] === 'string' ? meta[CHECKPOINTER_KEY] : null,
+    checkpointedBy: typeof meta[CHECKPOINTED_BY_KEY] === 'string' ? meta[CHECKPOINTED_BY_KEY] : null,
+    writer: writerOf(meta), createdAt: r.created_at, content: decodeContent(r.content as string | Buffer | null),
+    supersedes: idsOf(meta[SUPERSEDES_KEY]),
+  }
+}
+
+/** The briefs no newer brief for the same role under the same key names
+ *  as superseded (D327's supersession; the trace is a checkpoint's). */
+function unsupersededBriefs(briefs: BriefRecord[]): BriefRecord[] {
+  const superseded = new Set<string>()
+  for (const b of briefs) {
+    for (const id of b.supersedes) {
+      const target = briefs.find((t) => t.nodeId === id)
+      if (target && target.role === b.role && target.key === b.key && target.nodeId !== b.nodeId) superseded.add(id)
+    }
+  }
+  return briefs.filter((b) => !superseded.has(b.nodeId))
+}
+
 /**
  * The briefs in effect for a role (D327): a brief is in effect until a
  * newer brief for the same role under the same key names it as
@@ -339,111 +434,27 @@ export function briefsInEffect(db: RunReadHandle, treeId: number | null, role: s
         AND json_extract(metadata_json, '$.${BRIEF_FOR_KEY}') = ?
       ORDER BY created_at DESC, rowid DESC`,
   ).all(...treeParams(treeId), role) as RawRow[]
-  const briefs: BriefRecord[] = rows.map((r) => {
-    const meta = parseMeta(r.metadata_json) ?? {}
-    return {
-      nodeId: r.node_id, run: String(meta[RUN_META_KEY]), key: String(meta[KEY_META_KEY]), role,
-      checkpointer: typeof meta[CHECKPOINTER_KEY] === 'string' ? meta[CHECKPOINTER_KEY] : null,
-      checkpointedBy: typeof meta[CHECKPOINTED_BY_KEY] === 'string' ? meta[CHECKPOINTED_BY_KEY] : null,
-      writer: writerOf(meta), createdAt: r.created_at, content: decodeContent(r.content as string | Buffer | null),
-      supersedes: idsOf(meta[SUPERSEDES_KEY]),
-    }
-  })
-  const superseded = new Set<string>()
-  for (const b of briefs) {
-    for (const id of b.supersedes) {
-      const target = briefs.find((t) => t.nodeId === id)
-      if (target && target.key === b.key && target.nodeId !== b.nodeId) superseded.add(id)
-    }
-  }
   const closed = new Map<string, boolean>()
   const isClosed = (run: string): boolean => {
     if (!closed.has(run)) closed.set(run, runClosesOf(db, treeId, run).length > 0)
     return closed.get(run)!
   }
-  return briefs.filter((b) => !superseded.has(b.nodeId) && !isClosed(b.run))
-}
-
-// ── The key lookup (D289, D329), the floor the reply is built on ───
-
-/** A leg of the run as the lookup shows it: live or how it ended. */
-export interface LegState {
-  sessionId: string
-  agentId: string
-  role: string | null
-  kind: LegRegistration['kind']
-  key: string | null
-  keySrc: LegRegistration['keySrc']
-  state: 'live' | 'retired' | 'cut' | 'phantom' | 'invalid'
-  startedAt: number
-  stoppedAt: number | null
-  noticedAt: number | null
-  noticedBy: string | null
-  openedRuns: string[]
-  registration: LegRegistration
-}
-
-export function legStateOf(leg: LegRegistration): LegState {
-  const state: LegState['state'] = isLiveLeg(leg) ? 'live' : (leg.ended ?? 'retired')
-  return {
-    sessionId: leg.sessionId, agentId: leg.agentId, role: leg.role, kind: leg.kind, key: leg.key, keySrc: leg.keySrc,
-    state, startedAt: leg.startedAt, stoppedAt: leg.stoppedAt, noticedAt: leg.noticedAt, noticedBy: leg.noticedBy,
-    openedRuns: leg.openedRuns, registration: leg,
-  }
-}
-
-export interface KeyLookup {
-  run: string
-  key: string
-  /** The checkpoints in effect, in number order: none, one, or more. */
-  checkpoints: CheckpointRecord[]
-  /** The line saying what is in effect. */
-  line: string
-  /** Every leg registered under the run, live or how it ended. */
-  legs: LegState[]
-  /** The phantom pass this lookup ran (D297): who it retired, and one
-   *  sentence per worker it could not check. */
-  phantoms: PhantomPass
-  notes: string[]
+  return unsupersededBriefs(rows.map(toBrief)).filter((b) => !isClosed(b.run))
 }
 
 /**
- * The harness's lookup by run and key together (D289), with no model in
- * the loop: the phantom pass on this host first (the lookup is a reader of
- * the registry, D297), then the checkpoints in effect with their writers,
- * the line saying how many, and each leg of the run as live or how it
- * ended. The floor the full reply stands on: the run's facts (D301, D312,
- * D344), the flag against the brief's checkpointer (D296), the pointer to
- * the return (D336) and the agent's door to it (D337) are built over this.
+ * The briefs of a run's key, every role's, that no newer brief for the
+ * same role and key supersedes, newest first (D281, D296). A run's close
+ * ends its briefs for whoever starts next (D327), but never unsays what a
+ * brief named: the checkpointer a brief named for the key is still who it
+ * named when the harness looks the key up after the close.
  */
-export function lookupKey(db: RunReadHandle & RegistryHandle, treeId: number | null, opts: {
-  run: string
-  key: string
-  probe?: ProcessProbe
-  noticedBy?: string
-  at?: number
-}): KeyLookup {
-  let phantoms: PhantomPass
-  try {
-    phantoms = retirePhantoms(db, {
-      noticedBy: opts.noticedBy ?? NOTICED_BY_LOOKUP,
-      run: opts.run,
-      ...(opts.probe ? { probe: opts.probe } : {}),
-      ...(opts.at !== undefined ? { at: opts.at } : {}),
-    })
-  } catch (err) {
-    // A reader that cannot write (a read-only handle) still reads; it
-    // says it retired nothing, never that nothing was gone.
-    phantoms = { retired: [], unchecked: [], notes: [`The registry could not be written from this handle, so no gone worker was retired: ${err instanceof Error ? err.message : String(err)}`] }
-  }
-  const checkpoints = checkpointsInEffect(db, treeId, opts.run, opts.key)
-  return {
-    run: opts.run,
-    key: opts.key,
-    checkpoints,
-    line: inEffectLine(opts.run, opts.key, checkpoints),
-    legs: legsOfRun(db, opts.run).map(legStateOf),
-    phantoms,
-    notes: [...phantoms.notes],
-  }
+export function briefsOfKey(db: RunReadHandle, treeId: number | null, run: string, key: string): BriefRecord[] {
+  const rows = db.prepare(
+    `SELECT node_id, created_at, content, metadata_json, session_key FROM nodes
+      WHERE ${treeClause(treeId)} AND ${RUN_ROW_WHERE} AND json_extract(metadata_json, '$.kind') = '${BRIEF_KIND}'
+        AND json_extract(metadata_json, '$.${RUN_META_KEY}') = ? AND json_extract(metadata_json, '$.${KEY_META_KEY}') = ?
+      ORDER BY created_at DESC, rowid DESC`,
+  ).all(...treeParams(treeId), run, key) as RawRow[]
+  return unsupersededBriefs(rows.map(toBrief))
 }

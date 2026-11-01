@@ -30,6 +30,7 @@ import { randomUUID } from 'node:crypto'
 import type { RegistryHandle, GitSelf } from './session-registry.js'
 import { hasRegistry, selfOf, agentWriterOf } from './session-registry.js'
 import { hostProbe, sameProcessStart, type ProcessProbe } from './process-probe.js'
+import { RUN_META_KEY, KEY_META_KEY } from '../run-kinds.js'
 
 // ── Names ──────────────────────────────────────────────────────────
 
@@ -495,6 +496,25 @@ export function recordOpenedRun(db: RegistryHandle, ref: LegRef, run: string): b
   db.prepare('UPDATE session_registry SET opened_runs = ? WHERE session_id = ? AND agent_id = ?')
     .run(JSON.stringify([...leg.openedRuns, run]), ref.sessionId, ref.agentId)
   return true
+}
+
+/**
+ * What a leg's summary row carries of its run (D284, D309, D329): the run
+ * and the key, read from the leg's registration, never from the row's text
+ * (D289: the facts come from the registration the store holds). The drain
+ * stamps a SubagentStop summary with it (server/ingestion.ts); the ticket
+ * door's summary row at a worker's exit takes the same stamp. The run
+ * whenever the leg is registered under one; the key only when it is the
+ * leg's own or declared, since a key inferred from a brief and never
+ * written under is no key of the leg's (D320, D326): a keyless leg's
+ * summary carries its run alone. A registration with no run, a subagent
+ * exactly as today (D305), stamps nothing.
+ */
+export function legReturnStamp(db: RegistryHandle, ref: LegRef): Record<string, string> {
+  const leg = legOf(db, ref)
+  if (!leg || leg.kind === null || leg.run === null) return {}
+  const keyed = leg.key !== null && (leg.keySrc === 'own' || leg.keySrc === 'declared')
+  return { [RUN_META_KEY]: leg.run, ...(keyed ? { [KEY_META_KEY]: leg.key! } : {}) }
 }
 
 /** A fresh session id for a worker whose door has none of its own to
