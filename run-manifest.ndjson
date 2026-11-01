@@ -354,7 +354,7 @@
 {"file":"features/journal-storage.feature","title":"a stale server tells the agent to restart instead of failing","status":"passed"}
 {"file":"features/journal-storage.feature","title":"a store built by a deleted backend refuses loudly and loses nothing","status":"passed"}
 {"file":"features/journal-storage.feature","title":"a store that cannot get under budget says so","status":"passed"}
-{"file":"features/journal-storage.feature","title":"a worker's first-moment row evicts with its session under the session cap, and its checkpoints and summary row stay","status":"unbound"}
+{"file":"features/journal-storage.feature","title":"a worker's first-moment row evicts with its session under the session cap, and its checkpoints and summary row stay","status":"passed"}
 {"file":"features/journal-storage.feature","title":"an additive migration also runs behind a backup","status":"passed"}
 {"file":"features/journal-storage.feature","title":"an over-budget store names the knob that raises its budget","status":"passed"}
 {"file":"features/journal-storage.feature","title":"concurrent sessions do not corrupt each other","status":"passed"}
@@ -366,7 +366,7 @@
 {"file":"features/journal-storage.feature","title":"eviction refuses when it cannot archive","status":"passed"}
 {"file":"features/journal-storage.feature","title":"frequently relied-on history evicts last","status":"passed"}
 {"file":"features/journal-storage.feature","title":"only an explicit command destroys content","status":"passed"}
-{"file":"features/journal-storage.feature","title":"over the byte budget a worker's first-moment row is demoted like captured tool output, archived first","status":"unbound"}
+{"file":"features/journal-storage.feature","title":"over the byte budget a worker's first-moment row is demoted like captured tool output, archived first","status":"passed"}
 {"file":"features/journal-storage.feature","title":"schema changes never eat a store","status":"passed"}
 {"file":"features/journal-storage.feature","title":"the byte budget and the session cap are the operator's to set, per project","status":"passed"}
 {"file":"features/journal-storage.feature","title":"the byte budget defaults to a size a sprint of subagents can fill","status":"passed"}

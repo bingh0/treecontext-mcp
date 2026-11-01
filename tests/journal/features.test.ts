@@ -73,7 +73,7 @@ import { type MediaWorld, mediaDefiner } from './steps/journal-media.steps.js'
 import { type LibraryWorld, libraryDefiner } from './steps/journal-library.steps.js'
 import { type RecallWorld, recallDefiner, recallNoModelDefiner } from './steps/journal-recall.steps.js'
 import { type AgentSurfaceWorld, agentSurfaceDefiner, agentSurfaceSchemaDefiner } from './steps/journal-agent-surface.steps.js'
-import { type StorageWorld, storageDefiner, storageRefusalDefiner, storageBudgetDefiner, storageAdditiveBackupDefiner, storageStaleServerDefiner } from './steps/journal-storage.steps.js'
+import { type StorageWorld, storageDefiner, storageRefusalDefiner, storageBudgetDefiner, storageAdditiveBackupDefiner, storageStaleServerDefiner, storageWorkerRowsDefiner } from './steps/journal-storage.steps.js'
 import { type SearchModesWorld, searchModesDefiner } from './steps/journal-search-modes.steps.js'
 import { installDefiner } from './steps/journal-install.steps.js'
 import { type PolicyWorld, policyDefiner } from './steps/journal-policy.steps.js'
@@ -102,7 +102,7 @@ runFeatures(join(HERE, '../../features'), {
   'journal-search-modes': searchModesDefiner satisfies Definer<SearchModesWorld>,
   'journal-library': libraryDefiner satisfies Definer<LibraryWorld>,
   'journal-recall': (reg: Registry<RecallWorld>) => { recallDefiner(reg); recallNoModelDefiner(reg) },
-  'journal-storage': (reg: Registry<StorageWorld>) => { storageDefiner(reg); storageRefusalDefiner(reg); storageBudgetDefiner(reg); storageAdditiveBackupDefiner(reg); storageStaleServerDefiner(reg) },
+  'journal-storage': (reg: Registry<StorageWorld>) => { storageDefiner(reg); storageRefusalDefiner(reg); storageBudgetDefiner(reg); storageAdditiveBackupDefiner(reg); storageStaleServerDefiner(reg); storageWorkerRowsDefiner(reg) },
   'journal-namespaces': namespacesDefiner satisfies Definer<NamespacesWorld>,
   'journal-session-echo': sessionEchoDefiner satisfies Definer<SessionEchoWorld>,
   'journal-session-namespace': sessionNamespaceDefiner satisfies Definer<SessionNamespaceWorld>,
@@ -168,16 +168,6 @@ runFeatures(join(HERE, '../../features'), {
       feature: 'journal-workers',
       scenarios: [
         'a <worker> worker under a <parent> parent writes into its own lane with its role as writer',
-      ],
-    },
-    // journal-reorientation's `claude -p` child (D295) bound 2026-11-01,
-    // unit 4: the real session-start hook with the ticket in its
-    // environment.
-    {
-      feature: 'journal-storage',
-      scenarios: [
-        "a worker's first-moment row evicts with its session under the session cap, and its checkpoints and summary row stay",
-        "over the byte budget a worker's first-moment row is demoted like captured tool output, archived first",
       ],
     },
     // The driver switch, D278 (2026-10-11): three @D51 install scenarios

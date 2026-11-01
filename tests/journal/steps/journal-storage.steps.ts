@@ -1,9 +1,9 @@
-import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync, existsSync, statSync } from 'node:fs'
+import fs, { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync, existsSync, statSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import { spawn } from 'node:child_process'
-import { createRequire } from 'node:module'
+import { createRequire, syncBuiltinESMExports } from 'node:module'
 import { once } from 'node:events'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { hostname, tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { expect } from 'vitest'
@@ -21,16 +21,18 @@ import { createMemoryStore } from '../../../src/memory-store-factory.js'
 import { IngestionLoop } from '../../../src/server/ingestion.js'
 import { LeaseClient, leaseHolders, NS_LEASE_TTL_SECS, DRAIN_LEASE_TTL_SECS } from '../../../src/persistence/leases.js'
 import { MAX_INGEST_ATTEMPTS } from '../../../src/persistence/capture-constants.js'
-import { type World, T0, mcpOver, nsClaimHook, parseTool, openLiveStore, exportNode, rawAll } from '../world.js'
+import { T0, mcpOver, nsClaimHook, parseTool, openLiveStore, exportNode, rawAll } from '../world.js'
 import { Client } from '@modelcontextprotocol/client'
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio'
 import { CLI_TS, nodeTsArgs, sandboxedSpawnEnv } from '../../helpers/cli-spawn.js'
 import { loadConfigFile } from '../../../src/server/config.js'
 import { newerSchemaLine } from '../../../src/persistence/migrations.js'
 import { SCHEMA_CHECK_TTL_MS } from '../../../src/server/server.js'
-import { type CaptureWorld, openCaptureWorld, spawnHook, bashPayload } from '../capture-harness.js'
+import { openCaptureWorld, spawnHook, bashPayload, drainStaging } from '../capture-harness.js'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { readVerdict } from '../../../src/persistence/backup-verdict.js'
+import { type RunWorld, openRunWorld } from '../run-world.js'
+import { runWorker } from './journal-workers.steps.js'
 
 // ── journal-storage ─────────────────────────────────────────────────────
 
@@ -42,7 +44,7 @@ import { readVerdict } from '../../../src/persistence/backup-verdict.js'
  * failed sweep actually did, and what a SIGKILLed writer said it had
  * committed. Nothing outside this feature reads any of it.
  */
-export interface StorageWorld extends World, CaptureWorld {
+export interface StorageWorld extends RunWorld {
   /** Schema-migration scenario: the store as an older binary left it. */
   oldSchemaVersion?: number
   migrationReport?: MigrationReport
@@ -94,6 +96,45 @@ export interface StorageWorld extends World, CaptureWorld {
    *  collided with journal-media's meaning of that name — its own
    *  attached file — and so belonged to neither wave.) */
   archivePath?: string
+  /** Unit 7: the ticketed worker the valve scenarios sweep, and what the
+   *  sweep's archive writes were seen to find (see storageWorkerRowsDefiner). */
+  workerValve?: WorkerValveEvidence
+}
+
+/** A row exactly as SQLite holds it, every column. */
+type RawNodeRow = Record<string, unknown>
+
+/** What a sweep's archive fsync found, read at the moment of the fsync
+ *  through a separate handle: the archive file already whole on disk, and
+ *  every row of the store still where it was. */
+interface FsyncObservation {
+  path: string
+  archived: Array<{ nodeId: string; content: string }>
+  totalRows: number
+  tombstones: number
+  firstMomentChars: number | null
+  firstMomentDemoted: boolean
+}
+
+interface WorkerValveEvidence {
+  lane: string
+  prompt: string
+  previewLen: number
+  firstMomentId: string
+  checkpointIds: string[]
+  summaryId: string
+  /** Every column of the worker's protected rows before the sweep. */
+  protectedBefore: Map<string, RawNodeRow>
+  /** The worker's capture rows (source_label auto-capture) before the sweep. */
+  captureIds: string[]
+  /** Each capture row's whole text before the sweep. */
+  captureTexts: Map<string, string>
+  /** The developer's own words, captured before the worker started. */
+  developerPrompt?: { id: string; text: string }
+  totalBefore: number
+  archiveDir: string
+  fsyncs: FsyncObservation[]
+  sweep?: { evicted: number; demoted: number }
 }
 
 export const storageDefiner = (reg: Registry<StorageWorld>): void => {
@@ -1959,3 +2000,287 @@ export const storageAdditiveBackupDefiner = (reg: Registry<StorageWorld>): void 
   })
 }
 
+
+// ── A worker's rows under the valve (unit 7 of the beta.3 build) ─────────
+//
+// D319, D339: the ticket door writes a worker's first moment as the
+// worker's capture, so the valve reaches it; the worker's checkpoints and
+// summary row are agent-authored and stay. The worker is real: the real
+// `treecontext run` wrapper starts the stand-in headless process (the
+// model inside a real worker is out of reach), hands it a prompt past what
+// one argument may carry, and the door writes the lane. The sweep is the
+// store's own `retentionSweep`, run against the store file with real
+// archive files; the archive and the rows are read with a separate handle
+// and the filesystem. "Fsynced before any row moves" is observed, not read
+// off the source: the sweep's own fsync of an archive file is watched, and
+// at that very moment the store is read through a separate handle (every
+// row still there, no tombstone) and the file is read off the disk (whole).
+
+const WORKER_RUN = 'r1'
+const WORKER_KEY = 'login-form'
+const WORKER_SUMMARY = 'submit wired; the form validates; 12 tests pass'
+
+/** A pasted configuration of exactly `n` characters whose values do not
+ *  compress to nothing (the budget scenario needs stored bytes). */
+function pastedConfiguration(n: number): string {
+  let body = '# the deploy configuration, pasted whole: quokkaconfig\n'
+  for (let i = 0; body.length < n; i++) body += `setting_${String(i).padStart(6, '0')} = ${randomBytes(6).toString('hex')}\n`
+  return body.slice(0, n)
+}
+
+const storedBytes = (w: StorageWorld): number =>
+  rawAll<{ b: number }>(w, 'SELECT COALESCE(SUM(LENGTH(CAST(content AS BLOB))), 0) AS b FROM nodes')[0]!.b
+
+/** Watch the archive files the sweep fsyncs. At each fsync of a file under
+ *  `archiveDir` the observation is taken through a separate read-only
+ *  handle on the store and from the file itself, then the real fsync runs. */
+function watchArchiveFsyncs(w: StorageWorld, evidence: WorkerValveEvidence): void {
+  const realFsync = fs.fsyncSync
+  const realFdatasync = fs.fdatasyncSync
+  const pathOfFd = (fd: number): string | null => {
+    try { return fs.readlinkSync(`/proc/self/fd/${fd}`) } catch { /* not Linux */ }
+    // Without /proc: the newest file in the archive directory is the one
+    // being written.
+    try {
+      const files = readdirSync(evidence.archiveDir).map((f) => join(evidence.archiveDir, f))
+      return files.sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)[0] ?? null
+    } catch { return null }
+  }
+  const observe = (fd: number): void => {
+    const path = pathOfFd(fd)
+    if (path === null || !path.startsWith(evidence.archiveDir)) return
+    const file = JSON.parse(readFileSync(path, 'utf8')) as { nodes: Array<{ nodeId: string; content: string }> }
+    const raw = new DatabaseSync(w.dbPath!, { readOnly: true })
+    try {
+      const count = (sql: string): number => Number((raw.prepare(sql).get() as { n: number }).n)
+      const first = raw.prepare('SELECT content, metadata_json FROM nodes WHERE node_id = ?').get(evidence.firstMomentId) as
+        { content: string | Uint8Array; metadata_json: string } | undefined
+      evidence.fsyncs.push({
+        path,
+        archived: file.nodes.map((n) => ({ nodeId: n.nodeId, content: n.content })),
+        totalRows: count('SELECT COUNT(*) AS n FROM nodes'),
+        tombstones: count("SELECT COUNT(*) AS n FROM nodes WHERE json_extract(metadata_json, '$._tombstone') = 1"),
+        firstMomentChars: first ? decodeContent(first.content).length : null,
+        firstMomentDemoted: first ? (JSON.parse(first.metadata_json) as Record<string, unknown>)['_demoted'] === true : false,
+      })
+    } finally {
+      raw.close()
+    }
+  }
+  // Both make the file durable: the observation is taken at either.
+  fs.fsyncSync = ((fd: number) => { observe(fd); return realFsync(fd) }) as typeof fs.fsyncSync
+  fs.fdatasyncSync = ((fd: number) => { observe(fd); return realFdatasync(fd) }) as typeof fs.fdatasyncSync
+  syncBuiltinESMExports()
+  w.defer(() => { fs.fsyncSync = realFsync; fs.fdatasyncSync = realFdatasync; syncBuiltinESMExports() })
+}
+
+export const storageWorkerRowsDefiner = (reg: Registry<StorageWorld>): void => {
+  const autoRow = (session: string) => ({ source: 'auto-capture', role: 'tool', session_id: session })
+
+  /** A ticketed worker, started and finished through the real wrapper. */
+  async function aTicketedWorker(w: StorageWorld, chars: number, checkpoints: number, how: { child?: boolean; developerPrompt?: boolean } = {}): Promise<WorkerValveEvidence> {
+    await openRunWorld(w, { sessionStart: false })
+    // The developer's own words, through the real UserPromptSubmit hook and
+    // the drain, before the worker starts: older than any row of its lane.
+    let developerPrompt: { id: string; text: string } | undefined
+    if (how.developerPrompt) {
+      const text = `please wire the login form submit and keep going with the validation: ${randomBytes(10_000).toString('hex')}`
+      spawnHook(w, 'user-prompt-submit', { hook_event_name: 'UserPromptSubmit', transcript_path: join(w.proj!, 'transcript.jsonl'), prompt: text })
+      await drainStaging(w)
+      const mine = rawAll<{ node_id: string; content: string | Uint8Array }>(w,
+        "SELECT node_id, content FROM nodes WHERE source_label = 'auto-capture' AND json_extract(metadata_json, '$.role') = 'user'")
+      expect(mine, 'the hook and the drain captured the developer\'s prompt').toHaveLength(1)
+      expect(decodeContent(mine[0]!.content), 'the whole prompt is in the store').toBe(text)
+      developerPrompt = { id: mine[0]!.node_id, text }
+    }
+    const stateOf = (i: number): string => `state of the form after step ${i + 1}: submit wired for step ${i + 1}`
+    const ticket = { run: WORKER_RUN, key: WORKER_KEY, role: 'builder', parent: { id: w.sessionId ?? 'p1', cli: 'claude-code' }, checkpointer: 'builder' }
+    const prompt = pastedConfiguration(chars)
+    // A hook-less worker, or a `claude -p` child whose own hooks capture
+    // what it does into its lane at the drain (D295).
+    const out = how.child
+      ? await runWorker(w, { spawner: 'wrapper', prompt, ticket, plan: { first: {} }, claudeP: { tools: 2, checkpoints: Array.from({ length: checkpoints }, (_, i) => stateOf(i)), final: WORKER_SUMMARY } })
+      : await runWorker(w, { spawner: 'wrapper', prompt, ticket, plan: { first: { checkpoints: Array.from({ length: checkpoints }, (_, i) => stateOf(i)), print: WORKER_SUMMARY } } })
+    expect(out.exitCode, `the wrapper said: ${out.line}`).toBe(0)
+    if (how.child) await drainStaging(w)
+    const lane = out.sessionId!
+    const rows = rawAll<{ node_id: string; source_label: string | null; kind: string | null; meta: string }>(w,
+      "SELECT node_id, source_label, json_extract(metadata_json, '$.kind') AS kind, metadata_json AS meta FROM nodes WHERE session_key = ? ORDER BY created_at, rowid", lane)
+    const ofKind = (k: string) => rows.filter((r) => r.kind === k)
+    expect(ofKind('first-moment'), 'the door writes the worker\'s first moment').toHaveLength(1)
+    expect(ofKind('checkpoint'), 'the worker\'s checkpoints').toHaveLength(checkpoints)
+    expect(ofKind('subagent-summary'), 'the worker\'s summary row').toHaveLength(1)
+    const first = ofKind('first-moment')[0]!
+    const meta = JSON.parse(first.meta) as Record<string, unknown>
+    const row = rawAll<{ content: string | Uint8Array }>(w, 'SELECT content FROM nodes WHERE node_id = ?', first.node_id)[0]!
+    expect(decodeContent(row.content), 'the first-moment row holds the whole prompt').toBe(prompt)
+    const captured = rawAll<{ node_id: string; content: string | Uint8Array }>(w,
+      "SELECT node_id, content FROM nodes WHERE session_key = ? AND source_label = 'auto-capture' ORDER BY created_at, rowid", lane)
+    const protectedIds = rows.filter((r) => r.kind === 'checkpoint' || r.kind === 'subagent-summary').map((r) => r.node_id)
+    const protectedBefore = new Map<string, RawNodeRow>()
+    for (const id of protectedIds) protectedBefore.set(id, rawAll<RawNodeRow>(w, 'SELECT * FROM nodes WHERE node_id = ?', id)[0]!)
+    return {
+      lane, prompt, previewLen: Number(meta['_preview_len']), firstMomentId: first.node_id,
+      checkpointIds: ofKind('checkpoint').map((r) => r.node_id), summaryId: ofKind('subagent-summary')[0]!.node_id,
+      protectedBefore, captureIds: captured.map((r) => r.node_id), captureTexts: new Map(captured.map((r) => [r.node_id, decodeContent(r.content)])),
+      ...(developerPrompt ? { developerPrompt } : {}),
+      totalBefore: rawAll<{ n: number }>(w, 'SELECT COUNT(*) AS n FROM nodes')[0]!.n,
+      archiveDir: join(dirname(w.dbPath!), 'archive'), fsyncs: [],
+    }
+  }
+
+  /** A fresh handle on the store file with the valve's knobs (the wrapper's
+   *  own handles are long closed). */
+  async function sweepingStore(w: StorageWorld, knobs: { maxSessions?: number; maxStoreBytes?: number }): Promise<FlatStore> {
+    const store = await FlatStore.open({
+      database: openNodeSqlite(new DatabaseSync(w.dbPath!)), ownsDatabase: true, retentionInterval: 1_000_000_000, ...knobs,
+    })
+    w.defer(() => store.close())
+    return store
+  }
+
+  reg.define(/^a store over its session cap whose oldest session is a ticketed worker's, holding a first-moment row of (\d+) characters, (\d+) checkpoints and a summary row$/,
+    async (w: StorageWorld, ...caps) => {
+      // A `claude -p` child, so the lane holds what its own hooks captured
+      // beside the door's first moment: the worker's capture rows are
+      // several, and the session is more than one row.
+      const evidence = await aTicketedWorker(w, Number(caps[0]), Number(caps[1]), { child: true })
+      const others = evidence.captureIds.filter((id) => id !== evidence.firstMomentId)
+      expect(others.length, 'the worker\'s own tool calls were captured into its lane').toBeGreaterThanOrEqual(2)
+      // Two sessions newer than the worker's, each a captured session of
+      // its own: three sessions against a cap of two.
+      const now = Date.now() / 1000
+      for (const [i, session] of ['newer-session-1', 'newer-session-2'].entries()) {
+        await w.store!.insert(`${session}: a captured tool call`, { metadata: autoRow(session), createdAt: now + 600 * (i + 1) })
+      }
+      const sessions = new Set(rawAll<{ s: string | null }>(w, "SELECT session_key AS s FROM nodes WHERE source_label = 'auto-capture'").map((r) => r.s))
+      expect([...sessions].sort(), 'the worker\'s lane is the oldest of three captured sessions').toEqual([evidence.lane, 'newer-session-1', 'newer-session-2'].sort())
+      evidence.totalBefore = rawAll<{ n: number }>(w, 'SELECT COUNT(*) AS n FROM nodes')[0]!.n
+      w.workerValve = evidence
+      w.store = await sweepingStore(w, { maxSessions: 2 })
+    })
+
+  reg.define(/^a store over its byte budget holding a ticketed worker's first-moment row of (\d+) characters, (\d+) checkpoints and a summary row$/,
+    async (w: StorageWorld, ...caps) => {
+      const evidence = await aTicketedWorker(w, Number(caps[0]), Number(caps[1]), { developerPrompt: true })
+      const firstBytes = rawAll<{ b: number }>(w, 'SELECT LENGTH(CAST(content AS BLOB)) AS b FROM nodes WHERE node_id = ?', evidence.firstMomentId)[0]!.b
+      expect(firstBytes, 'the pasted prompt is bulk in the file').toBeGreaterThan(40_000)
+      // The developer's words are a demotion candidate (past the user cap,
+      // incompressible) and older than the first moment: were the first
+      // moment demoted as prose they would go first.
+      const dev = evidence.developerPrompt!
+      expect(dev.text.length, 'the developer\'s prompt is long enough to shrink').toBeGreaterThan(2_000)
+      expect(rawAll<{ c: number }>(w, 'SELECT created_at AS c FROM nodes WHERE node_id = ?', dev.id)[0]!.c, 'the developer spoke before the worker started')
+        .toBeLessThan(rawAll<{ c: number }>(w, 'SELECT created_at AS c FROM nodes WHERE node_id = ?', evidence.firstMomentId)[0]!.c)
+      // A budget the rest of the lane fits under with room to spare, and the
+      // first moment does not.
+      const budget = storedBytes(w) - firstBytes + 20_000
+      w.workerValve = evidence
+      w.store = await sweepingStore(w, { maxStoreBytes: budget })
+      expect(storedBytes(w), 'the store is over its byte budget').toBeGreaterThan(budget)
+    })
+
+  reg.define(/^the retention sweep runs$/, (w: StorageWorld) => {
+    const evidence = w.workerValve!
+    watchArchiveFsyncs(w, evidence)
+    evidence.sweep = w.store!.retentionSweep()
+  })
+
+  const samePath = (a: string, b: string): boolean => fs.realpathSync(a) === fs.realpathSync(b)
+
+  reg.define(/^the worker's capture rows, the first-moment row among them, are archived whole and fsynced before any row moves$/, (w: StorageWorld) => {
+    const v = w.workerValve!
+    expect(v.captureIds, 'the first-moment row is among the worker\'s capture rows').toContain(v.firstMomentId)
+    // The archive was fsynced, and at that moment, read off the disk, it
+    // already held every capture row whole, while the store (read through a
+    // separate handle) had moved nothing: no row gone, no tombstone.
+    expect(v.fsyncs.length, 'the sweep never fsynced an archive file').toBeGreaterThan(0)
+    const first = v.fsyncs[0]!
+    const archived = new Map(first.archived.map((n) => [n.nodeId, n.content]))
+    expect(v.captureIds.length, 'the worker\'s capture rows are several').toBeGreaterThanOrEqual(3)
+    for (const id of v.captureIds) {
+      expect(archived.has(id), `capture row ${id} was not in the archive when it was fsynced`).toBe(true)
+      expect(archived.get(id), `capture row ${id} was not archived whole`).toBe(v.captureTexts.get(id))
+    }
+    expect(archived.get(v.firstMomentId), 'the first moment is archived whole').toBe(v.prompt)
+    expect(first.totalRows, 'a row moved before the archive was fsynced').toBe(v.totalBefore)
+    expect(first.tombstones, 'a tombstone was written before the archive was fsynced').toBe(0)
+    expect(first.firstMomentChars, 'the first-moment row had already changed').toBe(v.prompt.length)
+    // After the sweep: the rows left, behind a tombstone naming the archive.
+    expect(rawAll(w, 'SELECT 1 FROM nodes WHERE node_id = ?', v.firstMomentId), 'the first-moment row is still in the store').toHaveLength(0)
+    for (const id of v.captureIds) expect(rawAll(w, 'SELECT 1 FROM nodes WHERE node_id = ?', id), `capture row ${id} stayed`).toHaveLength(0)
+    const tombs = rawAll<{ m: string }>(w, "SELECT metadata_json AS m FROM nodes WHERE json_extract(metadata_json, '$._archived_session') = ?", v.lane)
+    expect(tombs, 'a tombstone records the worker\'s session').toHaveLength(1)
+    const tomb = JSON.parse(tombs[0]!.m) as Record<string, unknown>
+    expect(samePath(tomb['_archive_path'] as string, first.path), 'the tombstone names the archive that was fsynced').toBe(true)
+    expect(tomb['_archive_entries']).toBe(v.captureIds.length)
+    expect(v.sweep!.evicted).toBe(v.captureIds.length)
+    const onDisk = JSON.parse(readFileSync(first.path, 'utf8')) as { version: number; nodes: Array<{ nodeId: string; content: string }> }
+    expect(onDisk.version).toBe(1)
+    expect(onDisk.nodes.find((n) => n.nodeId === v.firstMomentId)?.content).toBe(v.prompt)
+    for (const id of v.captureIds) expect(onDisk.nodes.find((n) => n.nodeId === id)?.content, `the archive holds ${id} whole`).toBe(v.captureTexts.get(id))
+  })
+
+  /** Every column of the worker's protected rows is what it was before the
+   *  sweep, and the rows are agent-authored, not capture. */
+  function protectedRowsAreUntouched(w: StorageWorld): void {
+    const v = w.workerValve!
+    expect(v.checkpointIds.length).toBeGreaterThan(0)
+    for (const [id, before] of v.protectedBefore) {
+      const after = rawAll<RawNodeRow>(w, 'SELECT * FROM nodes WHERE node_id = ?', id)
+      expect(after, `row ${id} left the store`).toHaveLength(1)
+      expect(after[0], `row ${id} changed`).toEqual(before)
+      expect(before['source_label'], `row ${id} is capture, not agent-authored`).not.toBe('auto-capture')
+    }
+  }
+
+  reg.define(/^the (\d+) checkpoints and the summary row remain in the store, protected as agent-authored$/, async (w: StorageWorld, ...caps) => {
+    const v = w.workerValve!
+    expect(v.checkpointIds).toHaveLength(Number(caps[0]))
+    protectedRowsAreUntouched(w)
+    // Protected is a behaviour: the harshest sweep there is (one session
+    // kept, one byte of budget) leaves every one of them as it was.
+    const harsh = await sweepingStore(w, { maxSessions: 1, maxStoreBytes: 1 })
+    harsh.retentionSweep()
+    protectedRowsAreUntouched(w)
+  })
+
+  reg.define(/^the first-moment row is demoted to its bounded preview, with its full length and its archive path on the row, after the archive is written$/, (w: StorageWorld) => {
+    const v = w.workerValve!
+    expect(v.sweep!.demoted, 'the sweep demoted nothing').toBeGreaterThan(0)
+    expect(v.sweep!.evicted, 'the byte budget evicts no session').toBe(0)
+    // The archive was fsynced first: at that moment the file held the whole
+    // prompt, and the row in the store was still whole and undemoted.
+    expect(v.fsyncs.length, 'the sweep never fsynced an archive file').toBeGreaterThan(0)
+    const first = v.fsyncs[0]!
+    expect(first.archived.find((n) => n.nodeId === v.firstMomentId)?.content, 'the archive held the whole first moment').toBe(v.prompt)
+    expect(first.firstMomentChars, 'the row had shrunk before the archive was fsynced').toBe(v.prompt.length)
+    expect(first.firstMomentDemoted, 'the row was marked demoted before the archive was fsynced').toBe(false)
+    // After: the row is its preview, naming its loss.
+    const [row] = rawAll<{ content: string | Uint8Array; m: string }>(w, 'SELECT content, metadata_json AS m FROM nodes WHERE node_id = ?', v.firstMomentId)
+    expect(row, 'a demotion keeps the row').toBeTruthy()
+    const meta = JSON.parse(row!.m) as Record<string, unknown>
+    const content = decodeContent(row!.content)
+    expect(v.previewLen, 'the door gave the row a bounded preview').toBeGreaterThan(0)
+    expect(content, 'the row is its bounded preview').toBe(v.prompt.slice(0, v.previewLen))
+    expect(meta['_demoted']).toBe(true)
+    expect(meta['_full_len'], 'the row carries its full length').toBe(v.prompt.length)
+    expect(samePath(meta['_archive_path'] as string, first.path), 'the row names the archive that was fsynced').toBe(true)
+    const onDisk = JSON.parse(readFileSync(meta['_archive_path'] as string, 'utf8')) as { nodes: Array<{ nodeId: string; content: string }> }
+    expect(onDisk.nodes.find((n) => n.nodeId === v.firstMomentId)?.content, 'the archive holds the full text').toBe(v.prompt)
+    // Demoted like captured tool output: before a person's words. The
+    // developer's own prompt, older than the first moment and itself a
+    // demotion candidate, is untouched.
+    const dev = v.developerPrompt!
+    const [mine] = rawAll<{ content: string | Uint8Array; m: string }>(w, 'SELECT content, metadata_json AS m FROM nodes WHERE node_id = ?', dev.id)
+    expect(mine, 'the developer\'s prompt is still in the store').toBeTruthy()
+    expect(decodeContent(mine!.content), 'the developer\'s prompt stayed whole').toBe(dev.text)
+    expect((JSON.parse(mine!.m) as Record<string, unknown>)['_demoted'], 'the developer\'s prompt was demoted').toBeUndefined()
+    expect(onDisk.nodes.some((n) => n.nodeId === dev.id), 'the developer\'s prompt was archived for nothing').toBe(false)
+  })
+
+  reg.define(/^the (\d+) checkpoints and the summary row are untouched$/, (w: StorageWorld, ...caps) => {
+    expect(w.workerValve!.checkpointIds).toHaveLength(Number(caps[0]))
+    protectedRowsAreUntouched(w)
+  })
+}

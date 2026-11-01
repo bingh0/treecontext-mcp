@@ -107,3 +107,33 @@ export function isIdentityRow(meta: Record<string, unknown> | null | undefined):
   const kind = meta?.['kind']
   return typeof kind === 'string' && IDENTITY_ROW_KINDS.includes(kind)
 }
+
+/** The kinds a leg's door writes as the leg's CAPTURE (D298, D313, D335,
+ *  D339): the spawner's prompt as the leg's user turn, and a re-run's first
+ *  message. The retention valve treats them as it treats captured tool
+ *  output: archived whole with their session under the session cap, and
+ *  demoted to their bounded preview, archived first, over the byte budget,
+ *  in the tool-bulk class, ahead of any prose (user text demotes last).
+ *  They are a door's composition, not words a person typed. */
+export const DOOR_CAPTURE_KINDS: readonly string[] = [FIRST_MOMENT_KIND, SEND_BACK_KIND]
+
+/** Whether a row is a leg's door capture (DOOR_CAPTURE_KINDS). */
+export function isDoorCapture(meta: Record<string, unknown> | null | undefined): boolean {
+  const kind = meta?.['kind']
+  return typeof kind === 'string' && DOOR_CAPTURE_KINDS.includes(kind)
+}
+
+/**
+ * Whether a row is agent-authored for the retention valve whatever its
+ * source label says (D319, D339): a run's own rows (checkpoint, brief, the
+ * run's open and close) and a summary row that names its run, which is a
+ * leg's return (D288, D336). The drain labels a SubagentStop report
+ * `auto-capture` (the label drives the index weights and stays), so the
+ * label alone would leave a leg's return to the valve; the valve reads the
+ * kind instead. A subagent with no run is summarised exactly as today
+ * (D305, D263): its report is drained like any capture and the valve
+ * treats it as capture, so it is not here.
+ */
+export function isRunAuthored(meta: Record<string, unknown> | null | undefined): boolean {
+  return runRowKindOf(meta) !== null
+}

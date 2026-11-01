@@ -609,9 +609,11 @@ the visionary ratified on 2026-11-01, D345).
   moment at both doors. [ruled: D325, D332] The valve treats the row
   as capture: the session cap archives it with its worker's session,
   and over the byte budget it is demoted to its bounded preview,
-  archived first. [ruled: D339] Open item: which demotion class a
-  first-moment row falls in (user text demotes last, tool bulk first)
-  [chosen at build].
+  archived first. [ruled: D339] Chosen at the build (unit 7, 2026-11-01): a first-moment row, and
+  the send-back row beside it, demote in the tool-bulk class, first,
+  never with a person's words, which demote last; D339's "as it treats
+  captured tool output" decides it, the row being the door's composition
+  behind a tool-sized preview, its `role: user` only the leg's turn.
 - **The faults, each visible.** A ticket the door cannot read whole
   registers the worker with what was read and the raw ticket text,
   never as a self; its first moment says its instructions were invalid

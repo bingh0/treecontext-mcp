@@ -22,7 +22,7 @@
  *    `stop_hook_active`, as the client does;
  *  - prints its final message and exits.
  *
- * STANDIN_CLAUDE_PLAN (JSON): `{ tools?: number, checkpoint?: string,
+ * STANDIN_CLAUDE_PLAN (JSON): `{ tools?: number, checkpoint?: string, checkpoints?: string[],
  * afterSendBack?: { checkpoint?: string, tools?: number }, final?: string,
  * exit?: number, waitBeforeStop?: string, waitAfterStop?: string,
  * invalidRow?: boolean }`; a `wait*` names a file it waits for after
@@ -50,6 +50,8 @@ interface Plan {
    *  call whose PostToolUse echo it fires, as Claude Code does. */
   toolNotes?: string[]
   tools?: number; checkpoint?: string; afterSendBack?: { checkpoint?: string; tools?: number }
+  /** A child that checkpoints more than once: each is written in turn, numbered and superseding the one before by the store's own rule. */
+  checkpoints?: string[]
   final?: string; exit?: number; waitBeforeStop?: string; waitAfterStop?: string; invalidRow?: boolean
 }
 
@@ -138,6 +140,7 @@ if (plan.invalidRow) {
   })
 }
 if (plan.checkpoint !== undefined) await writeCheckpoint(plan.checkpoint)
+for (const text of plan.checkpoints ?? []) await writeCheckpoint(text)
 waitFor(plan.waitBeforeStop)
 const final = plan.final ?? 'done'
 const stops: string[] = []

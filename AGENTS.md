@@ -270,6 +270,15 @@ node dist/server/cli.js doctor      # after a build
 - A `claude -p` child's captured rows land in its worker's lane at the
   drain (`workerLaneOf`: its own session, or the lane `client_sessions`
   links); the echo heals skip them, the lane's stamp being exact
+- The retention valve reads a row's *kind* as well as its label
+  (`isProtected` in `src/flat-store.ts`, `isRunAuthored` in
+  `src/run-kinds.ts`): a run's own rows and a `subagent-summary` that names
+  its run are never evicted or demoted although the drain labels a
+  SubagentStop report `auto-capture`; a plain subagent's summary (no run)
+  stays capture, as before. A leg's `first-moment` and `send-back` rows are
+  the door's capture, evicted with their session and demoted in the
+  tool-bulk class (`isDoorCapture`), not with user text, whatever `role`
+  they carry
 - The curated unique index is partial: `dedup_class = 'curated'` outside
   handoff lanes (`CURATED_INDEX_WHERE`). Inside a handoff lane identity
   decides, not content; any rebuild must reuse the shared DDL

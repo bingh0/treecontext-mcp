@@ -455,7 +455,7 @@ interface StandinRecord {
 /** The stand-in `claude -p` child's plan (tests/helpers/standin-claude-p.ts). */
 export interface ClaudePlan {
   toolNotes?: string[]
-  tools?: number; checkpoint?: string; afterSendBack?: { checkpoint?: string; tools?: number }
+  tools?: number; checkpoint?: string; checkpoints?: string[]; afterSendBack?: { checkpoint?: string; tools?: number }
   final?: string; exit?: number; waitBeforeStop?: string; waitAfterStop?: string; invalidRow?: boolean
 }
 

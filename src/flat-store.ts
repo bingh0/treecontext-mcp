@@ -72,7 +72,7 @@ import {
   type FirstMomentFacts, type HookCut,
 } from './first-moment.js'
 import { trustedWorkerLane, type TicketReading } from './ticket.js'
-import { FIRST_MOMENT_KIND, SEND_BACK_KIND, TICKET_REFUSED_KIND, RUN_META_KEY, LEG_REGISTRATION_KIND, LEG_REGISTRATION_KEY, REGISTRATION_DIFFERS_KEY } from './run-kinds.js'
+import { FIRST_MOMENT_KIND, SEND_BACK_KIND, TICKET_REFUSED_KIND, RUN_META_KEY, LEG_REGISTRATION_KIND, LEG_REGISTRATION_KEY, REGISTRATION_DIFFERS_KEY, isDoorCapture, isRunAuthored } from './run-kinds.js'
 import { retireMeta } from './persistence/writer-heal.js'
 import {
   DEDUP_WINDOW_SECS,
@@ -272,6 +272,14 @@ function isProtected(
   readOnly: boolean,
 ): boolean {
   if (source !== 'auto-capture') return true // agent-authored
+  // A run's own rows, a leg's summary row among them (it names its run),
+  // are agent-authored whatever the label says (D319, D339): the drain
+  // labels a SubagentStop report `auto-capture`, and the label must not
+  // hand a leg's return to the valve. A plain subagent's summary names no
+  // run and stays capture, as today (D305, D263). A leg's first-moment and
+  // send-back rows are not here: they are the door's capture, and the valve
+  // treats them as capture.
+  if (isRunAuthored(meta)) return true
   if (decayExempt || readOnly) return true
   if (!meta) return false
   return meta['next_session'] === true || meta['status'] === 'active'
@@ -3158,7 +3166,10 @@ export class FlatStore implements MemoryStore {
    * demote oldest-first non-protected rows back to their index text when
    * the store-byte budget is still exceeded. Protected (authored /
    * decay-exempt / read-only / resume-pointer) nodes are never touched by
-   * either step.
+   * either step, nor is a run's own row (a leg's summary row among them)
+   * whatever its label says (isRunAuthored). A leg's door rows (first
+   * moment, send-back) are capture: archived with their session under the
+   * cap, and demoted with the tool bulk over the budget (D339).
    */
   retentionSweep(): { evicted: number; demoted: number } {
     this.ensureOpen()
@@ -3632,7 +3643,14 @@ export class FlatStore implements MemoryStore {
         continue
       }
       const role = meta?.['role']
-      const isProse = role === 'user' || (role === 'assistant' && meta?.['tool_name'] == null)
+      // User text demotes last, tool bulk first (journal-recall calls the
+      // conversation's prose sacred). A leg's door rows (first moment,
+      // send-back) carry `role: 'user'` as the leg's user turn, but they
+      // are a spawner's prompt composed by a door, often a pasted file
+      // (D313), kept behind a tool-sized preview: D339 has the valve treat
+      // them "as it treats captured tool output", so they demote with the
+      // tool bulk, first, never with a person's words.
+      const isProse = !isDoorCapture(meta) && (role === 'user' || (role === 'assistant' && meta?.['tool_name'] == null))
       ;(isProse ? prose : toolBulk).push({ row: r, meta, decoded, idxText, saving })
     }
 
