@@ -465,7 +465,7 @@ describe('a run open or close through the tools under a writer the store could n
 
   it('P2: the main agent opens an inner run while a leg is live: no parent leg, nothing on the leg, by "main" after the echo', async () => {
     await inCaptureWorld(async (w) => {
-      const reviewer = await hooksLeg(w, 'reviewer', 'reviewer', { run: 'r1', key: 'login-form', keySrc: 'inferred' })
+      const reviewer = await hooksLeg(w, 'reviewer', 'reviewer', { run: 'r1', key: 'login-form' })
       const reply = await insertEchoed(w, null, 'opening the inner run', { kind: 'run-open', run: 'r1.inner', parent_run: 'r1' })
       const id = reply['node_id'] as string
       const before = rowIn(w, id)
@@ -482,7 +482,7 @@ describe('a run open or close through the tools under a writer the store could n
 
   it('the leg itself opens an inner run while two subagents are live: its echo names it, the parent leg and its registration', async () => {
     await inCaptureWorld(async (w) => {
-      const reviewer = await hooksLeg(w, 'reviewer', 'reviewer', { run: 'r1', key: 'login-form', keySrc: 'inferred' })
+      const reviewer = await hooksLeg(w, 'reviewer', 'reviewer', { run: 'r1', key: 'login-form' })
       subagentStartHook(w, 'abuilder2', 'builder')
       const reply = await insertEchoed(w, { agentId: reviewer.agentId, agentType: 'reviewer' }, 'two fixes, two workers', { kind: 'run-open', run: 'r1.review', parent_run: 'r1' })
       const id = reply['node_id'] as string

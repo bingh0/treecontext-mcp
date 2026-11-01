@@ -149,8 +149,14 @@ export function predecessorOf(
   db: RunReadHandle & RegistryHandle, treeId: number | null,
   opts: { run: string; key: string; role: string; except?: { sessionId: string; agentId: string } },
 ): Predecessor | null {
+  // A cut or gone leg's key is its key whether or not it ever wrote under
+  // it (D328: "the next leg of its role under its key starts as a
+  // recovery leg"): a leg killed mid-work had no stop to settle anything.
+  // A leg that stopped on its own with its key still inferred wrote
+  // nothing under it and is keyless (D326), never recovered from.
   const ended = legsOfRun(db, opts.run).filter((l) =>
-    l.role === opts.role && l.key === opts.key && (l.keySrc === 'own' || l.keySrc === 'declared')
+    l.role === opts.role && l.key === opts.key
+    && (l.keySrc === 'own' || l.keySrc === 'declared' || (l.keySrc === 'inferred' && (l.ended === 'cut' || l.ended === 'phantom')))
     && !isLiveLeg(l) && l.ended !== 'invalid'
     && !(opts.except && l.sessionId === opts.except.sessionId && l.agentId === opts.except.agentId))
   if (ended.length === 0) return null
@@ -225,20 +231,41 @@ export const NO_CHECKPOINTER_LINE = 'Neither your ticket nor your brief names wh
 /** The heading the spawner's prompt sits under in a first message. */
 export const PROMPT_HEADING = "The spawner's prompt:"
 
+/** How a first message is composed at each door. */
+export interface ComposeOptions {
+  /** The hooks door (a subagent leg, D284, D320): the leg is named a leg,
+   *  its key said to be inferred from its role's brief, and no spawner's
+   *  prompt follows, since the Agent tool carries the prompt itself. */
+  door?: 'ticket' | 'hooks'
+  /** The text each checkpoint is given as (the hooks door's cut at the
+   *  client's cap, D325); whole by default. */
+  contentOf?: (cp: CheckpointRecord) => string
+  /** The hooks door: the key is the leg's own (it wrote under it), not the
+   *  one inferred from its brief (D320, D326); said so in the first line. */
+  keyOwn?: boolean
+}
+
 /**
  * The first message (D298, D315, D329, D332): the brief, then the
  * checkpoint(s) in effect with number, writer and moment, each whole (the
  * ticket door never cuts one, D332) with its flag beside it, the recovery
  * line when there is a predecessor to recover, treecontext's own line, and
  * the spawner's prompt as written. A one-off worker (D341) is told it owes
- * no checkpoint.
+ * no checkpoint. At the hooks door (`door: 'hooks'`) the same parts, the
+ * leg named a leg and no prompt: the Agent tool delivers the prompt.
  */
-export function composeFirstMessage(f: FirstMomentFacts, prompt: string): string {
+export function composeFirstMessage(f: FirstMomentFacts, prompt: string | null, opts: ComposeOptions = {}): string {
+  const hooks = opts.door === 'hooks'
   const parts: string[] = []
   if (f.key === null) {
     parts.push(`treecontext: you are a one-off ${f.role} worker of the run "${f.run}". Your ticket says you have no key, so you owe no checkpoint.`)
   } else {
-    parts.push(`treecontext: you are the ${f.role} worker of the run "${f.run}", under the key "${f.key}".`)
+    parts.push(hooks
+      ? opts.keyOwn
+        ? `treecontext: you are the ${f.role} leg of the run "${f.run}", under the key "${f.key}", your own: you wrote under it.`
+        : `treecontext: you are the ${f.role} leg of the run "${f.run}", under the key "${f.key}", inferred from the brief in effect for your role. `
+          + 'Your first write under a key of the run makes that key your own.'
+      : `treecontext: you are the ${f.role} worker of the run "${f.run}", under the key "${f.key}".`)
     if (f.briefs.length === 0) parts.push(`No brief is in effect for the ${f.role} role under "${f.key}" on the run "${f.run}".`)
     for (const b of f.briefs) {
       parts.push(`The brief for the ${f.role} role under "${f.key}" (row ${b.nodeId}, written by "${b.writer}" at ${momentText(b.createdAt)}):\n${b.content}`)
@@ -251,14 +278,137 @@ export function composeFirstMessage(f: FirstMomentFacts, prompt: string): string
     parts.push(f.inEffect!)
     for (const cp of f.checkpoints) {
       const flag = f.flags.find((x) => x.nodeId === cp.nodeId)
+      const text = opts.contentOf ? opts.contentOf(cp) : cp.content
       parts.push(`${capital(checkpointName(cp.number))} under "${f.key}" (row ${cp.nodeId}), written by "${cp.writer}" at ${momentText(cp.createdAt)}, `
-        + `${cp.size} characters:\n${cp.content}${flag ? `\n${flag.sentence}` : ''}`)
+        + `${cp.size} characters:\n${text}${flag ? `\n${flag.sentence}` : ''}`)
     }
     if (f.predecessor) parts.push(recoveryLine(f.predecessor, f.key))
   }
   parts.push(STATE_NOT_HISTORY_LINE)
-  parts.push(`${PROMPT_HEADING}\n${prompt}`)
+  if (prompt !== null) parts.push(`${PROMPT_HEADING}\n${prompt}`)
   return parts.join('\n\n')
+}
+
+// ── The hooks door's cap (D325, D332) ──────────────────────────────
+
+/** D325: the client's cap on what one hook may inject, in characters (its
+ *  additionalContext, systemMessage and plain stdout each; Claude Code's
+ *  hooks reference). Above it the client writes the text to a file the
+ *  store never records and the leg is never asked to read, so the hooks
+ *  door keeps every injection at or under it. Counted as the client
+ *  counts, in JavaScript string length. */
+export const HOOK_CONTEXT_CAP = 10_000
+
+/** The line that ends a checkpoint the hooks door cut at the client's cap
+ *  (D325): the checkpoint row's id and how many characters were left out,
+ *  and the door that fetches the whole. */
+export function hookCutMarker(nodeId: string, leftOut: number): string {
+  return `\n…[cut at the client's ${HOOK_CONTEXT_CAP}-character hook cap: checkpoint row ${nodeId}, ${leftOut} characters left out; `
+    + 'fetch it whole with treecontext_export]'
+}
+
+/** The line that ends a first moment cut whole at the cap, when even the
+ *  brief and the lines around the checkpoints do not fit (a brief past the
+ *  cap): the rows it was composed from, to fetch by export. */
+export function hookWholeCutMarker(leftOut: number, ids: string[]): string {
+  return `\n…[cut at the client's ${HOOK_CONTEXT_CAP}-character hook cap: ${leftOut} characters left out; `
+    + `fetch the rows it was composed from whole with treecontext_export: ${ids.join(', ')}]`
+}
+
+/** What the hooks door cut of each checkpoint, for the first-moment row. */
+export interface HookCut {
+  cap: number
+  /** The whole first moment's length, before any cut. */
+  whole_chars: number
+  /** Each checkpoint cut, with the characters left out of it. */
+  checkpoints: Array<{ node_id: string; number: number | null; size: number; left_out: number }>
+  /** Characters left out of the message as a whole, when it was cut whole
+   *  (a brief past the cap). */
+  left_out?: number
+}
+
+/** Code units of `text` within its first `max` units, never splitting a
+ *  surrogate pair. */
+function headOf(text: string, max: number): string {
+  if (max <= 0) return ''
+  if (text.length <= max) return text
+  const code = text.charCodeAt(max - 1)
+  return text.slice(0, code >= 0xd800 && code <= 0xdbff ? max - 1 : max)
+}
+
+/**
+ * The hooks door's first moment under the client's cap (D325, D332): whole
+ * when it fits; otherwise the brief and every line around the checkpoints
+ * whole, and as much of each checkpoint as fits, in order, each cut one
+ * ending in its row's id and the count left out, so the leg fetches the
+ * rest by export. Never above the cap.
+ */
+export function fitHookCap(f: FirstMomentFacts, opts: { door?: 'hooks'; compose?: (o: ComposeOptions) => string } = {}): { message: string; cut: HookCut | null } {
+  const compose = opts.compose ?? ((o: ComposeOptions): string => composeFirstMessage(f, null, { door: 'hooks', ...o }))
+  const whole = compose({})
+  if (whole.length <= HOOK_CONTEXT_CAP) return { message: whole, cut: null }
+  const base = compose({ contentOf: (cp) => hookCutMarker(cp.nodeId, cp.size) })
+  let budget = HOOK_CONTEXT_CAP - base.length
+  if (budget < 0 || f.checkpoints.length === 0) {
+    // D332: treecontext's own line is in every first moment, a cut one
+    // too: it and the marker are reserved before the cut, and the line
+    // closes the message whatever the cut took.
+    const ids = [...f.briefs.map((b) => b.nodeId), ...f.checkpoints.map((c) => c.nodeId)]
+    const tail = `\n\n${STATE_NOT_HISTORY_LINE}`
+    const at = whole.lastIndexOf(STATE_NOT_HISTORY_LINE)
+    const body = at >= 0 ? whole.slice(0, at).replace(/\n+$/, '') + whole.slice(at + STATE_NOT_HISTORY_LINE.length) : whole
+    const probe = hookWholeCutMarker(charactersOf(body), ids)
+    const kept = headOf(body, HOOK_CONTEXT_CAP - probe.length - tail.length)
+    const leftOut = charactersOf(body) - charactersOf(kept)
+    return {
+      message: kept + hookWholeCutMarker(leftOut, ids) + tail,
+      cut: { cap: HOOK_CONTEXT_CAP, whole_chars: charactersOf(whole), checkpoints: [], left_out: leftOut },
+    }
+  }
+  const kept = new Map<string, string>()
+  for (const cp of f.checkpoints) {
+    const k = headOf(cp.content, budget)
+    kept.set(cp.nodeId, k)
+    budget -= k.length
+  }
+  const checkpoints: HookCut['checkpoints'] = []
+  const message = compose({
+    contentOf: (cp) => {
+      const k = kept.get(cp.nodeId) ?? cp.content
+      if (k.length >= cp.content.length) return cp.content
+      const leftOut = cp.size - charactersOf(k)
+      checkpoints.push({ node_id: cp.nodeId, number: cp.number, size: cp.size, left_out: leftOut })
+      return k + hookCutMarker(cp.nodeId, leftOut)
+    },
+  })
+  return { message, cut: { cap: HOOK_CONTEXT_CAP, whole_chars: charactersOf(whole), checkpoints } }
+}
+
+/** D320: the first moment of a leg whose role has more than one brief in
+ *  effect: its key is ambiguous, the candidates named with their briefs,
+ *  and no checkpoint carried, since no key is its own until it writes
+ *  under one; treecontext's own line closes it, as every first moment. */
+export function ambiguousFirstMessage(role: string, briefs: BriefRecord[]): string {
+  const parts = [
+    `treecontext: you are a ${role} leg whose key is ambiguous: ${briefs.length} briefs are in effect for your role, `
+      + `under ${briefs.map((b) => `"${b.key}" on the run "${b.run}"`).join(' and ')}. Your first write under one of those keys makes it your own; `
+      + 'until then no checkpoint is yours to start from, and you can read the one in effect under a key with treecontext_query\'s key_lookup.',
+    ...briefs.map((b) => `The brief for the ${role} role under "${b.key}" on the run "${b.run}" (row ${b.nodeId}, written by "${b.writer}" at ${momentText(b.createdAt)}):\n${b.content}`),
+    STATE_NOT_HISTORY_LINE,
+  ]
+  return parts.join('\n\n')
+}
+
+/**
+ * D284, D285, D330: the one line naming a leg's return, its summary row,
+ * with its writer, run and key (the key only when it is the leg's own or
+ * declared, as the summary row carries it). The hooks door adds it to what
+ * the main agent receives when the Agent tool returns; the ticket door
+ * hands the same facts to its spawner.
+ */
+export function returnPointerLine(o: { role: string | null; writer: string; run: string | null; key: string | null; summaryId: string }): string {
+  return `treecontext: the ${o.role ?? 'unnamed'} leg's return is the summary row ${o.summaryId} (writer "${o.writer}"`
+    + `${o.run ? `, run "${o.run}"` : ''}${o.key ? `, key "${o.key}"` : ''}); fetch it with treecontext_export.`
 }
 
 const capital = (s: string): string => s.charAt(0).toUpperCase() + s.slice(1)
@@ -273,12 +423,21 @@ const capital = (s: string): string => s.charAt(0).toUpperCase() + s.slice(1)
  * lane's row count and its first-moment row, any row fetched whole by
  * export.
  */
-export function composeSendBackMessage(o: { facts: FirstMomentFacts; prompt: string; sessionId: string; firstMomentId: string | null; rows: number }): string {
+export function composeSendBackMessage(o: {
+  facts: FirstMomentFacts; prompt: string | null; sessionId: string; firstMomentId: string | null; rows: number
+  /** The hooks door: a subagent leg's lane is its agent's rows in its
+   *  session, and its first moment carries no prompt (composeFirstMessage). */
+  agentId?: string; door?: 'ticket' | 'hooks'
+  /** The first moment as composed again (the hooks door's, fitted to the
+   *  client's cap); composed here when not given. */
+  firstMessage?: string
+}): string {
   const f = o.facts
+  const lane = o.agentId ? `the lane of session ${o.sessionId}, agent ${o.agentId}` : `the lane of session ${o.sessionId}`
   return [
     sendBackReason(f.role, f.run, f.key ?? ''),
-    composeFirstMessage(f, o.prompt),
-    `treecontext: your trail is in the store: the lane of session ${o.sessionId}, ${o.rows} ${o.rows === 1 ? 'row' : 'rows'} of your first run`
+    o.firstMessage ?? composeFirstMessage(f, o.prompt, o.door ? { door: o.door } : {}),
+    `treecontext: your trail is in the store: ${lane}, ${o.rows} ${o.rows === 1 ? 'row' : 'rows'} of your first run`
       + `${o.firstMomentId ? `, after your first moment, the row ${o.firstMomentId}` : ''}; fetch any of them whole by export. `
       + `Write the next checkpoint under "${f.key ?? ''}" on the run "${f.run}", then stop.`,
   ].join('\n\n')
@@ -324,9 +483,14 @@ export function firstMomentMetadata(o: {
   firstMessage: string
   facts: FirstMomentFacts | null
   invalid?: { absent: string[] }
+  /** The hooks door: what it cut at the client's cap, or null when the
+   *  first moment went whole (D325: the row records the cut). */
+  hookCut?: HookCut | null
+  /** D320: the hooks door's ambiguous registration, the candidate briefs. */
+  ambiguousBriefs?: string[]
 }): Record<string, unknown> {
   const f = o.facts
-  const refs = f ? [...f.briefs.map((b) => b.nodeId), ...f.checkpoints.map((c) => c.nodeId)] : []
+  const refs = f ? [...f.briefs.map((b) => b.nodeId), ...f.checkpoints.map((c) => c.nodeId)] : [...(o.ambiguousBriefs ?? [])]
   const size = f ? f.checkpoints.reduce((n, c) => n + c.size, 0) : 0
   return {
     kind: FIRST_MOMENT_KIND,
@@ -338,7 +502,7 @@ export function firstMomentMetadata(o: {
     ...(refs.length > 0 ? { refs } : {}),
     checkpoint_size: size,
     [FIRST_MOMENT_META_KEY]: {
-      brief_ids: f ? f.briefs.map((b) => b.nodeId) : [],
+      brief_ids: f ? f.briefs.map((b) => b.nodeId) : (o.ambiguousBriefs ?? []),
       checkpoints: f ? f.checkpoints.map((c) => ({ node_id: c.nodeId, number: c.number, writer: c.writer, moment: c.createdAt, size: c.size })) : [],
       in_effect: f?.inEffect ?? null,
       flags: f ? f.flags.map((x) => x.sentence) : [],
@@ -348,6 +512,8 @@ export function firstMomentMetadata(o: {
       state_line: true,
       message_chars: charactersOf(o.firstMessage),
       ...(o.invalid ? { invalid: { absent: o.invalid.absent } } : {}),
+      ...(o.hookCut !== undefined ? { cut: o.hookCut } : {}),
+      ...(o.ambiguousBriefs ? { ambiguous: o.ambiguousBriefs } : {}),
     },
     ...doorRowBoundaries(o.prompt),
   }

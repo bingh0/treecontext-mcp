@@ -15,7 +15,11 @@ import { CHECKPOINT_NUMBER_INDEX_DDL, RUN_ROW_INDEX_DDL } from '../../runs.js'
 // to write (D340), its host, process id and OS-reported start moment and
 // every process a re-run added (D297, D317, D335), its one send-back
 // (D279), how it ended and, for a phantom, when and by whom that was
-// noticed (D297), and the runs it opened (D311). Every column nullable:
+// noticed (D297), the runs it opened (D311), and the client sessions a
+// `claude -p` child's session-start hook linked to a worker (D295; added
+// inside this unreleased migration by the hooks-door build, so a store a
+// pre-release build already took to 31 lacks it, and every reader and
+// writer of it checks for it first). Every column nullable:
 // a self and a keyless subagent read exactly as before (D305).
 //
 // The journal gains two partial indexes over row metadata: the store's

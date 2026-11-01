@@ -24,7 +24,7 @@ import {
   registerSelf, registerSubagent, retireAllSubagents, liveSubagents, resolveWriter, type GitSelf,
 } from '../src/persistence/session-registry.js'
 import {
-  retirePhantoms, hasLegColumns, legOf, WORKER_AGENT_ID, registerWorkerLeg, recordWorkerProcess, settleLegKey, registerSubagentLeg,
+  retirePhantoms, hasLegColumns, legOf, WORKER_AGENT_ID, registerWorkerLeg, recordWorkerProcess, settleLegKey, registerSubagentLeg, LEG_REGISTRY_COLUMNS,
 } from '../src/persistence/leg-registry.js'
 import type { ProcessProbe } from '../src/persistence/process-probe.js'
 import { RUN_ROWS_SQL, briefsInEffect, inEffectLine } from '../src/runs.js'
@@ -318,7 +318,27 @@ describe('the registry around legs and workers', () => {
     expect(registration('w', WORKER_AGENT_ID)['run_key']).toBe('k')
   })
 
-  it('a store the ladder had not reached opens and climbs to 31, its registrations intact', async () => {
+  it('a store a pre-release build took to 31 without the later leg columns gains them all at 32 (the reconcile), its rows intact', async () => {
+    const s = await open()
+    await s.registerWorker({ sessionId: 'w', door: 'library', ticket: { parent: { id: 'p1' }, run: 'r1', key: 'k', role: 'builder' }, process: { pid: 4242, start: 1000, host: 'laptop' }, at: 1 })
+    await s.close()
+    const db = new DatabaseSync(path())
+    try {
+      // 031 as an early pre-release build ran it: no proc_start_token, no
+      // client_sessions; the store says 31, so 031 never runs again.
+      for (const c of ['proc_start_token', 'client_sessions']) db.exec(`ALTER TABLE session_registry DROP COLUMN ${c}`)
+      setPragma(db, 'user_version = 31')
+      const report = runMigrations(openNodeSqlite(db), { migrate: true })
+      expect(report.applied.map((a) => [a.version, a.kind])).toEqual([[32, 'additive']])
+      const cols = (db.prepare('PRAGMA table_info(session_registry)').all() as Array<{ name: string }>).map((c) => c.name)
+      for (const [name] of LEG_REGISTRY_COLUMNS) expect(cols, name).toContain(name)
+      // A second run of the reconcile adds nothing and fails on nothing.
+      expect(() => runMigrations(openNodeSqlite(db), { migrate: true })).not.toThrow()
+    } finally { db.close() }
+    expect(registration('w', WORKER_AGENT_ID)).toMatchObject({ run: 'r1', run_key: 'k', pid: 4242, proc_start_token: null, client_sessions: null })
+  })
+
+  it('a store the ladder had not reached opens and climbs to 32, its registrations intact', async () => {
     const s = await open()
     await s.close()
     const db = new DatabaseSync(path())
@@ -329,7 +349,7 @@ describe('the registry around legs and workers', () => {
       db.exec('DROP INDEX idx_session_registry_run; DROP INDEX idx_nodes_checkpoint_number; DROP INDEX idx_nodes_run')
       for (const c of ['kind', 'door', 'identity', 'run', 'run_key', 'key_src', 'key_candidates', 'brief_id', 'checkpointer', 'checkpointed_by',
         'start_checkpoints', 'parent_session', 'parent_src', 'parent_declared', 'ticket_minted_at', 'ticket_raw', 'ticket_absent', 'can_write',
-        'host', 'pid', 'proc_start', 'proc_start_token', 'processes', 'send_backs', 'ended', 'noticed_at', 'noticed_by', 'opened_runs', 'cap_refused', 'key_settled_from']) {
+        'host', 'pid', 'proc_start', 'proc_start_token', 'processes', 'send_backs', 'ended', 'noticed_at', 'noticed_by', 'opened_runs', 'cap_refused', 'key_settled_from', 'client_sessions']) {
         db.exec(`ALTER TABLE session_registry DROP COLUMN ${c}`)
       }
       setPragma(db, 'user_version = 30')
@@ -339,7 +359,7 @@ describe('the registry around legs and workers', () => {
       expect(retirePhantoms(db, { noticedBy: 'session-start hook', probe: probe({}) }).retired).toEqual([])
       expect(retireAllSubagents(db, 's1', 3)).toBe(1)
       const report = runMigrations(openNodeSqlite(db), { migrate: true })
-      expect(report.applied.map((a) => [a.version, a.kind])).toEqual([[31, 'additive']])
+      expect(report.applied.map((a) => [a.version, a.kind])).toEqual([[31, 'additive'], [32, 'additive']])
       expect(hasLegColumns(db)).toBe(true)
     } finally { db.close() }
     expect(registration('s1', 'a1')).toMatchObject({ agent_type: 'tester', stopped_at: 3, run: null, send_backs: 0 })

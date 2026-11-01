@@ -492,7 +492,7 @@ the visionary ratified on 2026-11-01, D345).
   lane, stamped with its role as writer and its parent as declared,
   none of them in the parent's lane; it is retired at exit and its last
   output is the summary row the pointer names. [ruled: D288, D291,
-  D293, D295, D305]
+  D293, D295, D305, D358]
 - **The leg contract.** At its first moment a leg sees its brief and
   the checkpoint in effect under its key, and makes no query. The brief
   names who checkpointed the work it resumes and who will checkpoint

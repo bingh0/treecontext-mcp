@@ -6,8 +6,9 @@ import { SUBAGENT_SUMMARY_KIND } from '../../../src/handoff.js'
 import { keyLookupReply } from '../../../src/key-lookup.js'
 import {
   type RunWorld, openRunWorld, hooksLeg, workerLeg, seedCheckpoints, sessionClient, insertEchoed, subagentStopHook, blocks,
-  rawOne, rawMetaOf, rawRowOf, rawRegistration, rawCheckpoints, cpLabel, stringSteps, subagentStartHook,
+  rawOne, rawMetaOf, rawRowOf, rawRegistration, rawCheckpoints, cpLabel, stringSteps, subagentStartHook, briefFor, agentToolReturns,
 } from '../run-world.js'
+import { hooksDoorSteps } from './journal-legs-hooks.steps.js'
 
 // ── journal-legs ────────────────────────────────────────────────────────
 //
@@ -17,11 +18,12 @@ import {
 // started from, marked as the store's; two in effect come back as two.
 //
 // A leg here runs through the hooks door as Claude Code drives it: the
-// real SessionStart hook registers the session's self, the real
-// SubagentStart hook registers the subagent under the PARENT's session,
-// and the registry call the hooks door makes gives it its run, key and
-// start (registerLeg; the hook's own inference from the role's brief is
-// the hooks-door build's, and its scenarios stay in the wip register).
+// real SessionStart hook registers the session's self, and the real
+// SubagentStart hook registers the subagent under the PARENT's session
+// and, reading the brief in effect for its role, makes it a leg of that
+// brief's run and key, marked inferred, starting from the checkpoint(s)
+// then in effect (the hooks door, unit 4; journal-legs-hooks.steps.ts
+// binds the door's own scenarios).
 // The leg writes through the real MCP insert tool on the session's one
 // connection, and the call's own PostToolUse echo makes its writer exact
 // at the drain; it stops through the real SubagentStop hook. Earlier
@@ -49,7 +51,12 @@ function cpNumbered(w: LegsWorld, key: string, n: number, run = RUN): string {
 /** A leg through the hooks door that started from the checkpoint in
  *  effect, with the MCP connection its session's subagents share. */
 async function legFrom(w: LegsWorld, name: string, role: string, key: string, start: string[]): Promise<void> {
-  await hooksLeg(w, name, role, { run: RUN, key, keySrc: 'inferred', checkpointer: role, startCheckpoints: start })
+  const ref = await hooksLeg(w, name, role, { run: RUN, key, checkpointer: role })
+  // The hook inferred the leg from the brief: its start is what was then
+  // in effect, which is the checkpoint the Given names.
+  const r = rawRegistration(w, ref)
+  expect([r['run'], r['run_key'], r['key_src'], r['door']]).toEqual([RUN, key, 'inferred', 'hooks'])
+  expect(JSON.parse(String(r['start_checkpoints']))).toEqual(start)
   await sessionClient(w)
 }
 
@@ -64,8 +71,17 @@ function stop(w: LegsWorld, name: string, role: string, report: string): void {
   w.stops![name] = subagentStopHook(w, w.legs![name]!.agentId, role, report)
 }
 
+/** A builder subagent started through the real SubagentStart hook, the
+ *  hooks door making of it what the store's briefs say. */
+function subagentStartBuilder(w: LegsWorld): void {
+  const agentId = `abuilder${Math.random().toString(16).slice(2, 10)}`
+  w.facts!['start:builder'] = subagentStartHook(w, agentId, 'builder')
+  w.legs!['builder'] = { sessionId: w.sessionId!, agentId }
+}
+
 export const legsDefiner = (reg: Registry<LegsWorld>): void => {
   const define = stringSteps(reg)
+  hooksDoorSteps(define)
 
   // ── D284, D331: the checkpoint a leg writes at its end ──
 
@@ -77,9 +93,10 @@ export const legsDefiner = (reg: Registry<LegsWorld>): void => {
     await legFrom(w, 'builder', 'builder', key, [ids.at(-1)!])
   })
 
-  define(/^the builder writes the checkpoint "([^"]+)" and stops$/, async (w, text) => {
-    await writeAsLeg(w, 'builder', 'builder', text, 'login-form')
-    stop(w, 'builder', 'builder', 'submit wired; validation next')
+  define(/^the (builder|recovery builder) writes the checkpoint "([^"]+)" and stops$/, async (w, who, text) => {
+    const name = who === 'builder' ? 'builder' : 'recovery'
+    await writeAsLeg(w, name, 'builder', text, 'login-form')
+    stop(w, name, 'builder', 'submit wired; validation next')
     await drainStaging(w)
   })
 
@@ -90,13 +107,11 @@ export const legsDefiner = (reg: Registry<LegsWorld>): void => {
     await drainStaging(w)
   })
 
-  // A forward guard: today's SubagentStop hook never blocks a stop. It
-  // starts to mean something when the hooks door's send-back lands (unit
-  // 4): a leg that wrote a checkpoint newer than its start is not sent
-  // back. (Noted on the journal-legs ruling in wip-register.ts.)
-  define(/^the builder's stop is not blocked$/, (w) => {
-    expect(w.stops!['builder'], 'the SubagentStop hook ran').toBeDefined()
-    expect(blocks(w.stops!['builder']!)).toBe(false)
+  // The hooks door's stop (D279, D281, D326): read from the hook's own
+  // stdout, which the platform reads.
+  define(/^the ([a-z-]+)'s stop is not blocked$/, (w, name) => {
+    expect(w.stops![name!], `the ${name} SubagentStop hook ran`).toBeDefined()
+    expect(blocks(w.stops![name!]!)).toBe(false)
   })
 
   define(/^the harness looking up the key "([^"]+)" receives checkpoint number (\d+), superseding number (\d+)$/, (w, key, num, prev) => {
@@ -201,8 +216,9 @@ export const legsDefiner = (reg: Registry<LegsWorld>): void => {
 
   define(/^the harness looking up the key "([^"]+)" receives checkpoint number (\d+) with the writer "([^"]+)"$/, (w, key, num, writer) => {
     const l = lookup(w, key)
-    expect(l.checkpoints.map((c) => [c.nodeId, c.number, c.writer])).toEqual([[w.ids!['review'], Number(num), writer]])
-    expect(rawMetaOf(w, w.ids!['review']!)['_writer']).toBe(writer)
+    const id = w.ids!['review'] ?? w.ids!['recovery-checkpoint'] ?? w.ids!['builder-checkpoint']
+    expect(l.checkpoints.map((c) => [c.nodeId, c.number, c.writer])).toEqual([[id, Number(num), writer]])
+    expect(rawMetaOf(w, id!)['_writer']).toBe(writer)
   })
 
   define(/^checkpoint number (\d+) is still readable by its id$/, async (w, num) => {
@@ -302,6 +318,9 @@ export const legsDefiner = (reg: Registry<LegsWorld>): void => {
 
   define(/^the explorer finishes with the report "([^"]+)"$/, async (w, report) => {
     stop(w, 'explorer', 'explorer', report)
+    // The Agent tool returns the explorer to the orchestrator: a plain
+    // subagent's return carries no pointer line (D305).
+    w.facts!['explorer-return'] = agentToolReturns(w, w.legs!['explorer']!.agentId, 'explorer', 'find where the login form is rendered', report!)
     await drainStaging(w)
   })
 
@@ -326,28 +345,33 @@ export const legsDefiner = (reg: Registry<LegsWorld>): void => {
     expect(blocks(out)).toBe(false)
     // The hook said nothing at all: no block, and no ask of any kind.
     expect(out.trim()).toBe('')
+    // And nothing rode on the Agent tool's result: no pointer line.
+    expect(String(w.facts!['explorer-return']).trim()).toBe('')
     expect(rawAll(w, "SELECT 1 FROM nodes WHERE json_extract(metadata_json, '$.kind') = 'checkpoint'")).toHaveLength(0)
   })
 
   // ── D320, D326: the leg's first write under a key settles it ──
 
-  define(/^a builder subagent registered with the key "([^"]+)", marked inferred$/, async (w, key) => {
+  define(/^a builder subagent registered with the key "([^"]+)",? marked inferred(, named as its checkpointer)?$/, async (w, key, named) => {
     await openRunWorld(w)
-    await hooksLeg(w, 'builder', 'builder', { run: RUN, key, keySrc: 'inferred' })
+    await hooksLeg(w, 'builder', 'builder', { run: RUN, key, checkpointer: named ? 'builder' : null })
     await sessionClient(w)
-    expect(rawRegistration(w, w.legs!['builder']!)['key_src']).toBe('inferred')
+    const r = rawRegistration(w, w.legs!['builder']!)
+    expect([r['run_key'], r['key_src'], r['checkpointer']]).toEqual([key, 'inferred', named ? 'builder' : null])
   })
 
   define(/^a builder subagent registered (?:on the run "([^"]+)" )?with an ambiguous key between "([^"]+)" and "([^"]+)"$/, async (w, run, a, b) => {
     if (run) expect(run).toBe(RUN)
     await openRunWorld(w)
-    await hooksLeg(w, 'builder', 'builder', {
-      run: RUN, key: null, keySrc: 'ambiguous',
-      keyCandidates: [{ run: RUN, key: a, briefId: null }, { run: RUN, key: b, briefId: null }],
-    })
+    // Two briefs in effect for the role on the run: the hooks door
+    // registers the subagent with its key ambiguous (D320).
+    await briefFor(w, 'builder', RUN, a!, { checkpointer: 'builder' })
+    await briefFor(w, 'builder', RUN, b!, { checkpointer: 'builder' })
+    subagentStartBuilder(w)
     await sessionClient(w)
     const r = rawRegistration(w, w.legs!['builder']!)
-    expect([r['key_src'], r['run_key']]).toEqual(['ambiguous', null])
+    expect([r['key_src'], r['run_key'], r['run']]).toEqual(['ambiguous', null, RUN])
+    expect((JSON.parse(String(r['key_candidates'])) as Array<{ key: string }>).map((c) => c.key).sort()).toEqual([a, b].sort())
     if (run) {
       // A keyed control in the same run, ended as the builder will be: a
       // reviewer worker whose ticket declared the key, which wrote under it
@@ -421,20 +445,26 @@ export const legsDefiner = (reg: Registry<LegsWorld>): void => {
   define(/^the harness looking up the key "([^"]+)" on the run "([^"]+)" counts one keyless leg among the run's facts$/, (w, key, run) => {
     const l = lookup(w, key, run)
     expect(l.facts.keylessLegs).toBe(1)
-    expect(l.facts.legsRun).toBe(2)
+    expect(l.facts.legsRun).toBe(w.legs!['control'] ? 2 : 1)
     const builder = l.legs.find((g) => g.agentId === w.legs!['builder']!.agentId)!
     expect([builder.state, builder.keyless]).toEqual(['retired', true])
     // The keyed control, ended too, is not counted.
-    const control = l.legs.find((g) => g.sessionId === w.legs!['control']!.sessionId)!
-    expect([control.state, control.keySrc, control.keyless]).toEqual(['retired', 'declared', false])
+    if (w.legs!['control']) {
+      const control = l.legs.find((g) => g.sessionId === w.legs!['control']!.sessionId)!
+      expect([control.state, control.keySrc, control.keyless]).toEqual(['retired', 'declared', false])
+    }
     expect(keyLookupReply(l).facts.keyless_legs).toBe(1)
     // The file: the registration never settled a key, the leg wrote no row
     // carrying one, and its summary carries the run alone.
     const r = rawRegistration(w, w.legs!['builder']!)
-    expect(r['run_key']).toBeNull()
-    expect(['inferred', 'ambiguous']).toContain(r['key_src'])
+    // Never settled: an ambiguous key stays unnamed, an inferred one stays
+    // the brief's, marked inferred, never the leg's own.
+    if (r['key_src'] === 'ambiguous') expect(r['run_key']).toBeNull()
+    else expect([r['run_key'], r['key_src']]).toEqual([key, 'inferred'])
     expect(r['stopped_at']).not.toBeNull()
-    expect(rawAll(w, "SELECT 1 FROM nodes WHERE json_extract(metadata_json, '$._writer_agent_id') = ? AND json_extract(metadata_json, '$.key') IS NOT NULL", w.legs!['builder']!.agentId)).toHaveLength(0)
+    // (The hooks door's own first-moment row in the lane names the key it
+    // inferred; it is the door's row, not a write of the leg's.)
+    expect(rawAll(w, "SELECT 1 FROM nodes WHERE json_extract(metadata_json, '$._writer_agent_id') = ? AND json_extract(metadata_json, '$.key') IS NOT NULL AND json_extract(metadata_json, '$.kind') IS NOT 'first-moment'", w.legs!['builder']!.agentId)).toHaveLength(0)
     const summary = rawOne<{ m: string }>(w, "SELECT metadata_json AS m FROM nodes WHERE json_extract(metadata_json, '$.kind') = ? AND json_extract(metadata_json, '$._writer_agent_id') = ?", SUBAGENT_SUMMARY_KIND, w.legs!['builder']!.agentId)
     expect(summary, 'the builder\'s summary landed').toBeTruthy()
     const sm = JSON.parse(summary!.m) as Record<string, unknown>
@@ -447,13 +477,14 @@ export const legsDefiner = (reg: Registry<LegsWorld>): void => {
     await openRunWorld(w)
     const start = Date.now() / 1000 - Number(hours) * 3600
     const last = Date.now() / 1000 - Number(minutes) * 60
-    // Registered through the library door at its own moment (the hooks
-    // door's clock is the hook's: a subprocess cannot be started two hours
-    // ago), and writing through it, each row at the moment it was written.
-    const agentId = `abuilder${Math.random().toString(16).slice(2, 10)}`
-    await w.store!.registerLeg({ sessionId: w.sessionId!, agentId, role: 'builder', run: RUN, key, keySrc: 'inferred', at: start, door: 'library', identity: 'declared' })
-    const ref = { sessionId: w.sessionId!, agentId }
-    w.legs!['builder'] = ref
+    // Registered through the hooks door, the real SubagentStart hook
+    // inferring the leg from the role's brief, at its own moment: the
+    // hook's clock is set to the start (the test-only TREECONTEXT_TEST_NOW
+    // its clock reads under the suite). Its rows are written through the
+    // library as the leg, each at the moment it was written.
+    await briefFor(w, 'builder', RUN, key!, { checkpointer: 'builder', at: start - 60 })
+    const ref = await hooksLeg(w, 'builder', 'builder', { run: RUN, key: key! }, { TREECONTEXT_TEST_NOW: String(start) })
+    expect([rawRegistration(w, ref)['door'], rawRegistration(w, ref)['key_src']]).toEqual(['hooks', 'inferred'])
     await w.store!.insert('npx vitest run login: 2 failing, the submit handler is missing', { leg: ref, createdAt: start + 300 })
     await w.store!.insert('waiting on the login API; no answer yet', { leg: ref, createdAt: last })
     // The session still running: its own agent is busy, and the real

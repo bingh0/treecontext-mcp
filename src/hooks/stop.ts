@@ -22,14 +22,23 @@
  * identical content; FlatStore's existing content-fingerprint dedup (see
  * flat-store.ts `insert`) is what prevents double-capture, not this hook.
  */
-import { readFileSync, writeFileSync, accessSync, constants as fsConstants } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { readFileSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { DatabaseSync } from 'node:sqlite'
-import { resolveDbPath, writeStaging, parseHookInput, isDirectInvocation, openHookDb, STOP_GUARD_TIMEOUT_MS } from './shared.js'
+import { resolveDbPath, writeStaging, parseHookInput, isDirectInvocation, openHookDb, STOP_GUARD_TIMEOUT_MS, storeRefusesWrites, blockOutput } from './shared.js'
 import { STORE_SAFETY_CAP, activeIndexCap } from '../persistence/capture-constants.js'
 import { dbg } from '../debug.js'
 import { checkpointDue, bookmarkRequest, markBookmarkAsked, hookNowSec, type CheckpointDue } from '../checkpoints.js'
+import { workerLaneOf, type LegRegistration, type LegRef } from '../persistence/leg-registry.js'
+import { checkpointsUnder } from '../runs.js'
+import { sendBackDecision } from '../ticket-door.js'
+import { composeSendBackMessage, composeFirstMessage, fitHookCap, laneRowsOf, firstMomentFactsOf } from '../first-moment.js'
+import { WORKER_SESSION_ENV } from '../ticket.js'
+import { FIRST_MOMENT_KIND } from '../run-kinds.js'
+import { decodeContent } from '../persistence/content-codec.js'
+import { hookStoreOn, hookTreeOf } from './hook-store.js'
+import { recordHookGap } from './gap-ledger.js'
 
 /**
  * Stale-recapture guard: `extractLastAssistantText` deliberately scans past
@@ -81,22 +90,30 @@ function staleOn(db: DatabaseSync, sessionId: string, text: string): boolean {
  *  adds no term to the guard+write sum the platform kill budget pins. */
 function guardRead(
   dbPath: string, sessionId: string, text: string | null, checkpoint: boolean,
-): { stale: boolean; due: CheckpointDue | null } {
+): { stale: boolean; due: CheckpointDue | null; worker: WorkerAtStop | null } {
   let db: DatabaseSync | null = null
   try {
     db = openHookDb(dbPath, { readonly: true, timeoutMs: STOP_GUARD_TIMEOUT_MS })
+    // One busy wait for the whole guard: a store another process holds
+    // answers this probe after the guard's budget, and then no further
+    // read is tried (each would wait the budget again: the guard's reads
+    // must never stack past the platform's kill with the write behind).
+    db.prepare('SELECT 1 FROM sqlite_master LIMIT 1').get()
     const stale = text !== null && staleOn(db, sessionId, text)
+    // A worker's stop (D295) is read on the same guard connection, so a
+    // locked store costs the worker read no wait of its own.
+    const worker = workerAtStopOn(db, sessionId)
     let due: CheckpointDue | null = null
-    if (checkpoint) {
+    if (checkpoint && worker === null) {
       try { due = checkpointDue(db, sessionId, hookNowSec()) } catch (err) {
         // A store too old for the checkpoint reads (no nodes, no
         // session_key): no bookmark is asked for, capture goes on.
         dbg('hook:stop', 'checkpoint check skipped', { error: err instanceof Error ? err.message : String(err) })
       }
     }
-    return { stale, due }
+    return { stale, due, worker }
   } catch {
-    return { stale: false, due: null }
+    return { stale: false, due: null, worker: null }
   } finally {
     if (db) db.close()
   }
@@ -115,22 +132,6 @@ function firstReport(sessionId: string): boolean {
     // second case silence is the lesser failure than a report every stop.
     void err
     return false
-  }
-}
-
-/** Can the agent's bookmark land? The write goes through the MCP server,
- *  not this hook, so the question is whether the store file takes writes
- *  at all — asked of the filesystem, which costs no lock wait. */
-function storeRefusesWrites(dbPath: string): string | null {
-  try {
-    accessSync(dbPath, fsConstants.W_OK)
-    accessSync(dirname(dbPath), fsConstants.W_OK)
-    return null
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code
-    return code === 'EACCES' || code === 'EPERM' || code === 'EROFS'
-      ? 'the store is read-only for this session'
-      : `the store is unavailable (${err instanceof Error ? err.message : String(err)})`
   }
 }
 
@@ -212,7 +213,107 @@ export function turnText(input: Record<string, unknown>): { text: string; source
   return fromTranscript ? { text: fromTranscript, source: 'transcript' } : null
 }
 
-export function main(preParsed?: Record<string, unknown>): void {
+type WorkerAtStop = { leg: LegRegistration; checkpointSinceStart: boolean; prompt: string | null; firstMomentId: string | null }
+
+/** The worker a `claude -p` child's session is (D295): its own lane, or
+ *  the lane its session-start hook linked it to, with whether a checkpoint
+ *  under its key is newer than its start; null for any session that is no
+ *  worker. Read on the guard's connection. */
+function workerAtStopOn(db: DatabaseSync, sessionId: string): WorkerAtStop | null {
+  try {
+    const leg = workerLaneOf(db, sessionId)
+    if (!leg) return null
+    const since = leg.startedAt
+    const checkpointSinceStart = leg.run !== null && leg.key !== null
+      && checkpointsUnder(db, null, leg.run, leg.key).some((c) => !c.imported && c.createdAt >= since)
+    const first = db.prepare(
+      `SELECT node_id, content FROM nodes WHERE session_key = ? AND json_extract(metadata_json, '$.kind') = ? ORDER BY created_at, rowid LIMIT 1`,
+    ).get(leg.sessionId, FIRST_MOMENT_KIND) as { node_id: string; content: string | Buffer } | undefined
+    return { leg, checkpointSinceStart, prompt: first ? decodeContent(first.content) : null, firstMomentId: first?.node_id ?? null }
+  } catch {
+    return null
+  }
+}
+
+/** D303, D342: the line a worker with no valid instructions is told at its
+ *  stop, when its own session-start hook was its door and no wrapper waits
+ *  to tell its spawner: the ticket door's words for that ending. */
+export function invalidStopLine(leg: LegRegistration): string {
+  return `treecontext: the ${leg.role ?? 'unnamed'} worker${leg.run ? ` of the run "${leg.run}"` : ''} (session ${leg.sessionId}) `
+    + `stopped and ended with invalid instructions: its ticket could not be read whole (unreadable: ${leg.ticketAbsent.join(', ')}).`
+}
+
+/**
+ * D295, D279, D291: a `claude -p` worker's stop is its leg's stop at the
+ * hooks door. A worker that stops with no checkpoint under its key newer
+ * than its start, whose ticket was read whole, names a key and names the
+ * worker itself as the one who will checkpoint it, declares a way to
+ * write, and was never sent back by either door, is sent back once here:
+ * the stop is blocked with the same message the ticket door's re-run
+ * opens on (the reason, the first moment composed again, the trail), its
+ * row lands in the worker's lane and the send-back is counted on the
+ * registration, so the wrapper that spawned it sees the leg's one spent
+ * and starts no run after it. A store this hook cannot write asks
+ * nothing, and the wrapper's send-back is then the leg's one. A worker is
+ * never a self: no bookmark is asked of it.
+ */
+async function workerStop(input: Record<string, unknown>, dbPath: string, sessionId: string, w: WorkerAtStop, capped: string | null): Promise<void> {
+  const ref: LegRef = { sessionId: w.leg.sessionId, agentId: w.leg.agentId }
+  if (capped) {
+    writeStaging(dbPath, {
+      sessionId, role: 'assistant', content: capped, timestamp: Date.now() / 1000, priority: 2,
+      indexLen: Math.min(activeIndexCap('assistant'), capped.length),
+    })
+  }
+  // No wrapper watches a worker its own hook claimed (no lane in the
+  // environment): its stop says how it ended when that is invalid
+  // instructions, the spawner's line it would otherwise never get.
+  if ((w.leg.ticketAbsent.length > 0 || w.leg.ticketRaw !== null) && !process.env[WORKER_SESSION_ENV]) {
+    process.stdout.write(JSON.stringify({ systemMessage: invalidStopLine(w.leg) }) + '\n')
+    return
+  }
+  if (input['stop_hook_active'] === true) return
+  const refusal = storeRefusesWrites(dbPath)
+  const verdict = sendBackDecision({
+    exit: { code: 0, signal: null }, ticketValid: w.leg.ticketAbsent.length === 0 && w.leg.ticketRaw === null,
+    noKey: w.leg.key === null, role: w.leg.role, checkpointer: w.leg.checkpointer, canWrite: w.leg.canWrite,
+    sendBacks: w.leg.sendBacks, checkpointSinceStart: w.checkpointSinceStart, storeWritable: refusal === null,
+  })
+  dbg('hook:stop', 'a worker\'s stop', { lane: ref.sessionId, sendBack: verdict.sendBack, why: verdict.why })
+  if (!verdict.sendBack) return
+  let db: DatabaseSync | null = null
+  try {
+    db = openHookDb(dbPath)
+    const opened = await hookStoreOn(db, dbPath, sessionId)
+    if (!opened || 'refused' in opened) {
+      if (opened) recordHookGap(dbPath, { hook: 'stop', sessionId, at: Date.now() / 1000, error: opened.refused, lost: 'The worker was owed its one send-back and was not sent back here; its wrapper may send it back at its exit.' })
+      return
+    }
+    const store = opened.store
+    try {
+      const leg = w.leg
+      const facts = firstMomentFactsOf(db, hookTreeOf(db, opened.namespace), {
+        run: leg.run!, key: leg.key, role: leg.role ?? 'unnamed', checkpointer: leg.checkpointer, checkpointedBy: leg.checkpointedBy, self: ref,
+      })
+      const rows = laneRowsOf(db, leg)
+      const compose = (o: Parameters<typeof composeFirstMessage>[2]): string => composeSendBackMessage({
+        facts, prompt: w.prompt ?? '', sessionId: ref.sessionId, firstMomentId: w.firstMomentId, rows,
+        firstMessage: composeFirstMessage(facts, w.prompt ?? '', o),
+      })
+      const message = fitHookCap(facts, { compose }).message
+      const sent = store.recordWorkerSendBack(ref, {
+        message, refs: [...(w.firstMomentId ? [w.firstMomentId] : []), ...facts.checkpoints.map((c) => c.nodeId)], door: 'hooks',
+      })
+      if (sent) process.stdout.write(blockOutput(message))
+    } finally { await store.close() }
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err)
+    dbg('hook:stop', 'worker send-back write FAILED — not sent back', { error })
+    recordHookGap(dbPath, { hook: 'stop', sessionId, at: Date.now() / 1000, error, lost: 'The worker was owed its one send-back and was not sent back here; its wrapper may send it back at its exit.' })
+  } finally { if (db) db.close() }
+}
+
+export async function main(preParsed?: Record<string, unknown>): Promise<void> {
   try {
     const input = preParsed ?? parseHookInput()
     const { session_id, cwd } = input
@@ -228,7 +329,12 @@ export function main(preParsed?: Record<string, unknown>): void {
     const askable = input.stop_hook_active !== true
     const guard = session_id
       ? guardRead(dbPath, session_id, capped, askable)
-      : { stale: false, due: null }
+      : { stale: false, due: null, worker: null }
+    if (guard.worker && typeof session_id === 'string') {
+      await workerStop(input, dbPath, session_id, guard.worker, guard.stale ? null : capped)
+      process.exit(0)
+      return
+    }
 
     // Second duty (D156, D207), decided before the write so the ask can
     // be recorded on the capture's own connection.
@@ -282,5 +388,5 @@ export function main(preParsed?: Record<string, unknown>): void {
 
 const isMain = isDirectInvocation(import.meta.url)
 if (isMain) {
-  main()
+  void main()
 }

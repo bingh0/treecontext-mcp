@@ -110,48 +110,48 @@
 {"file":"features/journal-legs.feature","title":"a checkpoint that names another checkpoint is taken at its word","status":"passed"}
 {"file":"features/journal-legs.feature","title":"a checkpoint that names nothing as superseded is stamped from the leg's start, marked as the store's","status":"passed"}
 {"file":"features/journal-legs.feature","title":"a checkpoint the main agent writes under a leg's key comes back flagged, never withheld","status":"passed"}
-{"file":"features/journal-legs.feature","title":"a cut leg leaves its trail and the next leg of its role starts as a recovery leg","status":"unbound"}
-{"file":"features/journal-legs.feature","title":"a cut leg leaves no checkpoint the store wrote","status":"unbound"}
-{"file":"features/journal-legs.feature","title":"a first moment of 10000 characters through the hooks door is the brief and the checkpoint whole, with no query made [2]","status":"unbound"}
-{"file":"features/journal-legs.feature","title":"a first moment of 17000 characters through the hooks door is the brief, the checkpoint up to the client's cap, the checkpoint row's id and the count of characters left out [3]","status":"unbound"}
-{"file":"features/journal-legs.feature","title":"a first moment of 40000 characters through the hooks door is the brief, the checkpoint up to the client's cap, the checkpoint row's id and the count of characters left out [4]","status":"unbound"}
-{"file":"features/journal-legs.feature","title":"a first moment of 9000 characters through the hooks door is the brief and the checkpoint whole, with no query made [1]","status":"unbound"}
-{"file":"features/journal-legs.feature","title":"a fresh leg on a key with no checkpoint is told so, and its first checkpoint is number 1","status":"unbound"}
-{"file":"features/journal-legs.feature","title":"a key the leg wrote under, marked as its own, makes the stop ask for the missing checkpoint","status":"unbound"}
-{"file":"features/journal-legs.feature","title":"a leg fetches the rest of a cut checkpoint by export and gets it whole","status":"unbound"}
-{"file":"features/journal-legs.feature","title":"a leg left live is retired as cut when its session next starts, and the next leg of its role recovers","status":"unbound"}
+{"file":"features/journal-legs.feature","title":"a cut leg leaves its trail and the next leg of its role starts as a recovery leg","status":"passed"}
+{"file":"features/journal-legs.feature","title":"a cut leg leaves no checkpoint the store wrote","status":"passed"}
+{"file":"features/journal-legs.feature","title":"a first moment of 10000 characters through the hooks door is the brief and the checkpoint whole, with no query made [2]","status":"passed"}
+{"file":"features/journal-legs.feature","title":"a first moment of 17000 characters through the hooks door is the brief, the checkpoint up to the client's cap, the checkpoint row's id and the count of characters left out [3]","status":"passed"}
+{"file":"features/journal-legs.feature","title":"a first moment of 40000 characters through the hooks door is the brief, the checkpoint up to the client's cap, the checkpoint row's id and the count of characters left out [4]","status":"passed"}
+{"file":"features/journal-legs.feature","title":"a first moment of 9000 characters through the hooks door is the brief and the checkpoint whole, with no query made [1]","status":"passed"}
+{"file":"features/journal-legs.feature","title":"a fresh leg on a key with no checkpoint is told so, and its first checkpoint is number 1","status":"passed"}
+{"file":"features/journal-legs.feature","title":"a key the leg wrote under, marked as its own, makes the stop ask for the missing checkpoint","status":"passed"}
+{"file":"features/journal-legs.feature","title":"a leg fetches the rest of a cut checkpoint by export and gets it whole","status":"passed"}
+{"file":"features/journal-legs.feature","title":"a leg left live is retired as cut when its session next starts, and the next leg of its role recovers","status":"passed"}
 {"file":"features/journal-legs.feature","title":"a leg refused once that stops without writing a shorter checkpoint is sent back for it","status":"unbound"}
-{"file":"features/journal-legs.feature","title":"a leg sent back once is never sent back a second time","status":"unbound"}
-{"file":"features/journal-legs.feature","title":"a leg sent back once that then writes its checkpoint stops unblocked","status":"unbound"}
-{"file":"features/journal-legs.feature","title":"a leg starting while two checkpoints are in effect is handed both, flagged","status":"unbound"}
-{"file":"features/journal-legs.feature","title":"a leg that ended without a checkpoint after its one send-back is followed by a recovery leg","status":"unbound"}
-{"file":"features/journal-legs.feature","title":"a leg that finishes with no checkpoint is sent back once with the missing checkpoint named","status":"unbound"}
+{"file":"features/journal-legs.feature","title":"a leg sent back once is never sent back a second time","status":"passed"}
+{"file":"features/journal-legs.feature","title":"a leg sent back once that then writes its checkpoint stops unblocked","status":"passed"}
+{"file":"features/journal-legs.feature","title":"a leg starting while two checkpoints are in effect is handed both, flagged","status":"passed"}
+{"file":"features/journal-legs.feature","title":"a leg that ended without a checkpoint after its one send-back is followed by a recovery leg","status":"passed"}
+{"file":"features/journal-legs.feature","title":"a leg that finishes with no checkpoint is sent back once with the missing checkpoint named","status":"passed"}
 {"file":"features/journal-legs.feature","title":"a leg that writes under no key stays keyless, stops unblocked, and the run's facts count it as such","status":"passed"}
-{"file":"features/journal-legs.feature","title":"a leg through the hooks door starts cold when the store is unreachable, and the gap is marked","status":"unbound"}
-{"file":"features/journal-legs.feature","title":"a leg whose brief names another role as checkpointer is never sent back","status":"unbound"}
-{"file":"features/journal-legs.feature","title":"a leg whose start was dropped stops unasked and its summary still lands","status":"unbound"}
-{"file":"features/journal-legs.feature","title":"a leg's first moment is its brief and the checkpoint in effect, with no query made","status":"unbound"}
-{"file":"features/journal-legs.feature","title":"a newer brief for the same role and key supersedes the older one","status":"unbound"}
-{"file":"features/journal-legs.feature","title":"a recovery leg writes the checkpoint its predecessor did not","status":"unbound"}
+{"file":"features/journal-legs.feature","title":"a leg through the hooks door starts cold when the store is unreachable, and the gap is marked","status":"passed"}
+{"file":"features/journal-legs.feature","title":"a leg whose brief names another role as checkpointer is never sent back","status":"passed"}
+{"file":"features/journal-legs.feature","title":"a leg whose start was dropped stops unasked and its summary still lands","status":"passed"}
+{"file":"features/journal-legs.feature","title":"a leg's first moment is its brief and the checkpoint in effect, with no query made","status":"passed"}
+{"file":"features/journal-legs.feature","title":"a newer brief for the same role and key supersedes the older one","status":"passed"}
+{"file":"features/journal-legs.feature","title":"a recovery leg writes the checkpoint its predecessor did not","status":"passed"}
 {"file":"features/journal-legs.feature","title":"a reviewer's original-plus-review supersedes the original and the lookup returns it","status":"passed"}
-{"file":"features/journal-legs.feature","title":"a run's close ends its briefs","status":"unbound"}
+{"file":"features/journal-legs.feature","title":"a run's close ends its briefs","status":"passed"}
 {"file":"features/journal-legs.feature","title":"a second over-cap write by another leg or under another key is refused again","status":"unbound"}
-{"file":"features/journal-legs.feature","title":"a subagent whose brief names a run and a key gets the leg contract","status":"unbound"}
+{"file":"features/journal-legs.feature","title":"a subagent whose brief names a run and a key gets the leg contract","status":"passed"}
 {"file":"features/journal-legs.feature","title":"a subagent with no brief or no key is registered and summarised exactly as today","status":"passed"}
 {"file":"features/journal-legs.feature","title":"an inferred key gives way to the key the leg first writes under","status":"passed"}
-{"file":"features/journal-legs.feature","title":"an inferred key never makes the stop ask for a checkpoint","status":"unbound"}
+{"file":"features/journal-legs.feature","title":"an inferred key never makes the stop ask for a checkpoint","status":"passed"}
 {"file":"features/journal-legs.feature","title":"an over-cap checkpoint accepted on its second write is the one in effect, and the next leg's first-moment row shows what it cost","status":"unbound"}
 {"file":"features/journal-legs.feature","title":"every checkpoint names what it supersedes and what it rests on, so a reader can walk back to the trail","status":"passed"}
-{"file":"features/journal-legs.feature","title":"every first moment says in treecontext's own words that a checkpoint is state, not history","status":"unbound"}
-{"file":"features/journal-legs.feature","title":"no send-back when the store cannot be written","status":"unbound"}
-{"file":"features/journal-legs.feature","title":"the brief names who checkpointed the work resumed and who will checkpoint at the end","status":"unbound"}
+{"file":"features/journal-legs.feature","title":"every first moment says in treecontext's own words that a checkpoint is state, not history","status":"passed"}
+{"file":"features/journal-legs.feature","title":"no send-back when the store cannot be written","status":"passed"}
+{"file":"features/journal-legs.feature","title":"the brief names who checkpointed the work resumed and who will checkpoint at the end","status":"passed"}
 {"file":"features/journal-legs.feature","title":"the checkpoint a leg writes at its end takes the next number and supersedes the one it started from","status":"passed"}
-{"file":"features/journal-legs.feature","title":"the hooks door takes a leg's key from its role's newest brief and marks it inferred","status":"unbound"}
+{"file":"features/journal-legs.feature","title":"the hooks door takes a leg's key from its role's newest brief and marks it inferred","status":"passed"}
 {"file":"features/journal-legs.feature","title":"the leg's first write under a key settles an ambiguous registration","status":"passed"}
-{"file":"features/journal-legs.feature","title":"the pointer comes back every time and the next leg starts from the store whether or not it was followed","status":"unbound"}
-{"file":"features/journal-legs.feature","title":"the pointer rides on the Agent tool's result and the subagent's final message is untouched","status":"unbound"}
-{"file":"features/journal-legs.feature","title":"the pointer to a leg's summary row carries the leg's role, run and key","status":"unbound"}
-{"file":"features/journal-legs.feature","title":"two briefs in effect for one role make the key ambiguous and name the candidates","status":"unbound"}
+{"file":"features/journal-legs.feature","title":"the pointer comes back every time and the next leg starts from the store whether or not it was followed","status":"passed"}
+{"file":"features/journal-legs.feature","title":"the pointer rides on the Agent tool's result and the subagent's final message is untouched","status":"passed"}
+{"file":"features/journal-legs.feature","title":"the pointer to a leg's summary row carries the leg's role, run and key","status":"passed"}
+{"file":"features/journal-legs.feature","title":"two briefs in effect for one role make the key ambiguous and name the candidates","status":"passed"}
 {"file":"features/journal-legs.feature","title":"two checkpoints in effect under one key come back as two, never a silent pick","status":"passed"}
 {"file":"features/journal-legs.feature","title":"two legs that started from one checkpoint write 4 and 5, never two 4s, and both stay in effect","status":"passed"}
 {"file":"features/journal-legs.feature","title":"until its session restarts, a silent leg reads as live with its ages shown","status":"passed"}
@@ -230,7 +230,7 @@
 {"file":"features/journal-recall.feature","title":"temporal questions get temporal answers","status":"passed"}
 {"file":"features/journal-recall.feature","title":"the developer's directives and the agent's notes outrank captured tool output","status":"passed"}
 {"file":"features/journal-recall.feature","title":"the orientation surface stays small enough to be read","status":"passed"}
-{"file":"features/journal-reorientation.feature","title":"a `claude -p` child with a ticket opens on its brief and checkpoint, never on a self's packet","status":"unbound"}
+{"file":"features/journal-reorientation.feature","title":"a `claude -p` child with a ticket opens on its brief and checkpoint, never on a self's packet","status":"passed"}
 {"file":"features/journal-reorientation.feature","title":"a bookmark is findable by its own words in a mature journal","status":"passed"}
 {"file":"features/journal-reorientation.feature","title":"a bookmark that cannot be written is reported once and never blocks","status":"passed"}
 {"file":"features/journal-reorientation.feature","title":"a chapter referenced from another lane shows its referrer one hop deep","status":"passed"}
@@ -376,7 +376,7 @@
 {"file":"features/journal-storage.feature","title":"the store does not grow without bound","status":"passed"}
 {"file":"features/journal-storage.feature","title":"what goes in comes back out, byte for byte","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a `agy -p` worker under a Antigravity parent writes into its own lane with its role as writer [3]","status":"unbound"}
-{"file":"features/journal-workers.feature","title":"a `claude -p` child with a ticket is registered as a worker by the hook, never as a self","status":"unbound"}
+{"file":"features/journal-workers.feature","title":"a `claude -p` child with a ticket is registered as a worker by the hook, never as a self","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a `claude -p` worker under a Codex parent writes into its own lane with its role as writer [2]","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a `codex exec` worker under a Claude Code parent writes into its own lane with its role as writer [1]","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a checkpoint the store cannot take at exit is lost from the store, not from the spawner","status":"passed"}
@@ -402,10 +402,10 @@
 {"file":"features/journal-workers.feature","title":"a worker that claimed a ticket with no wrapper gets no send-back and ends visibly without a checkpoint","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a worker that exits on its own error is finished and gets the one send-back","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a worker whose ticket declares no door gets no send-back","status":"passed"}
-{"file":"features/journal-workers.feature","title":"a worker whose ticket is hand-edited so that the run is missing is registered with what was read, told its instructions were invalid, and ends visibly through the session-start hook of a `claude -p` child [2]","status":"unbound"}
+{"file":"features/journal-workers.feature","title":"a worker whose ticket is hand-edited so that the run is missing is registered with what was read, told its instructions were invalid, and ends visibly through the session-start hook of a `claude -p` child [2]","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a worker whose ticket is minted in an older shape that still reads as the role \"reviewer\" is registered with what was read, told its instructions were invalid, and ends visibly through the hook-less door of a `codex exec` worker [3]","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a worker whose ticket is truncated after the role \"builder\" is registered with what was read, told its instructions were invalid, and ends visibly through the hook-less door of a `codex exec` worker [1]","status":"passed"}
-{"file":"features/journal-workers.feature","title":"a worker whose ticket is truncated after the role \"builder\" is registered with what was read, told its instructions were invalid, and ends visibly through the session-start hook of a `claude -p` child [4]","status":"unbound"}
+{"file":"features/journal-workers.feature","title":"a worker whose ticket is truncated after the role \"builder\" is registered with what was read, told its instructions were invalid, and ends visibly through the session-start hook of a `claude -p` child [4]","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a worker whose ticket names another role as checkpointer is never sent back","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a worker whose ticket still named its run is listed under that run; one that named neither is reachable only by its exit line and parent","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a worker's first message carries both checkpoints when two are in effect","status":"passed"}
@@ -415,12 +415,12 @@
 {"file":"features/journal-workers.feature","title":"an exit by signal is a cut, never sent back, and the next leg of the role is a recovery leg","status":"passed"}
 {"file":"features/journal-workers.feature","title":"an unregistered writer's row through the library call is accepted and traced, never refused [2]","status":"passed"}
 {"file":"features/journal-workers.feature","title":"an unregistered writer's row through the ticket door, with a self-minted ticket is accepted and traced, never refused [1]","status":"passed"}
-{"file":"features/journal-workers.feature","title":"both doors leave the same first-moment row, readable with plain SQL alone","status":"unbound"}
+{"file":"features/journal-workers.feature","title":"both doors leave the same first-moment row, readable with plain SQL alone","status":"passed"}
 {"file":"features/journal-workers.feature","title":"the first-moment row is the first row of the worker's lane through the hook-less door of a `codex exec` worker [1]","status":"passed"}
-{"file":"features/journal-workers.feature","title":"the first-moment row is the first row of the worker's lane through the session-start hook of a `claude -p` child [2]","status":"unbound"}
-{"file":"features/journal-workers.feature","title":"the stop hook's send-back is the leg's one, and the wrapper starts no run after it","status":"unbound"}
+{"file":"features/journal-workers.feature","title":"the first-moment row is the first row of the worker's lane through the session-start hook of a `claude -p` child [2]","status":"passed"}
+{"file":"features/journal-workers.feature","title":"the stop hook's send-back is the leg's one, and the wrapper starts no run after it","status":"passed"}
 {"file":"features/journal-workers.feature","title":"the ticket door composes a worker's first message from the brief, the checkpoint in effect and the spawner's prompt","status":"passed"}
 {"file":"features/journal-workers.feature","title":"the ticket door that sees the fault before spawning writes the row itself and spawns nothing","status":"passed"}
 {"file":"features/journal-workers.feature","title":"the ticket door's first message says in treecontext's own words that a checkpoint is state, not history","status":"passed"}
 {"file":"features/journal-workers.feature","title":"the wrapper never runs a worker a third time","status":"passed"}
-{"file":"features/journal-workers.feature","title":"when the stop hook could not ask, the wrapper's send-back is the leg's one","status":"unbound"}
+{"file":"features/journal-workers.feature","title":"when the stop hook could not ask, the wrapper's send-back is the leg's one","status":"passed"}

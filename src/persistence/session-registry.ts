@@ -210,13 +210,30 @@ export function retireSubagent(db: RegistryHandle, sessionId: string, agentId: s
 
 /** Retire every live subagent of a session (F3 of the chunk-5b review):
  *  none survives the session's (re)start, so a SubagentStop lost to a
- *  crash cannot hold the session's stamp past it. Returns how many. */
-export function retireAllSubagents(db: RegistryHandle, sessionId: string, at: number): number {
+ *  crash cannot hold the session's stamp past it. Returns how many.
+ *
+ *  D328: a LEG left live (a subagent the hooks door registered under a
+ *  run, kind `subagent`) was killed or interrupted with no stop to see it
+ *  end, so it is retired as cut: `ended = 'cut'`, the moment the start
+ *  noticed it and the start as what noticed it, and no `stopped_at`, which
+ *  would read as an exit time the store never saw (D297's rule). A plain
+ *  subagent (D305: exactly as today) keeps today's retirement, its
+ *  `stopped_at` set to the start's moment. */
+export function retireAllSubagents(db: RegistryHandle, sessionId: string, at: number, noticedBy = 'session-start hook'): number {
   if (!hasRegistry(db)) return 0
+  let n = 0
+  const legs = registryHasColumn(db, 'ended')
+  if (legs) {
+    const r = db.prepare(
+      `UPDATE session_registry SET ended = 'cut', noticed_at = ?, noticed_by = ?
+        WHERE session_id = ? AND agent_id != '' AND kind = 'subagent' AND stopped_at IS NULL AND ended IS NULL`,
+    ).run(at, noticedBy, sessionId) as { changes?: number }
+    n += r.changes ?? 0
+  }
   const r = db.prepare(
-    `UPDATE session_registry SET stopped_at = ? WHERE session_id = ? AND agent_id != '' AND stopped_at IS NULL${notWorker(db)}`,
+    `UPDATE session_registry SET stopped_at = ? WHERE session_id = ? AND agent_id != '' AND stopped_at IS NULL${notWorker(db)}${legs ? " AND ended IS NULL AND COALESCE(kind, '') != 'subagent'" : ''}`,
   ).run(at, sessionId) as { changes?: number }
-  return r.changes ?? 0
+  return n + (r.changes ?? 0)
 }
 
 export function selfOf(db: RegistryHandle, sessionId: string): RegistryRow | null {
@@ -234,7 +251,7 @@ export function subagentOf(db: RegistryHandle, sessionId: string, agentId: strin
 export function liveSubagents(db: RegistryHandle, sessionId: string): RegistryRow[] {
   if (!hasRegistry(db)) return []
   return (db.prepare(
-    `SELECT * FROM session_registry WHERE session_id = ? AND agent_id != '' AND stopped_at IS NULL${notWorker(db)} ORDER BY started_at, agent_id`,
+    `SELECT * FROM session_registry WHERE session_id = ? AND agent_id != '' AND stopped_at IS NULL${notWorker(db)}${registryHasColumn(db, 'ended') ? ' AND ended IS NULL' : ''} ORDER BY started_at, agent_id`,
   ).all(sessionId) as RawRow[]).map(toRow)
 }
 

@@ -28,7 +28,7 @@ export function main(): void {
     const input = parseAndNormalize()
 
     if (input.transcript_path) {
-      referenceMain(input)
+      void referenceMain(input)
       return
     }
 

@@ -64,7 +64,8 @@ import {
 import { lookupKey, keyLookupReply, type KeyLookup, type KeyLookupReply } from './key-lookup.js'
 import {
   firstMomentFactsOf, composeFirstMessage, invalidInstructionsMessage, firstMomentMetadata, sendBackMetadata, laneRowsOf,
-  type FirstMomentFacts,
+  fitHookCap, ambiguousFirstMessage, HOOK_CONTEXT_CAP,
+  type FirstMomentFacts, type HookCut,
 } from './first-moment.js'
 import { trustedWorkerLane, type TicketReading } from './ticket.js'
 import { FIRST_MOMENT_KIND, SEND_BACK_KIND, TICKET_REFUSED_KIND, RUN_META_KEY } from './run-kinds.js'
@@ -75,6 +76,32 @@ import {
   MAX_STORE_BYTES_DEFAULT,
   MAX_SESSIONS_DEFAULT,
 } from './persistence/capture-constants.js'
+
+/** The text of a hooks-door first-moment row (D298, D320): the door sees
+ *  no prompt (the Agent tool carries it), so the row says in its own words
+ *  what the leg was handed, the rows themselves referenced by id, never
+ *  copied. Distinct per leg, so no two legs' rows deduplicate. */
+export function hooksFirstMomentText(role: string, agentId: string, run: string | null, key: string | null, briefs: number, checkpoints: number): string {
+  const where = key !== null ? `under the key "${key}" on the run "${run}"` : `with an ambiguous key${run ? ` on the run "${run}"` : ''}`
+  return `treecontext: the first moment of the ${role} leg (agent ${agentId}) ${where}, through the hooks door: `
+    + `${briefs} ${briefs === 1 ? 'brief' : 'briefs'} and ${checkpoints} ${checkpoints === 1 ? 'checkpoint' : 'checkpoints'} in effect, referenced by id. `
+    + 'Its prompt rode on the Agent tool and is not seen by this door.'
+}
+
+/** The text of a `claude -p` child's first-moment row when its own
+ *  session-start hook is the door (D295, D298): the same kind of line the
+ *  hooks door writes for a subagent leg, the prompt being the child's own
+ *  argument, unseen by the hook. */
+export function workerHookFirstMomentText(role: string, sessionId: string, run: string | null, key: string | null, briefs: number, checkpoints: number, invalid = false): string {
+  if (invalid) {
+    return `treecontext: the first moment of a worker (session ${sessionId}) through the session-start hook of a \`claude -p\` child: `
+      + 'its ticket could not be read whole, so it was told its instructions were invalid. Its prompt is the child\'s own argument and is not seen by this door.'
+  }
+  const where = key !== null ? `under the key "${key}" on the run "${run}"` : `with no key on the run "${run}"`
+  return `treecontext: the first moment of the ${role} worker (session ${sessionId}) ${where}, through the session-start hook of a \`claude -p\` child: `
+    + `${briefs} ${briefs === 1 ? 'brief' : 'briefs'} and ${checkpoints} ${checkpoints === 1 ? 'checkpoint' : 'checkpoints'} in effect, referenced by id. `
+    + 'Its prompt is the child\'s own argument and is not seen by this door.'
+}
 
 /** The rows the ticket door writes in a worker's lane on its behalf:
  *  none of them is the worker's own write (D303's "its one row"). */
@@ -927,26 +954,37 @@ export class FlatStore implements MemoryStore {
    */
   startWorker(input: {
     reading: TicketReading
-    prompt: string
+    /** The spawner's prompt as written; null when the door is handed none
+     *  (a `claude -p` child's session-start hook: the prompt is the
+     *  child's own argument, D295), so the first message has no prompt
+     *  part and the row's text is empty. */
+    prompt: string | null
     sessionId?: string
     door?: Exclude<LegDoor, 'hooks'>
     where?: Partial<GitSelf>
     host: string
     at?: number
     probe?: ProcessProbe
-  }): { leg: LegRegistration; facts: FirstMomentFacts | null; firstMessage: string; firstMomentId: string } {
+    /** The door is a `claude -p` child's session-start hook (D295, D325):
+     *  the first message is fitted to the client's cap and the cut kept on
+     *  the row, whose text is the door's own line (the prompt is the
+     *  child's argument, unseen), and the briefs are the hook's resolved
+     *  namespace's, or every namespace's when it did not resolve. */
+    hookDoor?: { allNamespaces: boolean }
+  }): { leg: LegRegistration; facts: FirstMomentFacts | null; firstMessage: string; firstMomentId: string; cut: HookCut | null } {
     this.ensureOpen()
     const at = input.at ?? Date.now() / 1000
     const t = input.reading.ticket
     const sessionId = input.sessionId ?? mintWorkerSessionId()
     const keyed = input.reading.valid && t.run !== null && t.key !== null && t.role !== null
+    const scope = input.hookDoor?.allNamespaces ? null : this.treeId
     return this.db.transaction(() => {
       // D297: the door reads the registry, so it retires the run's gone
       // workers on this host first; a predecessor left live by a worker
       // nobody watched is then known gone (first-moment.ts predecessorOf).
       if (t.run !== null) retirePhantoms(this.db, { noticedBy: NOTICED_BY_TICKET_DOOR, run: t.run, at, ...(input.probe ? { probe: input.probe } : {}) })
-      const start = keyed ? checkpointsInEffect(this.db, this.treeId, t.run!, t.key!).map((c) => c.nodeId) : []
-      const brief = keyed ? briefsInEffect(this.db, this.treeId, t.role!).find((b) => b.run === t.run && b.key === t.key) : undefined
+      const start = keyed ? checkpointsInEffect(this.db, scope, t.run!, t.key!).map((c) => c.nodeId) : []
+      const brief = keyed ? briefsInEffect(this.db, scope, t.role!).find((b) => b.run === t.run && b.key === t.key) : undefined
       // D281: the checkpointer is the ticket's, else the in-effect brief's
       // for the role and key, in each tense, recorded on the registration,
       // which the send-back and the recovery read. Both silent: nobody.
@@ -962,24 +1000,37 @@ export class FlatStore implements MemoryStore {
       const ref = { sessionId, agentId: WORKER_AGENT_ID }
       let facts: FirstMomentFacts | null = null
       let firstMessage: string
+      let cut: HookCut | null = null
       if (input.reading.valid) {
-        facts = firstMomentFactsOf(this.db, this.treeId, {
+        facts = firstMomentFactsOf(this.db, scope, {
           run: t.run!, key: t.key, role: t.role!, noKey: t.noKey === true,
           checkpointer: named.checkpointer, checkpointedBy: named.checkpointedBy, self: ref,
         })
         firstMessage = composeFirstMessage(facts, input.prompt)
+        if (input.hookDoor) {
+          const f = facts
+          const fitted = fitHookCap(f, { compose: (o) => composeFirstMessage(f, input.prompt, o) })
+          cut = fitted.cut
+          firstMessage = fitted.message
+        }
       } else {
         firstMessage = invalidInstructionsMessage(input.reading.absent, { role: t.role, run: t.run, key: t.key })
       }
+      // At the hooks door the row's text is the door's line, as a
+      // subagent leg's is: the prompt was never seen.
+      const content = input.prompt ?? (input.hookDoor
+        ? workerHookFirstMomentText(t.role ?? 'unnamed', sessionId, t.run, t.noKey ? null : t.key, facts?.briefs.length ?? 0, facts?.checkpoints.length ?? 0, !input.reading.valid)
+        : '')
       const meta = {
         ...firstMomentMetadata({
-          sessionId, run: t.run, key: t.noKey ? null : t.key, prompt: input.prompt, firstMessage, facts,
+          sessionId, run: t.run, key: t.noKey ? null : t.key, prompt: content, firstMessage, facts,
           ...(input.reading.valid ? {} : { invalid: { absent: input.reading.absent } }),
+          ...(input.hookDoor ? { hookCut: cut } : {}),
         }),
         ...this.legStampFor({ ...ref, door: 'ticket' }),
       }
-      const firstMomentId = this.insertDoorRowSync(input.prompt, meta, at)
-      return { leg: legOf(this.db, ref)!, facts, firstMessage, firstMomentId }
+      const firstMomentId = this.insertDoorRowSync(content, meta, at)
+      return { leg: legOf(this.db, ref)!, facts, firstMessage, firstMomentId, cut }
     }, { mode: 'immediate' })
   }
 
@@ -992,17 +1043,163 @@ export class FlatStore implements MemoryStore {
    * is not a row (no scenario rules one in; the build leaves it out).
    * Returns null when the leg had already spent its send-back.
    */
-  recordWorkerSendBack(ref: LegRef, o: { message: string; refs: string[]; at?: number }): { sendBackId: string } | null {
+  recordWorkerSendBack(ref: LegRef, o: { message: string; refs: string[]; at?: number; door?: 'ticket' | 'hooks' }): { sendBackId: string } | null {
     this.ensureOpen()
     const at = o.at ?? Date.now() / 1000
+    const door = o.door ?? 'ticket'
     return this.db.transaction(() => {
       const leg = legOf(this.db, ref)
       if (!leg || leg.sendBacks >= 1 || leg.run === null || leg.key === null) return null
       recordSendBack(this.db, ref)
       const sendBackId = this.insertDoorRowSync(o.message,
-        { ...sendBackMetadata({ sessionId: ref.sessionId, run: leg.run, key: leg.key, message: o.message, refs: o.refs }), ...this.legStampFor({ ...ref, door: 'ticket' }) }, at)
+        { ...sendBackMetadata({ sessionId: ref.sessionId, run: leg.run, key: leg.key, message: o.message, refs: o.refs }), ...this.hooksDoorStamp(ref, door) }, at)
       return { sendBackId }
     }, { mode: 'immediate' })
+  }
+
+  // ── The hooks door (D284, D305, D320, D325, D326, D327, D329, D330) ──
+  //
+  // The subagent-start, subagent-stop, stop and session-start hooks write
+  // through these with a FlatStore over their own connection
+  // (hooks/hook-store.ts), so a hooks-door leg's rows are written by the
+  // same code the ticket door's are, column for column.
+
+  /** The stamp of a row a door writes in a leg's lane: the leg's (its
+   *  writer, lane and trace), with the door that wrote it; a subagent the
+   *  hook registered is the hook's to vouch for. */
+  private hooksDoorStamp(ref: LegRef, door: 'ticket' | 'hooks'): Record<string, unknown> {
+    const stamp = this.legStampFor({ ...ref, door })
+    const leg = legOf(this.db, ref)
+    return leg?.kind === 'subagent' && leg.identity === 'hook' ? { ...stamp, _writer_src: 'hook' } : stamp
+  }
+
+  /**
+   * The hooks door at a subagent's start (D284, D305, D320, D326, D327,
+   * D329): the subagent is already registered (session-registry.ts
+   * registerSubagent, as before this door); its role's briefs in effect
+   * decide what more it is. None: a subagent exactly as today, nothing
+   * written. One: a leg under that brief's run and key, marked inferred,
+   * the brief's checkpointer in both tenses, the checkpoint(s) in effect
+   * as its start, its run opened at this first registration, and its first
+   * moment composed from the store (first-moment.ts) and written as the
+   * first row of its lane, references to the brief and checkpoint rows,
+   * the cut at the client's cap recorded. More than one: the key ambiguous,
+   * the candidates kept, the run the candidates' own when they share one.
+   * One immediate transaction: the registration, the open and the row land
+   * together or not at all.
+   */
+  startHooksLeg(input: {
+    sessionId: string; agentId: string; role: string; at?: number; where?: GitSelf
+    /** The hook could not resolve its session's namespace: read the
+     *  briefs of every namespace rather than none (the default tree is
+     *  only where the drain routes such a session's rows, not where its
+     *  harness briefed it). Otherwise the briefs are this store's
+     *  namespace's alone: the multi-agent story is namespaces of one store,
+     *  and a brief in another namespace is never this subagent's. */
+    allNamespaces?: boolean
+  }): {
+    leg: LegRegistration; message: string; firstMomentId: string; facts: FirstMomentFacts | null; cut: HookCut | null
+  } | null {
+    this.ensureOpen()
+    if (!hasLegColumns(this.db)) return null
+    const at = input.at ?? Date.now() / 1000
+    const ref = { sessionId: input.sessionId, agentId: input.agentId }
+    return this.db.transaction(() => {
+      const scope = input.allNamespaces ? null : this.treeId
+      const briefs = briefsInEffect(this.db, scope, input.role)
+      if (briefs.length === 0) return null
+      if (briefs.length === 1) {
+        const b = briefs[0]!
+        const start = checkpointsInEffect(this.db, scope, b.run, b.key).map((c) => c.nodeId)
+        const leg = registerSubagentLeg(this.db, { ...ref, role: input.role }, {
+          run: b.run, key: b.key, keySrc: 'inferred', briefId: b.nodeId,
+          checkpointer: b.checkpointer, checkpointedBy: b.checkpointedBy, startCheckpoints: start,
+        }, { at, door: 'hooks', identity: 'hook', ...(input.where ? { where: input.where } : {}) })
+        this.openRunOnRegistrationSync(leg)
+        const facts = firstMomentFactsOf(this.db, scope, {
+          run: b.run, key: b.key, role: input.role, checkpointer: b.checkpointer, checkpointedBy: b.checkpointedBy, self: ref,
+        })
+        const fitted = fitHookCap(facts)
+        const whole = fitted.cut === null ? fitted.message : composeFirstMessage(facts, null, { door: 'hooks' })
+        const content = hooksFirstMomentText(input.role, input.agentId, b.run, b.key, facts.briefs.length, facts.checkpoints.length)
+        const meta = {
+          ...firstMomentMetadata({ sessionId: input.sessionId, run: b.run, key: b.key, prompt: content, firstMessage: whole, facts, hookCut: fitted.cut }),
+          ...this.hooksDoorStamp(ref, 'hooks'),
+        }
+        const firstMomentId = this.insertDoorRowSync(content, meta, at)
+        return { leg: legOf(this.db, ref)!, message: fitted.message, firstMomentId, facts, cut: fitted.cut }
+      }
+      // D320: more than one brief in effect for the role.
+      const runs = [...new Set(briefs.map((b) => b.run))]
+      const run = runs.length === 1 ? runs[0]! : null
+      const leg = registerSubagentLeg(this.db, { ...ref, role: input.role }, {
+        run, key: null, keySrc: 'ambiguous', keyCandidates: briefs.map((b) => ({ run: b.run, key: b.key, briefId: b.nodeId })),
+      }, { at, door: 'hooks', identity: 'hook', ...(input.where ? { where: input.where } : {}) })
+      if (run !== null) this.openRunOnRegistrationSync(leg)
+      let message = ambiguousFirstMessage(input.role, briefs)
+      let cut: HookCut | null = null
+      if (message.length > HOOK_CONTEXT_CAP) {
+        const fitted = fitHookCap({ run: run ?? '', key: null, role: input.role, noKey: false, briefs, checkpoints: [], inEffect: null, named: { names: [], by: null }, flags: [], checkpointer: null, checkpointedBy: null, predecessor: null },
+          { compose: () => message })
+        message = fitted.message
+        cut = fitted.cut
+      }
+      const content = hooksFirstMomentText(input.role, input.agentId, run, null, briefs.length, 0)
+      const meta = {
+        ...firstMomentMetadata({ sessionId: input.sessionId, run, key: null, prompt: content, firstMessage: message, facts: null, hookCut: cut, ambiguousBriefs: briefs.map((b) => b.nodeId) }),
+        ...this.hooksDoorStamp(ref, 'hooks'),
+      }
+      const firstMomentId = this.insertDoorRowSync(content, meta, at)
+      return { leg: legOf(this.db, ref)!, message, firstMomentId, facts: null, cut }
+    }, { mode: 'immediate' })
+  }
+
+  /**
+   * A hooks-door leg's end (D284, D329, D336): its report as the summary
+   * row in its lane, stamped with its run and key from its registration
+   * (legReturnStamp), by its role, written by the door as the ticket door
+   * writes a worker's, and the leg retired as finished, in ONE immediate
+   * transaction: both land or neither does, so a refused stop never leaves
+   * a retired leg without its return, nor a return beside a live leg.
+   */
+  retireHooksLeg(ref: LegRef, o: { report: string | null; at?: number }): { summaryId: string | null } {
+    this.ensureOpen()
+    const at = o.at ?? Date.now() / 1000
+    return this.db.transaction(() => {
+      let summaryId: string | null = null
+      if (o.report !== null) {
+        summaryId = this.insertDoorRowSync(o.report,
+          { kind: SUBAGENT_SUMMARY_KIND, ...legReturnStamp(this.db, ref), ...this.hooksDoorStamp(ref, 'hooks') }, at)
+      }
+      retireLeg(this.db, ref, 'retired', at)
+      return { summaryId }
+    }, { mode: 'immediate' })
+  }
+
+  /** D302: open a leg's run if it is not open yet, at the leg's
+   *  registration moment and by the store, as at its registration: for a
+   *  leg whose run was set after it registered (an ambiguous key across
+   *  runs, settled by its first write, D320). A no-op otherwise. */
+  openRunOfLeg(ref: LegRef): void {
+    this.ensureOpen()
+    this.db.transaction(() => {
+      const leg = legOf(this.db, ref)
+      if (leg && leg.kind !== null && leg.run !== null) this.openRunOnRegistrationSync(leg)
+    }, { mode: 'immediate' })
+  }
+
+  /** The newest summary row in a leg's lane, the return the pointer names
+   *  (D284, D336), or null when it left none. */
+  legSummaryOf(ref: LegRef): string | null {
+    this.ensureOpen()
+    const leg = legOf(this.db, ref)
+    if (!leg) return null
+    const worker = leg.kind === 'worker'
+    const r = this.db.prepare(
+      `SELECT node_id FROM nodes WHERE session_key = ? AND json_extract(metadata_json, '$.kind') = ?
+          ${worker ? '' : "AND json_extract(metadata_json, '$._writer_agent_id') = ?"} ORDER BY created_at DESC, rowid DESC LIMIT 1`,
+    ).get(...(worker ? [ref.sessionId, SUBAGENT_SUMMARY_KIND] : [ref.sessionId, SUBAGENT_SUMMARY_KIND, ref.agentId])) as { node_id: string } | undefined
+    return r?.node_id ?? null
   }
 
   /**
@@ -1285,12 +1482,19 @@ export class FlatStore implements MemoryStore {
       // provisionally, concurrently or ambiguously settles at its echo.
       if (meta && meta['_writer_src'] === 'declared' && typeof meta['key'] === 'string' && meta['key'].trim() !== '' && typeof meta['run'] === 'string') {
         const leg = this.writingLegOf(meta)
-        if (leg) settleLegKey(this.db, leg, meta['run'], meta['key'], nodeId)
+        if (leg && settleLegKey(this.db, leg, meta['run'], meta['key'], nodeId) && leg.run === null) {
+          // D302: the settle named the leg's run; it opens as at a registration.
+          const settled = legOf(this.db, leg)
+          if (settled) this.openRunOnRegistrationSync(settled)
+        }
       }
       // D303, D342: a worker whose ticket the door could not read whole
       // ends with no valid instructions once its one row lands, whichever
       // door it wrote through; the door's own rows in its lane are not it.
-      if (meta && typeof meta['_writer_agent_id'] === 'string' && !DOOR_ROW_KINDS.has(String(meta['kind'] ?? ''))) {
+      // The prompt a `claude -p` child's UserPromptSubmit hook captured is
+      // the door's message handed to it, not a row it wrote (D295).
+      const handedPrompt = meta?.['source'] === 'auto-capture' && meta['role'] === 'user'
+      if (meta && typeof meta['_writer_agent_id'] === 'string' && !DOOR_ROW_KINDS.has(String(meta['kind'] ?? '')) && !handedPrompt) {
         const leg = this.writingLegOf(meta)
         if (leg && leg.kind === 'worker' && leg.ticketAbsent.length > 0 && isLiveLeg(leg)) retireLeg(this.db, leg, 'invalid', createdAt)
       }

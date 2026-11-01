@@ -34,6 +34,10 @@ import {
 } from '../persistence/recovery-snapshot.js'
 import { agentWriterOf, INTERNAL_SUMMARY_KIND, CLIENT_WRITER } from '../persistence/session-registry.js'
 import { SUBAGENT_SUMMARY_KIND } from '../handoff.js'
+import { workerLaneOf, legWriterOf } from '../persistence/leg-registry.js'
+import { legTraceOf } from '../persistence/session-registry.js'
+import { DOOR_KEY, IDENTITY_KEY } from '../runs.js'
+import { claimHookGaps, hookGapText } from '../hooks/gap-ledger.js'
 
 /**
  * What the IngestionLoop needs from a backend: the MemoryStore surface
@@ -104,6 +108,10 @@ export interface IngestionOptions {
    * stores), publishing is a no-op — the heal itself is unaffected.
    */
   storePath?: string
+  /** TEST-ONLY: how old a claimed hook gap ledger must be before the drain
+   *  reads it (default GAP_CLAIM_GRACE_MS; hooks/gap-ledger.ts). The suite
+   *  passes 0 so one tick both claims and reads; production never sets it. */
+  hookGapGraceMs?: number
 }
 
 /** D265: the stale-drain warning is written once per process lifetime —
@@ -172,7 +180,8 @@ export class IngestionLoop {
     dbg('ingest', 'session namespace published', { session: sessionId, namespace, derivedFrom })
   }
 
-  readonly options: Required<Omit<IngestionOptions, 'storeName' | 'sweepIntervalMs' | 'stagingMaxBytes' | 'schemaCeiling' | 'onBatch' | 'storeFor' | 'drainLease' | 'storePath'>> & { storeName?: string }
+  readonly options: Required<Omit<IngestionOptions, 'storeName' | 'sweepIntervalMs' | 'stagingMaxBytes' | 'schemaCeiling' | 'onBatch' | 'storeFor' | 'drainLease' | 'storePath' | 'hookGapGraceMs'>> & { storeName?: string }
+  private readonly hookGapGraceMs: number | undefined
 
   get errors(): ErrorTracker { return this.errorTracker }
   get loops(): LoopDetector { return this.loopDetector }
@@ -185,6 +194,7 @@ export class IngestionLoop {
     this.storeFor = opts.storeFor ?? null
     this.drainLease = opts.drainLease ?? null
     this.storePath = opts.storePath ?? null
+    this.hookGapGraceMs = opts.hookGapGraceMs
     const defaultOpts = {
       intervalMs: opts.intervalMs ?? INGESTION_TICK_MS,
       batchSize: opts.batchSize ?? 20,
@@ -418,6 +428,38 @@ export class IngestionLoop {
     return total
   }
 
+  /** Turn each dropped hook event in the gap ledger into a capture-gap
+   *  row (hooks/gap-ledger.ts), once: a record whose row already landed
+   *  (by its gap id) is not written again, and the claimed ledger is let
+   *  go only once every row of it landed, so a failure here is retried
+   *  next tick, never lost. */
+  private async recordHookGaps(storePath: string): Promise<void> {
+    let claim: ReturnType<typeof claimHookGaps>
+    try { claim = claimHookGaps(storePath, this.hookGapGraceMs !== undefined ? { graceMs: this.hookGapGraceMs } : {}) } catch { return }
+    if (claim.gaps.length === 0) { claim.done(); return }
+    let all = true
+    for (const g of claim.gaps) {
+      try {
+        const db = this.ctx.store.database
+        const seen = db.prepare("SELECT 1 FROM nodes WHERE json_extract(metadata_json, '$.source') = 'capture-gap' AND json_extract(metadata_json, '$.gap_id') = ? LIMIT 1").get(g.id ?? '')
+        if (seen) continue
+        await this.ctx.insert(hookGapText(g), {
+          createdAt: g.at,
+          metadata: {
+            source: 'capture-gap', event: 'hook_dropped', hook: g.hook, gap_id: g.id,
+            session_id: g.sessionId || undefined,
+            ...(g.agentId ? { agent_id: g.agentId } : {}), ...(g.agentType ? { agent_type: g.agentType } : {}),
+            error: g.error.slice(0, 500), created_at: g.at, ingested_at: Date.now() / 1000,
+          },
+        })
+      } catch (err) {
+        all = false
+        warn('[IngestionLoop] A dropped hook event could not be recorded as a capture gap (retried next tick):', err)
+      }
+    }
+    if (all) claim.done()
+  }
+
   async ingestBatch(): Promise<number> {
     // Drain-role gate (G4): acquiring per tick IS the heartbeat, and a
     // refusal — live foreign holder, busy store, anything — skips the
@@ -455,6 +497,13 @@ export class IngestionLoop {
     // the valve are oldest WHOLE sessions dropped, one capture-gap
     // tombstone each, so the journal records its own holes (JF-6).
     await this.applyStagingByteValve()
+
+    // D314, D279: events the hooks could not write while the store
+    // refused them sit in the gap ledger beside the store; the drain is the
+    // store's next writer, so each becomes a capture-gap row now, at the
+    // moment it was dropped. A ledger record lost here is retried never:
+    // the claim renamed it, so a failed insert is logged, not repeated.
+    if (this.storePath) await this.recordHookGaps(this.storePath)
 
     // Claim, don't fetch (G3): one UPDATE … RETURNING marks the batch as
     // ours — two drains get disjoint batches by construction, and the
@@ -596,6 +645,31 @@ export class IngestionLoop {
             if (row.agentId != null) meta._writer_agent_id = row.agentId
             meta._writer_src = 'hook'
           }
+          // D295, D288: a `claude -p` child's own captures land in its
+          // worker's lane, stamped with the worker's identity as declared
+          // by its ticket and read by the hook (its role as writer, its
+          // parent and directory), the child's own session kept beside: its
+          // own session is the lane when the hook claimed the ticket, or is
+          // linked to the lane the ticket door registered.
+          let workerLane: string | null = null
+          if (row.agentId == null && row.agentType == null && row.kind !== INTERNAL_SUMMARY_KIND && row.sessionId) {
+            try {
+              const worker = workerLaneOf(this.ctx.store.database, row.sessionId)
+              if (worker) {
+                workerLane = worker.sessionId
+                meta.session_id = worker.sessionId
+                if (worker.sessionId !== row.sessionId) meta._client_session_id = row.sessionId
+                meta._writer = legWriterOf(worker)
+                meta._writer_agent_id = worker.agentId
+                meta._writer_src = 'declared'
+                meta[DOOR_KEY] = 'hooks'
+                meta[IDENTITY_KEY] = 'declared'
+                Object.assign(meta, legTraceOf(worker))
+              }
+            } catch (err) {
+              dbg('ingest', 'worker lane read failed (the row lands in its own session)', { error: err instanceof Error ? err.message : String(err) })
+            }
+          }
           // D147: the row's kind, as the hook staged it (the subagent's
           // summary).
           if (row.kind != null) meta.kind = row.kind
@@ -666,7 +740,9 @@ export class IngestionLoop {
           // hook-provided session id. Non-fatal by design — a failed heal
           // is a logged degradation to the insert-time ladder, never a
           // poisoned capture row; the echo node above landed regardless.
-          if (row.role === 'assistant' && isInsertEchoTool(row.toolName) && row.sessionId) {
+          // A worker's rows were stamped by its own lane, exactly; the heals
+          // read a session's registry, which a worker's lane is not.
+          if (row.role === 'assistant' && isInsertEchoTool(row.toolName) && row.sessionId && workerLane === null) {
             try {
               const echo = extractInsertEcho(row.content, row.previewLen)
               if (echo) {
@@ -680,6 +756,11 @@ export class IngestionLoop {
                     deduplicated: echo.deduplicated, agentId: row.agentId, agentType: row.agentType,
                   })
                   dbg('ingest', 'writer heal', { node: echo.nodeId, ...healed })
+                  // D302: a leg whose key the echo settled under a run it
+                  // had no run of (an ambiguous key across runs) opens that
+                  // run as at a registration; a no-op otherwise.
+                  const opener = (this.ctx as { openRunOfLeg?: (ref: { sessionId: string; agentId: string }) => void }).openRunOfLeg
+                  if (row.agentId != null && typeof opener === 'function') opener.call(this.ctx, { sessionId: row.sessionId, agentId: row.agentId })
                 } catch (writerErr) {
                   dbg('ingest', 'writer heal failed (row keeps its insert-time stamp)', {
                     error: writerErr instanceof Error ? writerErr.message : String(writerErr),

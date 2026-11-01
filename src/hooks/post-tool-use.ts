@@ -1,4 +1,8 @@
-import { resolveDbPath, writeStaging, parseHookInput, isDirectInvocation, payloadWriter } from './shared.js'
+import type { DatabaseSync as DatabaseType } from 'node:sqlite'
+import { resolveDbPath, writeStaging, parseHookInput, isDirectInvocation, payloadWriter, openHookDb, STOP_GUARD_TIMEOUT_MS } from './shared.js'
+import { legOf, hasLegColumns, legWriterOf } from '../persistence/leg-registry.js'
+import { returnPointerLine } from '../first-moment.js'
+import { SUBAGENT_SUMMARY_KIND } from '../run-kinds.js'
 import {
   STORE_SAFETY_CAP,
   TOOL_INPUT_PREVIEW_CAP,
@@ -29,6 +33,65 @@ function importEchoLabel(toolName: unknown, toolInput: unknown): string | null {
   if (typeof label !== 'string') return null
   const oneLine = label.replace(/[\r\n]+/g, ' ').trim()
   return oneLine === '' ? null : oneLine
+}
+
+/** The tool that spawns a subagent, by its names on the reference
+ *  platform: `Agent`, and `Task` before it was renamed. */
+export const AGENT_TOOL_NAMES: readonly string[] = ['Agent', 'Task']
+
+/**
+ * The subagent an Agent tool call returned, by the id in its result, or
+ * null: for any other tool, a result naming no agent, or a BACKGROUND
+ * launch. A background Agent call's PostToolUse fires at its launch, its
+ * result `{ isAsync: true, status: "async_launched", agentId }` (Claude
+ * Code, observed in this developer's transcripts): the subagent has not
+ * finished, its return arrives later as a task notification the platform
+ * owns, and no pointer is carried for it (a line here would read as a
+ * finished leg that left no summary).
+ */
+export function agentReturned(toolName: unknown, response: unknown): string | null {
+  if (typeof toolName !== 'string' || !AGENT_TOOL_NAMES.includes(toolName)) return null
+  if (response === null || typeof response !== 'object' || Array.isArray(response)) return null
+  const r = response as Record<string, unknown>
+  if (r['isAsync'] === true || r['status'] === 'async_launched') return null
+  return typeof r['agentId'] === 'string' && r['agentId'] !== '' ? r['agentId'] : null
+}
+
+/**
+ * D284, D285, D330: the one line the main agent receives beside the Agent
+ * tool's result when the subagent it spawned was a leg: its return, the
+ * summary row in its lane, with the leg's writer, run and key, or a line
+ * saying it left none. The tool's result itself, the subagent's own final
+ * message, is the platform's and is not touched; this line rides as the
+ * PostToolUse hook's added context, which Claude Code places next to the
+ * tool result. The subagent is named by the result's `agentId` (Claude
+ * Code's hooks reference: a foreground Agent call's tool_response carries
+ * `agentId` and `content`). A subagent with no leg facts gets no line
+ * (D305: exactly as today). Read-only, on the guard budget.
+ */
+export function legPointerFor(dbPath: string, sessionId: string, agentId: string): string | null {
+  let db: DatabaseType | null = null
+  try {
+    db = openHookDb(dbPath, { readonly: true, timeoutMs: STOP_GUARD_TIMEOUT_MS })
+    if (!hasLegColumns(db)) return null
+    const leg = legOf(db, { sessionId, agentId })
+    if (!leg || leg.kind !== 'subagent' || (leg.run === null && leg.keyCandidates.length === 0)) return null
+    const row = db.prepare(
+      `SELECT node_id, metadata_json FROM nodes WHERE session_key = ? AND json_extract(metadata_json, '$._writer_agent_id') = ?
+          AND json_extract(metadata_json, '$.kind') = ? ORDER BY created_at DESC, rowid DESC LIMIT 1`,
+    ).get(sessionId, agentId, SUBAGENT_SUMMARY_KIND) as { node_id: string; metadata_json: string } | undefined
+    if (!row) {
+      return `treecontext: the ${leg.role ?? 'unnamed'} leg${leg.run ? ` of the run "${leg.run}"` : ''} (agent ${agentId}) left no summary row in the store yet; `
+        + 'its key lookup says how it ended.'
+    }
+    const m = JSON.parse(row.metadata_json) as Record<string, unknown>
+    return returnPointerLine({
+      role: leg.role, writer: typeof m['_writer'] === 'string' ? m['_writer'] : legWriterOf(leg),
+      run: typeof m['run'] === 'string' ? m['run'] : null, key: typeof m['key'] === 'string' ? m['key'] : null, summaryId: row.node_id,
+    })
+  } catch {
+    return null
+  } finally { if (db) db.close() }
 }
 
 /** True for the MCP content-block shape: a non-empty list whose every
@@ -327,6 +390,14 @@ export function main(preParsed?: Record<string, unknown>) {
       ...payloadWriter(input),
     })
 
+    // D330: the pointer to a leg's return rides on the Agent tool's result.
+    const spawned = agentReturned(tool_name, tool_output)
+    if (spawned && typeof session_id === 'string') {
+      const line = legPointerFor(dbPath, session_id, spawned)
+      if (line) {
+        process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: line } }) + '\n')
+      }
+    }
   } catch (error) {
     if (error instanceof Error) {
       console.error(error.message)

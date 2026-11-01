@@ -15,19 +15,21 @@ import { SUBAGENT_SUMMARY_KIND } from '../../../src/handoff.js'
 import { decodeContent } from '../../../src/persistence/content-codec.js'
 import { parseTool, rawAll, mcpOver } from '../world.js'
 import { TS_ROOT, tsxArgv } from '../proc.js'
+import { drainStaging } from '../capture-harness.js'
 import { sandboxedSpawnEnv, nodeTsArgs, spawnCli, CLI_TS } from '../../helpers/cli-spawn.js'
 import { agentConfigPath } from '../install-harness.js'
 import { mintTicket, readTicket, TICKET_ENV, type TicketFields } from '../../../src/ticket.js'
 import { spawnWorker, DOOR_LINE_PREFIX, DOOR_BUSY_WAIT_MS, NOT_STARTED_EXIT, type WorkerRunResult } from '../../../src/ticket-door.js'
 import {
-  momentText, PROMPT_HEADING, STATE_NOT_HISTORY_LINE, sendBackReason, invalidInstructionsMessage,
+  momentText, PROMPT_HEADING, STATE_NOT_HISTORY_LINE, sendBackReason, invalidInstructionsMessage, firstMomentFactsOf, composeFirstMessage,
 } from '../../../src/first-moment.js'
+import { readSessionBeacon } from '../../../src/session-beacon.js'
 import { FIRST_MOMENT_KIND, SEND_BACK_KIND, CHECKPOINT_KIND } from '../../../src/run-kinds.js'
 import { keyLookupReply, type KeyLookup } from '../../../src/key-lookup.js'
 import { storesDirIn } from '../../helpers/store-fixtures.js'
 import {
   type RunWorld, openRunWorld, sessionStartHook, sleeper, killAndReap, localMoment, rawOne, rawRegistration, stringSteps, liveProcess,
-  seedCheckpoints, cpLabel, rawCheckpoints, rawContentOf, rawRowOf,
+  seedCheckpoints, cpLabel, rawCheckpoints, rawContentOf, rawRowOf, lockStore, waitForFile, readerOf,
 } from '../run-world.js'
 
 // ── journal-workers ─────────────────────────────────────────────────────
@@ -116,6 +118,7 @@ const READERS: Record<string, string> = {
 export const workersDefiner = (reg: Registry<WorkersWorld>): void => {
   const define = stringSteps(reg)
   ticketDoorSteps(define)
+  claudeChildSteps(define)
 
   // ── D294: the parent as declared, or as a hook registered it ──
 
@@ -432,6 +435,9 @@ export const workersDefiner = (reg: Registry<WorkersWorld>): void => {
 // the store file through a separate read-only handle.
 
 const STANDIN = join(TS_ROOT, 'tests', 'helpers', 'standin-worker.ts')
+/** The stand-in `claude -p` child: it fires the real hooks Claude Code
+ *  fires, with the platform's payloads and its own environment. */
+const STANDIN_CLAUDE = join(TS_ROOT, 'tests', 'helpers', 'standin-claude-p.ts')
 
 interface StandinStep {
   notes?: number; label?: string; texts?: string[]; checkpoint?: string; invalidRow?: boolean; print?: string
@@ -441,6 +447,16 @@ export interface StandinPlan { first: StandinStep; rerun?: StandinStep }
 interface StandinRecord {
   pid: number; start: number | null; rerun: boolean; stdin: string; argv: string[]; ticket: string | null; lane: string | null
   claimed: boolean; session: string | null; laneRowsSeen: number; firstRunNotesSeen: number; firstMessage: string | null
+  /** The stand-in `claude -p` child's own: its Claude Code session, the
+   *  context its session-start hook handed it, what its stop hook said. */
+  ccSession?: string; context?: string | null; systemMessage?: string | null; sentBack?: string | null; stops?: string[]
+}
+
+/** The stand-in `claude -p` child's plan (tests/helpers/standin-claude-p.ts). */
+export interface ClaudePlan {
+  toolNotes?: string[]
+  tools?: number; checkpoint?: string; afterSendBack?: { checkpoint?: string; tools?: number }
+  final?: string; exit?: number; waitBeforeStop?: string; waitAfterStop?: string; invalidRow?: boolean
 }
 
 /** What spawns the worker: the wrapper, the library call, or nothing (a
@@ -462,6 +478,9 @@ export interface WorkerSpec {
   /** The door's clock (the library call's), for a run replayed at its
    *  own moments. */
   clock?: () => number
+  /** The worker is a `claude -p` child (the stand-in that fires the real
+   *  hooks), on this plan, instead of the hook-less stand-in. */
+  claudeP?: ClaudePlan
 }
 
 export interface Outcome {
@@ -515,14 +534,18 @@ let standinRuns = 0
  *  while it is alive (the library's promise or the wrapper's process). */
 export async function runWorker(w: RunWorld, spec: WorkerSpec, name = 'worker', during?: () => Promise<void>): Promise<Outcome> {
   const logPath = join(w.home!, `standin-${++standinRuns}.jsonl`)
-  const standinEnv = { STANDIN_DB: w.dbPath!, STANDIN_LOG: logPath, STANDIN_PLAN: JSON.stringify(spec.plan) }
+  const standinEnv = {
+    STANDIN_DB: w.dbPath!, STANDIN_LOG: logPath, STANDIN_PLAN: JSON.stringify(spec.plan),
+    ...(spec.claudeP ? { STANDIN_CLAUDE_PLAN: JSON.stringify(spec.claudeP) } : {}),
+  }
+  const script = spec.claudeP ? STANDIN_CLAUDE : STANDIN
   const sandbox = sandboxedSpawnEnv(w.home!, { TREECONTEXT_BINDINGS_FILE: join(w.home!, '.treecontext', 'bindings.json'), ...standinEnv })
   const cwd = spec.cwd ?? w.proj!
   const t0 = Date.now()
   let out: Omit<Outcome, 'log' | 'sessionId' | 'logPath' | 'elapsedMs'>
   if (spec.spawner === 'library') {
     const p = spawnWorker({
-      store: w.store!, ticket: spec.ticket, prompt: spec.prompt, command: process.execPath, args: nodeTsArgs(STANDIN), cwd,
+      store: w.store!, ticket: spec.ticket, prompt: spec.prompt, command: process.execPath, args: nodeTsArgs(script), cwd,
       env: sandbox, ...(spec.timeoutSecs ? { timeoutMs: spec.timeoutSecs * 1000 } : {}),
       ...(spec.checkTicket ? { checkTicket: true, spawner: { sessionId: w.sessionId! } } : {}),
       ...(spec.clock ? { clock: spec.clock } : {}),
@@ -536,7 +559,7 @@ export async function runWorker(w: RunWorld, spec: WorkerSpec, name = 'worker', 
     let env: NodeJS.ProcessEnv = sandbox
     if (spec.spawner === 'none') {
       // No door at all: the worker holds its ticket and claims it itself.
-      args = nodeTsArgs(STANDIN)
+      args = nodeTsArgs(script)
       env = { ...sandbox, [TICKET_ENV]: raw }
     } else {
       const promptFile = join(w.home!, `prompt-${standinRuns}.txt`)
@@ -549,7 +572,7 @@ export async function runWorker(w: RunWorld, spec: WorkerSpec, name = 'worker', 
         'run', ...ticketArgs, '--prompt-file', promptFile,
         ...(spec.timeoutSecs ? ['--timeout', String(spec.timeoutSecs)] : []),
         ...(spec.checkTicket ? ['--check-ticket'] : []),
-        '--', process.execPath, ...nodeTsArgs(STANDIN),
+        '--', process.execPath, ...nodeTsArgs(script),
       ])
     }
     const child = spawn(process.execPath, args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] })
@@ -566,6 +589,16 @@ export async function runWorker(w: RunWorld, spec: WorkerSpec, name = 'worker', 
   }
   const log = existsSync(logPath)
     ? readFileSync(logPath, 'utf8').trim().split('\n').filter((l) => l !== '').map((l) => JSON.parse(l) as StandinRecord) : []
+  // A `claude -p` child no wrapper watched has no spawner's line: what it
+  // was told at its stop (its stop hook's message) is the line it ends on.
+  if (spec.claudeP && spec.spawner === 'none' && out.line === '') {
+    for (const stop of log[0]?.stops ?? []) {
+      try {
+        const m = (JSON.parse(stop.trim() || '{}') as { systemMessage?: string }).systemMessage
+        if (typeof m === 'string') out = { ...out, line: m }
+      } catch { /* not the hook's JSON */ }
+    }
+  }
   const sessionId = out.result?.sessionId ?? log[0]?.session ?? /\(session ([^,)]+)/.exec(out.line)?.[1] ?? null
   const full: Outcome = { ...out, log, logPath, sessionId, elapsedMs: Date.now() - t0 }
   w.facts![`out:${name}`] = full
@@ -587,7 +620,11 @@ function laneRows(w: WorkersWorld, sessionId: string): Array<{ node_id: string; 
 function firstMessageOf(w: WorkersWorld, name = 'worker'): string {
   const o = outOf(w, name)
   expect(o.log.length, 'the worker recorded what it was given').toBeGreaterThan(0)
-  return o.log[0]!.stdin
+  const r = o.log[0]!
+  // A `claude -p` child its own session-start hook was the door for (no
+  // lane in its environment): its first message is that hook's context.
+  if (r.ccSession !== undefined && r.lane === null) return r.context ?? ''
+  return r.stdin
 }
 
 /** Each part found in the message, in this order. */
@@ -604,30 +641,6 @@ function harnessLookup(w: WorkersWorld, key = 'login-form', run = RUN): KeyLooku
   const l = w.store!.lookupKey({ run, key })
   w.lookups![run] = l
   return l
-}
-
-/** A real lock another process holds on the store: the whole store
- *  (store-locker.cjs, which needs every other connection let go first),
- *  or its writes alone (store-write-locker.cjs, readers left reading). */
-async function lockStore(w: WorkersWorld, what: 'whole' | 'writes' = 'whole'): Promise<ChildProcess> {
-  const helper = what === 'whole' ? 'store-locker.cjs' : 'store-write-locker.cjs'
-  const locker = spawn(process.execPath, [join(TS_ROOT, 'tests', 'helpers', helper), w.dbPath!], { stdio: ['ignore', 'pipe', 'inherit'] })
-  w.defer(() => { try { locker.kill('SIGKILL') } catch { /* gone */ } })
-  let seen = ''
-  await new Promise<void>((resolve, reject) => {
-    const bail = setTimeout(() => reject(new Error(`the locker never locked: ${seen}`)), 20_000)
-    locker.stdout!.on('data', (c: Buffer) => { seen += c.toString(); if (/locked \d+/.test(seen)) { clearTimeout(bail); resolve() } })
-    locker.once('exit', (code) => { clearTimeout(bail); reject(new Error(`the locker exited ${code}: ${seen}`)) })
-  })
-  return locker
-}
-
-async function waitForFile(path: string, ms = 30_000): Promise<void> {
-  const deadline = Date.now() + ms
-  while (!existsSync(path)) {
-    if (Date.now() > deadline) throw new Error(`${path} never appeared`)
-    await new Promise((r) => setTimeout(r, 25))
-  }
 }
 
 const WORKER_CLI = /`(codex exec|claude -p|agy -p)`/.source
@@ -925,9 +938,37 @@ export function ticketDoorSteps(define: (re: RegExp, fn: (w: WorkersWorld, ...ca
     expect(r.m['refs']).toEqual([w.ids!['brief'], cp])
     expect([r.m['run'], r.m['key'], r.m['source'], r.m['_writer'], r.m['_door']]).toEqual([RUN, 'login-form', 'auto-capture', 'builder', 'ticket'])
     expect(r.m['checkpoint_size']).toBe(rawContentOf(w, cp).length)
-    // Through the hook-less door, the wrapper: the row is the first the
-    // lane holds, written before the worker started (it saw only it).
-    expect(outOf(w).log[0]!.laneRowsSeen).toBe(1)
+    const log = outOf(w).log[0]!
+    if (log.ccSession === undefined) {
+      // Through the hook-less door, the wrapper: the row is the first the
+      // lane holds, written before the worker started (it saw only it).
+      expect(log.laneRowsSeen).toBe(1)
+    } else {
+      // Through a `claude -p` child's session-start hook: the hook linked
+      // the child's own Claude Code session to the lane the door
+      // registered, wrote no first moment of its own, and the child's
+      // captured rows landed in the lane after it.
+      const lane = outOf(w).sessionId!
+      const links = JSON.parse(String(rawRegistration(w, w.legs!['worker']!)['client_sessions'])) as Array<{ id: string; linked_by: string }>
+      expect(links.map((l) => [l.id, l.linked_by])).toEqual([[log.ccSession, 'session-start hook']])
+      const rows = laneRows(w, lane)
+      expect(rows.filter((x) => x.kind === FIRST_MOMENT_KIND)).toHaveLength(1)
+      expect(rows.length).toBeGreaterThan(1)
+      // After it: the child's hook captures (its own session kept beside),
+      // the note it wrote through its own tools (the server inside it
+      // stamped it into the lane), and its return.
+      const note = rows.find((x) => x.content === CHILD_NOTE)
+      expect(note, 'the note the child wrote through its tools').toBeTruthy()
+      expect([note!.m['_writer'], note!.m['_writer_agent_id'], note!.m['_writer_src']]).toEqual(['builder', WORKER_AGENT_ID, 'declared'])
+      // Its insert's echo landed in the lane as the child's capture, and the
+      // drain healed nothing from it (a worker's lane is stamped exactly).
+      const echo = rows.find((x) => x.m['tool_name'] === 'mcp__treecontext__treecontext_insert')
+      expect(echo, 'the insert echo').toBeTruthy()
+      expect([echo!.m['_client_session_id'], echo!.m['_writer'], echo!.m['_door']]).toEqual([log.ccSession, 'builder', 'hooks'])
+      expect(note!.m['_writer_heal_note']).toBeUndefined()
+      expect(rows.slice(1).every((x) => x.m['_client_session_id'] === log.ccSession || x.kind === SUBAGENT_SUMMARY_KIND || x === note)).toBe(true)
+      expect(rawAll(w, 'SELECT 1 FROM nodes WHERE session_key = ?', log.ccSession)).toHaveLength(0)
+    }
   })
 
   define(/^that row holds no copy of the brief or the checkpoint$/, (w) => {
@@ -1479,4 +1520,253 @@ export function ticketDoorSteps(define: (re: RegExp, fn: (w: WorkersWorld, ...ca
     const leg = l.legs.find((g) => g.sessionId === w.legs!['worker']!.sessionId)!
     expect([leg.state, leg.noticedBy]).toEqual(['phantom', NOTICED_BY_LOOKUP])
   })
+}
+
+// ── The `claude -p` child through its hooks (unit 4 of the beta.3 build) ──
+//
+// D295, D298, D303, D342: the worker here is the stand-in `claude -p` child
+// (tests/helpers/standin-claude-p.ts), which fires the REAL hooks Claude
+// Code fires, as subprocesses with the platform's payloads and its own
+// environment, the ticket and the lane the spawner put there inherited:
+// SessionStart, UserPromptSubmit, PostToolUse and Stop. The wrapper that
+// spawns it is the real `treecontext run`; a child with no wrapper holds
+// its ticket alone. Every Then reads the hooks' output as the child
+// recorded it, the wrapper's line, or the store file.
+
+const STANDIN_FINAL = 'half the submit wired; stopping'
+const CHILD_NOTE = 'note: the submit handler is wired to /api/login (written through the tools)'
+
+function claudeChildSteps(define: (re: RegExp, fn: (w: WorkersWorld, ...caps: string[]) => void | Promise<void>) => void): void {
+  define(/^a worker starts through the session-start hook of a `claude -p` child with the spawner's prompt "([^"]+)"$/, async (w, prompt) => {
+    await runWorker(w, {
+      spawner: 'wrapper', prompt: prompt!, ticket: ticketFields(w, { role: 'builder', checkpointer: 'reviewer' }),
+      plan: { first: {} }, claudeP: { tools: 2, toolNotes: [CHILD_NOTE], final: STANDIN_FINAL },
+    })
+    expect(outOf(w).log[0]!.ccSession, 'the claude -p stand-in ran').toBeTruthy()
+    await drainStaging(w)
+  })
+
+  define(/^a `codex exec` worker and a `claude -p` child each start with the spawner's prompt "([^"]+)"$/, async (w, prompt) => {
+    const ticket = ticketFields(w, { role: 'builder', checkpointer: 'reviewer' })
+    await runWorker(w, { spawner: 'wrapper', prompt: prompt!, ticket, plan: { first: {} } }, 'codex')
+    await runWorker(w, { spawner: 'wrapper', prompt: prompt!, ticket, plan: { first: {} }, claudeP: { tools: 1, final: STANDIN_FINAL } }, 'claude')
+    await drainStaging(w)
+  })
+
+  const firstMomentOf = (raw: DatabaseSync, lane: string): Record<string, unknown> => {
+    const rows = raw.prepare("SELECT * FROM nodes WHERE session_key = ? AND json_extract(metadata_json, '$.kind') = 'first-moment'").all(lane) as Array<Record<string, unknown>>
+    expect(rows, `one first-moment row in ${lane}`).toHaveLength(1)
+    return rows[0]!
+  }
+
+  // What differs between two doors' rows by construction: the row's own
+  // identity, its moments, its lane and its writer stamp.
+  const OWN_COLUMNS = new Set(['node_id', 'created_at', 'updated_at', 'session_key', 'last_accessed_at'])
+  const STAMP_KEYS = new Set(['session_id', '_cc_session_id', '_writer', '_writer_src', '_writer_agent_id'])
+
+  define(/^a reader with the store file and plain SQL sees the two first-moment rows equal column for column apart from their writer stamps, lanes and moments$/, (w) => {
+    const raw = readerOf(w)
+    const a = firstMomentOf(raw, outOf(w, 'codex').sessionId!)
+    const b = firstMomentOf(raw, outOf(w, 'claude').sessionId!)
+    const differing = Object.keys(a).filter((c) => JSON.stringify(a[c]) !== JSON.stringify(b[c]))
+    for (const c of differing.filter((x) => x !== 'metadata_json')) expect(OWN_COLUMNS.has(c), `column ${c} differs`).toBe(true)
+    const ma = JSON.parse(String(a['metadata_json'])) as Record<string, unknown>
+    const mb = JSON.parse(String(b['metadata_json'])) as Record<string, unknown>
+    for (const k of new Set([...Object.keys(ma), ...Object.keys(mb)])) {
+      if (STAMP_KEYS.has(k)) continue
+      expect(mb[k], `metadata ${k}`).toEqual(ma[k])
+    }
+    expect([ma['session_id'], mb['session_id']]).toEqual([outOf(w, 'codex').sessionId, outOf(w, 'claude').sessionId])
+    // The claude -p child's own session-start hook ran, and wrote no row
+    // of its own into the lane's head.
+    expect(outOf(w, 'claude').log[0]!.systemMessage).toContain('worker of the lane')
+  })
+
+  define(/^no file outside the store is needed to read what either worker saw$/, (w) => {
+    const raw = readerOf(w)
+    for (const name of ['codex', 'claude']) {
+      const o = outOf(w, name)
+      const row = firstMomentOf(raw, o.sessionId!)
+      const reg = raw.prepare("SELECT * FROM session_registry WHERE session_id = ? AND agent_id = 'worker'").get(o.sessionId!) as Record<string, unknown>
+      // Recomposed from the file alone, through a read-only handle: the
+      // first message the worker received on its stdin, byte for byte.
+      const facts = firstMomentFactsOf(raw, null, {
+        run: String(reg['run']), key: reg['run_key'] as string, role: String(reg['agent_type']),
+        checkpointer: reg['checkpointer'] as string | null, checkpointedBy: reg['checkpointed_by'] as string | null,
+        self: { sessionId: o.sessionId!, agentId: WORKER_AGENT_ID },
+      })
+      expect(composeFirstMessage(facts, decodeContent(row['content'] as Buffer | string))).toBe(o.log[0]!.stdin)
+    }
+  })
+
+  const handEdited = (): string => {
+    const t = JSON.parse(mintTicket({ run: RUN, key: 'login-form', role: 'builder', checkpointer: 'builder', parent: { id: 'p1' } })) as Record<string, unknown>
+    delete t['run']
+    return JSON.stringify(t)
+  }
+  const truncated = (): string => {
+    const t = mintTicket({ run: RUN, key: 'login-form', role: 'builder', checkpointer: 'builder', parent: { id: 'p1' } })
+    return t.slice(0, t.indexOf('"role":"builder"') + '"role":"builder"'.length)
+  }
+
+  define(/^a ticket in the environment, (hand-edited so that the run is missing|truncated after the role "builder"), so that the session-start hook of a `claude -p` child cannot read it whole$/, async (w, damage) => {
+    await openRunWorld(w)
+    const raw = damage!.startsWith('hand-edited') ? handEdited() : truncated()
+    expect(readTicket(raw).valid).toBe(false)
+    w.facts!['raw'] = raw
+    // The child holds the ticket alone, no wrapper: its own session-start
+    // hook is the door. It does what its first message asks: one row
+    // saying its instructions were invalid (its turn's text, captured by
+    // its Stop hook), and a stop.
+    w.facts!['spec'] = {
+      spawner: 'none', prompt: '', ticket: raw, plan: { first: {} },
+      claudeP: { final: 'my instructions were invalid; I did no work and stop here' },
+    } satisfies WorkerSpec
+  })
+
+  define(/^the worker starts through the session-start hook of a `claude -p` child$/, async (w) => {
+    await runWorker(w, specOf(w))
+    await drainStaging(w)
+    const log = outOf(w).log[0]!
+    // The hook registered the child in its own session's lane, the worker
+    // row the one row there: no self, and its context is the statement
+    // that its instructions were invalid.
+    expect(log.lane).toBeNull()
+    expect(rawAll(w, 'SELECT agent_id FROM session_registry WHERE session_id = ?', log.ccSession)).toEqual([{ agent_id: WORKER_AGENT_ID }])
+    expect(log.context).toContain('your instructions were invalid')
+    const fm = laneRows(w, log.ccSession!)[0]!
+    expect(fm.kind).toBe(FIRST_MOMENT_KIND)
+    expect(fm.content).toMatch(/through the session-start hook of a `claude -p` child: its ticket could not be read whole/)
+  })
+
+  define(/^a ticket in the environment naming the parent "([^"]+)", the run "([^"]+)", the key "([^"]+)" and the role "([^"]+)"$/, async (w, parent, run, key, role) => {
+    await openRunWorld(w)
+    w.ids!['brief'] = (await w.store!.writeBrief('BRIEF: build the login form', { run: run!, key: key!, role: role!, checkpointer: 'reviewer', by: 'harness' })).nodeId
+    w.facts!['spec'] = {
+      spawner: 'none', prompt: '', plan: { first: {} },
+      ticket: { run: run!, key: key!, role: role!, checkpointer: 'reviewer', parent: { id: parent!, cli: 'claude-code' } },
+      claudeP: { tools: 2, final: 'looked at the login form; nothing to wire yet' },
+    } satisfies WorkerSpec
+  })
+
+  define(/^a `claude -p` process starts and its session-start hook fires$/, async (w) => {
+    await runWorker(w, specOf(w))
+    await drainStaging(w)
+  })
+
+  define(/^the store holds a worker registration for it with the role "([^"]+)", the run "([^"]+)", the key "([^"]+)" and the parent "([^"]+)", marked as the ticket door read by the hook$/, (w, role, run, key, parent) => {
+    const log = outOf(w).log[0]!
+    const lane = log.ccSession!
+    const reg = rawRegistration(w, { sessionId: lane, agentId: WORKER_AGENT_ID })
+    expect([reg['kind'], reg['agent_type'], reg['run'], reg['run_key'], reg['parent_session'], reg['parent_src']]).toEqual(['worker', role, run, key, parent, 'declared'])
+    // The ticket door, read by the hook: the door is the ticket's, and the
+    // child's own session is linked, by the session-start hook, at its start.
+    expect([reg['door'], reg['identity']]).toEqual(['ticket', 'declared'])
+    const links = JSON.parse(String(reg['client_sessions'])) as Array<{ id: string; linked_by: string; at: number }>
+    expect(links.map((l) => [l.id, l.linked_by])).toEqual([[lane, 'session-start hook']])
+    expect(Math.abs(links[0]!.at - Number(reg['started_at']))).toBeLessThan(5)
+    const procs = JSON.parse(String(reg['processes'])) as Array<{ pid: number }>
+    expect(procs.map((p) => p.pid)).toEqual([log.pid])
+    // Its first moment, composed from the store by the hook, is the first
+    // row of its lane and is what the hook handed it.
+    const rows = laneRows(w, lane)
+    expect(rows[0]!.kind).toBe(FIRST_MOMENT_KIND)
+    expect(rows[0]!.m['refs']).toEqual([w.ids!['brief']])
+    expect(log.context).toContain('BRIEF: build the login form')
+    expect(log.context).toContain(STATE_NOT_HISTORY_LINE)
+  })
+
+  define(/^the store holds no self registration and no beacon for it$/, (w) => {
+    const log = outOf(w).log[0]!
+    expect(rawAll(w, "SELECT 1 FROM session_registry WHERE session_id = ? AND agent_id = ''", log.ccSession)).toHaveLength(0)
+    // The beacon is keyed by the client's process: none names the child.
+    expect(readSessionBeacon(w.dbPath!, log.pid)).toBeNull()
+  })
+
+  define(/^every row the child writes carries the writer "([^"]+)" and the parent "([^"]+)" as declared$/, (w, writer, parent) => {
+    const lane = outOf(w).log[0]!.ccSession!
+    const rows = laneRows(w, lane).filter((r) => r.kind !== FIRST_MOMENT_KIND)
+    // Its two tool calls and its turn's text, captured by its hooks (its
+    // prompt was its own argument, empty here, which the prompt hook skips).
+    expect(rows.length).toBeGreaterThanOrEqual(3)
+    for (const r of rows) {
+      expect([r.m['_writer'], r.m['_parent'], r.m['_parent_src'], r.m['_writer_agent_id'], r.m['_door']], r.content.slice(0, 80))
+        .toEqual([writer, parent, 'declared', WORKER_AGENT_ID, 'hooks'])
+    }
+    expect(rawAll(w, "SELECT 1 FROM nodes WHERE json_extract(metadata_json, '$._writer') = 'main'")).toHaveLength(0)
+  })
+
+  define(/^a `claude -p` worker started by the wrapper, naming itself as checkpointer, whose stop hook fires before its process exits$/, async (w) => {
+    await openRunWorld(w)
+    await seedCheckpoints(w, RUN, 'login-form', 3, 'builder')
+    w.facts!['spec'] = { ...owingSpec(w), claudeP: { tools: 3, final: STANDIN_FINAL } }
+  })
+
+  define(/^the worker stops with no checkpoint under the key "([^"]+)"$/, async (w, key) => {
+    expect((specOf(w).ticket as TicketFields).key).toBe(key)
+    await runWorker(w, specOf(w))
+    await drainStaging(w)
+  })
+
+  define(/^the stop hook sends it back once with the reason naming the missing checkpoint under "([^"]+)"$/, (w, key) => {
+    const log = outOf(w).log[0]!
+    expect(log.sentBack, 'the stop hook blocked').not.toBeNull()
+    expect(log.sentBack!.startsWith(sendBackReason('builder', RUN, key!))).toBe(true)
+    expect(log.sentBack!).toContain(`no checkpoint under the key "${key}"`)
+    const reg = rawRegistration(w, w.legs!['worker']!)
+    expect(reg['send_backs']).toBe(1)
+    const sent = laneRows(w, outOf(w).sessionId!).filter((r) => r.kind === SEND_BACK_KIND)
+    expect(sent).toHaveLength(1)
+    expect([sent[0]!.content, sent[0]!.m['_door']]).toEqual([log.sentBack, 'hooks'])
+  })
+
+  define(/^when the process then exits with still no checkpoint, the wrapper starts no second run$/, (w) => {
+    const o = outOf(w)
+    expect(o.log).toHaveLength(1)
+    const reg = rawRegistration(w, w.legs!['worker']!)
+    expect((JSON.parse(String(reg['processes'])) as unknown[]).length).toBe(1)
+    expect([reg['send_backs'], reg['ended']]).toEqual([1, 'retired'])
+    // The wrapper's line says it exited and was retired, with no send-back
+    // of its own between the two (its words when it sends back are
+    // "exited with code 0 after its one send-back and is retired").
+    expect(o.line).toMatch(/ exited with code \d+ and is retired; /)
+  })
+
+  define(/^a `claude -p` worker started by the wrapper, naming itself as checkpointer, whose store refuses writes at the moment its stop hook fires$/, async (w) => {
+    await openRunWorld(w)
+    await seedCheckpoints(w, RUN, 'login-form', 3, 'builder')
+    const before = join(w.home!, 'stop-go')
+    const after = join(w.home!, 'exit-go')
+    w.facts!['go'] = [before, after]
+    w.facts!['spec'] = { ...owingSpec(w), claudeP: { tools: 2, final: STANDIN_FINAL, waitBeforeStop: before, waitAfterStop: after } }
+  })
+
+  define(/^the worker stops with no checkpoint and its process exits with the store writable again$/, async (w) => {
+    const [before, after] = w.facts!['go'] as [string, string]
+    await runWorker(w, specOf(w), 'worker', async () => {
+      await waitForFile(`${before}.ready`)
+      chmodSync(w.dbPath!, 0o444)
+      w.defer(() => { try { chmodSync(w.dbPath!, 0o644) } catch { /* gone */ } })
+      writeFileSync(before, 'go')
+      await waitForFile(`${after}.ready`)
+      chmodSync(w.dbPath!, 0o644)
+      writeFileSync(after, 'go')
+    })
+  })
+
+  define(/^the stop hook sent it back no time$/, (w) => {
+    const first = outOf(w).log[0]!
+    expect(first.sentBack).toBeNull()
+    expect(first.stops!.map((s) => s.trim())).toEqual([''])
+  })
+}
+
+/** A `claude -p` worker the wrapper spawns, its ticket naming it as the
+ *  checkpointer of the key and declaring a way to write. */
+function owingSpec(w: WorkersWorld): WorkerSpec {
+  return {
+    spawner: 'wrapper', prompt: 'wire the submit button',
+    ticket: ticketFields(w, { checkpointer: 'builder', canWrite: true }),
+    plan: { first: {} },
+  }
 }

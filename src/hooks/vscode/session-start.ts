@@ -9,7 +9,7 @@ import { parseAndNormalize } from './normalize.js'
 import { main as referenceMain } from '../session-start.js'
 
 export function main(): void {
-  referenceMain(parseAndNormalize())
+  void referenceMain(parseAndNormalize())
 }
 
 const isMain = isDirectInvocation(import.meta.url)

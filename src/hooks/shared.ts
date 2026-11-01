@@ -7,6 +7,8 @@ import { StagingEntry } from '../persistence/store.js'
 import { resolveHookNamespace } from '../session-beacon.js'
 import { nsLeaseLiveFor } from '../persistence/leases.js'
 import { dirname } from 'node:path'
+import { HOOK_CONTEXT_CAP } from '../first-moment.js'
+import { recordHookGap } from './gap-ledger.js'
 import { openNodeSqlite, openRaw, ensureDbFileMode, pragmaValue, setPragma } from '../persistence/node-sqlite.js'
 import { ensureBaseSchema, runMigrations } from '../persistence/migrations.js'
 import { maxSupportedVersion } from '../persistence/migrations/index.js'
@@ -346,9 +348,52 @@ export function writeStaging(dbPath: string, entry: StagingEntry, andThen?: (db:
     const losing = /no such table|does not exist|unable to open database/i.test(msg)
     dbg('hook', losing ? 'staging write FAILED — CAPTURE IS LOSING DATA: the store has no usable schema' : 'staging write FAILED', { error: msg, dbPath, role: entry.role })
     console.error(`[treecontext hook] Failed to write staging entry: ${msg}${losing ? ' — capture is losing data; run `treecontext doctor`' : ''}`)
+    // D314: a dropped event is marked, whichever hook dropped it: the gap
+    // ledger beside the store, which the drain writes as a capture-gap row
+    // when the store is next written.
+    recordHookGap(dbPath, {
+      hook: stagingHookOf(entry), sessionId: entry.sessionId ?? null,
+      ...(entry.agentId ? { agentId: entry.agentId } : {}), ...(entry.agentType ? { agentType: entry.agentType } : {}),
+      at: entry.timestamp, error: msg,
+      lost: `The ${entry.toolName ? `${entry.toolName} call` : entry.role === 'user' ? 'developer turn' : entry.role === 'snapshot' ? 'recovery snapshot claim' : 'assistant turn'} it captured was not staged.`,
+      text: entry.content,
+    })
   } finally {
     if (db) db.close()
   }
+}
+
+/** Can the store take a hook's writes? Asked of the filesystem, which
+ *  costs no lock wait (D163): the Stop hook's bookmark ask and the hooks
+ *  door's send-back are skipped when it cannot (D279: never when the store
+ *  cannot be written). */
+export function storeRefusesWrites(dbPath: string): string | null {
+  try {
+    fs.accessSync(dbPath, fs.constants.W_OK)
+    fs.accessSync(dirname(dbPath), fs.constants.W_OK)
+    return null
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code
+    return code === 'EACCES' || code === 'EPERM' || code === 'EROFS'
+      ? 'the store is read-only for this session'
+      : `the store is unavailable (${err instanceof Error ? err.message : String(err)})`
+  }
+}
+
+/** The hook's block decision: the subagent continues with the reason as
+ *  its next instruction (Claude Code's SubagentStop decision control). */
+export function blockOutput(reason: string): string {
+  return JSON.stringify({ decision: 'block', reason: reason.length > HOOK_CONTEXT_CAP ? reason.slice(0, HOOK_CONTEXT_CAP) : reason }) + '\n'
+}
+
+/** The hook a staged event came from, by its shape: what the gap row
+ *  names when the staging write was refused. */
+export function stagingHookOf(entry: Pick<StagingEntry, 'toolName' | 'role' | 'kind'>): string {
+  if (entry.toolName) return 'post-tool-use'
+  if (entry.role === 'user') return 'user-prompt-submit'
+  if (entry.role === 'snapshot') return 'session-start'
+  if (entry.kind) return 'subagent-stop'
+  return 'stop'
 }
 
 /** The writer a Claude Code hook payload names (D190): a subagent's

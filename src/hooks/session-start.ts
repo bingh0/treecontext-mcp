@@ -9,6 +9,12 @@ import { buildClearPacket, localDateOf, markNudged, recordSessionLink, sessionCh
 import { hasRegistry, registerSelf, retireAllSubagents, type GitSelf } from '../persistence/session-registry.js'
 import { retirePhantoms, NOTICED_BY_SESSION_START } from '../persistence/leg-registry.js'
 import { gitSelfOf } from './git-self.js'
+import { hookStoreOn, hookTreeOf } from './hook-store.js'
+import { recordHookGap } from './gap-ledger.js'
+import { ticketTextIn, readTicket, trustedWorkerLane } from '../ticket.js'
+import { hasLegColumns, legOf, linkClientSession, workerOfSession, recordWorkerProcess, WORKER_AGENT_ID, LINKED_BY_SESSION_START, type LegRegistration } from '../persistence/leg-registry.js'
+import { hostProbe } from '../persistence/process-probe.js'
+import { composeFirstMessage, fitHookCap, invalidInstructionsMessage, firstMomentFactsOf } from '../first-moment.js'
 
 /** The packet when the session before this clear cannot be identified. */
 export const UNKNOWN_PREDECESSOR =
@@ -31,6 +37,98 @@ function messageOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
 
+/** The context a `claude -p` child opens on when the ticket door that
+ *  spawned it already handed it its first message as its prompt (D298:
+ *  "the worker's first moment is its prompt"): who it is and where that
+ *  first moment is kept, never the first moment a second time (D295's
+ *  road not taken: the first moment spent twice). */
+export function workerIdentityLine(leg: LegRegistration, firstMomentId: string | null): string {
+  const keyed = leg.key !== null ? `, under the key "${leg.key}"` : ''
+  return `treecontext: this session is the ${leg.role ?? 'unnamed'} worker${leg.run ? ` of the run "${leg.run}"` : ''}${keyed}, `
+    + `in the lane of session ${leg.sessionId}, never this checkout's self. Your first message, your prompt, came from the ticket door`
+    + `${firstMomentId ? ` and is kept as the first-moment row ${firstMomentId}` : ''}; no re-orientation packet follows.`
+}
+
+/**
+ * D295: a session started with a ticket in its environment is a worker,
+ * never a self: no beacon, no self registration, no /clear packet. The
+ * ticket wins. When the ticket door that spawned this `claude -p` child
+ * registered it already (its lane in the environment, honoured only when
+ * the ticket matches that registration, ticket.ts trustedWorkerLane), the
+ * child's own Claude Code session id is linked to that registration, so
+ * the drain lands the child's captured rows in the worker's lane, and the
+ * child is told who it is. With no wrapper, the hook is the ticket door:
+ * it registers the child in its own session's lane under the parent the
+ * ticket names, composes its first moment from the store, writes it as the
+ * first row of that lane and injects it, under the client's cap (D325).
+ * A ticket it cannot read whole registers the child with what was read and
+ * tells it its instructions were invalid (D303, D342). Returns the hook's
+ * output, or null when the store could not be written (the start is then
+ * a capture gap).
+ */
+async function workerStart(db: DatabaseType, dbPath: string, sessionId: string, cwd: string | undefined, raw: string): Promise<{ additionalContext?: string; systemMessage: string }> {
+  const at = Date.now() / 1000
+  const lane = trustedWorkerLane(db)
+  if (lane !== null) {
+    const ref = { sessionId: lane, agentId: WORKER_AGENT_ID }
+    linkClientSession(db, ref, sessionId, { linkedBy: LINKED_BY_SESSION_START, at })
+    const leg = legOf(db, ref)!
+    const first = db.prepare(
+      "SELECT node_id FROM nodes WHERE session_key = ? AND json_extract(metadata_json, '$.kind') = 'first-moment' ORDER BY created_at, rowid LIMIT 1",
+    ).get(lane) as { node_id: string } | undefined
+    return {
+      systemMessage: `treecontext: this session is the ${leg.role ?? 'unnamed'} worker of the lane ${lane}, read from its ticket.`,
+      additionalContext: workerIdentityLine(leg, first?.node_id ?? null),
+    }
+  }
+  const opened = await hookStoreOn(db, dbPath, sessionId)
+  if (!opened || 'refused' in opened) {
+    // D265, D314: the worker's start is not lost silently.
+    const why = opened ? opened.refused : 'its store predates workers (schema 31)'
+    recordHookGap(dbPath, {
+      hook: 'session-start', sessionId, at, error: why,
+      lost: 'This session held a worker\'s ticket; no worker registration or first moment was recorded for it.',
+    })
+    return { systemMessage: `treecontext: this session holds a worker's ticket, but ${why}; it is journaled as no one's self, and the start is recorded as a capture gap.` }
+  }
+  const store = opened.store
+  const allNamespaces = opened.namespace === null
+  try {
+    const reading = readTicket(raw)
+    const ref = { sessionId, agentId: WORKER_AGENT_ID }
+    const existing = workerOfSession(db, sessionId)
+    let message: string
+    if (existing === null) {
+      const started = store.startWorker({
+        reading, prompt: null, sessionId, door: 'ticket', where: gitSelfOf(cwd ?? process.cwd()), host: hostProbe.host(), at,
+        hookDoor: { allNamespaces },
+      })
+      message = started.firstMessage
+      // The client process this child runs as: the hook's parent (the
+      // wrapper execs into node, as for the session beacon).
+      const pid = process.ppid
+      recordWorkerProcess(db, ref, { pid, start: hostProbe.startMoment(pid), token: hostProbe.startToken?.(pid) ?? null, host: hostProbe.host(), at })
+    } else if (reading.valid && existing.run !== null) {
+      // A resumed worker session: told again, from the store as it
+      // stands, under the client's cap like any first moment (D325).
+      const facts = firstMomentFactsOf(db, hookTreeOf(db, opened.namespace), {
+        run: existing.run, key: existing.key, role: existing.role ?? 'unnamed', checkpointer: existing.checkpointer, checkpointedBy: existing.checkpointedBy, self: ref,
+      })
+      message = fitHookCap(facts, { compose: (o) => composeFirstMessage(facts, null, o) }).message
+    } else {
+      message = invalidInstructionsMessage(reading.absent, { role: reading.ticket.role, run: reading.ticket.run, key: reading.ticket.key })
+    }
+    linkClientSession(db, ref, sessionId, { linkedBy: LINKED_BY_SESSION_START, at })
+    const leg = legOf(db, ref)
+    return {
+      systemMessage: `treecontext: this session is the ${leg?.role ?? 'unnamed'} worker${leg?.run ? ` of the run "${leg.run}"` : ''}, read from its ticket; it is no self of this checkout.`,
+      additionalContext: message,
+    }
+  } finally {
+    await store.close()
+  }
+}
+
 function emit(out: { additionalContext?: string; systemMessage?: string }): void {
   const json: Record<string, unknown> = {}
   if (out.systemMessage) json['systemMessage'] = out.systemMessage
@@ -40,7 +138,7 @@ function emit(out: { additionalContext?: string; systemMessage?: string }): void
   if (Object.keys(json).length > 0) process.stdout.write(JSON.stringify(json) + '\n')
 }
 
-export function main(preParsed?: Record<string, unknown>) {
+export async function main(preParsed?: Record<string, unknown>): Promise<void> {
   try {
     const input = preParsed ?? parseHookInput()
     const sessionId = input.session_id
@@ -56,6 +154,35 @@ export function main(preParsed?: Record<string, unknown>) {
 
     const source = normalizeSource(input.source)
     const dbPath = resolveDbPath(cwd)
+
+    // D295: the ticket wins. A session holding a worker's ticket writes no
+    // beacon, registers no self and gets no packet.
+    const ticket = ticketTextIn(process.env)
+    if (ticket !== null) {
+      let db: DatabaseType | null = null
+      try {
+        db = openHookDb(dbPath)
+        if (!hasLegColumns(db)) {
+          recordHookGap(dbPath, {
+            hook: 'session-start', sessionId, at: Date.now() / 1000, error: 'its store predates workers (schema 31)',
+            lost: 'This session held a worker\'s ticket; no worker registration or first moment was recorded for it.',
+          })
+          emit({ systemMessage: 'treecontext: this session holds a worker\'s ticket, but its store predates workers (schema 31); it is journaled as no one\'s self.' })
+        } else {
+          emit(await workerStart(db, dbPath, sessionId, cwd, ticket))
+        }
+      } catch (err) {
+        dbg('hook:session-start', 'worker start FAILED — recorded as a capture gap', { error: messageOf(err) })
+        recordHookGap(dbPath, {
+          hook: 'session-start', sessionId, at: Date.now() / 1000, error: messageOf(err),
+          lost: 'This session held a worker\'s ticket; no worker registration or first moment was recorded for it.',
+        })
+      } finally {
+        if (db) db.close()
+      }
+      process.exit(0)
+      return
+    }
     // The store's name is its directory under the stores root.
     const storeName = basename(dirname(dbPath))
     dbg('hook:session-start', 'opening db', { source, dbPath })
@@ -209,4 +336,4 @@ export function main(preParsed?: Record<string, unknown>) {
 
 
 const isMain = isDirectInvocation(import.meta.url)
-if (isMain) main()
+if (isMain) void main()

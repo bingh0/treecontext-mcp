@@ -14,37 +14,37 @@ export async function dispatchHook(event: string): Promise<void> {
     switch (event) {
       case 'session-start': {
         const mod = await import('../hooks/session-start.js')
-        mod.main()
+        await mod.main()
         break
       }
       case 'pre-compact': {
         const mod = await import('../hooks/pre-compact.js')
-        mod.main()
+        await mod.main()
         break
       }
       case 'post-tool-use': {
         const mod = await import('../hooks/post-tool-use.js')
-        mod.main()
+        await mod.main()
         break
       }
       case 'user-prompt-submit': {
         const mod = await import('../hooks/user-prompt-submit.js')
-        mod.main()
+        await mod.main()
         break
       }
       case 'stop': {
         const mod = await import('../hooks/stop.js')
-        mod.main()
+        await mod.main()
         break
       }
       case 'subagent-start': {
         const mod = await import('../hooks/subagent-start.js')
-        mod.main()
+        await mod.main()
         break
       }
       case 'subagent-stop': {
         const mod = await import('../hooks/subagent-stop.js')
-        mod.main()
+        await mod.main()
         break
       }
       default:

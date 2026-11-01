@@ -7,14 +7,15 @@
  * Every Given here writes through the production writer of what it
  * establishes: checkpoints and briefs through the library's own writers
  * (writeCheckpoint, writeBrief), a hooks-door leg through the real
- * SubagentStart hook and then the registry call the hooks door makes
- * (registerLeg), a worker through registerWorker, the library door a
- * spawner registers through. Every Then reads the SQLite file through a
+ * SubagentStart hook alone, which reads its role's brief in effect and
+ * infers the leg's run and key from it (the hooks door, unit 4), a worker
+ * through registerWorker, the library door a spawner registers through. Every Then reads the SQLite file through a
  * separate read-only handle, or the production surface (a hook's stdout,
  * a tool's reply, the harness's lookup).
  */
 import { spawn, type ChildProcess } from 'node:child_process'
 import { hostname } from 'node:os'
+import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect } from 'vitest'
 import { type Registry } from 'gherkin-node-test/vitest'
@@ -24,6 +25,7 @@ import { hostProbe } from '../../src/persistence/process-probe.js'
 import { WORKER_AGENT_ID, type LegRef } from '../../src/persistence/leg-registry.js'
 import type { KeyLookup } from '../../src/key-lookup.js'
 import { mcpOver, parseTool, rawAll } from './world.js'
+import { TS_ROOT } from './proc.js'
 import { runHook } from './capture-harness.js'
 import { type ReorientationWorld, openWorld } from './steps/journal-reorientation.steps.js'
 
@@ -83,16 +85,54 @@ export function sessionStartHook(w: RunWorld, source = 'startup'): string {
 }
 
 /** The orchestrator spawns a subagent: the real SubagentStart hook under
- *  the PARENT's session id with the subagent's agent id and type. */
-export function subagentStartHook(w: RunWorld, agentId: string, agentType: string): string {
-  return runHook(w, 'subagent-start', { hook_event_name: 'SubagentStart', agent_id: agentId, agent_type: agentType }).stdout
+ *  the PARENT's session id with the subagent's agent id and type. `env`
+ *  adds to the sandbox (TREECONTEXT_TEST_NOW: the hook's own clock, for a
+ *  leg registered at a moment in the past). */
+export function subagentStartHook(w: RunWorld, agentId: string, agentType: string, env: Record<string, string> = {}): string {
+  return runHook(w, 'subagent-start', { hook_event_name: 'SubagentStart', agent_id: agentId, agent_type: agentType }, env).stdout
 }
 
-/** The subagent finishes: the real SubagentStop hook with its report. */
-export function subagentStopHook(w: RunWorld, agentId: string, agentType: string, report: string): string {
+/** The context a SubagentStart hook's stdout injects into the subagent,
+ *  or null when it emitted none. */
+export function startContext(stdout: string): string | null {
+  const t = stdout.trim()
+  if (t === '') return null
+  const out = JSON.parse(t) as Record<string, unknown>
+  const hso = out['hookSpecificOutput'] as Record<string, unknown> | undefined
+  expect(hso?.['hookEventName'], `not a SubagentStart output: ${t.slice(0, 200)}`).toBe('SubagentStart')
+  return typeof hso?.['additionalContext'] === 'string' ? hso['additionalContext'] : null
+}
+
+/** The subagent finishes: the real SubagentStop hook with its report. A
+ *  stop after a block carries `stop_hook_active` as the platform sends it. */
+export function subagentStopHook(w: RunWorld, agentId: string, agentType: string, report: string, opts: { stopActive?: boolean } = {}): string {
   return runHook(w, 'subagent-stop', {
-    hook_event_name: 'SubagentStop', agent_id: agentId, agent_type: agentType, stop_hook_active: false,
+    hook_event_name: 'SubagentStop', agent_id: agentId, agent_type: agentType, stop_hook_active: opts.stopActive ?? false,
     agent_transcript_path: join(w.proj!, `agent-${agentId}.jsonl`), last_assistant_message: report,
+  }).stdout
+}
+
+/** The Agent tool returns to the main agent: the real PostToolUse hook
+ *  with the reference platform's Agent payload, the subagent's own final
+ *  text in `tool_response.content` and its id in `tool_response.agentId`
+ *  (Claude Code's hooks reference). Returns the hook's stdout. */
+export function agentToolReturns(w: RunWorld, agentId: string, role: string, prompt: string, finalMessage: string): string {
+  return runHook(w, 'post-tool-use', {
+    transcript_path: join(w.proj!, 'transcript.jsonl'), hook_event_name: 'PostToolUse', permission_mode: 'default',
+    tool_name: 'Agent', tool_input: { description: `${role} leg`, prompt, subagent_type: role },
+    tool_response: { agentId, content: [{ type: 'text', text: finalMessage }] },
+  }).stdout
+}
+
+/** A BACKGROUND Agent call's PostToolUse: it fires at the launch, its
+ *  result `{ isAsync: true, status: "async_launched", agentId }` (Claude
+ *  Code, as this developer's transcripts hold it), the subagent not yet
+ *  finished. Returns the hook's stdout. */
+export function agentToolLaunchesInBackground(w: RunWorld, agentId: string, role: string, prompt: string): string {
+  return runHook(w, 'post-tool-use', {
+    transcript_path: join(w.proj!, 'transcript.jsonl'), hook_event_name: 'PostToolUse', permission_mode: 'default',
+    tool_name: 'Agent', tool_input: { description: `${role} leg`, prompt, subagent_type: role, run_in_background: true },
+    tool_response: { isAsync: true, status: 'async_launched', agentId },
   }).stdout
 }
 
@@ -146,16 +186,44 @@ export async function seedCheckpoints(w: RunWorld, run: string, key: string, n: 
   return ids
 }
 
-/** A hooks-door leg: the real SubagentStart hook registers the subagent,
- *  then the registry call the hooks door makes gives it its leg facts. */
+/** A brief for a role under a run's key, by the harness, through the
+ *  library's brief writer (D281, D327). */
+export async function briefFor(w: RunWorld, role: string, run: string, key: string, opts: {
+  checkpointer?: string | null; checkpointedBy?: string | null; content?: string; supersedes?: string[]; at?: number
+} = {}): Promise<string> {
+  const r = await w.store!.writeBrief(opts.content ?? `${role}: carry the ${key} of ${run} forward from the checkpoint in effect`, {
+    run, key, role, by: 'harness',
+    ...(opts.checkpointer ? { checkpointer: opts.checkpointer } : {}),
+    ...(opts.checkpointedBy ? { checkpointedBy: opts.checkpointedBy } : {}),
+    ...(opts.supersedes ? { supersedes: opts.supersedes } : {}),
+    ...(opts.at !== undefined ? { at: opts.at } : {}),
+  })
+  return r.nodeId
+}
+
+/**
+ * A hooks-door leg, as the hooks door makes one (D284, D320, D326): the
+ * role's brief in effect names the run and the key (written here by the
+ * harness unless one is in effect already), and the real SubagentStart
+ * hook registers the subagent and infers its leg facts from that brief,
+ * its start the checkpoint(s) then in effect. What the hook injected is
+ * kept as `start:<name>`.
+ */
 export async function hooksLeg(w: RunWorld, name: string, role: string, facts: {
-  run?: string | null; key?: string | null; keySrc?: 'declared' | 'inferred' | 'ambiguous' | 'own' | null
-  keyCandidates?: Array<{ run: string | null; key: string; briefId: string | null }>
-  checkpointer?: string | null; startCheckpoints?: string[]
-}): Promise<LegRef> {
+  run: string; key: string; checkpointer?: string | null; checkpointedBy?: string | null
+}, env: Record<string, string> = {}): Promise<LegRef> {
+  const inEffect = w.store!.briefsInEffect(role).filter((b) => b.run === facts.run && b.key === facts.key)
+  if (inEffect.length === 0) await briefFor(w, role, facts.run, facts.key, { checkpointer: facts.checkpointer ?? null, checkpointedBy: facts.checkpointedBy ?? null })
+  return hooksSubagent(w, name, role, env)
+}
+
+/** A subagent of the role started through the real SubagentStart hook and
+ *  nothing else: whatever the hooks door makes of it from the store. */
+export function hooksSubagent(w: RunWorld, name: string, role: string, env: Record<string, string> = {}): LegRef {
   const agentId = `a${name}${Math.random().toString(16).slice(2, 10)}`
-  subagentStartHook(w, agentId, role)
-  await w.store!.registerLeg({ sessionId: w.sessionId!, agentId, role, ...facts })
+  w.facts ??= {}
+  w.legs ??= {}
+  w.facts[`start:${name}`] = subagentStartHook(w, agentId, role, env)
   const ref = { sessionId: w.sessionId!, agentId }
   w.legs![name] = ref
   return ref
@@ -177,7 +245,7 @@ export async function workerLeg(w: RunWorld, name: string, opts: {
     door: 'library',
     ticket: {
       parent: { id: opts.parent ?? w.sessionId ?? 'p1' }, run: opts.run, key: opts.key, role: opts.role,
-      checkpointer: opts.checkpointer ?? opts.role, mintedAt: (opts.at ?? Date.now() / 1000) - 1,
+      checkpointer: opts.checkpointer === undefined ? opts.role : opts.checkpointer, mintedAt: (opts.at ?? Date.now() / 1000) - 1,
     },
     process: opts.process ?? liveProcess(),
     ...(opts.startCheckpoints ? { startCheckpoints: opts.startCheckpoints } : {}),
@@ -186,6 +254,30 @@ export async function workerLeg(w: RunWorld, name: string, opts: {
   const ref = { sessionId: leg.sessionId, agentId: WORKER_AGENT_ID }
   w.legs![name] = ref
   return ref
+}
+
+/** A real lock another process holds on the store: the whole store
+ *  (store-locker.cjs, which needs every other connection let go first),
+ *  or its writes alone (store-write-locker.cjs, readers left reading). */
+export async function lockStore(w: RunWorld, what: 'whole' | 'writes' = 'whole'): Promise<ChildProcess> {
+  const helper = what === 'whole' ? 'store-locker.cjs' : 'store-write-locker.cjs'
+  const locker = spawn(process.execPath, [join(TS_ROOT, 'tests', 'helpers', helper), w.dbPath!], { stdio: ['ignore', 'pipe', 'inherit'] })
+  w.defer(() => { try { locker.kill('SIGKILL') } catch { /* gone */ } })
+  let seen = ''
+  await new Promise<void>((resolve, reject) => {
+    const bail = setTimeout(() => reject(new Error(`the locker never locked: ${seen}`)), 20_000)
+    locker.stdout!.on('data', (c: Buffer) => { seen += c.toString(); if (/locked \d+/.test(seen)) { clearTimeout(bail); resolve() } })
+    locker.once('exit', (code) => { clearTimeout(bail); reject(new Error(`the locker exited ${code}: ${seen}`)) })
+  })
+  return locker
+}
+
+export async function waitForFile(path: string, ms = 30_000): Promise<void> {
+  const deadline = Date.now() + ms
+  while (!existsSync(path)) {
+    if (Date.now() > deadline) throw new Error(`${path} never appeared`)
+    await new Promise((r) => setTimeout(r, 25))
+  }
 }
 
 /** A process that waits to be killed, for the phantom pass to find. */

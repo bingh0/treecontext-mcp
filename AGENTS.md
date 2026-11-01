@@ -136,8 +136,20 @@ in the charter or out of the build.
   SQL predicates (D268); the rest stays on the pool post-filter
 - `src/hooks/` — journaling hooks. Claude Code is the verified reference
   platform; the other adapters are unverified scaffolding. `subagent-start`
-  and `subagent-stop` register and retire subagents; `git-self.ts` reads
-  where a session runs (worktree, branch) for its registration
+  and `subagent-stop` register and retire subagents and are the hooks door
+  of a leg (the inference from the role's brief, the first moment under
+  the client's 10,000-character cap, the send-back once); `post-tool-use`
+  adds the leg's pointer beside the Agent tool's result; `session-start`
+  retires a leg left live as cut and makes a `claude -p` child with a
+  ticket a worker, never a self; `stop` sends that worker back once;
+  `git-self.ts` reads where a session runs (worktree, branch) for its
+  registration
+- `src/hooks/hook-store.ts` — a FlatStore over a hook's own connection
+  (`migrate: false`, at this build's schema only), so the hooks door writes its rows
+  with the ticket door's code
+- `src/hooks/gap-ledger.ts` — the events a hook could not write while the
+  store refused them, kept beside the store; the drain writes each as a
+  capture-gap row
 - `src/session-beacon.ts` — pid-keyed session identity; on a /clear the
   session-start hook reads the predecessor session from it before
   rewriting it
@@ -226,6 +238,25 @@ node dist/server/cli.js doctor      # after a build
   signals the group. A door that cannot write the store at a worker's exit records
   nothing and leaves the leg for the phantom pass: never retry that
   write, never guess an exit moment
+- Platform events still stage (hook → staging → drain). The hooks door
+  is the one place a hook writes journal rows directly: a leg's own rows
+  (registration, the run's open, first moment, send-back, summary),
+  through the library via `hook-store.ts`, in one transaction with the
+  registration fact they belong to; never a migration, never at another
+  schema than this build's (that, too, is recorded as a gap). What a
+  hook cannot write goes to the gap ledger, never silently away (D314)
+- The hooks door reads a role's briefs from the session's resolved
+  namespace only; every namespace only when it does not resolve (the
+  multi-agent story is namespaces of one store)
+- A background Agent launch (`status: "async_launched"`) carries no
+  pointer: its return is the platform's task notification
+- A leg's key asks for a checkpoint at its stop only when it is the leg's
+  own or declared, never inferred (D326); the stop hook settles it from
+  the leg's own staged echoes first, the drain's rule, so the race with
+  the drain cannot decide
+- A `claude -p` child's captured rows land in its worker's lane at the
+  drain (`workerLaneOf`: its own session, or the lane `client_sessions`
+  links); the echo heals skip them, the lane's stamp being exact
 - The curated unique index is partial: `dedup_class = 'curated'` outside
   handoff lanes (`CURATED_INDEX_WHERE`). Inside a handoff lane identity
   decides, not content; any rebuild must reuse the shared DDL

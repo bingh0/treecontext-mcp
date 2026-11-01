@@ -10,6 +10,8 @@ import { DatabaseSync } from 'node:sqlite'
 import { type Registry } from 'gherkin-node-test/vitest'
 import { FlatStore } from '../../../src/flat-store.js'
 import { writeSessionBeacon } from '../../../src/session-beacon.js'
+import { mintTicket, TICKET_ENV } from '../../../src/ticket.js'
+import { STATE_NOT_HISTORY_LINE } from '../../../src/first-moment.js'
 import { openNodeSqlite, pragmaValue } from '../../../src/persistence/node-sqlite.js'
 import { mcpOver, parseTool, rawAll } from '../world.js'
 import { TS_ROOT, tsxArgv, killAndWait } from '../proc.js'
@@ -76,6 +78,8 @@ export interface ReorientationWorld extends CaptureWorld {
   packetChars?: number
   /** The developer's last search, for a Then that repeats it. */
   lastQuery?: string
+  /** A `claude -p` child's scenario: its needles, ticket and packet. */
+  childFacts?: Record<string, string>
 }
 
 const LOCKER = fileURLToPath(new URL('../../helpers/store-locker.cjs', import.meta.url))
@@ -312,7 +316,94 @@ function parseAge(text: string): { rounds: number; minutes: number } {
 /** A long single-line text of exactly `n` characters. */
 const longLine = (head: string, n: number): string => (head + ' ' + 'x'.repeat(n)).slice(0, n)
 
+/**
+ * D295: a `claude -p` child with a ticket (journal-reorientation). The
+ * checkout's main session holds a chapter summary, a bookmark and recent
+ * developer turns; the child starts in that checkout with the ticket in
+ * its environment, and the REAL session-start hook fires for it as Claude
+ * Code fires it, under the child's own new session id.
+ */
+function claudeChildSteps(reg: Registry<ReorientationWorld>): void {
+  const define = (re: RegExp, fn: (w: ReorientationWorld, ...caps: string[]) => void | Promise<void>): void => {
+    reg.define(re, fn as unknown as Parameters<Registry<ReorientationWorld>['define']>[1])
+  }
+  define(/^a checkout whose main session holds the chapter summary "([^"]+)" and a bookmark$/, async (w, chapter: string) => {
+    await openWorld(w)
+    runHook(w, 'session-start', { hook_event_name: 'SessionStart', source: 'startup' })
+    w.childFacts = {
+      chapter,
+      bookmark: 'at: the submit handler half wired; next: the error states (wombatmark)',
+      turn: 'turn: before you wire the login form, check the CSRF token path (kestrelturn)',
+    }
+    await mcpCheckpoint(w, chapter)
+    await mcpCheckpoint(w, w.childFacts['bookmark']!, { kind: 'bookmark' })
+    await captureDeveloperTurns(w, [w.childFacts['turn']!])
+  })
+
+  define(/^a brief row for the builder role on the run "([^"]+)" under the key "([^"]+)", with checkpoint number (\d+) in effect under that key$/, async (w, run: string, key: string, num: string) => {
+    const facts = w.childFacts!
+    facts['brief'] = (await w.store!.writeBrief('BRIEF: build the submit flow, tests first', { run, key, role: 'builder', checkpointer: 'reviewer', by: 'harness' })).nodeId
+    let last: string | null = null
+    for (let i = 1; i <= Number(num); i++) {
+      const r = await w.store!.writeCheckpoint(`STATE ${i}: the submit flow after leg ${i}`, { run, key, declared: { role: 'builder' }, ...(last ? { supersedes: [last] } : {}) })
+      expect(r.checkpoint!.number).toBe(i)
+      last = r.nodeId
+    }
+    facts['checkpoint'] = last!
+  })
+
+  define(/^a ticket in the environment naming the parent "([^"]+)", the run "([^"]+)", the key "([^"]+)", the role "([^"]+)" and the reviewer as the one who will checkpoint$/, (w, parent: string, run: string, key: string, role: string) => {
+    const facts = w.childFacts!
+    facts['ticket'] = mintTicket({ run, key, role, checkpointer: 'reviewer', parent: { id: parent, cli: 'claude-code' } })
+  })
+
+  // The child starts as a clear of the checkout's main session would: the
+  // pid beacon names that session as the one before, so a self starting
+  // here would be handed the main session's chapter, bookmark and turns.
+  // A control self, started the same way after the child, proves it.
+  define(/^a `claude -p` process starts in that checkout and its session-start hook fires$/, (w) => {
+    const facts = w.childFacts!
+    facts['child'] = `cc-${randomBytes(6).toString('hex')}`
+    writeTranscript(w, 'the turn before the child')
+    const r = runHook(w, 'session-start', { session_id: facts['child'], hook_event_name: 'SessionStart', source: 'clear', transcript_path: join(w.proj!, 'transcript.jsonl') }, { [TICKET_ENV]: facts['ticket']! })
+    facts['packet'] = r.stdout
+    const control = runHook(w, 'session-start', { session_id: `cc-${randomBytes(6).toString('hex')}`, hook_event_name: 'SessionStart', source: 'clear', transcript_path: join(w.proj!, 'transcript.jsonl') })
+    facts['control'] = control.stdout
+  })
+
+  const packetOf = (w: ReorientationWorld): string => {
+    const facts = w.childFacts!
+    const out = JSON.parse(facts['packet']!.trim()) as Record<string, unknown>
+    return String((out['hookSpecificOutput'] as Record<string, unknown>)['additionalContext'])
+  }
+
+  define(/^the packet handed to it carries the builder's brief and checkpoint number (\d+)$/, (w, num: string) => {
+    const facts = w.childFacts!
+    const packet = packetOf(w)
+    expect(packet).toContain('BRIEF: build the submit flow, tests first')
+    expect(packet).toContain(`Checkpoint number ${num} under "login-form" (row ${facts['checkpoint']})`)
+    expect(packet).toContain(`STATE ${num}: the submit flow after leg ${num}`)
+    expect(packet).toContain(STATE_NOT_HISTORY_LINE)
+    // A worker, never a self: its own session is registered as a worker
+    // and holds no self row.
+    expect(rawAll(w, "SELECT agent_id, kind FROM session_registry WHERE session_id = ?", facts['child'])).toEqual([{ agent_id: 'worker', kind: 'worker' }])
+  })
+
+  define(/^the packet carries no chapter summary, no bookmark and no recent turns of the checkout's main session$/, (w) => {
+    const facts = w.childFacts!
+    const out = facts['packet']!
+    // Needles alive: a self started the same way, as a clear of the main
+    // session, is handed all three.
+    const control = facts['control']!
+    for (const needle of [facts['chapter']!, 'wombatmark', 'kestrelturn']) expect(control, needle).toContain(needle)
+    for (const needle of [facts['chapter']!, 'wombatmark', 'kestrelturn']) {
+      expect(out, needle).not.toContain(needle)
+    }
+  })
+}
+
 export const reorientationDefiner = (reg: Registry<ReorientationWorld>): void => {
+  claudeChildSteps(reg)
   // The machine's local day is moved the way a machine's is: its zone.
   // Etc/GMT+12 and Etc/GMT-14 are 26 hours apart, so a clear under the
   // second always falls on a later local date than one under the first.

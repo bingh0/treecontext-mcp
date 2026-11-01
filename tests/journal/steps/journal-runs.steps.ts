@@ -275,7 +275,7 @@ export const runsDefiner = (reg: Registry<RunsWorld>): void => {
     // The builder: a hooks-door leg of the session, captured by the real
     // PostToolUse hook with its agent fields, dated where the scenario
     // needs it (the hook stamps its own clock), and drained LAST.
-    const builder = await hooksLeg(w, 'builder', 'builder', { run: run!, key: 'login-form', keySrc: 'inferred' })
+    const builder = await hooksLeg(w, 'builder', 'builder', { run: run!, key: 'login-form' })
     runHook(w, 'post-tool-use', { ...bashPayload(w, 'npx vitest run login', 'login form: 12 passed (zebrafinch)'), agent_id: builder.agentId, agent_type: 'builder' })
     const tBuilder = localMoment(builderAt!)
     const tReviewer = localMoment(reviewerAt!)
@@ -713,7 +713,11 @@ export const runsDefiner = (reg: Registry<RunsWorld>): void => {
     await openRunWorld(w)
     const n = Number(num)
     const ids = await seedCheckpoints(w, run!, key!, n - 1)
-    const leg = await hooksLeg(w, 'reviewer', 'reviewer', { run: run!, key: key!, keySrc: 'inferred', checkpointer: 'reviewer', startCheckpoints: [ids.at(-1)!] })
+    // Through the hooks door: the harness's brief names the reviewer as the
+    // key's checkpointer, and the real SubagentStart hook infers the leg's
+    // run, key and start from it.
+    const leg = await hooksLeg(w, 'reviewer', 'reviewer', { run: run!, key: key!, checkpointer: 'reviewer' })
+    expect(JSON.parse(String(rawRegistration(w, leg)['start_checkpoints']))).toEqual([ids.at(-1)!])
     const wrote = await insertEchoed(w, { agentId: leg.agentId, agentType: 'reviewer' }, 'state: original plus review; two fixes asked for', { kind: 'checkpoint', run: run!, key: key! })
     expect((wrote['checkpoint'] as Record<string, unknown>)['number']).toBe(n)
     w.cps![cpLabel(run!, key!, n)] = wrote['node_id'] as string
@@ -771,14 +775,19 @@ export const runsDefiner = (reg: Registry<RunsWorld>): void => {
     await w.store!.writeBrief(`build the ${key}`, { run: run!, key: key!, role: 'builder', checkpointer: 'builder', by: 'harness', at: start + 60 })
     const n = Number(num)
     const ids = await seedCheckpoints(w, run!, key!, n - 1)
-    // The stranger is a subagent of the session, registered under the run
-    // by the hooks door, writing through the tools and stopping with a report.
-    const leg = await hooksLeg(w, 'stranger', stranger!, { run: run!, key: key!, keySrc: 'inferred', startCheckpoints: [ids.at(-1)!] })
-    const wrote = await insertEchoed(w, { agentId: leg.agentId, agentType: stranger! }, 'state: rewritten by another hand; ship it', { kind: 'checkpoint', run: run!, key: key! })
-    expect((wrote['checkpoint'] as Record<string, unknown>)['number']).toBe(n)
-    w.cps![cpLabel(run!, key!, n)] = wrote['node_id'] as string
-    w.stops!['stranger'] = subagentStopHook(w, leg.agentId, stranger!, `${stranger} done: shipped the form`)
-    await drainStaging(w)
+    // The stranger is a leg of the run with no brief of its own: no brief
+    // names it, so through the hooks door it would be a plain subagent
+    // (D305), which no run counts and whose return no key names. It is a
+    // worker its spawner registered under the run (the library door,
+    // declared, its ticket naming no checkpointer), writing its checkpoint
+    // as itself and returning its report at its exit, the summary row its
+    // pointer names.
+    const leg = await workerLeg(w, 'stranger', { role: stranger!, run: run!, key: key!, checkpointer: null, startCheckpoints: [ids.at(-1)!] })
+    expect(rawAll(w, "SELECT 1 FROM nodes WHERE json_extract(metadata_json, '$.brief_for') = ?", stranger)).toHaveLength(0)
+    const wrote = await w.store!.writeCheckpoint('state: rewritten by another hand; ship it', { run: run!, key: key!, leg })
+    expect(wrote.checkpoint!.number).toBe(n)
+    w.cps![cpLabel(run!, key!, n)] = wrote.nodeId
+    await w.store!.retireWorker(leg, { output: `${stranger} done: shipped the form`, how: 'retired', summary: true })
     w.moments!['start'] = start
   })
 

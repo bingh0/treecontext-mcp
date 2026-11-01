@@ -124,7 +124,11 @@ Pinned in `features/design/store-bindings.feature`.
 
 ```
 platform event ─ hook (per fire) ─▶ staging table ─▶ drain ─▶ nodes
-                  8s db budget        (letterbox)     (one owner)
+                  8s db budget   │    (letterbox)     (one owner)  ▲
+                                 │                                 │
+                                 └─ hooks door (a leg's own rows) ─┘
+                                    through the library, one transaction
+                                 └─ refused write ─▶ gap ledger ─▶ drain ─▶ [capture gap] row
 ```
 
 - **Hooks** parse the platform payload, compose the event text (a
@@ -138,8 +142,18 @@ platform event ─ hook (per fire) ─▶ staging table ─▶ drain ─▶ node
   capture. From v27 the row
   also carries the payload's `agent_id`/`agent_type` (a subagent's call)
   and a row `kind`; a hook meeting an older store falls back to the
-  earlier column list. Hooks never touch
-  `nodes`; the staging insert is their capture write. Beside it they
+  earlier column list. A platform event's capture is the staging insert,
+  always. The one exception is the hooks door of a leg (beta.3, D284,
+  D295, D298, D302, D330): the SubagentStart, SubagentStop, Stop and
+  SessionStart hooks write a leg's OWN rows — its registration, its
+  run's open at that registration, its first moment, a send-back's row,
+  its summary row — directly through the library (`hooks/hook-store.ts`,
+  a FlatStore over the hook's own connection, `migrate: false`, only at
+  this build's schema), each in one immediate transaction with the
+  registration fact it belongs to, so both doors write those rows with
+  the same code and the pointer can name a row that exists. A write the
+  store refuses is recorded in the gap ledger (`hooks/gap-ledger.ts`,
+  beside the store) and the drain writes it as a `[capture gap]` row. Beside it they
   write the session registry (`session_registry`: the session-start
   hook registers the self and retires live subagents, SubagentStart and
   SubagentStop register and retire a subagent), `store_config` (the

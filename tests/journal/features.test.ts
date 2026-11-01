@@ -157,12 +157,22 @@ runFeatures(join(HERE, '../../features'), {
         'a client that honors the key but has no /config row is pointed at the settings line alone',
       ],
     },
+    // journal-workers left the whole-feature register 2026-11-01 (unit 4).
+    // The parent outline's Antigravity row is unbound: this build writes no
+    // hooks for Antigravity (an archived-build platform, MCP config only),
+    // so no hook of its can register a parent, and standing it in with
+    // another CLI's hook would bind the row against something it does not
+    // name. Its Claude Code and Codex rows bind; the outline is held open
+    // here by its title until the owner rules on the Antigravity row.
     {
-      feature: 'journal-reorientation',
+      feature: 'journal-workers',
       scenarios: [
-        "a `claude -p` child with a ticket opens on its brief and checkpoint, never on a self's packet",
+        'a <worker> worker under a <parent> parent writes into its own lane with its role as writer',
       ],
     },
+    // journal-reorientation's `claude -p` child (D295) bound 2026-11-01,
+    // unit 4: the real session-start hook with the ticket in its
+    // environment.
     {
       feature: 'journal-storage',
       scenarios: [

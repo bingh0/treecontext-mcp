@@ -332,7 +332,7 @@ export async function drainStaging(w: CaptureWorld): Promise<void> {
   }
   // storePath mirrors production too (§7.8): the serving CLI always
   // passes it, and the session-namespace publisher is a no-op without it.
-  const loop = new IngestionLoop(w.store!, { batchSize: 50, storeFor, storePath: w.dbPath! })
+  const loop = new IngestionLoop(w.store!, { batchSize: 50, storeFor, storePath: w.dbPath!, hookGapGraceMs: 0 })
   try {
     for (let i = 0; i < 200; i++) {
       await loop.ingestBatch()

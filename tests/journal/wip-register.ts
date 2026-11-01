@@ -42,64 +42,19 @@ export const WHOLE_FEATURE_WIP: WholeFeatureWipRuling[] = [
   // name any still here as acceptable for `0.1.0-beta.3`.
   {
     feature: 'journal-legs',
-    reason: 'scoped 2026-10-31 before its build (D279–D285, D299, D305, D314, D320, D321); on 2026-11-01 unit 1 bound the store half of the leg contract (numbering, supersession named or stamped from the leg, two in effect, the walk back, the key settled by the leg\'s own write, the keyless subagent unchanged); on 2026-11-01 unit 2 bound the key lookup\'s reply for legs (the main agent\'s checkpoint flagged against the brief\'s checkpointer beside the one before it, a keyless leg counted in the run\'s facts, a silent leg live with its start and last write); leaves the register when the send-back, the recovery leg and the key lookup bind against real hook subprocesses',
+    reason: 'scoped 2026-10-31 before its build (D279–D285, D299, D305, D314, D320, D321); on 2026-11-01 unit 1 bound the store half of the leg contract (numbering, supersession named or stamped from the leg, two in effect, the walk back, the key settled by the leg\'s own write, the keyless subagent unchanged); on 2026-11-01 unit 2 bound the key lookup\'s reply for legs (the main agent\'s checkpoint flagged against the brief\'s checkpointer beside the one before it, a keyless leg counted in the run\'s facts, a silent leg live with its start and last write); leaves the register when the send-back, the recovery leg and the key lookup bind against real hook subprocesses; on 2026-11-01 unit 4 bound them (the hooks door: the first moment, the inference from the role\'s brief, the cap\'s cut, the send-back once, the cut at the next start, the recovery leg, the pointer on the Agent tool\'s result, the dropped start), so that condition holds, and the ruling stays only for the checkpoint cap\'s four scenarios (unit 5)',
     ruledOn: '2026-11-01',
-    // Bound on 2026-11-01 with the leg's facts given by registerLeg, the
-    // registry call the hooks door makes, after the real SubagentStart hook
-    // registered the subagent (run-world.ts hooksLeg): to be re-bound
-    // through the SubagentStart hook's own inference in unit 4 —
-    //   'the checkpoint a leg writes at its end takes the next number and supersedes the one it started from'
-    //   'two legs that started from one checkpoint write 4 and 5, never two 4s, and both stay in effect'
-    //   "a checkpoint that names nothing as superseded is stamped from the leg's start, marked as the store's"
-    //   'a checkpoint that names another checkpoint is taken at its word'
-    //   'an inferred key gives way to the key the leg first writes under'
-    //   "the leg's first write under a key settles an ambiguous registration"
-    //   "a leg that writes under no key stays keyless, stops unblocked, and the run's facts count it as such" (unit 2)
-    // and one bound on 2026-11-01 by unit 2 with the leg registered through
-    // the library door at its own moment two hours back (registerLeg with
-    // `at`; a hook subprocess cannot be started in the past), to be
-    // re-bound when the hooks door's registration lands (unit 4) —
-    //   'until its session restarts, a silent leg reads as live with its ages shown'
-    // and "the builder's stop is not blocked" in the first of those is a
-    // forward guard: today's SubagentStop hook never blocks; it holds once
-    // the send-back lands (unit 4), since a checkpoint newer than the start
-    // was written.
+    // The hooks door bound on 2026-11-01 (unit 4): every legs scenario
+    // but unit 5's four runs through the real SubagentStart hook, which
+    // infers the leg from its role's brief in effect, the real SubagentStop
+    // hook (the send-back once), the real SessionStart hook (the cut known
+    // at the next start) and the real PostToolUse hook on the Agent tool's
+    // result (the pointer). The seven unit 1 and 2 scenarios once bound
+    // through run-world.ts hooksLeg's registry call, and "until its session
+    // restarts, a silent leg reads as live with its ages shown", are
+    // re-bound through the hook's own inference (the last at the hook's own
+    // clock, set to two hours back). What stays is unit 5's.
     scenarios: [
-      // unit 4, the hooks door: the subagent-start hook's inference from
-      // the role's brief and the first moment it emits, the stop hook's
-      // send-back, the cut known at the session's next start, the
-      // recovery leg, the pointer on the Agent tool's result (D279, D281,
-      // D284, D285, D305, D314, D320, D325, D326, D327, D328, D329, D330,
-      // D332, D334)
-      "a leg's first moment is its brief and the checkpoint in effect, with no query made",
-      'a fresh leg on a key with no checkpoint is told so, and its first checkpoint is number 1',
-      'a leg that finishes with no checkpoint is sent back once with the missing checkpoint named',
-      'a leg sent back once that then writes its checkpoint stops unblocked',
-      'a leg sent back once is never sent back a second time',
-      'no send-back when the store cannot be written',
-      'a cut leg leaves its trail and the next leg of its role starts as a recovery leg',
-      'a recovery leg writes the checkpoint its predecessor did not',
-      'a cut leg leaves no checkpoint the store wrote',
-      'the brief names who checkpointed the work resumed and who will checkpoint at the end',
-      'a leg whose brief names another role as checkpointer is never sent back',
-      "the pointer to a leg's summary row carries the leg's role, run and key",
-      'the pointer comes back every time and the next leg starts from the store whether or not it was followed',
-      'a subagent whose brief names a run and a key gets the leg contract',
-      "the hooks door takes a leg's key from its role's newest brief and marks it inferred",
-      'two briefs in effect for one role make the key ambiguous and name the candidates',
-      'a leg through the hooks door starts cold when the store is unreachable, and the gap is marked',
-      'a first moment of <chars> characters through the hooks door is <injected>',
-      'a leg fetches the rest of a cut checkpoint by export and gets it whole',
-      'an inferred key never makes the stop ask for a checkpoint',
-      'a key the leg wrote under, marked as its own, makes the stop ask for the missing checkpoint',
-      'a newer brief for the same role and key supersedes the older one',
-      "a run's close ends its briefs",
-      'a leg left live is retired as cut when its session next starts, and the next leg of its role recovers',
-      'a leg starting while two checkpoints are in effect is handed both, flagged',
-      "the pointer rides on the Agent tool's result and the subagent's final message is untouched",
-      "every first moment says in treecontext's own words that a checkpoint is state, not history",
-      'a leg that ended without a checkpoint after its one send-back is followed by a recovery leg',
-      'a leg whose start was dropped stops unasked and its summary still lands',
       // unit 5, the checkpoint cap (D299, D321, D332)
       'a checkpoint of <chars> characters is <verdict> on its first write and <verdict2> on the second',
       'a second over-cap write by another leg or under another key is refused again',
@@ -107,45 +62,20 @@ export const WHOLE_FEATURE_WIP: WholeFeatureWipRuling[] = [
       "an over-cap checkpoint accepted on its second write is the one in effect, and the next leg's first-moment row shows what it cost",
     ],
   },
-  {
-    feature: 'journal-workers',
-    reason: 'scoped 2026-10-31 before its build (D288, D291–D298, D303, D307, D313, D315–D317); on 2026-11-01 unit 1 bound the registry half of the ticket door (the parent declared or linked, what a registration carries, phantoms retired by the registry\'s readers against real processes, a library writer traced); on 2026-11-01 unit 3 bound the ticket door itself through real worker processes, the library call and the `treecontext run` wrapper each starting the stand-in headless worker (the ticket read from the environment, whole, damaged, blank-keyed or keyless, the first message and the first-moment row, the send-back once, the cut, the not-started rule, the exit the store cannot take, the self-minted ticket); leaves the register when the `claude -p` child binds through its hooks (unit 4): its registration as a worker, the first-moment row through its session-start hook, the send-back once across both doors',
-    ruledOn: '2026-11-01',
-    // Two outlines are bound in part: their rows through the hook-less door
-    // of a `codex exec` worker (the wrapper) run on 2026-11-01, unit 3; the
-    // rows through the session-start hook of a `claude -p` child wait on
-    // unit 4, so the outlines stay listed until those rows bind —
-    //   "the first-moment row is the first row of the worker's lane through the <door>"
-    //   'a worker whose ticket is <damage> is registered with what was read, told its instructions were invalid, and ends visibly through the <door>'
-    // The parent outline is bound in part too: its Claude Code row (the
-    // real session-start hook) and its Codex row (the session-start command
-    // of the verbatim copy `install --experimental-capture --agent codex`
-    // writes, run as Codex runs it) bind; its Antigravity row cannot, since
-    // this build writes no hooks for Antigravity (an archived-build platform,
-    // MCP config only), so no unit owns it until Antigravity gets a hook
-    // adapter, and the outline stays listed. Standing it in with another
-    // CLI's hook would bind the row against something it does not name.
-    scenarios: [
-      'a <worker> worker under a <parent> parent writes into its own lane with its role as writer',
-      // unit 4, the hooks door for a `claude -p` child (D295, D298, D303, D342)
-      "the first-moment row is the first row of the worker's lane through the <door>",
-      'both doors leave the same first-moment row, readable with plain SQL alone',
-      'a worker whose ticket is <damage> is registered with what was read, told its instructions were invalid, and ends visibly through the <door>',
-      'a `claude -p` child with a ticket is registered as a worker by the hook, never as a self',
-      "the stop hook's send-back is the leg's one, and the wrapper starts no run after it",
-      "when the stop hook could not ask, the wrapper's send-back is the leg's one",
-    ],
-  },
+  // journal-workers left this register on 2026-11-01 (unit 4) by its own
+  // leaving condition: the `claude -p` child binds through its hooks (its
+  // registration as a worker, the first-moment row through its
+  // session-start hook, the send-back once across both doors). Its one
+  // unbound row, the Antigravity parent of the parent outline, is a
+  // scenario-scoped wip entry in features.test.ts: no hook adapter exists
+  // for Antigravity, a charter question for the owner.
   {
     feature: 'journal-runs',
     reason: 'scoped 2026-10-31 before its build (D289, D296, D300–D302, D309–D312, D318); on 2026-11-01 unit 1 bound the plain-SQL read-back, the open and close, the run found by name, nested runs and the harness\'s lookup by run and key; on 2026-11-01 unit 2 bound the key lookup\'s whole reply (the flag in words against the brief\'s checkpointer, the run\'s facts and the sizes of the last three, a live leg\'s start and last write, the pointer to the writing leg\'s return or the line that it left none) and the agent\'s door to it and to a run\'s close through the tools; on 2026-11-01 unit 3 bound the run found by time through the first-moment, checkpoint and summary rows real workers left through the ticket door; leaves the register when the run export forms and the run come back by the handoff (D343) bind against the store file (unit 6)',
     ruledOn: '2026-11-01',
-    // Bound on 2026-11-01 through run-world.ts hooksLeg (the real
-    // SubagentStart hook, then registerLeg): to be re-bound through the
-    // SubagentStart hook's own inference in unit 4 —
-    //   "a run's rows read back by plain SQL in the order of their own moments, each naming its writer and moment, each leg naming its run and key"
-    //   'the lookup reply carries the pointer to the return of the leg that wrote the checkpoint' (unit 2)
-    //   'an agent gets the same lookup reply as the harness through the tools' (unit 2)
+    // The three runs scenarios once bound through run-world.ts hooksLeg's
+    // registry call are re-bound (unit 4, 2026-11-01) through the real
+    // SubagentStart hook's own inference from the role's brief.
     scenarios: [
       // unit 6: run export forms and the handoff back (D300, D318, D343)
       'a leg that ran on another machine comes back into the run by the handoff, and its claim is believed, flagged',

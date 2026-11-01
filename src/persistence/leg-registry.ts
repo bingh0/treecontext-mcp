@@ -117,6 +117,13 @@ export const LEG_REGISTRY_COLUMNS: Array<[name: string, decl: string]> = [
   // echo that names another writer can put it back (JSON {node_id, key,
   // key_src}).
   ['key_settled_from', 'TEXT'],
+  // D295: the client session ids a `claude -p` child's session-start hook
+  // linked to this worker registration (a JSON list): the child's own
+  // Claude Code session differs from the lane the ticket door registered,
+  // and the drain lands the child's captured rows in the lane by this
+  // link. Present only on a worker the hook read; its presence is the mark
+  // that the ticket door was read by the hook.
+  ['client_sessions', 'TEXT'],
 ]
 
 export const LEG_REGISTRY_INDEX_DDL =
@@ -149,6 +156,18 @@ export interface WorkerProcess {
   /** When the door recorded it. */
   at: number
 }
+
+/** One client session linked to a worker (D295). */
+export interface ClientSessionLink {
+  id: string
+  /** What linked it: the session-start hook that read the ticket. */
+  linkedBy: string
+  /** When, unix seconds. */
+  at: number
+}
+
+/** Who links a `claude -p` child's session to its worker (D295). */
+export const LINKED_BY_SESSION_START = 'session-start hook'
 
 export interface KeyCandidate { run: string | null; key: string; briefId: string | null }
 
@@ -187,10 +206,14 @@ export interface LegRegistration {
   noticedBy: string | null
   openedRuns: string[]
   /** What the write that settled the key changed (D320). */
-  keySettledFrom: { node_id: string; key: string | null; key_src: KeySource | null } | null
+  keySettledFrom: { node_id: string; key: string | null; key_src: KeySource | null; run?: string | null } | null
   /** The keys under which an over-cap checkpoint of this leg was refused
    *  once (D299). */
   capRefused: string[]
+  /** D295: the client sessions linked to this worker (a `claude -p`
+   *  child's own Claude Code session ids), each with what linked it and
+   *  when: the mark that the ticket door was read by the hook. */
+  clientSessions: ClientSessionLink[]
   worktree: string | null
   branch: string | null
   cwd: string | null
@@ -208,7 +231,7 @@ interface RawLeg {
   ticket_absent: string | null; can_write: number | null; host: string | null; pid: number | null
   proc_start: number | null; proc_start_token: string | null; processes: string | null; send_backs: number | null; ended: string | null
   noticed_at: number | null; noticed_by: string | null; opened_runs: string | null; cap_refused: string | null
-  key_settled_from: string | null
+  key_settled_from: string | null; client_sessions?: string | null
 }
 
 function json<T>(text: string | null, fallback: T): T {
@@ -233,6 +256,8 @@ function toLeg(r: RawLeg): LegRegistration {
     openedRuns: json<string[]>(r.opened_runs, []),
     capRefused: json<string[]>(r.cap_refused, []),
     keySettledFrom: json<LegRegistration['keySettledFrom']>(r.key_settled_from, null),
+    clientSessions: json<Array<{ id: string; linked_by: string; at: number }>>(r.client_sessions ?? null, [])
+      .map((c) => ({ id: c.id, linkedBy: c.linked_by, at: c.at })),
     worktree: r.worktree, branch: r.branch, cwd: r.cwd, startedAt: r.started_at, stoppedAt: r.stopped_at,
   }
 }
@@ -270,6 +295,52 @@ export function legOf(db: RegistryHandle, ref: LegRef): LegRegistration | null {
 /** The worker registered for a session, if the session is a worker's lane. */
 export function workerOfSession(db: RegistryHandle, sessionId: string): LegRegistration | null {
   return legOf(db, { sessionId, agentId: WORKER_AGENT_ID })
+}
+
+/** Whether the registry carries a column (the registry gains columns
+ *  additively; a store below one reads without it). */
+function hasColumn(db: RegistryHandle, column: string): boolean {
+  try {
+    return (db.prepare('PRAGMA table_info(session_registry)').all() as Array<{ name: string }>).some((c) => c.name === column)
+  } catch {
+    return false
+  }
+}
+
+/**
+ * The worker whose lane a session's captured rows land in (D288, D295): the
+ * worker registered at that session itself (a worker the hook claimed in
+ * its own Claude Code session, or any worker lane), else the worker a
+ * session-start hook linked that client session to (a `claude -p` child
+ * the ticket door registered in a lane of its own). Null for any other
+ * session: its rows are the session's as always.
+ */
+export function workerLaneOf(db: RegistryHandle, sessionId: string): LegRegistration | null {
+  if (!hasLegColumns(db)) return null
+  const own = db.prepare("SELECT * FROM session_registry WHERE session_id = ? AND agent_id = 'worker' AND kind = 'worker'").get(sessionId) as RawLeg | undefined
+  if (own) return toLeg(own)
+  if (!hasColumn(db, 'client_sessions')) return null
+  const linked = db.prepare(
+    `SELECT * FROM session_registry WHERE kind = 'worker' AND agent_id = 'worker' AND client_sessions IS NOT NULL
+        AND EXISTS (SELECT 1 FROM json_each(client_sessions) WHERE json_extract(value, '$.id') = ?) ORDER BY started_at DESC LIMIT 1`,
+  ).get(sessionId) as RawLeg | undefined
+  return linked ? toLeg(linked) : null
+}
+
+/** D295: link a client session (a `claude -p` child's own Claude Code
+ *  session id) to the worker registration its ticket names, so the
+ *  child's captured rows land in the worker's lane; recorded with what
+ *  linked it and when. Idempotent per session id; false on a store without
+ *  the column (below the reconcile, 032) or with no such registration. */
+export function linkClientSession(db: RegistryHandle, ref: LegRef, clientSession: string, opts: { linkedBy?: string; at?: number } = {}): boolean {
+  if (!hasColumn(db, 'client_sessions')) return false
+  const leg = legOf(db, ref)
+  if (!leg) return false
+  if (leg.clientSessions.some((c) => c.id === clientSession)) return true
+  const links = [...leg.clientSessions, { id: clientSession, linkedBy: opts.linkedBy ?? LINKED_BY_SESSION_START, at: opts.at ?? Date.now() / 1000 }]
+  db.prepare('UPDATE session_registry SET client_sessions = ? WHERE session_id = ? AND agent_id = ?')
+    .run(JSON.stringify(links.map((c) => ({ id: c.id, linked_by: c.linkedBy, at: c.at }))), ref.sessionId, ref.agentId)
+  return true
 }
 
 /** Every leg registered under a run, in the order they started. */
@@ -483,13 +554,19 @@ export function recordSendBack(db: RegistryHandle, ref: LegRef): number {
 export function settleLegKey(db: RegistryHandle, ref: LegRef, run: string, key: string, byNodeId: string): boolean {
   if (!hasLegColumns(db)) return false
   const leg = legOf(db, ref)
-  if (!leg || leg.kind === null || leg.run === null || leg.run !== run) return false
+  if (!leg || leg.kind === null) return false
+  // An ambiguous registration whose candidates span runs names no run of
+  // its own (the hooks door, D320): a write under one candidate's run and
+  // key settles both, the run being that candidate's.
+  const candidateRun = leg.run === null && leg.keySrc === 'ambiguous' && leg.keyCandidates.some((c) => c.run === run && c.key === key)
+  if (!candidateRun && (leg.run === null || leg.run !== run)) return false
   if (leg.keySrc !== null && leg.keySrc !== 'inferred' && leg.keySrc !== 'ambiguous') return false
   const r = db.prepare(
-    `UPDATE session_registry SET run_key = ?, key_src = 'own', key_settled_from = ?
-      WHERE session_id = ? AND agent_id = ? AND kind IS NOT NULL AND run = ?
+    `UPDATE session_registry SET run = ?, run_key = ?, key_src = 'own', key_settled_from = ?
+      WHERE session_id = ? AND agent_id = ? AND kind IS NOT NULL AND (run = ? OR (run IS NULL AND ? = 1))
         AND (key_src IS NULL OR key_src IN ('inferred', 'ambiguous'))`,
-  ).run(key, JSON.stringify({ node_id: byNodeId, key: leg.key, key_src: leg.keySrc }), ref.sessionId, ref.agentId, run) as { changes?: number }
+  ).run(run, key, JSON.stringify({ node_id: byNodeId, key: leg.key, key_src: leg.keySrc, ...(candidateRun ? { run: null } : {}) }),
+    ref.sessionId, ref.agentId, run, candidateRun ? 1 : 0) as { changes?: number }
   return (r.changes ?? 0) > 0
 }
 
@@ -499,8 +576,9 @@ export function settleLegKey(db: RegistryHandle, ref: LegRef, run: string, key: 
 export function unsettleLegKey(db: RegistryHandle, ref: LegRef, byNodeId: string): boolean {
   const leg = legOf(db, ref)
   if (!leg || leg.keySettledFrom === null || leg.keySettledFrom.node_id !== byNodeId) return false
-  db.prepare('UPDATE session_registry SET run_key = ?, key_src = ?, key_settled_from = NULL WHERE session_id = ? AND agent_id = ?')
-    .run(leg.keySettledFrom.key, leg.keySettledFrom.key_src, ref.sessionId, ref.agentId)
+  const from = leg.keySettledFrom as { key: string | null; key_src: KeySource | null; run?: string | null }
+  db.prepare(`UPDATE session_registry SET run_key = ?, key_src = ?, key_settled_from = NULL${from.run === null ? ', run = NULL' : ''} WHERE session_id = ? AND agent_id = ?`)
+    .run(from.key, from.key_src, ref.sessionId, ref.agentId)
   return true
 }
 
