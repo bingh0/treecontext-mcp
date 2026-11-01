@@ -29,9 +29,10 @@ import m027 from './027_session_registry.js'
 import m028 from './028_echo_index_boundary.js'
 import m029 from './029_internal_summary.js'
 import m030 from './030_recovery_snapshot_boundary.js'
+import m031 from './031_legs_and_runs.js'
 
 /** All known migrations, ordered by version ascending. */
-export const migrations: Migration[] = [m001, m002, m003, m004, m005, m006, m007, m008, m009, m010, m011, m012, m013, m014, m015, m016, m017, m018, m019, m020, m021, m022, m023, m024, m025, m026, m027, m028, m029, m030]
+export const migrations: Migration[] = [m001, m002, m003, m004, m005, m006, m007, m008, m009, m010, m011, m012, m013, m014, m015, m016, m017, m018, m019, m020, m021, m022, m023, m024, m025, m026, m027, m028, m029, m030, m031]
 
 /** The highest schema version this build understands. */
 export const maxSupportedVersion = migrations.at(-1)!.version

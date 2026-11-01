@@ -86,6 +86,9 @@ import { type ReorientationWorld, reorientationDefiner } from './steps/journal-r
 import { type ClientsWorld, clientsDefiner } from './steps/journal-clients.steps.js'
 import { type HandoffWorld, handoffDefiner } from './steps/journal-handoff.steps.js'
 import { type OrchestrationWorld, orchestrationDefiner } from './steps/journal-orchestration.steps.js'
+import { type RunsWorld, runsDefiner } from './steps/journal-runs.steps.js'
+import { type LegsWorld, legsDefiner } from './steps/journal-legs.steps.js'
+import { type WorkersWorld, workersDefiner } from './steps/journal-workers.steps.js'
 const HERE = fileURLToPath(new URL('.', import.meta.url))
 
 
@@ -109,6 +112,9 @@ runFeatures(join(HERE, '../../features'), {
   'journal-clients': clientsDefiner satisfies Definer<ClientsWorld>,
   'journal-handoff': handoffDefiner satisfies Definer<HandoffWorld>,
   'journal-orchestration': orchestrationDefiner satisfies Definer<OrchestrationWorld>,
+  'journal-runs': runsDefiner satisfies Definer<RunsWorld>,
+  'journal-legs': legsDefiner satisfies Definer<LegsWorld>,
+  'journal-workers': workersDefiner satisfies Definer<WorkersWorld>,
 }, {
   manifest: join(HERE, '../../run-manifest.ndjson'),
   wip: [
@@ -131,6 +137,10 @@ runFeatures(join(HERE, '../../features'), {
     // written ruling and the release gate can see it. A bare string here
     // would be an entire unbound surface with nobody having decided that is
     // acceptable — which is how 0.0.9-beta shipped.
+    // The beta.3 subagent cut's three surfaces (journal-legs,
+    // journal-workers, journal-runs) are whole-feature rulings in
+    // wip-register.ts, partly bound by unit 1 on 2026-11-01: each ruling
+    // carries the scenarios still unbound, with the unit that owns each.
     ...wholeFeatureWip(),
     // The beta.3 subagent cut (2026-10-31): scenarios added to three bound
     // files by the scope run, unbound until their build (D290, D304, D295,

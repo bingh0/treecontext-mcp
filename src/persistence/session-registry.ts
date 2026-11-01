@@ -71,11 +71,38 @@ export const INTERNAL_SUMMARY_KIND = 'internal-summary'
  *  agentWriterOf), so the two never share a lane. */
 export const CLIENT_WRITER = 'claude-code'
 
+/** The writer of a row the store records on a door's behalf rather than
+ *  any agent's: a run opened at the registration of its first leg (D302),
+ *  as the capture of an event it observed. Escaped like the client's own
+ *  name, so no subagent type can join its lane. */
+export const STORE_WRITER = 'treecontext'
+
+/** Whether the registry carries a column (the leg columns arrive with
+ *  migration 031; a store the ladder has not reached reads without them). */
+function registryHasColumn(db: RegistryHandle, column: string): boolean {
+  try {
+    return (db.prepare('PRAGMA table_info(session_registry)').all() as Array<{ name: string }>).some((c) => c.name === column)
+  } catch {
+    return false
+  }
+}
+
+/** A worker's registration is never one of a session's subagents (D288,
+ *  D295): the clause every subagent read adds when the column exists. */
+function notWorker(db: RegistryHandle): string {
+  return registryHasColumn(db, 'kind') ? " AND COALESCE(kind, '') != 'worker'" : ''
+}
+
 /** The metadata keys only the store writes — the stamp, the heal's
  *  record, and the supersession trace the heal restores from. A caller's
  *  copy through the insert tool is a forgery and is dropped. */
 export const WRITER_STAMP_KEYS = ['_writer', '_writer_src', '_writer_agent_id', '_writer_candidates', '_worktree', '_branch', '_writer_stamped', '_writer_heal_reverted', '_writer_heal_note',
-  '_writer_heal_retired', '_writer_heal_unretired', '_superseded_prior', '_supersedes_referenced'] as const
+  '_writer_heal_retired', '_writer_heal_unretired', '_superseded_prior', '_supersedes_referenced',
+  // The trace every row carries (D293): the directory, the door, whether
+  // the identity was registered by a hook or declared, the parent as
+  // declared or linked. And a run's numbering and supersession marks
+  // (D329, D331): the store's, never a caller's.
+  '_cwd', '_door', '_identity', '_parent', '_parent_src', '_checkpoint_number', '_supersedes_src'] as const
 
 interface Prepared { get(...p: unknown[]): unknown; all(...p: unknown[]): unknown[]; run(...p: unknown[]): unknown }
 /** The one capability the registry needs from a database handle. */
@@ -184,7 +211,7 @@ export function retireSubagent(db: RegistryHandle, sessionId: string, agentId: s
 export function retireAllSubagents(db: RegistryHandle, sessionId: string, at: number): number {
   if (!hasRegistry(db)) return 0
   const r = db.prepare(
-    "UPDATE session_registry SET stopped_at = ? WHERE session_id = ? AND agent_id != '' AND stopped_at IS NULL",
+    `UPDATE session_registry SET stopped_at = ? WHERE session_id = ? AND agent_id != '' AND stopped_at IS NULL${notWorker(db)}`,
   ).run(at, sessionId) as { changes?: number }
   return r.changes ?? 0
 }
@@ -204,7 +231,7 @@ export function subagentOf(db: RegistryHandle, sessionId: string, agentId: strin
 export function liveSubagents(db: RegistryHandle, sessionId: string): RegistryRow[] {
   if (!hasRegistry(db)) return []
   return (db.prepare(
-    "SELECT * FROM session_registry WHERE session_id = ? AND agent_id != '' AND stopped_at IS NULL ORDER BY started_at, agent_id",
+    `SELECT * FROM session_registry WHERE session_id = ? AND agent_id != '' AND stopped_at IS NULL${notWorker(db)} ORDER BY started_at, agent_id`,
   ).all(sessionId) as RawRow[]).map(toRow)
 }
 
@@ -225,7 +252,7 @@ export const AGENT_WRITER_PREFIX = 'agent:'
  *  echo heal. */
 export function agentWriterOf(agentType: string | null | undefined, agentId: string | null | undefined): string {
   const name = agentType && agentType.trim() !== '' ? agentType : (agentId ?? '')
-  return name === MAIN_WRITER || name === CLIENT_WRITER || name.startsWith(WORKTREE_WRITER_PREFIX) || name.startsWith(AGENT_WRITER_PREFIX)
+  return name === MAIN_WRITER || name === CLIENT_WRITER || name === STORE_WRITER || name.startsWith(WORKTREE_WRITER_PREFIX) || name.startsWith(AGENT_WRITER_PREFIX)
     ? `${AGENT_WRITER_PREFIX}${name}` : name
 }
 
@@ -278,8 +305,12 @@ export function newestMainEvent(db: RegistryHandle, sessionId: string): number |
  *  - `unregistered`: the session is unknown here — no writer stamped.
  * `registry` is the source of rows written before the echo heal existed;
  * `echo` and `hook` are exact.
+ *  - `declared`: the writer named itself, no hook vouching (D293): a
+ *    worker's session, whose identity its ticket declared, or a library
+ *    caller naming its role or its leg;
+ *  - `store`: a row the store recorded on a door's behalf (STORE_WRITER).
  */
-export type WriterSource = 'registry' | 'provisional' | 'concurrent' | 'self' | 'ambiguous' | 'unregistered' | 'echo' | 'hook'
+export type WriterSource = 'registry' | 'provisional' | 'concurrent' | 'self' | 'ambiguous' | 'unregistered' | 'echo' | 'hook' | 'declared' | 'store'
 
 export interface WriterStamp {
   src: WriterSource
@@ -292,6 +323,19 @@ export interface WriterStamp {
 
 export function resolveWriter(db: RegistryHandle, sessionId: string | null): WriterStamp {
   if (!sessionId || !hasRegistry(db)) return { src: 'unregistered' }
+  // A worker's session is the worker's lane (D288, D295): every row its
+  // tools write is the worker's, under the role its ticket declared.
+  if (registryHasColumn(db, 'kind')) {
+    const w = db.prepare(
+      "SELECT agent_type, worktree, branch FROM session_registry WHERE session_id = ? AND agent_id = 'worker' AND kind = 'worker'",
+    ).get(sessionId) as { agent_type: string | null; worktree: string | null; branch: string | null } | undefined
+    if (w) {
+      return {
+        src: 'declared', writer: agentWriterOf(w.agent_type, null) || 'worker', agentId: 'worker',
+        ...(w.worktree ? { worktree: w.worktree } : {}), ...(w.branch ? { branch: w.branch } : {}),
+      }
+    }
+  }
   const self = selfOf(db, sessionId)
   const live = liveSubagents(db, sessionId)
   const where = (r: RegistryRow | null): Pick<WriterStamp, 'worktree' | 'branch'> => ({

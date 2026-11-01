@@ -252,7 +252,7 @@ export class Persistence {
    *  transcription. */
   private arbiterFor(node: PersistedNode): {
     fingerprint: string
-    dedupClass: 'auto' | 'curated'
+    dedupClass: ReturnType<typeof dedupClassOf>
     sessionKey: string
     reliedCount: number
     indexLen: number | null

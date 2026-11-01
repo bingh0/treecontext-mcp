@@ -35,6 +35,8 @@ import type { Database } from './database.js'
 import { laneWriterOf } from '../references.js'
 import { sessionOf, NO_SESSION } from '../dedup-identity.js'
 import { agentWriterOf, selfOf, selfWriterOf } from './session-registry.js'
+import { legOf, legWriterOf, workerOfSession, settleLegKey, unsettleLegKey, WORKER_AGENT_ID } from './leg-registry.js'
+import { storeSupersedesFor } from '../runs.js'
 
 const BOOKMARK = 'bookmark'
 
@@ -160,12 +162,16 @@ export function healWriterFromEcho(db: Database, opts: {
     // The echo's writer: the caller's own agent fields, or — none sent —
     // the session's own agent, its self as the registry holds it.
     const isAgent = opts.agentId !== null || opts.agentType !== null
-    const self = isAgent ? null : (() => { try { return selfOf(db, opts.echoSessionId) } catch { return null } })()
-    const writer = isAgent ? agentWriterOf(opts.agentType, opts.agentId) : selfWriterOf(self)
+    // A worker's session is the worker's lane (D288, D295): its own
+    // agent's echo names the worker, never a self it does not have.
+    const worker = isAgent ? null : (() => { try { return workerOfSession(db, opts.echoSessionId) } catch { return null } })()
+    const self = isAgent || worker ? null : (() => { try { return selfOf(db, opts.echoSessionId) } catch { return null } })()
+    const writer = isAgent ? agentWriterOf(opts.agentType, opts.agentId) : worker ? legWriterOf(worker) : selfWriterOf(self)
+    const agentOf = isAgent ? opts.agentId : worker ? WORKER_AGENT_ID : null
     const before = { writer: (meta['_writer'] as string | undefined) ?? null, src: (meta['_writer_src'] as string | undefined) ?? null }
     const oldLane = laneWriterOf(meta)
     const next: Record<string, unknown> = { ...meta, _writer: writer, _writer_src: 'echo' }
-    if (isAgent && opts.agentId !== null) next['_writer_agent_id'] = opts.agentId
+    if (agentOf !== null) next['_writer_agent_id'] = agentOf
     else delete next['_writer_agent_id']
     delete next['_writer_candidates']
     if (!isAgent && self?.worktree) next['_worktree'] = self.worktree
@@ -233,6 +239,40 @@ export function healWriterFromEcho(db: Database, opts: {
 
       next['_writer_heal_note'] = `stamped ${before.writer ?? 'with no writer'} (${before.src ?? 'unstamped'}) at insert; its echo names ${writer}. `
         + (notes.length > 0 ? `${notes.join('; ')}.` : 'Nothing it did under the first stamp needed undoing.')
+    }
+    // D331 (read with its sib clause), D320, D326: the leg the echo names
+    // is exact, so what the store could only guess at insert is set here.
+    const trueLeg = agentOf !== null
+      ? (() => { try { return legOf(db, { sessionId: opts.echoSessionId, agentId: agentOf }) } catch { return null } })()
+      : null
+    const leg = trueLeg && trueLeg.kind !== null ? trueLeg : null
+    // A checkpoint whose supersession the store stamped (or could not yet
+    // stamp) follows the true leg: its own newest checkpoint under the
+    // key, else what it started from; nothing when no leg stands behind
+    // the true writer. A supersession the writer named is its own word.
+    if (next['kind'] === 'checkpoint' && (changed || next['_supersedes_src'] === 'pending')) {
+      const src = next['_supersedes_src']
+      if (src === 'pending' || src === 'store') {
+        if (leg && typeof next['run'] === 'string' && typeof next['key'] === 'string') {
+          next['supersedes'] = storeSupersedesFor(db, row.tree_id, leg, next['run'], next['key'], opts.nodeId)
+          next['_supersedes_src'] = 'store'
+        } else {
+          delete next['supersedes']
+          delete next['_supersedes_src']
+        }
+      }
+    }
+    // A settle the insert made under a stamp this echo contradicts is put
+    // back; then the true leg's write under a key of its run settles its
+    // registration, whatever kind of row it is.
+    if (changed) {
+      const priorAgent = meta['_writer_agent_id']
+      if (typeof priorAgent === 'string' && priorAgent !== agentOf) {
+        try { unsettleLegKey(db, { sessionId: rowSession === NO_SESSION ? opts.echoSessionId : rowSession, agentId: priorAgent }, opts.nodeId) } catch { /* no leg columns */ }
+      }
+    }
+    if (leg && typeof next['run'] === 'string' && typeof next['key'] === 'string' && next['key'].trim() !== '') {
+      settleLegKey(db, { sessionId: leg.sessionId, agentId: leg.agentId }, next['run'], next['key'], opts.nodeId)
     }
     // A replayed echo that changes nothing writes nothing.
     if (JSON.stringify(next) !== JSON.stringify(meta)) {

@@ -1,6 +1,6 @@
 /**
  * Release gate — refuse to cut an artifact while a whole product surface has
- * a charter that has never executed.
+ * a charter that has never executed, or has not executed whole.
  *
  * This exists because of 0.0.9-beta. `journal-install.feature` was added in
  * the same commit the release tarball was built from, all thirteen of its
@@ -108,7 +108,7 @@ function main(): void {
   }
 
   console.error('release-gate: REFUSING to pack.\n')
-  console.error('These product surfaces have a charter that has never executed:\n')
+  console.error('These product surfaces have a charter that has not executed whole:\n')
   for (const r of blocking) {
     console.error(`  ${r.feature}   (ruled ${r.ruledOn})`)
     console.error(`    ${r.reason}\n`)

@@ -6,6 +6,7 @@
  * path, and a migration cannot import flat-store without a cycle —
  * so both import this leaf module instead.
  */
+import { runRowKindOf, RUN_DEDUP_CLASS } from './run-kinds.js'
 
 /** Sentinel session key for rows with no resolvable session identity.
  *  Deliberately not NULL: dedup windows, retention grouping, and the
@@ -49,6 +50,23 @@ export function isAutoCaptureSource(source: string | null | undefined): boolean 
  *  effectiveSource reaches every consumer together or dedup silently
  *  diverges between paths. */
 export function dedupClassOf(
+  sourceLabel: string | null | undefined,
+  meta: Record<string, unknown> | null,
+): 'auto' | 'curated' | typeof RUN_DEDUP_CLASS {
+  if (isAutoCaptureSource(effectiveSource(sourceLabel, meta))) return 'auto'
+  // D329: a run's rows (a checkpoint, a brief, a run's open and close) are
+  // identified by their place in the run, never by their text: two legs
+  // that write the same state write two checkpoints, numbered apart.
+  return runRowKindOf(meta) !== null ? RUN_DEDUP_CLASS : 'curated'
+}
+
+/** The dedup class as the shipped ladder rungs 021–023 computed it,
+ *  frozen: auto or curated by the source ladder alone, before a run's
+ *  rows had a class of their own (migration 031). The arbiter backfill
+ *  runs inside shipped ladder steps and must climb identically on every
+ *  store whatever this build's classifier says (the tombstone rule of
+ *  022_interim_heal.ts). Do not call this from any live path. */
+export function dedupClassOfV1(
   sourceLabel: string | null | undefined,
   meta: Record<string, unknown> | null,
 ): 'auto' | 'curated' {

@@ -1,6 +1,6 @@
 import type { Database } from '../database.js'
 import { contentFingerprintV1 } from '../../fingerprint.js'
-import { sessionOf, dedupClassOf, parseMeta, reliedCountOf, liftBoundary } from '../../dedup-identity.js'
+import { sessionOf, dedupClassOfV1 as dedupClassOf, parseMeta, reliedCountOf, liftBoundary } from '../../dedup-identity.js'
 import { decodeContent } from '../content-codec.js'
 import { EXPLICIT_INDEX_LEN_KEY, EXPLICIT_PREVIEW_LEN_KEY } from '../index-text.js'
 import { dbg } from '../../debug.js'

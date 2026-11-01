@@ -45,7 +45,21 @@ import { roleWeightVector } from './persistence/fts.js'
 import { BOOKMARK_KIND, checkpointKindOf, placeChaptersAboveBookmarks, searchCheckpointKindOf, sessionChainWith } from './checkpoints.js'
 import { metadataFilterSql } from './persistence/metadata-filter.js'
 import { AMBIGUOUS_LANE, laneWriterOf, referencedBy, refIdsOf } from './references.js'
-import { resolveWriter, selfOf, selfWriterOf, MAIN_WRITER, type WriterStamp } from './persistence/session-registry.js'
+import { resolveWriter, selfOf, selfWriterOf, agentWriterOf, MAIN_WRITER, STORE_WRITER, type WriterStamp } from './persistence/session-registry.js'
+import {
+  legOf, legsOfRun, workersOfParent, registerSubagentLeg, registerWorkerLeg, recordWorkerProcess, recordOpenedRun, recordSendBack,
+  retireLeg, retirePhantoms, settleLegKey, legWriterOf, hasLegColumns, mintWorkerSessionId,
+  type LegRef, type LegFacts, type LegDoor, type LegIdentity, type LegRegistration, type LegEnding, type WorkerStart,
+  type WorkerProcess, type PhantomPass,
+} from './persistence/leg-registry.js'
+import type { ProcessProbe } from './persistence/process-probe.js'
+import {
+  CHECKPOINT_KIND, BRIEF_KIND, RUN_OPEN_KIND, RUN_CLOSE_KIND, runRowKindOf, nextCheckpointNumber, checkpointsInEffect, briefsInEffect,
+  runOpenOf, lookupKey, storeSupersedesFor, CHECKPOINT_NUMBER_KEY, SUPERSEDES_KEY, SUPERSEDES_SRC_KEY, SUPERSEDES_BY_WRITER, SUPERSEDES_BY_STORE,
+  SUPERSEDES_PENDING, RESTS_ON_KEY, CHECKPOINTER_KEY, CHECKPOINTED_BY_KEY, BRIEF_FOR_KEY, OPENED_BY_KEY, OPENED_VIA_KEY,
+  PARENT_RUN_KEY, PARENT_LEG_KEY, CLOSED_BY_KEY, REASON_KEY, DOOR_KEY, IDENTITY_KEY, CWD_KEY, PARENT_KEY, PARENT_SRC_KEY,
+  type CheckpointRecord, type BriefRecord, type KeyLookup,
+} from './runs.js'
 import { retireMeta } from './persistence/writer-heal.js'
 import {
   DEDUP_WINDOW_SECS,
@@ -337,6 +351,28 @@ function withForeign(
   }
 }
 
+/** The ids a metadata value names: one id or a list of them. */
+function idsIn(v: unknown): string[] {
+  if (typeof v === 'string' && v !== '') return [v]
+  return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && x !== '') : []
+}
+
+/** The library door's read of where a declared writer runs (D293): git's
+ *  answer for the directory, once per directory per process. */
+const gitSelfCache = new Map<string, { worktree: string | null; branch: string | null; cwd: string }>()
+async function gitSelfFor(cwd: string): Promise<{ worktree: string | null; branch: string | null; cwd: string }> {
+  const hit = gitSelfCache.get(cwd)
+  if (hit) return hit
+  let self: { worktree: string | null; branch: string | null; cwd: string } = { worktree: null, branch: null, cwd }
+  try {
+    const { gitSelfOf } = await import('./hooks/git-self.js')
+    const g = gitSelfOf(cwd)
+    self = { worktree: g.worktree, branch: g.branch, cwd }
+  } catch { /* no git here: the directory alone is what the door could read */ }
+  gitSelfCache.set(cwd, self)
+  return self
+}
+
 export class FlatStore implements MemoryStore {
   private readonly db: Database
   private readonly persistence: Persistence
@@ -419,9 +455,12 @@ export class FlatStore implements MemoryStore {
     meta: Record<string, unknown> | null,
     createdAt: number,
   ): boolean {
-    if (dedupClassOf(sourceLabel, meta) === 'auto') {
+    const cls = dedupClassOf(sourceLabel, meta)
+    if (cls === 'auto') {
       return this.persistence.liveAnchor(treeId, sessionOf(meta), fp, createdAt, DEDUP_WINDOW_SECS) !== undefined
     }
+    // A run's rows dedup by identity alone, never by text (D329).
+    if (cls !== 'curated') return false
     return this.persistence.curatedHolder(treeId, fp) !== undefined
   }
 
@@ -490,6 +529,273 @@ export class FlatStore implements MemoryStore {
     return { writers: [role], ids: [...ids] }
   }
 
+  // ── Legs, workers and runs (D279–D352) ────────────────────────────
+
+  /** The stamp a row written as a registered leg carries (D284, D288,
+   *  D293): the leg's writer and lane, read from the registry, and the
+   *  trace, never the caller's word. */
+  private legStampFor(ref: { sessionId: string; agentId: string; door?: string }): Record<string, unknown> {
+    const leg = legOf(this.db, ref)
+    if (!leg) throw new Error(`No leg registered for session ${ref.sessionId}, agent ${ref.agentId}`)
+    return {
+      _cc_session_id: leg.sessionId,
+      _writer: legWriterOf(leg),
+      _writer_src: 'declared',
+      _writer_agent_id: leg.agentId,
+      [DOOR_KEY]: ref.door ?? 'library',
+      [IDENTITY_KEY]: leg.identity ?? 'declared',
+      ...(leg.parentSession ? { [PARENT_KEY]: leg.parentSession, [PARENT_SRC_KEY]: leg.parentSrc } : {}),
+      ...(leg.cwd ? { [CWD_KEY]: leg.cwd } : {}),
+      ...(leg.worktree ? { _worktree: leg.worktree } : {}),
+      ...(leg.branch ? { _branch: leg.branch } : {}),
+    }
+  }
+
+  /** The stamp a writer no hook registered carries (D293): what it
+   *  declared, marked declared, and where the door could read it runs. */
+  private async declaredStampFor(d: { role: string; parent?: string | null; door?: string; cwd?: string }): Promise<Record<string, unknown>> {
+    const where = await gitSelfFor(d.cwd ?? process.cwd())
+    return {
+      _writer: agentWriterOf(d.role, null),
+      _writer_src: 'declared',
+      [DOOR_KEY]: d.door ?? 'library',
+      [IDENTITY_KEY]: 'declared',
+      ...(d.parent ? { [PARENT_KEY]: d.parent, [PARENT_SRC_KEY]: 'declared' } : {}),
+      [CWD_KEY]: where.cwd,
+      ...(where.worktree ? { _worktree: where.worktree } : {}),
+      ...(where.branch ? { _branch: where.branch } : {}),
+    }
+  }
+
+  /** The leg a row is written by, from its stamp: the registration of the
+   *  row's session and writer agent (a subagent leg, or a worker's own
+   *  lane). Null when the stamp names no agent, or none is registered. */
+  private writingLegOf(meta: Record<string, unknown> | null): LegRegistration | null {
+    const agentId = meta?.['_writer_agent_id']
+    if (typeof agentId !== 'string' || agentId === '' || !hasLegColumns(this.db)) return null
+    const session = sessionOf(meta)
+    if (session === NO_SESSION) return null
+    const leg = legOf(this.db, { sessionId: session, agentId })
+    return leg && leg.kind !== null ? leg : null
+  }
+
+  /** Open a run with a row of its own unless it is open already (D302):
+   *  the open at the registration of its first leg is recorded at that
+   *  registration's moment, by the store on the registering door's behalf.
+   *  Synchronous, so the registration, the "is the run open yet" read and
+   *  the open row share one immediate transaction: two first legs
+   *  registering at once write one open row. */
+  private openRunOnRegistrationSync(leg: LegRegistration): void {
+    if (!leg.run || runOpenOf(this.db, this.treeId, leg.run)) return
+    const role = leg.role ?? 'unnamed'
+    const content = `run ${leg.run} opened at the registration of its first leg, the ${role} ${leg.kind === 'worker' ? 'worker' : 'leg'}`
+    const nodeId = randomUUID().replace(/-/g, '')
+    const inserted = this.persistence.insertNode(this.treeId, {
+      nodeId, treeId: this.treeId, parentId: null, depth: 0, isLeaf: true, content, summary: '',
+      createdAt: leg.startedAt, updatedAt: Date.now() / 1000, summaryStale: false, readOnly: false, decayExempt: false,
+      decayRate: undefined, utilityScore: 0.5, sourceLabel: null,
+      metadata: {
+        kind: RUN_OPEN_KIND, run: leg.run,
+        [OPENED_BY_KEY]: legWriterOf(leg), [OPENED_VIA_KEY]: 'registration',
+        first_leg: { session_id: leg.sessionId, agent_id: leg.agentId, role: leg.role },
+        _writer: STORE_WRITER, _writer_src: 'store',
+        [DOOR_KEY]: leg.door ?? 'library', [IDENTITY_KEY]: leg.identity ?? 'declared',
+      },
+    })
+    if (!inserted) throw new Error(`The open row of the run "${leg.run}" was refused`)
+  }
+
+  /**
+   * Register a hooks-door subagent as a leg of a run (D284, D305, D320):
+   * its run, key and their source, the checkpointer its brief names
+   * (D281), and the checkpoint(s) it started from (D329). The first leg of
+   * a run opens it (D302).
+   */
+  async registerLeg(input: { sessionId: string; agentId: string; role: string | null; at?: number; door?: LegDoor; identity?: LegIdentity } & LegFacts): Promise<LegRegistration> {
+    this.ensureOpen()
+    const { sessionId, agentId, role, at, door, identity, ...facts } = input
+    return this.db.transaction(() => {
+      const leg = registerSubagentLeg(this.db, { sessionId, agentId, role }, facts, {
+        at: at ?? Date.now() / 1000, ...(door ? { door } : {}), ...(identity ? { identity } : {}),
+      })
+      this.openRunOnRegistrationSync(leg)
+      return leg
+    }, { mode: 'immediate' })
+  }
+
+  /**
+   * Register a worker under the ticket its spawner declared (D288, D294,
+   * D297, D317): its own lane, its parent linked or declared, its host,
+   * process and the process's start moment. A session id is minted when
+   * the door has none to give. The first leg of a run opens it (D302).
+   */
+  async registerWorker(input: Omit<WorkerStart, 'sessionId' | 'at'> & { sessionId?: string; at?: number }): Promise<LegRegistration> {
+    this.ensureOpen()
+    return this.db.transaction(() => {
+      const leg = registerWorkerLeg(this.db, { ...input, sessionId: input.sessionId ?? mintWorkerSessionId(), at: input.at ?? Date.now() / 1000 })
+      this.openRunOnRegistrationSync(leg)
+      return leg
+    }, { mode: 'immediate' })
+  }
+
+  /** A worker's re-run (D335): the second process beside the first. */
+  recordWorkerRerun(ref: LegRef, proc: WorkerProcess): LegRegistration {
+    this.ensureOpen()
+    return recordWorkerProcess(this.db, ref, proc)
+  }
+
+  /** Record how a leg ended, at the moment its door saw it (D279, D291,
+   *  D292, D303). Returns whether a live leg was retired. */
+  retireLeg(ref: LegRef, how: Exclude<LegEnding, 'phantom'>, at: number = Date.now() / 1000): boolean {
+    this.ensureOpen()
+    return retireLeg(this.db, ref, how, at)
+  }
+
+  /** Count a leg's one send-back (D279, D295). */
+  recordSendBack(ref: LegRef): number {
+    this.ensureOpen()
+    return recordSendBack(this.db, ref)
+  }
+
+  legOf(ref: LegRef): LegRegistration | null {
+    this.ensureOpen()
+    return legOf(this.db, ref)
+  }
+
+  legsOfRun(run: string): LegRegistration[] {
+    this.ensureOpen()
+    return legsOfRun(this.db, run)
+  }
+
+  /** Workers grouped by the parent they declared or were linked to: a
+   *  view computed when read, never a stored row (D294). */
+  workersOfParent(parentId: string): LegRegistration[] {
+    this.ensureOpen()
+    return workersOfParent(this.db, parentId)
+  }
+
+  /** The phantom pass (D297, D317), as any reader of the registry runs it. */
+  retirePhantoms(opts: { noticedBy: string; probe?: ProcessProbe; run?: string; at?: number }): PhantomPass {
+    this.ensureOpen()
+    return retirePhantoms(this.db, opts)
+  }
+
+  /**
+   * Open a run explicitly (D302): before any leg, by whoever declares it.
+   * An inner run names the outer run and the leg that opened it as
+   * declared facts, and that leg's registration names it back (D311).
+   * Opening a run already open records nothing new.
+   */
+  async openRun(opts: {
+    run: string
+    by?: string
+    leg?: LegRef
+    parentRun?: string
+    parentLeg?: LegRef
+    at?: number
+    cwd?: string
+  }): Promise<{ nodeId: string; opened: boolean; createdAt: number }> {
+    this.ensureOpen()
+    const existing = runOpenOf(this.db, this.treeId, opts.run)
+    if (existing) return { nodeId: existing.nodeId, opened: false, createdAt: existing.createdAt }
+    const at = opts.at ?? Date.now() / 1000
+    const parentLeg = opts.parentLeg ? legOf(this.db, opts.parentLeg) : null
+    const by = opts.leg ? legWriterOf(legOf(this.db, opts.leg) ?? { role: null, agentId: opts.leg.agentId }) : (opts.by ?? 'unnamed')
+    const inside = opts.parentRun
+      ? `, inside the run ${opts.parentRun}${opts.parentLeg ? ` by its ${parentLeg?.role ?? 'unnamed'} leg` : ''}`
+      : ''
+    const r = await this.insert(`run ${opts.run} opened by ${by}${inside}`, {
+      createdAt: at,
+      ...(opts.leg ? { leg: opts.leg } : { declared: { role: by, ...(opts.cwd ? { cwd: opts.cwd } : {}) } }),
+      metadata: {
+        kind: RUN_OPEN_KIND, run: opts.run, [OPENED_BY_KEY]: by, [OPENED_VIA_KEY]: 'explicit',
+        ...(opts.parentRun ? { [PARENT_RUN_KEY]: opts.parentRun } : {}),
+        ...(opts.parentLeg ? { [PARENT_LEG_KEY]: { session_id: opts.parentLeg.sessionId, agent_id: opts.parentLeg.agentId, role: parentLeg?.role ?? null } } : {}),
+      },
+    })
+    if (opts.parentLeg) recordOpenedRun(this.db, opts.parentLeg, opts.run)
+    return { nodeId: r.nodeId, opened: true, createdAt: at }
+  }
+
+  /** Close a run with a reason (D302): who and why, recorded as a journal
+   *  row naming the run and pointing at its open. A run nobody closes
+   *  stays open and readable (D308). */
+  async closeRun(opts: { run: string; reason: string; by?: string; leg?: LegRef; at?: number; cwd?: string }): Promise<{ nodeId: string; createdAt: number }> {
+    this.ensureOpen()
+    const at = opts.at ?? Date.now() / 1000
+    const open = runOpenOf(this.db, this.treeId, opts.run)
+    const by = opts.leg ? legWriterOf(legOf(this.db, opts.leg) ?? { role: null, agentId: opts.leg.agentId }) : (opts.by ?? 'unnamed')
+    const r = await this.insert(`run ${opts.run} closed by ${by}: ${opts.reason}`, {
+      createdAt: at,
+      ...(opts.leg ? { leg: opts.leg } : { declared: { role: by, ...(opts.cwd ? { cwd: opts.cwd } : {}) } }),
+      metadata: {
+        kind: RUN_CLOSE_KIND, run: opts.run, [CLOSED_BY_KEY]: by, [REASON_KEY]: opts.reason,
+        ...(open ? { refs: [open.nodeId] } : {}),
+      },
+    })
+    return { nodeId: r.nodeId, createdAt: at }
+  }
+
+  /** Write a brief for a role under a run's key (D281, D327): who
+   *  checkpointed the work it resumes and who will checkpoint it at the
+   *  end; a newer brief names the one it supersedes. */
+  async writeBrief(content: string, opts: {
+    run: string; key: string; role: string
+    checkpointer?: string | null; checkpointedBy?: string | null
+    supersedes?: string[]; by?: string; leg?: LegRef; at?: number; cwd?: string
+  }): Promise<InsertResult> {
+    this.ensureOpen()
+    return this.insert(content, {
+      ...(opts.at !== undefined ? { createdAt: opts.at } : {}),
+      ...(opts.supersedes ? { supersedes: opts.supersedes } : {}),
+      ...(opts.leg ? { leg: opts.leg } : { declared: { role: opts.by ?? 'unnamed', ...(opts.cwd ? { cwd: opts.cwd } : {}) } }),
+      metadata: {
+        kind: BRIEF_KIND, run: opts.run, key: opts.key, [BRIEF_FOR_KEY]: opts.role,
+        ...(opts.checkpointer ? { [CHECKPOINTER_KEY]: opts.checkpointer } : {}),
+        ...(opts.checkpointedBy ? { [CHECKPOINTED_BY_KEY]: opts.checkpointedBy } : {}),
+      },
+    })
+  }
+
+  /** Write a checkpoint under a run's key (D280, D284, D329, D331): the
+   *  store numbers it when it lands; what it supersedes is named here or
+   *  stamped from the leg's start; what it rests on is its references. */
+  async writeCheckpoint(content: string, opts: {
+    run: string; key: string
+    supersedes?: string[]; restsOn?: string[]
+    leg?: LegRef & { door?: string }
+    declared?: { role: string; parent?: string | null; door?: string; cwd?: string }
+    at?: number
+  }): Promise<InsertResult> {
+    this.ensureOpen()
+    return this.insert(content, {
+      ...(opts.at !== undefined ? { createdAt: opts.at } : {}),
+      ...(opts.supersedes ? { supersedes: opts.supersedes } : {}),
+      ...(opts.leg ? { leg: opts.leg } : opts.declared ? { declared: opts.declared } : {}),
+      metadata: {
+        kind: CHECKPOINT_KIND, run: opts.run, key: opts.key,
+        ...(opts.restsOn && opts.restsOn.length > 0 ? { [RESTS_ON_KEY]: opts.restsOn } : {}),
+      },
+    })
+  }
+
+  checkpointsInEffect(run: string, key: string): CheckpointRecord[] {
+    this.ensureOpen()
+    return checkpointsInEffect(this.db, this.treeId, run, key)
+  }
+
+  briefsInEffect(role: string): BriefRecord[] {
+    this.ensureOpen()
+    return briefsInEffect(this.db, this.treeId, role)
+  }
+
+  /** The harness's lookup by run and key (D289), the phantom pass first
+   *  (D297). See runs.ts lookupKey. */
+  lookupKey(opts: { run: string; key: string; probe?: ProcessProbe; noticedBy?: string; at?: number }): KeyLookup {
+    this.ensureOpen()
+    return lookupKey(this.db, this.treeId, opts)
+  }
+
   /** Rows with `content` decoded to plaintext (C1: the column may hold a
    *  zstd-flagged Buffer for larger rows). */
   private allRows(): NodeRow[] {
@@ -516,6 +822,32 @@ export class FlatStore implements MemoryStore {
     let meta = opts?.mediaRef
       ? { ...opts?.metadata, _media: opts.mediaRef }
       : (opts?.metadata ?? null)
+    // The library door's identities (D293): a leg named by its
+    // registration, or a role declared with no registration behind it.
+    // Either way the store writes the stamp; a caller's copy of a
+    // store-only key never survives.
+    if (opts?.leg) meta = { ...meta, ...this.legStampFor(opts.leg) }
+    else if (opts?.declared) meta = { ...meta, ...(await this.declaredStampFor(opts.declared)) }
+    // A run's rows (run-kinds.ts): a checkpoint or a brief names what it
+    // supersedes on itself, the targets untouched (D280, D327); a
+    // checkpoint is numbered by the store when it lands (D329).
+    const runKind = runRowKindOf(meta)
+    let runSupersedes: string[] | null = null
+    if (runKind !== null && meta) {
+      const m: Record<string, unknown> = { ...meta }
+      delete m[CHECKPOINT_NUMBER_KEY]
+      delete m[SUPERSEDES_SRC_KEY]
+      if (runKind === CHECKPOINT_KIND || runKind === BRIEF_KIND) {
+        const named = [...new Set([...(opts?.supersedes ?? []), ...idsIn(m[SUPERSEDES_KEY])])]
+        delete m[SUPERSEDES_KEY]
+        if (named.length > 0) {
+          m[SUPERSEDES_KEY] = named
+          m[SUPERSEDES_SRC_KEY] = SUPERSEDES_BY_WRITER
+        }
+        runSupersedes = idsIn(m[SUPERSEDES_KEY])
+      }
+      meta = m
+    }
     // A bookmark (D158) is a resume pointer by definition: it is live until
     // the session's next bookmark supersedes it (D166), so the flag is
     // implied rather than left for every writer to remember.
@@ -548,7 +880,10 @@ export class FlatStore implements MemoryStore {
     // previous one. An unattributed bookmark supersedes the lane's other
     // unattributed ones, so a failed attribution never grows the panel.
     const writer = laneWriterOf(meta)
-    let ownSupersedes: string[] | undefined = opts?.supersedes
+    // A run's supersession lives on the newer row alone: no pointer flag
+    // is flipped on what it supersedes (D280, D343).
+    const pointerSupersedes = runKind !== null ? undefined : opts?.supersedes
+    let ownSupersedes: string[] | undefined = pointerSupersedes
     const withPriorBookmarks = (self: string): string[] | undefined => {
       if (!isBookmark || isAuto) return ownSupersedes
       const session = sessionOf(meta)
@@ -580,8 +915,40 @@ export class FlatStore implements MemoryStore {
       // supersedes target another writer owns is left untouched; the new
       // entry carries the pointer instead, as a reference in its refs,
       // which the owning lane sees as "referenced by" at its next read.
-      const split = this.splitSupersedes(opts?.supersedes, writer)
+      const split = this.splitSupersedes(pointerSupersedes, writer)
       ownSupersedes = split.own
+      // D329: the store numbers a checkpoint when it lands, inside this
+      // immediate transaction, so two legs that started from one
+      // checkpoint take the next two numbers and never the same one.
+      let checkpoint: InsertResult['checkpoint']
+      if (runKind === CHECKPOINT_KIND && meta) {
+        const run = String(meta['run'])
+        const key = String(meta['key'])
+        if (meta[SUPERSEDES_SRC_KEY] === undefined) {
+          // D331, read with its sib clause: a checkpoint that names
+          // nothing supersedes the leg's own newest checkpoint under the
+          // key, else what the leg started from, read from its
+          // registration and marked as the store's; with no leg behind it,
+          // nothing is stamped. While the store cannot tell which live
+          // subagent wrote it (ambiguous) or reads the session's own agent
+          // beside a live one (concurrent), the stamp waits for the call's
+          // echo (writer-heal.ts).
+          const leg = this.writingLegOf(meta)
+          if (leg) {
+            meta = { ...meta, [SUPERSEDES_KEY]: storeSupersedesFor(this.db, this.treeId, leg, run, key), [SUPERSEDES_SRC_KEY]: SUPERSEDES_BY_STORE }
+            runSupersedes = idsIn(meta[SUPERSEDES_KEY])
+          } else if (meta['_writer_src'] === 'ambiguous' || meta['_writer_src'] === 'concurrent') {
+            meta = { ...meta, [SUPERSEDES_SRC_KEY]: SUPERSEDES_PENDING }
+          }
+        }
+        const number = nextCheckpointNumber(this.db, this.treeId, run, key)
+        meta = { ...meta, [CHECKPOINT_NUMBER_KEY]: number }
+        checkpoint = { run, key, number, supersedes: runSupersedes ?? [], supersedesSrc: (meta[SUPERSEDES_SRC_KEY] as string | undefined) ?? null }
+      }
+      const runOut: Partial<InsertResult> = {
+        ...(checkpoint ? { checkpoint } : {}),
+        ...(runSupersedes && runSupersedes.length > 0 ? { superseded: runSupersedes } : {}),
+      }
       if (split.foreign.length > 0) {
         // `_supersedes_referenced` remembers which refs were supersessions
         // the writer's lane could not perform, so an echo heal that moves
@@ -645,8 +1012,17 @@ export class FlatStore implements MemoryStore {
       }
       if (isAuto) this.persistence.upsertAnchor(this.treeId, sessionOf(meta), fp, nodeId, createdAt)
 
+      // D320, D326: the leg's first write under a key of its run settles
+      // its registration as the leg's own, here only when the writer is
+      // known exactly (a leg named through the library, or a worker's own
+      // session, both stamped `declared`); a writer the registry read
+      // provisionally, concurrently or ambiguously settles at its echo.
+      if (meta && meta['_writer_src'] === 'declared' && typeof meta['key'] === 'string' && meta['key'].trim() !== '' && typeof meta['run'] === 'string') {
+        const leg = this.writingLegOf(meta)
+        if (leg) settleLegKey(this.db, leg, meta['run'], meta['key'], nodeId)
+      }
       const sup = this.applySupersedes(withPriorBookmarks(nodeId), nodeId)
-      return { nodeId, path: [nodeId], depth: 0, deduplicated: false, driftDetected: false, staleNodes: [], ...withForeign(sup, split.foreign, true) }
+      return { nodeId, path: [nodeId], depth: 0, deduplicated: false, driftDetected: false, staleNodes: [], ...withForeign(sup, split.foreign, true), ...runOut }
     })
 
     // The amortized sweep stays OUTSIDE the insert transaction: it runs

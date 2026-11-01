@@ -2623,3 +2623,32 @@ D352 2026-11-01 [V] ratifies D332
   serves: N29 N27 N31
   touches: D332 D325 D321 D299
 # the read's ratification, 2026-11-01, of the chain the gate amended under the visionary's own ratification of D299 (D321); items 1 to 8 ratified in one answer, "Ratify all eight", the ledger ladderings of N28 and N31 (item 7) among them, which carry no entry of their own
+
+D353 2026-11-01 [I] amends D331
+  trig:  a leg writes a checkpoint under its key that names nothing as superseded, having already written one or more checkpoints under that key on that run since it started [I]
+  resp:  the store stamps the checkpoint as superseding the leg's own newest checkpoint under that run and key, and only when the leg has written none there, the checkpoint(s) it started from as read from its registration; the stamp is marked as the store's as D331 has it, and a checkpoint that names another is taken at its word as before; the start checkpoints are used only when the checkpoint's run and key are the leg's registered ones, so a leg writing under another key gets no supersession stamped from a different key's chain [I]
+  sib:   none -- D331's own sib, a forgetful leg leaving a pile of checkpoints in effect under one key, which the literal "started from" reading would produce on the leg's second write
+  serves: N28 N29 N32
+  touches: D331 D329 D280 D283
+# the build, 2026-11-01, unit 1's failure-ladder review (finding 4): one leg writing 4 then 5, both naming nothing, left 4 and 5 in effect under the literal reading, the pile D331's sib clause names as what it prevents; resolved from the record under D333 and awaiting ratification. The fact stamped is in the journal (the leg's newest checkpoint under the key, by its writer stamp), nothing synthesized (D283). Verified at the gate against the SQLite file: n=4 ["3"] store, n=5 ["4"] store, in effect [5]; two legs from one checkpoint still write 4 and 5 both superseding 3, both in effect (D329). Code: src/runs.ts storeSupersedesFor
+
+D354 2026-11-01 [I]
+  resp:  the open row the store writes at a leg's registration carries the store itself as its writer, `treecontext`, with writer source `store`, the registering leg named as the run's first leg, and `opened_via` as `registration`; an explicit open carries the harness or agent that declared it; the store's own name is escaped like the client's so no subagent type can join its lane [I]
+  ->     structural
+  serves: N28 N32
+  touches: D302 D309 D283 D293 D263
+# the build, 2026-11-01, unit 1's decision at build endorsed by its review: D283 forbids crediting a writer that did not write the row, and D294 allows a declared parent that leaves no row of its own; the client's own reports already carry the client as writer (D263), so the store's own row carries the store. Written within the registration's immediate transaction so two first legs at once open the run once. Awaiting ratification
+
+D355 2026-11-01 [V] ratifies D353
+  resp:  the build's reading stands as written: a checkpoint naming nothing supersedes its leg's own newest checkpoint under the key, else the one(s) it started from, stamped as the store's [V]
+  ->     structural
+  serves: N28 N29 N32
+  touches: D353 D331 D283
+# the visionary, 2026-11-01, at unit 1's gate, "Ratify both" to the two put in plain words (the pile a forgetful leg would leave; a row nobody but the store wrote), under D333's rule that gate questions are resolved from the record first and brought back only with their derivation
+
+D356 2026-11-01 [V] ratifies D354
+  resp:  the open row the store writes at a leg's registration carries the store itself as its writer, as D354 has it [V]
+  ->     structural
+  serves: N28 N32
+  touches: D354 D302 D283
+# the visionary, 2026-11-01, at unit 1's gate, the same "Ratify both" as D355
