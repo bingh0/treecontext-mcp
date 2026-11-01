@@ -34,6 +34,11 @@ export interface InsertResult {
    *  were not recorded anywhere — the survivor is never modified to hold
    *  them. Present only when there were any. */
   refsNotRecorded?: string[]
+  /** A checkpoint under a run's key (D329, D331): the number the store
+   *  gave it when it landed, what it supersedes, and who named that
+   *  (`writer`, or `store` from the leg's registration, or `pending`
+   *  until the call's echo names the leg). */
+  checkpoint?: { run: string; key: string; number: number; supersedes: string[]; supersedesSrc: string | null }
 }
 
 export interface AncestorEntry {
@@ -382,5 +387,23 @@ export interface InsertOptions {
    * entry's `metadata.refs` instead, reported in `InsertResult.referenced`.
    */
   supersedes?: string[]
+  /**
+   * The leg writing this row, named by its registration (D284, D331): the
+   * library door's way to write as a leg. The store stamps the row with
+   * the leg's writer, lane and trace from the registry (D293), never from
+   * the caller's metadata; a checkpoint that names nothing as superseded
+   * is stamped as superseding the checkpoint(s) the leg started from.
+   * `door` names the door the caller is (default `library`).
+   */
+  leg?: { sessionId: string; agentId: string; door?: string }
+  /**
+   * An identity no hook registered, declared by the writer through the
+   * library (D293): a role and, when it has one, the parent session it
+   * says it serves. The store refuses nothing and checks nothing; it
+   * stamps what was declared, marked declared, with the directory,
+   * worktree and branch the door could read for `cwd` (default the
+   * process's).
+   */
+  declared?: { role: string; parent?: string | null; door?: string; cwd?: string }
 }
 

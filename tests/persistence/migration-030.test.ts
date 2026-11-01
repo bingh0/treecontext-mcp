@@ -16,6 +16,7 @@ import { openNodeSqlite, pragmaValue, setPragma } from '../../src/persistence/no
 import { FlatStore } from '../../src/flat-store.js'
 import { decodeContent } from '../../src/persistence/content-codec.js'
 import { RECOVERY_SNAPSHOT_SOURCE, RECOVERY_PREVIEW_LEN, RECOVERY_INDEX_LEN } from '../../src/persistence/recovery-snapshot.js'
+import { maxSupportedVersion } from '../../src/persistence/migrations/index.js'
 
 type Raw = { node_id: string; metadata_json: string; content: Uint8Array | string; index_len: number | null; preview_len: number | null }
 
@@ -63,7 +64,7 @@ describe('migration 030 (D286)', () => {
 
       const raw2 = new DatabaseSync(path, { readOnly: true })
       try {
-        expect(pragmaValue(raw2, 'user_version')).toBe(30)
+        expect(pragmaValue(raw2, 'user_version')).toBe(maxSupportedVersion)
         const after = Object.fromEntries(Object.entries(ids).map(([k, id]) => [k,
           raw2.prepare('SELECT node_id, metadata_json, content, index_len, preview_len FROM nodes WHERE node_id = ?').get(id) as Raw]))
         const fts2 = (term: string): string[] => (raw2.prepare(

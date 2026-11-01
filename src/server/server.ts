@@ -36,6 +36,8 @@ import { resolveCcSessionId, writeNamespaceAnnotation, type CcSessionResolution 
 import { dbg, warn } from '../debug.js'
 import type { FlatStore } from '../flat-store.js'
 import { selfWriterOf, stampMetadata, WRITER_STAMP_KEYS, type WriterStamp } from '../persistence/session-registry.js'
+import { NOTICED_BY_STATUS } from '../persistence/leg-registry.js'
+import { DOOR_KEY, IDENTITY_KEY } from '../runs.js'
 import {
   INLINE_EXPORT_CAP, SECRETS_WARNING, buildHandoff, importToldMessage, resolveProjectPath, writeHandoffFile,
   type HandoffForm,
@@ -339,7 +341,7 @@ export function createServer(
   // the hooks keep (persistence/session-registry.ts). A session whose own
   // identity is ambiguous here is not looked up: its stamp would be a
   // guess about a guess.
-  type Stamping = MemoryStore & Partial<Pick<FlatStore, 'writerStampFor' | 'subagentScopeFor' | 'selfOfSession'>>
+  type Stamping = MemoryStore & Partial<Pick<FlatStore, 'writerStampFor' | 'subagentScopeFor' | 'selfOfSession' | 'retirePhantoms'>>
   const writerStamp = (ctx: MemoryStore, cc: CcSessionResolution): WriterStamp => {
     const store = ctx as Stamping
     if (typeof store.writerStampFor !== 'function' || cc.ccSessionId === null || cc.ambiguous) return { src: 'unregistered' }
@@ -462,6 +464,11 @@ export function createServer(
             }
           }
           if (stamp.src !== 'unregistered') Object.assign(merged, stampMetadata(stamp))
+          // D293: how the row came in: through the tools, its identity
+          // registered by a hook (the session's self or a subagent the
+          // hooks registered) or declared (a worker's ticket).
+          merged[DOOR_KEY] = 'tools'
+          if (stamp.src !== 'unregistered') merged[IDENTITY_KEY] = stamp.src === 'declared' ? 'declared' : 'hook'
           opts.metadata = merged
         }
         if (media_ref) {
@@ -509,6 +516,18 @@ export function createServer(
             response.writer_note = `A subagent of this session is live (${names.join(', ')}) but the session's own agent has been `
               + `active since it started, so this entry is stamped "${stamp.writer}", the session's own; the call's own echo `
               + 'corrects the writer when it is captured.'
+          }
+        }
+        // D329, D331: a checkpoint under a run's key is numbered by the
+        // store when it lands; what it supersedes, and who named that,
+        // said back as stored.
+        if (result.checkpoint) {
+          response.checkpoint = {
+            run: result.checkpoint.run,
+            key: result.checkpoint.key,
+            number: result.checkpoint.number,
+            supersedes: result.checkpoint.supersedes,
+            supersedes_src: result.checkpoint.supersedesSrc,
           }
         }
         // A dedup hit lands no row: the references it carried went nowhere,
@@ -870,6 +889,18 @@ export function createServer(
       }
       const c = resolve()
       const info = getInfo()
+      // D297: status reads the registry, so it is one of the readers that
+      // retires a gone worker of this host as a phantom, noticed now and
+      // by the status call, and says which workers it could not check.
+      let phantoms: ReturnType<NonNullable<Stamping['retirePhantoms']>> | null = null
+      const phantomReader = c as Stamping
+      if (policy !== 'read_only' && typeof phantomReader.retirePhantoms === 'function') {
+        try {
+          phantoms = phantomReader.retirePhantoms({ noticedBy: NOTICED_BY_STATUS })
+        } catch (err) {
+          dbg('server', 'phantom pass failed in status — registry left as it was', { error: err instanceof Error ? err.message : String(err) })
+        }
+      }
       // D167, D242: a session registered in a linked worktree orients on
       // its self, so status lists that worktree's own pointers unless
       // asked for every lane. The main checkout's status is unchanged.
@@ -905,6 +936,16 @@ export function createServer(
         ensemble_size: (status as { ensembleSize?: number }).ensembleSize ?? 1,
       }
 
+      if (phantoms && (phantoms.retired.length > 0 || phantoms.unchecked.length > 0)) {
+        response.workers = {
+          ...(phantoms.retired.length > 0 ? {
+            retired_as_phantoms: phantoms.retired.map((p) => ({
+              session_id: p.ref.sessionId, role: p.role, run: p.run, key: p.key, host: p.host, pid: p.pid,
+            })),
+          } : {}),
+          ...(phantoms.notes.length > 0 ? { unchecked: phantoms.notes } : {}),
+        }
+      }
       if (lane !== undefined) {
         const others = status.resumePointerOtherLanes ?? 0
         response.scope = {

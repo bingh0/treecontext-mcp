@@ -7,6 +7,7 @@ import { writeSessionBeacon } from '../session-beacon.js'
 import { readSessionBeacon } from '../session-beacon.js'
 import { buildClearPacket, localDateOf, markNudged, recordSessionLink, sessionChain, worktreeSelfLines, CHAPTER_HOWTO } from '../checkpoints.js'
 import { hasRegistry, registerSelf, retireAllSubagents, type GitSelf } from '../persistence/session-registry.js'
+import { retirePhantoms, NOTICED_BY_SESSION_START } from '../persistence/leg-registry.js'
 import { gitSelfOf } from './git-self.js'
 
 /** The packet when the session before this clear cannot be identified. */
@@ -133,6 +134,17 @@ export function main(preParsed?: Record<string, unknown>) {
       else dbg('hook:session-start', 'no session registry in this store — session left unregistered', { dbPath })
     } catch (err) {
       dbg('hook:session-start', 'self registration FAILED', { error: messageOf(err) })
+    }
+
+    // D297: the session-start hook reads the registry, so it is one of the
+    // readers that retires a gone worker of this host as a phantom, with
+    // the moment it noticed and itself as what noticed it. Best-effort: a
+    // store without the leg columns has no workers to check.
+    try {
+      const pass = retirePhantoms(db, { noticedBy: NOTICED_BY_SESSION_START })
+      if (pass.retired.length > 0) dbg('hook:session-start', 'retired phantom workers', { retired: pass.retired.length })
+    } catch (err) {
+      dbg('hook:session-start', 'phantom pass FAILED', { error: messageOf(err) })
     }
 
     try {

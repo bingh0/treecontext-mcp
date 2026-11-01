@@ -107,8 +107,8 @@
 {"file":"features/journal-legs.feature","title":"a checkpoint of 16000 characters is accepted on its first write and accepted on the second [2]","status":"unbound"}
 {"file":"features/journal-legs.feature","title":"a checkpoint of 16001 characters is refused with the reason and the shape asked for on its first write and accepted and marked over the cap on the second [3]","status":"unbound"}
 {"file":"features/journal-legs.feature","title":"a checkpoint of 300000 characters is refused with the reason and the shape asked for on its first write and accepted and marked over the cap on the second [4]","status":"unbound"}
-{"file":"features/journal-legs.feature","title":"a checkpoint that names another checkpoint is taken at its word","status":"unbound"}
-{"file":"features/journal-legs.feature","title":"a checkpoint that names nothing as superseded is stamped from the leg's start, marked as the store's","status":"unbound"}
+{"file":"features/journal-legs.feature","title":"a checkpoint that names another checkpoint is taken at its word","status":"passed"}
+{"file":"features/journal-legs.feature","title":"a checkpoint that names nothing as superseded is stamped from the leg's start, marked as the store's","status":"passed"}
 {"file":"features/journal-legs.feature","title":"a checkpoint the main agent writes under a leg's key comes back flagged, never withheld","status":"unbound"}
 {"file":"features/journal-legs.feature","title":"a cut leg leaves its trail and the next leg of its role starts as a recovery leg","status":"unbound"}
 {"file":"features/journal-legs.feature","title":"a cut leg leaves no checkpoint the store wrote","status":"unbound"}
@@ -133,27 +133,27 @@
 {"file":"features/journal-legs.feature","title":"a leg's first moment is its brief and the checkpoint in effect, with no query made","status":"unbound"}
 {"file":"features/journal-legs.feature","title":"a newer brief for the same role and key supersedes the older one","status":"unbound"}
 {"file":"features/journal-legs.feature","title":"a recovery leg writes the checkpoint its predecessor did not","status":"unbound"}
-{"file":"features/journal-legs.feature","title":"a reviewer's original-plus-review supersedes the original and the lookup returns it","status":"unbound"}
+{"file":"features/journal-legs.feature","title":"a reviewer's original-plus-review supersedes the original and the lookup returns it","status":"passed"}
 {"file":"features/journal-legs.feature","title":"a run's close ends its briefs","status":"unbound"}
 {"file":"features/journal-legs.feature","title":"a second over-cap write by another leg or under another key is refused again","status":"unbound"}
 {"file":"features/journal-legs.feature","title":"a subagent whose brief names a run and a key gets the leg contract","status":"unbound"}
-{"file":"features/journal-legs.feature","title":"a subagent with no brief or no key is registered and summarised exactly as today","status":"unbound"}
-{"file":"features/journal-legs.feature","title":"an inferred key gives way to the key the leg first writes under","status":"unbound"}
+{"file":"features/journal-legs.feature","title":"a subagent with no brief or no key is registered and summarised exactly as today","status":"passed"}
+{"file":"features/journal-legs.feature","title":"an inferred key gives way to the key the leg first writes under","status":"passed"}
 {"file":"features/journal-legs.feature","title":"an inferred key never makes the stop ask for a checkpoint","status":"unbound"}
 {"file":"features/journal-legs.feature","title":"an over-cap checkpoint accepted on its second write is the one in effect, and the next leg's first-moment row shows what it cost","status":"unbound"}
-{"file":"features/journal-legs.feature","title":"every checkpoint names what it supersedes and what it rests on, so a reader can walk back to the trail","status":"unbound"}
+{"file":"features/journal-legs.feature","title":"every checkpoint names what it supersedes and what it rests on, so a reader can walk back to the trail","status":"passed"}
 {"file":"features/journal-legs.feature","title":"every first moment says in treecontext's own words that a checkpoint is state, not history","status":"unbound"}
 {"file":"features/journal-legs.feature","title":"no send-back when the store cannot be written","status":"unbound"}
 {"file":"features/journal-legs.feature","title":"the brief names who checkpointed the work resumed and who will checkpoint at the end","status":"unbound"}
-{"file":"features/journal-legs.feature","title":"the checkpoint a leg writes at its end takes the next number and supersedes the one it started from","status":"unbound"}
+{"file":"features/journal-legs.feature","title":"the checkpoint a leg writes at its end takes the next number and supersedes the one it started from","status":"passed"}
 {"file":"features/journal-legs.feature","title":"the hooks door takes a leg's key from its role's newest brief and marks it inferred","status":"unbound"}
-{"file":"features/journal-legs.feature","title":"the leg's first write under a key settles an ambiguous registration","status":"unbound"}
+{"file":"features/journal-legs.feature","title":"the leg's first write under a key settles an ambiguous registration","status":"passed"}
 {"file":"features/journal-legs.feature","title":"the pointer comes back every time and the next leg starts from the store whether or not it was followed","status":"unbound"}
 {"file":"features/journal-legs.feature","title":"the pointer rides on the Agent tool's result and the subagent's final message is untouched","status":"unbound"}
 {"file":"features/journal-legs.feature","title":"the pointer to a leg's summary row carries the leg's role, run and key","status":"unbound"}
 {"file":"features/journal-legs.feature","title":"two briefs in effect for one role make the key ambiguous and name the candidates","status":"unbound"}
-{"file":"features/journal-legs.feature","title":"two checkpoints in effect under one key come back as two, never a silent pick","status":"unbound"}
-{"file":"features/journal-legs.feature","title":"two legs that started from one checkpoint write 4 and 5, never two 4s, and both stay in effect","status":"unbound"}
+{"file":"features/journal-legs.feature","title":"two checkpoints in effect under one key come back as two, never a silent pick","status":"passed"}
+{"file":"features/journal-legs.feature","title":"two legs that started from one checkpoint write 4 and 5, never two 4s, and both stay in effect","status":"passed"}
 {"file":"features/journal-legs.feature","title":"until its session restarts, a silent leg reads as live with its ages shown","status":"unbound"}
 {"file":"features/journal-library.feature","title":"a plain Node program journals without any server","status":"passed"}
 {"file":"features/journal-library.feature","title":"a reader can watch a live store without stopping the writer","status":"passed"}
@@ -267,28 +267,28 @@
 {"file":"features/journal-reorientation.feature","title":"the tail keeps its shape with 5 turns since the bookmark [2]","status":"passed"}
 {"file":"features/journal-reorientation.feature","title":"the tail keeps its shape with 6 turns since the bookmark [3]","status":"passed"}
 {"file":"features/journal-runs.feature","title":"a checkpoint by the named checkpointer comes back with no flag","status":"unbound"}
-{"file":"features/journal-runs.feature","title":"a harness may open a run explicitly before any leg","status":"unbound"}
-{"file":"features/journal-runs.feature","title":"a key that holds no checkpoint yet comes back as an honest nothing","status":"unbound"}
+{"file":"features/journal-runs.feature","title":"a harness may open a run explicitly before any leg","status":"passed"}
+{"file":"features/journal-runs.feature","title":"a key that holds no checkpoint yet comes back as an honest nothing","status":"passed"}
 {"file":"features/journal-runs.feature","title":"a key with 0 checkpoints returns the sizes of the last 0 [1]","status":"unbound"}
 {"file":"features/journal-runs.feature","title":"a key with 1 checkpoints returns the sizes of the last 1 [2]","status":"unbound"}
 {"file":"features/journal-runs.feature","title":"a key with 3 checkpoints returns the sizes of the last 3 [3]","status":"unbound"}
 {"file":"features/journal-runs.feature","title":"a key with 40 checkpoints returns the sizes of the last 3 [4]","status":"unbound"}
-{"file":"features/journal-runs.feature","title":"a leg opens a run of its own and both runs reach each other","status":"unbound"}
+{"file":"features/journal-runs.feature","title":"a leg opens a run of its own and both runs reach each other","status":"passed"}
 {"file":"features/journal-runs.feature","title":"a leg that left no return is said so, never guessed","status":"unbound"}
 {"file":"features/journal-runs.feature","title":"a leg that ran on another machine comes back into the run by the handoff, and its claim is believed, flagged","status":"unbound"}
-{"file":"features/journal-runs.feature","title":"a run opens on its first leg's registration","status":"unbound"}
+{"file":"features/journal-runs.feature","title":"a run opens on its first leg's registration","status":"passed"}
 {"file":"features/journal-runs.feature","title":"a run's default export is its skeleton, with no captured tool output","status":"unbound"}
-{"file":"features/journal-runs.feature","title":"a run's open and close are journal rows the query reaches","status":"unbound"}
-{"file":"features/journal-runs.feature","title":"a run's rows read back by plain SQL in the order of their own moments, each naming its writer and moment, each leg naming its run and key","status":"unbound"}
+{"file":"features/journal-runs.feature","title":"a run's open and close are journal rows the query reaches","status":"passed"}
+{"file":"features/journal-runs.feature","title":"a run's rows read back by plain SQL in the order of their own moments, each naming its writer and moment, each leg naming its run and key","status":"passed"}
 {"file":"features/journal-runs.feature","title":"a stranger's checkpoint comes back as the one in effect, flagged against the named checkpointer","status":"unbound"}
 {"file":"features/journal-runs.feature","title":"an agent closes a run through the tools and the record is the same as the harness's","status":"unbound"}
-{"file":"features/journal-runs.feature","title":"an agent finds a run by its name","status":"unbound"}
+{"file":"features/journal-runs.feature","title":"an agent finds a run by its name","status":"passed"}
 {"file":"features/journal-runs.feature","title":"an agent finds a run by time with no id in hand","status":"unbound"}
 {"file":"features/journal-runs.feature","title":"an agent gets the same lookup reply as the harness through the tools","status":"unbound"}
 {"file":"features/journal-runs.feature","title":"every key lookup carries the run's facts beside the checkpoint","status":"unbound"}
-{"file":"features/journal-runs.feature","title":"nesting is not limited to one level","status":"unbound"}
-{"file":"features/journal-runs.feature","title":"the harness asks by run and key with no model and receives the one checkpoint in effect","status":"unbound"}
-{"file":"features/journal-runs.feature","title":"the harness closes a run with a reason and plain SQL shows who ended it and why","status":"unbound"}
+{"file":"features/journal-runs.feature","title":"nesting is not limited to one level","status":"passed"}
+{"file":"features/journal-runs.feature","title":"the harness asks by run and key with no model and receives the one checkpoint in effect","status":"passed"}
+{"file":"features/journal-runs.feature","title":"the harness closes a run with a reason and plain SQL shows who ended it and why","status":"passed"}
 {"file":"features/journal-runs.feature","title":"the lookup reply carries the pointer to the return of the leg that wrote the checkpoint","status":"unbound"}
 {"file":"features/journal-runs.feature","title":"the run's facts show each live leg's start and last write","status":"unbound"}
 {"file":"features/journal-runs.feature","title":"the skeleton carries first moments whole and its reply says they are the spawners' prompts as written","status":"unbound"}
@@ -382,23 +382,23 @@
 {"file":"features/journal-workers.feature","title":"a checkpoint the store cannot take at exit is lost from the store, not from the spawner","status":"unbound"}
 {"file":"features/journal-workers.feature","title":"a first moment with no checkpoint in effect is the brief and the prompt","status":"unbound"}
 {"file":"features/journal-workers.feature","title":"a first-moment row keeps a pasted prompt whole behind a bounded preview","status":"unbound"}
-{"file":"features/journal-workers.feature","title":"a gone worker nobody retired is retired as a phantom by the next harness's lookup on its host [1]","status":"unbound"}
-{"file":"features/journal-workers.feature","title":"a gone worker nobody retired is retired as a phantom by the next session-start hook on its host [3]","status":"unbound"}
-{"file":"features/journal-workers.feature","title":"a gone worker nobody retired is retired as a phantom by the next status call on its host [2]","status":"unbound"}
+{"file":"features/journal-workers.feature","title":"a gone worker nobody retired is retired as a phantom by the next harness's lookup on its host [1]","status":"passed"}
+{"file":"features/journal-workers.feature","title":"a gone worker nobody retired is retired as a phantom by the next session-start hook on its host [3]","status":"passed"}
+{"file":"features/journal-workers.feature","title":"a gone worker nobody retired is retired as a phantom by the next status call on its host [2]","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a hook-less worker that finishes without a checkpoint is run once more by the `treecontext run` wrapper that started it [1]","status":"unbound"}
 {"file":"features/journal-workers.feature","title":"a hook-less worker that finishes without a checkpoint is run once more by the library call that started it [2]","status":"unbound"}
-{"file":"features/journal-workers.feature","title":"a host whose process start moment cannot be read leaves the number alone, and the reply says so","status":"unbound"}
-{"file":"features/journal-workers.feature","title":"a live worker with its own start moment stays live","status":"unbound"}
-{"file":"features/journal-workers.feature","title":"a parent a hook did register is linked by id, never copied","status":"unbound"}
-{"file":"features/journal-workers.feature","title":"a parent no hook registered is carried on each worker's registration as declared, never as a row of its own","status":"unbound"}
-{"file":"features/journal-workers.feature","title":"a reused process number is told from the worker by the process's start moment","status":"unbound"}
+{"file":"features/journal-workers.feature","title":"a host whose process start moment cannot be read leaves the number alone, and the reply says so","status":"passed"}
+{"file":"features/journal-workers.feature","title":"a live worker with its own start moment stays live","status":"passed"}
+{"file":"features/journal-workers.feature","title":"a parent a hook did register is linked by id, never copied","status":"passed"}
+{"file":"features/journal-workers.feature","title":"a parent no hook registered is carried on each worker's registration as declared, never as a row of its own","status":"passed"}
+{"file":"features/journal-workers.feature","title":"a reused process number is told from the worker by the process's start moment","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a stranger's checkpoint reaches the worker's first moment flagged in words","status":"unbound"}
 {"file":"features/journal-workers.feature","title":"a ticket that says in words the worker has no key starts a one-off worker","status":"unbound"}
 {"file":"features/journal-workers.feature","title":"a ticket that says nothing about the door is read as declaring one","status":"unbound"}
 {"file":"features/journal-workers.feature","title":"a ticket whose key is merely blank is damage","status":"unbound"}
 {"file":"features/journal-workers.feature","title":"a worker is not started while the store cannot be read, and the spawner is told","status":"unbound"}
 {"file":"features/journal-workers.feature","title":"a worker is retired at exit and its last output is the summary row the pointer names","status":"unbound"}
-{"file":"features/journal-workers.feature","title":"a worker on another host is left live and the reply says it cannot be checked from here","status":"unbound"}
+{"file":"features/journal-workers.feature","title":"a worker on another host is left live and the reply says it cannot be checked from here","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a worker that claimed a ticket with no wrapper gets no send-back and ends visibly without a checkpoint","status":"unbound"}
 {"file":"features/journal-workers.feature","title":"a worker that exits on its own error is finished and gets the one send-back","status":"unbound"}
 {"file":"features/journal-workers.feature","title":"a worker whose ticket declares no door gets no send-back","status":"unbound"}
@@ -410,10 +410,10 @@
 {"file":"features/journal-workers.feature","title":"a worker whose ticket still named its run is listed under that run; one that named neither is reachable only by its exit line and parent","status":"unbound"}
 {"file":"features/journal-workers.feature","title":"a worker's first message carries both checkpoints when two are in effect","status":"unbound"}
 {"file":"features/journal-workers.feature","title":"a worker's re-run for its missing checkpoint is the same leg in the same lane","status":"unbound"}
-{"file":"features/journal-workers.feature","title":"a worker's registration carries every field its ticket declared and the facts the door read","status":"unbound"}
+{"file":"features/journal-workers.feature","title":"a worker's registration carries every field its ticket declared and the facts the door read","status":"passed"}
 {"file":"features/journal-workers.feature","title":"an empty spawner prompt still leaves the first-moment row","status":"unbound"}
 {"file":"features/journal-workers.feature","title":"an exit by signal is a cut, never sent back, and the next leg of the role is a recovery leg","status":"unbound"}
-{"file":"features/journal-workers.feature","title":"an unregistered writer's row through the library call is accepted and traced, never refused [2]","status":"unbound"}
+{"file":"features/journal-workers.feature","title":"an unregistered writer's row through the library call is accepted and traced, never refused [2]","status":"passed"}
 {"file":"features/journal-workers.feature","title":"an unregistered writer's row through the ticket door, with a self-minted ticket is accepted and traced, never refused [1]","status":"unbound"}
 {"file":"features/journal-workers.feature","title":"both doors leave the same first-moment row, readable with plain SQL alone","status":"unbound"}
 {"file":"features/journal-workers.feature","title":"the first-moment row is the first row of the worker's lane through the hook-less door of a `codex exec` worker [1]","status":"unbound"}

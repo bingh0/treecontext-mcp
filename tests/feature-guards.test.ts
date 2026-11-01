@@ -256,15 +256,21 @@ describe('feature-file guards (gherkin-node-test lints and executes the corpus)'
         .toContain('...wholeFeatureWip()')
     })
 
-    test('a ruling whose feature is now fully bound must be removed', () => {
-      // Stale-ruling ratchet: if the feature binds, the register must shrink.
-      // gnt already fails a wip entry that is fully bound, so this asserts
-      // the register cannot outlive that signal silently.
+    test('a ruling says which of its scenarios are open once any of it binds', () => {
+      // Stale-ruling ratchet: a ruling with nothing bound has no definer; a
+      // ruling whose surface has partly bound carries the scenarios still
+      // open, so the runner holds those and no more, while the gate keeps
+      // refusing on the ruling until its own leaving condition holds. gnt
+      // fails a scenario entry that has become fully bound, so the list
+      // cannot outlive that signal silently either.
+      const runnerSrc = read('tests/journal/features.test.ts')
       for (const ruling of WHOLE_FEATURE_WIP) {
-        const runnerSrc = read('tests/journal/features.test.ts')
-        expect(runnerSrc.includes(`'${ruling.feature}': `),
-          `${ruling.feature} has a definer registered but is still ruled whole-feature wip — remove the ruling`)
-          .toBe(false)
+        const bound = runnerSrc.includes(`'${ruling.feature}': `)
+        expect(bound ? (ruling.scenarios?.length ?? 0) > 0 : ruling.scenarios === undefined,
+          bound
+            ? `${ruling.feature} has a definer registered: its ruling must list the scenarios still open, or be removed`
+            : `${ruling.feature} has no definer: its ruling holds the whole feature and lists no scenarios`)
+          .toBe(true)
       }
     })
   })

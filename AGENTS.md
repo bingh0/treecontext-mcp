@@ -87,6 +87,18 @@ in the charter or out of the build.
   worktree's self lines
 - `src/persistence/session-registry.ts` — the session registry (self and
   live subagents) and the writer stamp a tool-written row gets at insert
+- `src/persistence/leg-registry.ts` — legs and workers on the registry
+  (migration 031): run, key and its source, door and identity, the
+  checkpointer, the start checkpoint(s), the parent linked or declared,
+  a worker's host, process and OS start moment, re-runs, send-backs, how
+  a leg ended; the phantom pass any reader of the registry runs
+- `src/persistence/process-probe.ts` — what this host's OS says about a
+  process (exists, start moment) for the phantom pass
+- `src/run-kinds.ts` — the row kinds a run is made of (checkpoint, brief,
+  run-open, run-close, first-moment), a leaf the dedup identity reads
+- `src/runs.ts` — a run's reads: checkpoints in effect, the store's
+  numbering, briefs in effect, a run's open and close, the harness's key
+  lookup floor, and `RUN_ROWS_SQL`, the plain-SQL read-back
 - `src/persistence/writer-heal.ts` — the echo heal that sets a
   tool-written row's writer exactly at the drain, and undoes what a wrong
   first stamp did across lanes

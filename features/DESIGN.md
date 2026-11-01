@@ -573,7 +573,7 @@ the visionary ratified on 2026-11-01, D345).
   and whose opening leg's facts name it back, at any depth; a run is
   reconstructable whole however many stores its legs wrote into, a leg
   from elsewhere returning by the handoff into a handoff lane the run's
-  facts then count. [ruled: D289, D301, D302, D309, D310, D311, D312]
+  facts then count. [ruled: D289, D301, D302, D309, D310, D311, D312, D354]
 - **The agent's door to a run.** An agent asks for the checkpoint in
   effect, the run's facts and the leg's return through the eight tools
   and gets the harness's reply; it declares a run's open and close
