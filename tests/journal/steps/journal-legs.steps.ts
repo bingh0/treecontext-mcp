@@ -5,9 +5,10 @@ import { drainStaging, runHook, bashPayload } from '../capture-harness.js'
 import { SUBAGENT_SUMMARY_KIND } from '../../../src/handoff.js'
 import { keyLookupReply } from '../../../src/key-lookup.js'
 import {
-  type RunWorld, openRunWorld, hooksLeg, workerLeg, seedCheckpoints, sessionClient, insertEchoed, subagentStopHook, blocks,
+  type RunWorld, openRunWorld, seedCheckpoints, sessionClient, insertEchoed, subagentStopHook, blocks,
   rawOne, rawMetaOf, rawRowOf, rawRegistration, rawCheckpoints, cpLabel, stringSteps, subagentStartHook, briefFor, agentToolReturns,
 } from '../run-world.js'
+import { hooksLeg, workerLeg, retiredWithoutReturn } from '../standins.js'
 import { hooksDoorSteps } from './journal-legs-hooks.steps.js'
 
 // ── journal-legs ────────────────────────────────────────────────────────
@@ -378,7 +379,7 @@ export const legsDefiner = (reg: Registry<LegsWorld>): void => {
       // and was retired. The run's facts must not count it as keyless.
       const control = await workerLeg(w, 'control', { role: 'reviewer', run: RUN, key: a! })
       await w.store!.writeCheckpoint('state: the form reviewed; two fixes asked for', { run: RUN, key: a!, leg: control })
-      expect(w.store!.retireLeg(control, 'retired')).toBe(true)
+      expect(retiredWithoutReturn(w, control)).toBe(true)
     }
   })
 

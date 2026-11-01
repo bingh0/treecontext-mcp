@@ -23,7 +23,8 @@ import { REGISTRATION_DIFFERS_KEY } from '../src/run-kinds.js'
 import { Client, InMemoryTransport } from '@modelcontextprotocol/client'
 import { createServer } from '../src/server/server.js'
 import { spawnCli } from './helpers/cli-spawn.js'
-import { openRunWorld, hooksSubagent, startContext, rawRegistration, type RunWorld } from './journal/run-world.js'
+import { openRunWorld, startContext, rawRegistration, type RunWorld } from './journal/run-world.js'
+import { hooksSubagent } from './journal/standins.js'
 
 let tmpDir: string
 beforeEach(() => { tmpDir = mkdtempSync(join(tmpdir(), 'tc-runimp-')) })

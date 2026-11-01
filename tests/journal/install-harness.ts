@@ -8,6 +8,7 @@ import { mcpLauncherPath } from '../../src/server/installer.js'
 import { sandboxedSpawnEnv, spawnCli, type CliSpawnResult } from '../helpers/cli-spawn.js'
 import type { World } from './world.js'
 import { TS_ROOT } from './proc.js'
+import { writeFakeClaude } from './standins.js'
 
 // ── Install-wave harness: the real CLI, a redirected HOME, and the ─────
 //    other side of every boundary it claims to cross.
@@ -105,14 +106,8 @@ export function setClaudeVersion(w: InstallWorld, version: string | null): void 
     w.iClaudeBin = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-fake-claude-')))
     w.defer(() => rmSync(w.iClaudeBin!, { recursive: true, force: true }))
   }
-  const win = process.platform === 'win32'
-  const answer = version === null ? 'claude: cannot report a version' : `${version} (Claude Code)`
-  const status = version === null ? 1 : 0
-  if (win) {
-    writeFileSync(join(w.iClaudeBin, 'claude.cmd'), `@echo off\r\necho ${answer}\r\nexit /b ${status}\r\n`)
-  } else {
-    writeFileSync(join(w.iClaudeBin, 'claude'), `#!/bin/sh\necho '${answer}'\nexit ${status}\n`, { mode: 0o755 })
-  }
+  // The binary itself is the stand-in harness's (./standins.ts).
+  writeFakeClaude(w.iClaudeBin, version)
 }
 
 /**

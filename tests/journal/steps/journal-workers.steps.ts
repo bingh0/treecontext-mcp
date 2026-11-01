@@ -3,7 +3,7 @@ import { hostname, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { createRequire } from 'node:module'
-import { execFileSync, spawn, spawnSync, type ChildProcess } from 'node:child_process'
+import { execFileSync, spawnSync, type ChildProcess } from 'node:child_process'
 import { expect } from 'vitest'
 import { DatabaseSync } from 'node:sqlite'
 import { type Registry } from 'gherkin-node-test/vitest'
@@ -18,8 +18,8 @@ import { TS_ROOT, tsxArgv } from '../proc.js'
 import { drainStaging } from '../capture-harness.js'
 import { sandboxedSpawnEnv, nodeTsArgs, spawnCli, CLI_TS } from '../../helpers/cli-spawn.js'
 import { agentConfigPath } from '../install-harness.js'
-import { mintTicket, readTicket, TICKET_ENV, type TicketFields } from '../../../src/ticket.js'
-import { spawnWorker, DOOR_LINE_PREFIX, DOOR_BUSY_WAIT_MS, NOT_STARTED_EXIT, type WorkerRunResult } from '../../../src/ticket-door.js'
+import { mintTicket, readTicket, type TicketFields } from '../../../src/ticket.js'
+import { DOOR_LINE_PREFIX, DOOR_BUSY_WAIT_MS, NOT_STARTED_EXIT } from '../../../src/ticket-door.js'
 import {
   momentText, PROMPT_HEADING, STATE_NOT_HISTORY_LINE, sendBackReason, invalidInstructionsMessage, firstMomentFactsOf, composeFirstMessage,
 } from '../../../src/first-moment.js'
@@ -27,6 +27,9 @@ import { readSessionBeacon } from '../../../src/session-beacon.js'
 import { FIRST_MOMENT_KIND, SEND_BACK_KIND, CHECKPOINT_KIND } from '../../../src/run-kinds.js'
 import { keyLookupReply, type KeyLookup } from '../../../src/key-lookup.js'
 import { storesDirIn } from '../../helpers/store-fixtures.js'
+import {
+  runWorker, registerThroughLibrary, STANDIN_WORKER, type Spawner, type WorkerPlan, type WorkerSpec, type Outcome,
+} from '../standins.js'
 import {
   type RunWorld, openRunWorld, sessionStartHook, sleeper, killAndReap, localMoment, rawOne, rawRegistration, stringSteps, liveProcess,
   seedCheckpoints, cpLabel, rawCheckpoints, rawContentOf, rawRowOf, lockStore, waitForFile, readerOf,
@@ -41,9 +44,9 @@ import {
 // worker whose process is gone is retired as a phantom by the next reader
 // of the registry on its host.
 //
-// A worker in these registry scenarios is registered through
-// registerWorker, the library call a spawner holding the ticket registers
-// through; the ticket door itself (the ticket read from the environment,
+// A worker in these registry scenarios is registered through the library
+// door a spawner holding the ticket registers through (the stand-in
+// harness's registerThroughLibrary, ../standins.ts); the ticket door itself (the ticket read from the environment,
 // the `treecontext run` wrapper, the first message and the send-back) is
 // bound further down, through real worker processes.
 // Liveness is read from this host's real operating system: a worker's
@@ -100,9 +103,8 @@ async function openGitSession(w: WorkersWorld, sessionId: string, branch: string
 
 /** A worker of the run registered through the library door, its process
  *  as the door read it. */
-async function registerWorker(w: WorkersWorld, name: string, proc: { pid: number | null; start: number | null; host: string; token?: string | null }): Promise<void> {
-  const leg = await w.store!.registerWorker({ door: 'library', ticket: ticketFor({ id: 'p1' }), process: proc })
-  w.legs![name] = { sessionId: leg.sessionId, agentId: WORKER_AGENT_ID }
+async function libraryWorker(w: WorkersWorld, name: string, proc: { pid: number | null; start: number | null; host: string; token?: string | null }): Promise<void> {
+  await registerThroughLibrary(w, name, { door: 'library', ticket: ticketFor({ id: 'p1' }), process: proc })
 }
 
 function lookup(w: WorkersWorld): void {
@@ -130,10 +132,9 @@ export const workersDefiner = (reg: Registry<WorkersWorld>): void => {
   define(/^two workers start with tickets naming the parent "([^"]+)", one declaring the branch "([^"]+)" and the other the branch "([^"]+)"$/, async (w, parent, a, b) => {
     for (const [name, branch, minted] of [['first', a, 100], ['second', b, 200]] as const) {
       const at = Date.now() / 1000
-      const leg = await w.store!.registerWorker({
+      await registerThroughLibrary(w, name, {
         door: 'library', ticket: ticketFor({ id: parent, branch }, { mintedAt: at - minted }), process: liveProcess(),
       })
-      w.legs![name] = { sessionId: leg.sessionId, agentId: WORKER_AGENT_ID }
       w.moments![`${name}-minted`] = at - minted
       w.facts![`${name}-branch`] = branch
       // Each writes into its own lane.
@@ -184,10 +185,9 @@ export const workersDefiner = (reg: Registry<WorkersWorld>): void => {
   define(/^a worker starts with a ticket naming the parent "([^"]+)"$/, async (w, parent) => {
     // The ticket declares a branch of its own; a registered parent is
     // linked, so the declaration is not copied.
-    const leg = await w.store!.registerWorker({
+    await registerThroughLibrary(w, 'worker', {
       door: 'library', ticket: ticketFor({ id: parent, branch: 'what-the-ticket-said' }), process: liveProcess(),
     })
-    w.legs!['worker'] = { sessionId: leg.sessionId, agentId: WORKER_AGENT_ID }
   })
 
   define(/^the worker's registration links the parent by the id "([^"]+)"$/, (w, parent) => {
@@ -280,11 +280,10 @@ export const workersDefiner = (reg: Registry<WorkersWorld>): void => {
   })
 
   define(/^a `codex exec` worker starts with that ticket on the host "([^"]+)" as the process (\d+) started at (\d\d:\d\d:\d\d)$/, async (w, host, pid, started) => {
-    const leg = await w.store!.registerWorker({
-      door: 'library', ticket: w.facts!['ticket'] as Parameters<FlatStore['registerWorker']>[0]['ticket'],
+    await registerThroughLibrary(w, 'worker', {
+      door: 'library', ticket: w.facts!['ticket'] as Parameters<typeof registerThroughLibrary>[2]['ticket'],
       process: { pid: Number(pid), start: localMoment(started), host },
     })
-    w.legs!['worker'] = { sessionId: leg.sessionId, agentId: WORKER_AGENT_ID }
   })
 
   define(/^a reader of the registration sees the parent "([^"]+)", the run "([^"]+)", the key "([^"]+)", the role "([^"]+)", the checkpointer "([^"]+)", the door declared, the mint moment (\d\d:\d\d:\d\d), the host "([^"]+)", the process id (\d+) and the start moment (\d\d:\d\d:\d\d)$/, (w, parent, run, key, role, checkpointer, minted, host, pid, started) => {
@@ -303,7 +302,7 @@ export const workersDefiner = (reg: Registry<WorkersWorld>): void => {
     await openRunWorld(w)
     const child = sleeper(w)
     const start = hostProbe.startMoment(child.pid!)
-    await registerWorker(w, 'worker', { pid: child.pid!, start, token: hostProbe.startToken?.(child.pid!) ?? null, host: hostname() })
+    await libraryWorker(w, 'worker', { pid: child.pid!, start, token: hostProbe.startToken?.(child.pid!) ?? null, host: hostname() })
     await killAndReap(child)
     expect(hostProbe.exists(child.pid!)).toBe(false)
     const r = rawRegistration(w, w.legs!['worker']!)
@@ -347,7 +346,7 @@ export const workersDefiner = (reg: Registry<WorkersWorld>): void => {
     await openRunWorld(w, { sessionStart: false })
     // A process number that, on THIS host, belongs to a live process: were
     // the host ignored, the pass could not tell; it must not even look.
-    await registerWorker(w, 'worker', { pid: 1, start: 0, host: there })
+    await libraryWorker(w, 'worker', { pid: 1, start: 0, host: there })
   })
 
   define(/^the harness(?: on "[^"]+")? looks up the key "([^"]+)"$/, (w, key) => {
@@ -388,7 +387,7 @@ export const workersDefiner = (reg: Registry<WorkersWorld>): void => {
     // started then.
     const now = hostProbe.startToken?.(child.pid!) ?? null
     const token = now === null ? null : now.replace(/:(\d+)$/, (_m, t: string) => `:${Number(t) - 360000}`)
-    await registerWorker(w, 'worker', { pid: child.pid!, start: registered, token, host: hostname() })
+    await libraryWorker(w, 'worker', { pid: child.pid!, start: registered, token, host: hostname() })
   })
 
   define(/^the process (?:\d+) that started at (?:\d\d:\d\d:\d\d) still running$/, async (w) => {
@@ -396,7 +395,7 @@ export const workersDefiner = (reg: Registry<WorkersWorld>): void => {
     const actual = hostProbe.startMoment(child.pid!)
     expect(actual, 'this host reads process start moments').not.toBeNull()
     // The registration carries the start moment the OS reports for it.
-    await registerWorker(w, 'worker', { pid: child.pid!, start: actual, token: hostProbe.startToken?.(child.pid!) ?? null, host: hostname() })
+    await libraryWorker(w, 'worker', { pid: child.pid!, start: actual, token: hostProbe.startToken?.(child.pid!) ?? null, host: hostname() })
   })
 
   define(/^the worker's registration reads retired as a phantom$/, (w) => {
@@ -412,7 +411,7 @@ export const workersDefiner = (reg: Registry<WorkersWorld>): void => {
 
   define(/^a process holding the id (?:\d+)$/, async (w) => {
     const child = sleeper(w)
-    await registerWorker(w, 'worker', { pid: child.pid!, start: null, host: hostname() })
+    await libraryWorker(w, 'worker', { pid: child.pid!, start: null, host: hostname() })
   })
 
   define(/^the reply says the worker cannot be told from a successor that took its number$/, (w) => {
@@ -434,68 +433,6 @@ export const workersDefiner = (reg: Registry<WorkersWorld>): void => {
 // library's result), from what the stand-in recorded it was given, or from
 // the store file through a separate read-only handle.
 
-const STANDIN = join(TS_ROOT, 'tests', 'helpers', 'standin-worker.ts')
-/** The stand-in `claude -p` child: it fires the real hooks Claude Code
- *  fires, with the platform's payloads and its own environment. */
-const STANDIN_CLAUDE = join(TS_ROOT, 'tests', 'helpers', 'standin-claude-p.ts')
-
-interface StandinStep {
-  notes?: number; label?: string; texts?: string[]; checkpoint?: string; checkpoints?: string[]; invalidRow?: boolean; print?: string
-  exit?: number | 'hang'; waitFor?: string; at?: number; viaTools?: boolean
-}
-export interface StandinPlan { first: StandinStep; rerun?: StandinStep }
-interface StandinRecord {
-  pid: number; start: number | null; rerun: boolean; stdin: string; argv: string[]; ticket: string | null; lane: string | null
-  claimed: boolean; session: string | null; laneRowsSeen: number; firstRunNotesSeen: number; firstMessage: string | null
-  /** The stand-in `claude -p` child's own: its Claude Code session, the
-   *  context its session-start hook handed it, what its stop hook said. */
-  ccSession?: string; context?: string | null; systemMessage?: string | null; sentBack?: string | null; stops?: string[]
-}
-
-/** The stand-in `claude -p` child's plan (tests/helpers/standin-claude-p.ts). */
-export interface ClaudePlan {
-  toolNotes?: string[]
-  tools?: number; checkpoint?: string; checkpoints?: string[]; afterSendBack?: { checkpoint?: string; tools?: number }
-  final?: string; exit?: number; waitBeforeStop?: string; waitAfterStop?: string; invalidRow?: boolean
-}
-
-/** What spawns the worker: the wrapper, the library call, or nothing (a
- *  process that holds its ticket and claims it itself). */
-export type Spawner = 'wrapper' | 'library' | 'none'
-
-export interface WorkerSpec {
-  spawner: Spawner
-  /** The ticket: fields (minted by the wrapper's flags or by the library
-   *  call) or its text as the spawner put it in the environment. */
-  ticket: TicketFields | string
-  prompt: string
-  plan: StandinPlan
-  timeoutSecs?: number
-  checkTicket?: boolean
-  /** How the leg is expected to read once ended (for the lookup's Then). */
-  expectEnd?: 'retired' | 'phantom' | 'cut'
-  cwd?: string
-  /** The door's clock (the library call's), for a run replayed at its
-   *  own moments. */
-  clock?: () => number
-  /** The worker is a `claude -p` child (the stand-in that fires the real
-   *  hooks), on this plan, instead of the hook-less stand-in. */
-  claudeP?: ClaudePlan
-}
-
-export interface Outcome {
-  spawner: Spawner
-  stdout: string
-  stderr: string
-  line: string
-  exitCode: number | null
-  elapsedMs: number
-  sessionId: string | null
-  log: StandinRecord[]
-  logPath: string
-  result: WorkerRunResult | null
-}
-
 const specOf = (w: WorkersWorld): WorkerSpec => {
   const s = w.facts!['spec'] as WorkerSpec | undefined
   expect(s, 'a worker spec from the Given').toBeTruthy()
@@ -513,97 +450,6 @@ function ticketFields(w: WorkersWorld, o: Partial<TicketFields> & { role?: strin
     run: RUN, key: 'login-form', role: 'builder', parent: { id: w.sessionId ?? 'p1', cli: 'claude-code' },
     ...o,
   } as TicketFields
-}
-
-/** The wrapper's ticket flags for minted fields. */
-function ticketFlags(t: TicketFields): string[] {
-  const out = ['--run', t.run, '--role', t.role, '--parent', t.parent.id]
-  if (t.noKey) out.push('--no-key')
-  else out.push('--key', t.key!)
-  if (t.checkpointer) out.push('--checkpointer', t.checkpointer)
-  if (t.checkpointedBy) out.push('--checkpointed-by', t.checkpointedBy)
-  if (t.parent.cli) out.push('--parent-cli', t.parent.cli)
-  if (t.canWrite === true) out.push('--door')
-  if (t.canWrite === false) out.push('--no-door')
-  return out
-}
-
-let standinRuns = 0
-
-/** Run a worker through its spawner's door to its end. `during` runs
- *  while it is alive (the library's promise or the wrapper's process). */
-export async function runWorker(w: RunWorld, spec: WorkerSpec, name = 'worker', during?: () => Promise<void>): Promise<Outcome> {
-  const logPath = join(w.home!, `standin-${++standinRuns}.jsonl`)
-  const standinEnv = {
-    STANDIN_DB: w.dbPath!, STANDIN_LOG: logPath, STANDIN_PLAN: JSON.stringify(spec.plan),
-    ...(spec.claudeP ? { STANDIN_CLAUDE_PLAN: JSON.stringify(spec.claudeP) } : {}),
-  }
-  const script = spec.claudeP ? STANDIN_CLAUDE : STANDIN
-  const sandbox = sandboxedSpawnEnv(w.home!, { TREECONTEXT_BINDINGS_FILE: join(w.home!, '.treecontext', 'bindings.json'), ...standinEnv })
-  const cwd = spec.cwd ?? w.proj!
-  const t0 = Date.now()
-  let out: Omit<Outcome, 'log' | 'sessionId' | 'logPath' | 'elapsedMs'>
-  if (spec.spawner === 'library') {
-    const p = spawnWorker({
-      store: w.store!, ticket: spec.ticket, prompt: spec.prompt, command: process.execPath, args: nodeTsArgs(script), cwd,
-      env: sandbox, ...(spec.timeoutSecs ? { timeoutMs: spec.timeoutSecs * 1000 } : {}),
-      ...(spec.checkTicket ? { checkTicket: true, spawner: { sessionId: w.sessionId! } } : {}),
-      ...(spec.clock ? { clock: spec.clock } : {}),
-    })
-    await during?.()
-    const result = await p
-    out = { spawner: 'library', stdout: result.output, stderr: '', line: result.line, exitCode: result.exitCode, result }
-  } else {
-    const raw = typeof spec.ticket === 'string' ? spec.ticket : mintTicket(spec.ticket)
-    let args: string[]
-    let env: NodeJS.ProcessEnv = sandbox
-    if (spec.spawner === 'none') {
-      // No door at all: the worker holds its ticket and claims it itself.
-      args = nodeTsArgs(script)
-      env = { ...sandbox, [TICKET_ENV]: raw }
-    } else {
-      const promptFile = join(w.home!, `prompt-${standinRuns}.txt`)
-      writeFileSync(promptFile, spec.prompt)
-      // Fields are minted by the wrapper's flags; a ticket given as text
-      // sits in the wrapper's environment, where its spawner put it.
-      const ticketArgs = typeof spec.ticket === 'string' ? [] : ticketFlags(spec.ticket)
-      if (typeof spec.ticket === 'string') env = { ...sandbox, [TICKET_ENV]: spec.ticket }
-      args = nodeTsArgs(CLI_TS, [
-        'run', ...ticketArgs, '--prompt-file', promptFile,
-        ...(spec.timeoutSecs ? ['--timeout', String(spec.timeoutSecs)] : []),
-        ...(spec.checkTicket ? ['--check-ticket'] : []),
-        '--', process.execPath, ...nodeTsArgs(script),
-      ])
-    }
-    const child = spawn(process.execPath, args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] })
-    w.defer(() => { try { child.kill('SIGKILL') } catch { /* gone */ } })
-    let stdout = ''
-    let stderr = ''
-    child.stdout!.on('data', (c: Buffer) => { stdout += c.toString() })
-    child.stderr!.on('data', (c: Buffer) => { stderr += c.toString() })
-    const exited = new Promise<number | null>((resolve) => child.once('close', (code) => resolve(code)))
-    await during?.()
-    const exitCode = await exited
-    const line = stderr.split('\n').filter((l) => l.startsWith(DOOR_LINE_PREFIX)).at(-1) ?? ''
-    out = { spawner: spec.spawner, stdout, stderr, line, exitCode, result: null }
-  }
-  const log = existsSync(logPath)
-    ? readFileSync(logPath, 'utf8').trim().split('\n').filter((l) => l !== '').map((l) => JSON.parse(l) as StandinRecord) : []
-  // A `claude -p` child no wrapper watched has no spawner's line: what it
-  // was told at its stop (its stop hook's message) is the line it ends on.
-  if (spec.claudeP && spec.spawner === 'none' && out.line === '') {
-    for (const stop of log[0]?.stops ?? []) {
-      try {
-        const m = (JSON.parse(stop.trim() || '{}') as { systemMessage?: string }).systemMessage
-        if (typeof m === 'string') out = { ...out, line: m }
-      } catch { /* not the hook's JSON */ }
-    }
-  }
-  const sessionId = out.result?.sessionId ?? log[0]?.session ?? /\(session ([^,)]+)/.exec(out.line)?.[1] ?? null
-  const full: Outcome = { ...out, log, logPath, sessionId, elapsedMs: Date.now() - t0 }
-  w.facts![`out:${name}`] = full
-  if (sessionId) w.legs![name] = { sessionId, agentId: WORKER_AGENT_ID }
-  return full
 }
 
 /** The rows of a worker's lane, oldest first, straight from the file. */
@@ -833,7 +679,7 @@ export function ticketDoorSteps(define: (re: RegExp, fn: (w: WorkersWorld, ...ca
   // The ticket door, asked by the library call, starts the worker; the
   // stand-in writes a checkpoint of its own so the leg owes nothing at its
   // exit unless the scenario says otherwise.
-  const startByDoor = async (w: WorkersWorld, o: { role: string; prompt: string; spawner?: Spawner; checkpointer?: string | null; plan?: StandinPlan }): Promise<void> => {
+  const startByDoor = async (w: WorkersWorld, o: { role: string; prompt: string; spawner?: Spawner; checkpointer?: string | null; plan?: WorkerPlan }): Promise<void> => {
     await runWorker(w, {
       spawner: o.spawner ?? 'library', prompt: o.prompt,
       ticket: ticketFields(w, { role: o.role, key: (w.facts!['key'] as string | undefined) ?? 'login-form', ...(o.checkpointer !== null ? { checkpointer: o.checkpointer ?? o.role } : {}) }),
@@ -894,7 +740,7 @@ export function ticketDoorSteps(define: (re: RegExp, fn: (w: WorkersWorld, ...ca
     // The door's record of the worker's input: its stdin, the first
     // message, and its argv, the command alone.
     expect(run.input.stdin).toBe(o.result!.firstMessage)
-    expect(run.input.argv).toEqual(nodeTsArgs(STANDIN))
+    expect(run.input.argv).toEqual(nodeTsArgs(STANDIN_WORKER))
     expect(o.log[0]!.stdin).toBe(run.input.stdin)
     expect(o.log[0]!.argv).toEqual([])
     // When the worker started, the door had written one row in its lane,

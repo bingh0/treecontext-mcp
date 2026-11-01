@@ -14,10 +14,10 @@ import { KEY_LOOKUP_PARAM, keyLookupReply, type KeyLookup, type KeyLookupReply }
 import { SUBAGENT_SUMMARY_KIND } from '../../../src/handoff.js'
 import { STORE_WRITER } from '../../../src/persistence/session-registry.js'
 import {
-  type RunWorld, openRunWorld, hooksLeg, workerLeg, seedCheckpoints, sessionClient, localMoment, readerOf,
+  type RunWorld, openRunWorld, seedCheckpoints, sessionClient, localMoment, readerOf,
   rawOne, rawMetaOf, rawContentOf, rawRowOf, rawRegistration, rawCheckpoints, cpLabel, stringSteps, insertEchoed, subagentStopHook,
 } from '../run-world.js'
-import { runWorker } from './journal-workers.steps.js'
+import { runWorker, hooksLeg, workerLeg, retiredWithoutReturn, cutByTimeout, exitedWithSummary, harnessRetiresLeg } from '../standins.js'
 
 // ── journal-runs ────────────────────────────────────────────────────────
 //
@@ -107,37 +107,58 @@ function bigPrompt(size: number, marker: string): string {
   return body.slice(0, size - tail.length) + tail
 }
 
+/** How many of a run's captured tool calls its worker leg makes. */
+const WORKER_CALLS = 20
+
 /**
- * A run of two hooks-door legs, as Claude Code runs one: the builder (the
- * key "login-form") writes two checkpoints under it and two under
- * "search-box", the reviewer two more under "login-form"; each leg's tool
- * calls are captured by the real PostToolUse hook with its agent fields,
- * and each ends through the real SubagentStop hook with its report. The
- * checkpoints go in through the real insert tool with its echo.
+ * A run of two legs through the two doors a leg comes in by. The builder
+ * is a hooks-door leg, as Claude Code runs one: it writes two checkpoints
+ * under the key "login-form" and two under "search-box" through the real
+ * insert tool with its echo, its tool calls captured by the real
+ * PostToolUse hook with its agent fields, and it ends through the real
+ * SubagentStop hook with its report. The reviewer is a `claude -p` child
+ * the real `treecontext run` wrapper starts with its ticket (the stand-in
+ * harness's `runWorker`): its tool calls captured by the real hooks it
+ * fires into its own lane, its first stop blocked once by its Stop hook
+ * for the checkpoint it owes (a send-back row in its lane), after which it
+ * writes two checkpoints under "login-form" and exits, its last output its
+ * summary row. The run's captured calls are split between them.
  */
-async function hooksRun(w: RunsWorld, run: string, calls: number, withSearchBox: boolean): Promise<void> {
+async function runOfTwoDoors(w: RunsWorld, run: string, calls: number, withSearchBox: boolean): Promise<void> {
   await openRunWorld(w)
-  const legs: Array<{ role: string; writes: Array<[string, number]> }> = [
-    { role: 'builder', writes: withSearchBox ? [['login-form', 2], ['search-box', 2]] : [['login-form', 2]] },
-    { role: 'reviewer', writes: [['login-form', 2]] },
-  ]
-  for (const leg of legs) {
-    const ref = await hooksLeg(w, leg.role, leg.role, { run, key: 'login-form', checkpointer: leg.role })
-    const agent = { agentId: ref.agentId, agentType: leg.role }
-    const payloads: Array<Record<string, unknown>> = []
-    for (let i = 0; i < calls / legs.length; i++) {
-      payloads.push({ ...bashPayload(w, `npx vitest run ${leg.role} case-${i}`, `${leg.role} case-${i}: 1 passed (zebrafinch-${leg.role}-${i})`), agent_id: ref.agentId, agent_type: leg.role })
-    }
-    await spawnHooksInBatches(w, 'post-tool-use', payloads)
-    for (const [key, n] of leg.writes) {
-      for (let i = 1; i <= n; i++) {
-        const wrote = await insertEchoed(w, agent, `state of ${key} after the ${leg.role}: step ${i} done; next: step ${i + 1}`, { kind: 'checkpoint', run, key })
-        w.cps![cpLabel(run, key, (wrote['checkpoint'] as Record<string, unknown>)['number'] as number)] = wrote['node_id'] as string
-      }
-    }
-    w.stops![leg.role] = subagentStopHook(w, ref.agentId, leg.role, `${leg.role} done: ${leg.writes.map(([k]) => k).join(' and ')} delivered`)
-    await drainStaging(w)
+  const builderCalls = calls - WORKER_CALLS
+  const ref = await hooksLeg(w, 'builder', 'builder', { run, key: 'login-form', checkpointer: 'builder' })
+  const agent = { agentId: ref.agentId, agentType: 'builder' }
+  const payloads: Array<Record<string, unknown>> = []
+  for (let i = 0; i < builderCalls; i++) {
+    payloads.push({ ...bashPayload(w, `npx vitest run builder case-${i}`, `builder case-${i}: 1 passed (zebrafinch-builder-${i})`), agent_id: ref.agentId, agent_type: 'builder' })
   }
+  await spawnHooksInBatches(w, 'post-tool-use', payloads)
+  const writes: Array<[string, number]> = withSearchBox ? [['login-form', 2], ['search-box', 2]] : [['login-form', 2]]
+  for (const [key, n] of writes) {
+    for (let i = 1; i <= n; i++) {
+      const wrote = await insertEchoed(w, agent, `state of ${key} after the builder: step ${i} done; next: step ${i + 1}`, { kind: 'checkpoint', run, key })
+      w.cps![cpLabel(run, key, (wrote['checkpoint'] as Record<string, unknown>)['number'] as number)] = wrote['node_id'] as string
+    }
+  }
+  w.stops!['builder'] = subagentStopHook(w, ref.agentId, 'builder', `builder done: ${writes.map(([k]) => k).join(' and ')} delivered`)
+  await drainStaging(w)
+  const out = await runWorker(w, {
+    spawner: 'wrapper', prompt: `review the login form the builder wired on ${run}`,
+    ticket: { run, key: 'login-form', role: 'reviewer', checkpointer: 'reviewer', parent: { id: w.sessionId!, cli: 'claude-code' } },
+    plan: { first: {} },
+    claudeP: {
+      tools: WORKER_CALLS, toolText: 'reviewer case-{i}: 1 passed (zebrafinch-reviewer-{i})',
+      afterSendBack: { checkpoints: [1, 2].map((i) => `state of login-form after the reviewer: review ${i} done; next: review ${i + 1}`) },
+      final: 'reviewer done: login-form delivered',
+    },
+  }, 'reviewer')
+  await drainStaging(w)
+  // The worker was sent back once by its Stop hook, and its lane holds the row.
+  expect(out.log[0]?.sentBack, out.stderr).toBeTruthy()
+  expect(out.exitCode, out.stderr).toBe(0)
+  expect(rawAll(w, "SELECT 1 FROM nodes WHERE session_key = ? AND json_extract(metadata_json, '$.kind') = 'send-back'", out.sessionId)).toHaveLength(1)
+  for (const c of rawCheckpoints(w, run, 'login-form')) w.cps![cpLabel(run, 'login-form', c.n)] = c.node_id
 }
 
 /** Rows of the file carrying a marker, however it was captured. */
@@ -211,7 +232,7 @@ async function finishedWorker(w: RunsWorld, name: string, role: string, run: str
   const ref = await workerLeg(w, name, { role, run, key, startCheckpoints: start })
   const r = await w.store!.writeCheckpoint(text, { run, key, leg: ref })
   w.cps![cpLabel(run, key, r.checkpoint!.number)] = r.nodeId
-  expect(w.store!.retireLeg(ref, 'retired')).toBe(true)
+  expect(retiredWithoutReturn(w, ref)).toBe(true)
   return r.nodeId
 }
 
@@ -522,7 +543,7 @@ export const runsDefiner = (reg: Registry<RunsWorld>): void => {
 
   define(/^the harness retires the leg and closes the run "([^"]+)" through the door with the reason "([^"]+)"$/, async (w, run, reason) => {
     const at = Date.now() / 1000
-    expect(w.store!.retireLeg(w.legs!['builder']!, 'retired', at)).toBe(true)
+    expect(harnessRetiresLeg(w, w.legs!['builder']!, at)).toBe(true)
     await w.store!.closeRun({ run: run!, by: 'harness', reason: reason!, at })
     w.moments!['close'] = at
   })
@@ -755,7 +776,7 @@ export const runsDefiner = (reg: Registry<RunsWorld>): void => {
         const r = await w.store!.writeCheckpoint(sized(`leg ${i} of ${run}`, sizes[k]!), { run: run!, key: key!, leg: ref, at: at + 300 })
         w.cps![cpLabel(run!, key!, r.checkpoint!.number)] = r.nodeId
       }
-      expect(w.store!.retireLeg(ref, 'retired', at + 400)).toBe(true)
+      expect(retiredWithoutReturn(w, ref, at + 400)).toBe(true)
     }
   })
 
@@ -859,7 +880,7 @@ export const runsDefiner = (reg: Registry<RunsWorld>): void => {
     expect(r.checkpoint!.number).toBe(n)
     w.cps![cpLabel(run!, key!, n)] = r.nodeId
     // The harness's timeout cut it (D292): retired as cut, no summary row.
-    expect(w.store!.retireLeg(ref, 'cut')).toBe(true)
+    expect(cutByTimeout(w, ref)).toBe(true)
   })
 
   define(/^the harness receives checkpoint number (\d+) and a line saying the builder leg left no return$/, (w, num) => {
@@ -896,7 +917,7 @@ export const runsDefiner = (reg: Registry<RunsWorld>): void => {
     const wrote = await w.store!.writeCheckpoint('state: rewritten by another hand; ship it', { run: run!, key: key!, leg })
     expect(wrote.checkpoint!.number).toBe(n)
     w.cps![cpLabel(run!, key!, n)] = wrote.nodeId
-    await w.store!.retireWorker(leg, { output: `${stranger} done: shipped the form`, how: 'retired', summary: true })
+    await exitedWithSummary(w, leg, `${stranger} done: shipped the form`)
     w.moments!['start'] = start
   })
 
@@ -936,7 +957,7 @@ export const runsDefiner = (reg: Registry<RunsWorld>): void => {
     await openRunWorld(w)
     for (let i = 0; i < Number(n); i++) {
       const ref = await workerLeg(w, `leg${i}`, { role: i === 0 ? 'builder' : 'reviewer', run: run!, key: 'login-form' })
-      expect(w.store!.retireLeg(ref, 'retired')).toBe(true)
+      expect(retiredWithoutReturn(w, ref)).toBe(true)
     }
     w.ids!['open'] = rawOne<{ node_id: string }>(w, "SELECT node_id FROM nodes WHERE json_extract(metadata_json, '$.kind') = 'run-open' AND json_extract(metadata_json, '$.run') = ?", run)!.node_id
     expect(rawAll(w, "SELECT 1 FROM nodes WHERE json_extract(metadata_json, '$.kind') = 'run-close' AND json_extract(metadata_json, '$.run') = ?", run)).toHaveLength(0)
@@ -1001,7 +1022,7 @@ export const runsDefiner = (reg: Registry<RunsWorld>): void => {
   define(/^a run "([^"]+)" with a builder leg and a reviewer leg, (\d+) checkpoints under the key "([^"]+)" and (\d+) under the key "([^"]+)", (\d+) summary rows, (\d+) first-moment rows and (\d+) captured tool calls$/, async (w, run, a, keyA, b, keyB, summaries, firsts, calls) => {
     expect([Number(a), Number(b), Number(summaries), Number(firsts), Number(calls)]).toEqual([4, 2, 2, 2, 120])
     expect([keyA, keyB]).toEqual(['login-form', 'search-box'])
-    await hooksRun(w, run!, Number(calls), true)
+    await runOfTwoDoors(w, run!, Number(calls), true)
     // What the Given made, read from the file before any export acts.
     expect(rawCheckpoints(w, run!, keyA!)).toHaveLength(4)
     expect(rawCheckpoints(w, run!, keyB!)).toHaveLength(2)
@@ -1011,7 +1032,7 @@ export const runsDefiner = (reg: Registry<RunsWorld>): void => {
   })
 
   define(/^a run "([^"]+)" with (\d+) captured tool calls across its legs$/, async (w, run, calls) => {
-    await hooksRun(w, run!, Number(calls), false)
+    await runOfTwoDoors(w, run!, Number(calls), false)
     expect(rawAll<{ n: number }>(w, "SELECT COUNT(*) AS n FROM nodes WHERE content LIKE '%zebrafinch-%'")[0]!.n).toBe(Number(calls))
   })
 
@@ -1044,12 +1065,10 @@ export const runsDefiner = (reg: Registry<RunsWorld>): void => {
     const firstMoments = kindsIn(file, 'first-moment')
     expect(firstMoments).toHaveLength(Number(firsts))
     for (const n of firstMoments) expect(n.content).toBe(rawContentOf(w, n.nodeId))
-    // Through the hooks door the row is the door's own line, the prompt
-    // having ridden on the Agent tool: the reply says so, in the row's words.
-    const reply = w.facts!['export-reply'] as ToolReply
-    expect(reply.json['first_moments']).toMatch(/^First moments carry the spawners' prompts as written/)
-    expect(String(reply.json['door_lines'])).toContain('2 of the 2 first moments are the door\'s own line, not a prompt')
-    expect(String(reply.json['door_lines'])).toContain('Its prompt rode on the Agent tool and is not seen by this door.')
+    // One first moment per leg: the hooks-door builder's and the
+    // ticket-door reviewer's, whose row is the spawner's prompt.
+    expect(firstMoments.map((n) => n.metadata!['_writer'])).toEqual(['builder', 'reviewer'])
+    expect(firstMoments[1]!.content).toBe('review the login form the builder wired on r1')
     // The registrations: one per leg, the facts as data, none a row the
     // exporting store holds (its registry is a table).
     const regsInFile = kindsIn(file, 'leg-registration')
@@ -1057,7 +1076,7 @@ export const runsDefiner = (reg: Registry<RunsWorld>): void => {
     const facts = regsInFile.map((n) => n.metadata!['_leg_registration'] as Record<string, unknown>)
     expect(facts.map((f) => [f['role'], f['run'], f['key'], f['door'], f['kind'], f['session_id'], f['ended']])).toEqual([
       ['builder', 'r1', 'login-form', 'hooks', 'subagent', w.sessionId, 'retired'],
-      ['reviewer', 'r1', 'login-form', 'hooks', 'subagent', w.sessionId, 'retired'],
+      ['reviewer', 'r1', 'login-form', 'ticket', 'worker', w.legs!['reviewer']!.sessionId, 'retired'],
     ])
     expect(rawAll<{ n: number }>(w, "SELECT COUNT(*) AS n FROM nodes WHERE json_extract(metadata_json, '$.kind') = 'leg-registration'")[0]!.n).toBe(0)
     // Each registration names its leg as the store's table does.
@@ -1065,6 +1084,16 @@ export const runsDefiner = (reg: Registry<RunsWorld>): void => {
       const reg = rawOne<Record<string, unknown>>(w, 'SELECT * FROM session_registry WHERE session_id = ? AND agent_id = ?', f['session_id'], f['agent_id'])!
       expect([reg['agent_type'], reg['run'], reg['run_key'], reg['door'], reg['kind'], reg['ended']]).toEqual([f['role'], f['run'], f['key'], f['door'], f['kind'], f['ended']])
     }
+    // And the file holds these and nothing else of the run: the skeleton's
+    // rows are the ones D360 lists (its open and close, every brief, every
+    // checkpoint, every first-moment and summary row, each registration as
+    // data). The store holds the reviewer's send-back row with the run on
+    // it, and the skeleton leaves it out. (The scenario is tagged @D300
+    // only; D360 is the ruling that lists these rows, a tag for the owner.)
+    expect(rawAll(w, "SELECT 1 FROM nodes WHERE json_extract(metadata_json, '$.kind') = 'send-back' AND json_extract(metadata_json, '$.run') = 'r1'")).toHaveLength(1)
+    expect([...new Set(file.nodes.map((n) => n.metadata?.['kind']))].sort()).toEqual(['brief', 'checkpoint', 'first-moment', 'leg-registration', 'run-open', 'subagent-summary'].sort())
+    // (The run was opened at its first leg's registration and nobody closed it.)
+    expect(kindsIn(file, 'run-open')).toHaveLength(1)
   })
 
   define(/^the file holds none of the (\d+) tool calls$/, (w, calls) => {
@@ -1072,11 +1101,6 @@ export const runsDefiner = (reg: Registry<RunsWorld>): void => {
     // The calls exist in the store, so their absence is not an empty store.
     expect(rawAll<{ n: number }>(w, "SELECT COUNT(*) AS n FROM nodes WHERE content LIKE '%zebrafinch-%'")[0]!.n).toBe(Number(calls))
     expect(holding(file, 'zebrafinch-')).toHaveLength(0)
-    // Every row of the file is one of the run's own kinds: the open, the briefs, the checkpoints,
-    // the first moments and summaries and the registrations, never a capture of a tool call.
-    expect([...new Set(file.nodes.map((n) => n.metadata?.['kind']))].sort()).toEqual(['brief', 'checkpoint', 'first-moment', 'leg-registration', 'run-open', 'subagent-summary'].sort())
-    // (The run was opened at its first leg's registration and nobody closed it.)
-    expect(kindsIn(file, 'run-open')).toHaveLength(1)
   })
 
   define(/^the file's head names the form as the run's skeleton$/, (w) => {
@@ -1121,15 +1145,23 @@ export const runsDefiner = (reg: Registry<RunsWorld>): void => {
     expect(file.head['run']).toBe('r1')
     const captured = holding(file, 'zebrafinch-')
     expect(captured).toHaveLength(Number(calls))
-    // Under each leg's lane: the leg's agent id and writer on every call,
-    // half to each leg, the content as the store holds it.
-    const legs = ['builder', 'reviewer'].map((role) => ({ role, agent: w.legs![role]!.agentId }))
-    for (const leg of legs) {
-      const mine = captured.filter((n) => n.metadata!['_writer_agent_id'] === leg.agent)
-      expect(mine, `the ${leg.role}'s calls`).toHaveLength(Number(calls) / 2)
+    // Under each leg's lane, as the store holds it: the hooks-door
+    // builder's calls in the session's lane under its agent id, the
+    // worker's in the worker's own lane; each call the leg's own, its
+    // content as the store holds it.
+    const laneOf = (id: string): string => String(rawRowOf(w, id)['session_key'])
+    const builder = w.legs!['builder']!
+    const reviewer = w.legs!['reviewer']!
+    const lanes = {
+      builder: captured.filter((n) => laneOf(n.nodeId) === builder.sessionId && n.metadata!['_writer_agent_id'] === builder.agentId),
+      reviewer: captured.filter((n) => laneOf(n.nodeId) === reviewer.sessionId),
+    }
+    expect(lanes.builder, "the builder's calls").toHaveLength(Number(calls) - WORKER_CALLS)
+    expect(lanes.reviewer, "the reviewer's calls").toHaveLength(WORKER_CALLS)
+    for (const [role, mine] of Object.entries(lanes)) {
       for (const n of mine) {
-        expect(n.metadata!['_writer']).toBe(leg.role)
-        expect(n.content).toContain(`${leg.role} case-`)
+        expect(n.metadata!['_writer']).toBe(role)
+        expect(n.content).toContain(`${role} case-`)
       }
     }
     const some = captured[0]!
@@ -1137,6 +1169,9 @@ export const runsDefiner = (reg: Registry<RunsWorld>): void => {
     // The skeleton's rows are all there too, the whole form being a superset.
     expect(kindsIn(file, 'checkpoint')).toHaveLength(4)
     expect(kindsIn(file, 'leg-registration')).toHaveLength(2)
+    // Every row of every leg: the reviewer's send-back row, which the
+    // skeleton leaves out, is a row of its lane.
+    expect(kindsIn(file, 'send-back').map((n) => laneOf(n.nodeId))).toEqual([reviewer.sessionId])
   })
 
   // ── D318: first moments whole, and the reply says what they are ──

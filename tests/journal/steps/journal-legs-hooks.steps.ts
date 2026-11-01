@@ -16,9 +16,10 @@ import { charactersOf } from '../../../src/runs.js'
 import { NOTICED_BY_SESSION_START, type LegRef } from '../../../src/persistence/leg-registry.js'
 import { keyLookupReply } from '../../../src/key-lookup.js'
 import {
-  type RunWorld, openRunWorld, hooksLeg, hooksSubagent, briefFor, seedCheckpoints, sessionClient, insertEchoed, subagentStopHook, blocks,
+  type RunWorld, openRunWorld, briefFor, seedCheckpoints, sessionClient, insertEchoed, subagentStopHook, blocks,
   rawOne, rawMetaOf, rawContentOf, rawRegistration, rawCheckpoints, cpLabel, startContext, sessionStartHook, agentToolReturns, agentToolLaunchesInBackground, lockStore, killAndReap,
 } from '../run-world.js'
+import { hooksLeg, hooksSubagent } from '../standins.js'
 
 // ── journal-legs, the hooks door (unit 4) ───────────────────────────────
 //
@@ -998,7 +999,11 @@ export function hooksDoorSteps(define: Define): void {
   })
 
   define(/^the context the subagent-start hook emits for the builder says a checkpoint is the state of the work as it now stands, names what it supersedes and rests on, and never pastes the history in$/, (w) => {
-    expect(contextOf(w, 'builder')).toContain(STATE_NOT_HISTORY_LINE)
+    const c = contextOf(w, 'builder')
+    expect(c).toContain(STATE_NOT_HISTORY_LINE)
+    // The three things the scenario says the line says, each in the
+    // emitted context itself, not only as the source's constant reads.
+    for (const words of ['state of the work as it now stands', 'what it supersedes and what it rests on', 'never pastes the history in']) expect(c).toContain(words)
   })
 
   // ── D334: after the one send-back, a recovery leg ──

@@ -1,6 +1,6 @@
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync, existsSync, statSync } from 'node:fs'
 import { spawn, spawnSync } from 'node:child_process'
-import { delimiter, dirname, isAbsolute, join } from 'node:path'
+import { basename, delimiter, dirname, isAbsolute, join } from 'node:path'
 import { hostname, tmpdir } from 'node:os'
 import { expect } from 'vitest'
 import { type Registry } from 'gherkin-node-test/vitest'
@@ -158,21 +158,35 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
   })
 
   // ── a corrupt config file is backed up, not destroyed ───────────────
+  // The reference agent's config is two files install writes: the MCP
+  // entry in ~/.claude.json and the hooks in ~/.claude/settings.json. Each
+  // is an agent config file the scenario's words cover, so each is made
+  // unparseable and each is held to both Thens.
+  const CORRUPT_CONFIGS = [
+    { rel: '.claude.json', bytes: '{ this is not json at all' },
+    { rel: join('.claude', 'settings.json'), bytes: '{ these settings do not parse either,' },
+  ]
   reg.define(/^an agent config file that does not parse$/, async (w: InstallWorld) => {
     await openInstallWorld(w, ['.claude'])
-    writeFileSync(join(w.ihome!, '.claude.json'), '{ this is not json at all')
+    for (const c of CORRUPT_CONFIGS) writeFileSync(join(w.ihome!, c.rel), c.bytes)
   })
 
   reg.define(/^a fresh config is written with the treecontext entries$/, (w: InstallWorld) => {
     const cfg = JSON.parse(readFileSync(join(w.ihome!, '.claude.json'), 'utf8')) as Record<string, Record<string, unknown>>
     expect(cfg['mcpServers']?.['treecontext']).toBeDefined()
+    const settings = JSON.parse(readFileSync(join(w.ihome!, '.claude', 'settings.json'), 'utf8')) as { hooks?: Record<string, unknown> }
+    expect(JSON.stringify(settings.hooks ?? {}), 'the rebuilt settings carry treecontext\'s hooks').toMatch(/tc-|treecontext/)
   })
 
   reg.define(/^the unparseable original is preserved as a backup beside it$/, (w: InstallWorld) => {
-    const backups = readdirSync(w.ihome!).filter(f => f.startsWith('.claude.json') && f !== '.claude.json')
-    expect(backups.length, 'the corrupt original was destroyed').toBeGreaterThan(0)
-    const kept = backups.map(f => readFileSync(join(w.ihome!, f), 'utf8'))
-    expect(kept.some(c => c.includes('this is not json at all')), 'no backup holds the original bytes').toBe(true)
+    for (const c of CORRUPT_CONFIGS) {
+      const dir = dirname(join(w.ihome!, c.rel))
+      const base = basename(c.rel)
+      const backups = readdirSync(dir).filter(f => f.startsWith(base) && f !== base)
+      expect(backups.length, `the corrupt original of ${c.rel} was destroyed`).toBeGreaterThan(0)
+      const kept = backups.map(f => readFileSync(join(dir, f), 'utf8'))
+      expect(kept.some(k => k.includes(c.bytes)), `no backup of ${c.rel} holds the original bytes`).toBe(true)
+    }
   })
 
   // ── reinstalling converges instead of duplicating ───────────────────

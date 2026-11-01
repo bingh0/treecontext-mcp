@@ -33,6 +33,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, test } from 'vitest'
 import { lintFeature, lintStepDefinitionSource, parseFeature } from 'gherkin-node-test'
 import { WHOLE_FEATURE_WIP } from './journal/wip-register.js'
+import { GUARDED_DOOR_CALLS, DOOR_ROW_KINDS } from './journal/standins.js'
 
 // ── Debt registers ──────────────────────────────────────────────────────────
 
@@ -273,5 +274,186 @@ describe('feature-file guards (gherkin-node-test lints and executes the corpus)'
           .toBe(true)
       }
     })
+  })
+})
+
+describe('no binding stands in for a door outside the stand-in harness', () => {
+  // A door's own acts (a registration, a retirement, a send-back, a key
+  // settled, a worker started, claimed or re-run, a door row composed, the
+  // echo heal: GUARDED_DOOR_CALLS) are the door's to make. A binding that
+  // needs one already made, because its scenario's Given is history, makes
+  // it through a named helper of tests/journal/standins.ts, where each
+  // stand-in says what it stands in for; anywhere else a mention of the
+  // act would stand in for the door silently.
+  //
+  // What is checked, in every steps file of both tiers, every journal
+  // harness module but standins.ts, and every file under tests/helpers:
+  //  1. a guarded name anywhere outside comments and strings, as a word:
+  //     a call (split across lines or not), `.call`/`.bind`/`.apply`, an
+  //     import and its alias; and a string whose whole text is a guarded
+  //     name (`store['retireLeg']`). A template literal's text is a string;
+  //     its `${}` expressions are code. A regex literal is skipped whole.
+  //  2. a plain `insert(` whose arguments name a door's row kind
+  //     (DOOR_ROW_KINDS, quoted or by its constant).
+  // Each finding outside the harness fails unless ALLOWED names its file
+  // and line with a reason; an ALLOWED entry that no longer matches fails.
+  // Not checked: a name assembled at run time (`store['retire' + 'Leg']`),
+  // a door reached through a variable holding the store's prototype, or a
+  // door row written through raw SQL.
+  const HARNESS = 'tests/journal/standins.ts'
+  const ALLOWED: Array<{ file: string; finding: string; line: string; why: string }> = [
+    // The stand-in headless worker is the worker: a worker started with a
+    // ticket and no wrapper claims it itself through claimTicket, the
+    // production surface such a worker calls (D291), and under the door it
+    // takes the lane the door registered. It never registers through the
+    // registry directly.
+    { file: 'tests/helpers/standin-worker.ts', finding: 'claimTicket', line: "import { claimTicket } from '../../src/ticket-door.js'", why: 'the worker imports its own claim surface' },
+    { file: 'tests/helpers/standin-worker.ts', finding: 'claimTicket', line: 'const claim = await claimTicket({ store, ...(plan.claim?.prompt !== undefined ? { prompt: plan.claim.prompt } : {}) })', why: 'the worker claims its ticket as a real worker does' },
+    // The run-open race (D302, tests/legs-and-runs.test.ts) needs two
+    // processes registering first legs of the same runs at once; the
+    // library door a spawner calls is the act under test there.
+    { file: 'tests/helpers/run-opener.ts', finding: 'registerWorker', line: 'await store.registerWorker({', why: 'the run-open race is two spawners registering through the library door at once' },
+    // A beta.1 handoff Given (journal-handoff, "the default export carries
+    // summaries only"): a plain subagent's summary row as the drain writes
+    // it, seeded so the export's selection by kind is under test, not the
+    // door. Older than the harness; a plain subagent is no leg.
+    { file: 'tests/journal/steps/journal-handoff.steps.ts', finding: 'insert kind subagent-summary', line: 'await w.aStore!.insert(w.testerText, {', why: "the export's selection by kind is under test; the row is seeded as the drain writes it" },
+  ]
+  const NAMES = new Set<string>(GUARDED_DOOR_CALLS)
+  const KIND_CONSTS: Record<string, string> = { FIRST_MOMENT_KIND: 'first-moment', SEND_BACK_KIND: 'send-back', SUBAGENT_SUMMARY_KIND: 'subagent-summary' }
+
+  /** The source as code alone, line for line: comments dropped, a string's
+   *  text blanked unless it is exactly a guarded name, a template's text
+   *  blanked with its `${}` kept, a regex literal blanked. `keepStrings`
+   *  keeps every string's text (for the insert check). */
+  const codeOf = (src: string, keepStrings = false): string => {
+    let out = ''
+    let i = 0
+    const exprDepth: number[] = []
+    let depth = 0
+    let prev = ''
+    const blank = (t: string): string => t.replace(/[^\n]/g, ' ')
+    const str = (t: string): string => (keepStrings ? t : NAMES.has(t.slice(1, -1)) ? ` ${t.slice(1, -1)} ` : blank(t))
+    const template = (): void => {
+      // at the char after ` or after the } closing a ${}
+      let t = ''
+      while (i < src.length) {
+        if (src[i] === '\\') { t += src.slice(i, i + 2); i += 2; continue }
+        if (src[i] === '`') { out += keepStrings ? t + '`' : blank(t) + ' '; i++; prev = '`'; return }
+        if (src[i] === '$' && src[i + 1] === '{') { out += (keepStrings ? t : blank(t)) + '  '; i += 2; exprDepth.push(depth); depth++; prev = '{'; return }
+        t += src[i]; i++
+      }
+      out += keepStrings ? t : blank(t)
+    }
+    while (i < src.length) {
+      const c = src[i]!
+      const n = src[i + 1]
+      if (c === '/' && n === '/') { while (i < src.length && src[i] !== '\n') i++; continue }
+      if (c === '/' && n === '*') { const end = src.indexOf('*/', i + 2); const stop = end === -1 ? src.length : end + 2; out += blank(src.slice(i, stop)); i = stop; continue }
+      if (c === '/' && (prev === '' || /[(,=:[!&|?{};\n]/.test(prev))) {
+        // A regex literal: to its unescaped closing slash outside a class.
+        let j = i + 1
+        let cls = false
+        while (j < src.length && src[j] !== '\n') {
+          if (src[j] === '\\') { j += 2; continue }
+          if (src[j] === '[') cls = true
+          else if (src[j] === ']') cls = false
+          else if (src[j] === '/' && !cls) break
+          j++
+        }
+        while (j + 1 < src.length && /[a-z]/.test(src[j + 1]!)) j++
+        out += blank(src.slice(i, j + 1)); i = j + 1; prev = '/'; continue
+      }
+      if (c === "'" || c === '"') {
+        let j = i + 1
+        while (j < src.length && src[j] !== c && src[j] !== '\n') j += src[j] === '\\' ? 2 : 1
+        out += str(src.slice(i, j + 1)); i = j + 1; prev = c; continue
+      }
+      if (c === '`') { out += ' '; i++; template(); continue }
+      if (c === '{') depth++
+      if (c === '}') {
+        depth--
+        if (exprDepth.length > 0 && exprDepth[exprDepth.length - 1] === depth) { exprDepth.pop(); out += ' '; i++; template(); continue }
+      }
+      out += c
+      if (!/\s/.test(c) || c === '\n') prev = c
+      i++
+    }
+    return out
+  }
+  const lineAt = (text: string, at: number): number => text.slice(0, at).split('\n').length
+  /** Each finding: its line number, what was found. */
+  const findingsIn = (src: string): Array<{ n: number; finding: string }> => {
+    const found: Array<{ n: number; finding: string }> = []
+    const code = codeOf(src)
+    for (const m of code.matchAll(/[A-Za-z_$][\w$]*/g)) if (NAMES.has(m[0])) found.push({ n: lineAt(code, m.index), finding: m[0] })
+    const kept = codeOf(src, true)
+    for (const m of kept.matchAll(/(?<![\w$])insert\s*\(/g)) {
+      let d = 0
+      let j = m.index + m[0].length - 1
+      for (; j < kept.length; j++) { if (kept[j] === '(') d++; else if (kept[j] === ')' && --d === 0) break }
+      const args = kept.slice(m.index, j + 1)
+      const quoted = new RegExp(`kind\\s*:\\s*['"\`](${DOOR_ROW_KINDS.join('|')})['"\`]`).exec(args)?.[1]
+      const named = /kind\s*:\s*([A-Z_]+_KIND)\b/.exec(args)?.[1]
+      const kind = quoted ?? (named ? KIND_CONSTS[named] : undefined)
+      if (kind) found.push({ n: lineAt(kept, m.index), finding: `insert kind ${kind}` })
+    }
+    return found
+  }
+  const scanned = (): string[] => [
+    ...walkFrom(TESTS_DIR, 'tests/', '.steps.ts'),
+    ...walkFrom(join(TESTS_DIR, 'journal'), 'tests/journal/', '.ts').filter((f) => !f.endsWith('.test.ts') && !f.endsWith('.steps.ts')),
+    ...walkFrom(join(TESTS_DIR, 'helpers'), 'tests/helpers/', '.ts').filter((f) => !f.endsWith('.test.ts')),
+    ...walkFrom(join(TESTS_DIR, 'helpers'), 'tests/helpers/', '.cjs'),
+  ].filter((f) => f !== HARNESS)
+  const names = (src: string): string[] => findingsIn(src).map((x) => x.finding)
+
+  test('the matcher finds every shape of a door act and passes over prose', () => {
+    // The anti-vacuity half: each evasion shape a binding could write is
+    // found; a comment, a string mentioning the name, a look-alike name and
+    // a regex literal are not.
+    expect(names("    expect(w.store!.retireLeg(ref, 'cut')).toBe(true)")).toEqual(['retireLeg'])
+    expect(names("  w.store!['retireLeg'](ref, 'cut')")).toEqual(['retireLeg'])
+    expect(names('  w.store!.retireLeg\n    (ref, "cut")')).toEqual(['retireLeg'])
+    expect(names('  w.store!.retireLeg.call(w.store, ref, "cut")')).toEqual(['retireLeg'])
+    expect(names('  const r = w.store!.retireLeg.bind(w.store)')).toEqual(['retireLeg'])
+    expect(names("import { retireLeg as end } from '../../src/persistence/leg-registry.js'\nend(db, ref, 'cut', 0)")).toEqual(['retireLeg'])
+    expect(names('  const msg = `${w.store!.recordSendBack(ref)} sent back`')).toEqual(['recordSendBack'])
+    expect(names("  define(/^the \"([^\"]+)\" leg ends$/, (w) => w.store!.registerWorker({ door: 'library' }))")).toEqual(['registerWorker'])
+    expect(names("  await w.store!.insert('x', { metadata: { kind: 'first-moment', run: 'r1' } })")).toEqual(['insert kind first-moment'])
+    expect(names('  await store.insert(text, {\n    metadata: { kind: SEND_BACK_KIND },\n  })')).toEqual(['insert kind send-back'])
+    expect(names("  // the hook calls retireLeg(db, ref) at its stop\n  /* registerWorker( */")).toEqual([])
+    expect(names("  const why = 'the retireLeg of a leg, said in prose'")).toEqual([])
+    expect(names('  await w.store!.retireLegacy(ref)\n  const reRegisterWorker = 1')).toEqual([])
+    expect(names("  define(/^a leg retireLeg\\(s\\) here$/, () => {})")).toEqual([])
+    expect(names("  await w.store!.insert('x', { metadata: { kind: 'checkpoint' } })")).toEqual([])
+  })
+
+  test('the harness is where the door acts are', () => {
+    const inHarness = new Set(names(read(HARNESS)))
+    // The library-door stand-ins the bindings use live here, so the scan
+    // below has something it would have found elsewhere.
+    for (const n of ['registerWorker', 'retireLeg', 'retireWorker']) expect(inHarness, n).toContain(n)
+  })
+
+  test('no steps file, journal harness module or test helper stands in for a door outside its allowlist', () => {
+    const files = scanned()
+    expect(files.filter((f) => f.endsWith('.steps.ts')).length, 'no steps files found').toBeGreaterThan(20)
+    expect(files, 'the scan roots').toEqual(expect.arrayContaining(['tests/journal/run-world.ts', 'tests/journal/world.ts', 'tests/helpers/standin-worker.ts', 'tests/helpers/standin-claude-p.ts']))
+    const problems: string[] = []
+    const used = new Set<number>()
+    for (const f of files) {
+      const src = read(f)
+      const lines = src.split('\n')
+      for (const x of findingsIn(src)) {
+        const text = lines[x.n - 1]!.trim()
+        const k = ALLOWED.findIndex((a) => a.file === f && a.finding === x.finding && a.line === text)
+        if (k === -1) problems.push(`${f}:${x.n}: ${x.finding} — ${text}`)
+        else used.add(k)
+      }
+    }
+    expect(problems, `a binding stands in for a door's own act; go through a named stand-in in ${HARNESS}, or allowlist the line with its reason`).toEqual([])
+    const stale = ALLOWED.filter((_, k) => !used.has(k)).map((a) => `${a.file}: ${a.finding} — ${a.line}`)
+    expect(stale, 'stale ALLOWED entries (the line no longer holds the finding — remove them)').toEqual([])
   })
 })

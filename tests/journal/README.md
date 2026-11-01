@@ -152,7 +152,59 @@ lie about what it checked.
 | Step ambiguity | both gnt runners (per feature) | a step matching more than one definition — asserted at suite start, wip or not |
 | Unbound-step ratchet | both gnt runners (per feature) | any unbound step outside the `wip:` list (paste-ready failing snippet); stale wip entries; orphaned definer keys |
 | Home-sandbox guard | `home-sandbox-guard.test.ts` | a test file touching a home variable outside `helpers/home.ts`'s `redirectHome()`/`sandboxedEnv()`, unless register-exempted with a reason; stale exemptions fail (it caught the mega-runner extraction moving the install probe, in both directions) |
+| Stand-in confinement | `feature-guards.test.ts` | a steps file (either tier), journal harness module or test helper mentioning a door's own act (`GUARDED_DOOR_CALLS`, outside comments and strings, any call shape or alias) or a plain `insert(` naming a door's row kind, outside `tests/journal/standins.ts` and its reasoned allowlist; stale allowlist entries; a matcher that stopped seeing an evasion shape |
 | `@only` / duplicate titles | gnt parser + runner | committed focus and copy-paste titles register as failing tests, never as narrowed runs |
+
+### The stand-in harness
+
+Where a beta.3 binding cannot reach the far side of the door its scenario
+names (Claude Code itself, the model inside a headless worker, the spawner
+that holds a ticket, the client a version check reads), it stands that
+party in through **`standins.ts`** and nowhere else. The module's header is
+the reference: a table of what each stand-in stands in for (`hooksLeg` and
+`hooksSubagent` for Claude Code starting a subagent; `runWorker` launching
+`tests/helpers/standin-worker.ts` or `tests/helpers/standin-claude-p.ts`
+through the real ticket door; `viaTools`/`toolNotes` plans for a worker's
+own tools; `workerLeg` and `registerThroughLibrary` for a spawner's
+library door; `retiredWithoutReturn`, `cutByTimeout` and
+`exitedWithSummary` for a leg already ended in a Given of history;
+`harnessRetiresLeg` where the scenario says the harness retires it;
+`writeFakeClaude` for the client install and doctor read), what a
+stand-in may do (only what its platform could: read its ticket, env and
+stdin; write as its leg by its platform's means, a hook-less worker
+through the library or its own tools, a `claude -p` child through its
+tools only, each call echoed; fire the hooks with the payloads Claude Code
+sends, in its order; exit as told), what it must never do (reach into a
+door's internals, register itself, write the rows a door writes), and the
+plan vocabulary both stand-in processes read (`WorkerPlan`,
+`ClaudePPlan`, typed once and imported by the processes).
+
+The helpers carry names and confinement, not rules: nothing checks that
+a Given's history is one a door could have made.
+
+The guard **"no binding stands in for a door outside the stand-in
+harness"** (`feature-guards.test.ts`) reads every steps file of both
+tiers, every journal harness module and every file under
+`tests/helpers`, with comments dropped, string text blanked (a string
+that is exactly a guarded name kept as that name), template text blanked
+with its `${}` kept, and regex literals blanked. It fails on (1) any
+mention of a name in `GUARDED_DOOR_CALLS` (leg-registry's writers,
+FlatStore's door methods, `claimTicket`, `firstMomentMetadata`,
+`sendBackMetadata`, `healWriterFromEcho`): a call, split across lines or
+not, `.call`/`.bind`, `store['name']`, an import and its alias; and (2) a
+plain `insert(` whose arguments name a door's row kind (`DOOR_ROW_KINDS`,
+quoted or by constant). `standins.ts` is exempt; elsewhere a finding
+passes only when the allowlist names the file and the line with a reason
+(the stand-in worker's `claimTicket`, the run-open race's spawner, one
+beta.1 handoff Given), and an allowlist entry that stops matching fails.
+Its anti-vacuity test proves each evasion shape is found and a comment, a
+prose string, a look-alike name and a regex literal are not. It does not
+see a name assembled at run time, a door reached through the store's
+prototype, or a door row written through raw SQL.
+
+The state of every beta.3 binding against the failure ladder (door,
+evidence, rung, the review mutations each does and does not catch) is
+**[`docs/beta3-bindings-audit.md`](../../docs/beta3-bindings-audit.md)**.
 
 ### Known limits — what no guard here can see
 

@@ -32,7 +32,7 @@ import { openCaptureWorld, spawnHook, bashPayload, drainStaging } from '../captu
 import { setTimeout as sleep } from 'node:timers/promises'
 import { readVerdict } from '../../../src/persistence/backup-verdict.js'
 import { type RunWorld, openRunWorld } from '../run-world.js'
-import { runWorker } from './journal-workers.steps.js'
+import { runWorker } from '../standins.js'
 
 // ── journal-storage ─────────────────────────────────────────────────────
 
@@ -503,12 +503,34 @@ export const storageDefiner = (reg: Registry<StorageWorld>): void => {
     } finally {
       raw.close()
     }
-    // With the archive writable, the same sweep completes end to end.
+    // With the archive writable, the same sweep completes end to end, and
+    // the order is read off the file itself: at the moment the archive is
+    // made durable, the archive holds the session's row whole while the
+    // store, read through a separate handle, still holds it with no
+    // tombstone; after the sweep the tombstone stands and the row is gone.
+    const atFsync: Array<{ archived: string[]; rows: string[]; tombstones: number }> = []
+    onFsyncUnder(w, archiveDir, (path) => {
+      const file = JSON.parse(readFileSync(path, 'utf8')) as { nodes: Array<{ content: string }> }
+      const reader = new DatabaseSync(dbPath, { readOnly: true })
+      try {
+        atFsync.push({
+          archived: file.nodes.map((n) => n.content),
+          rows: (reader.prepare("SELECT content FROM nodes WHERE COALESCE(json_extract(metadata_json,'$._tombstone'), 0) != 1 ORDER BY created_at").all() as Array<{ content: string | Uint8Array }>).map((r) => decodeContent(r.content)),
+          tombstones: (reader.prepare("SELECT COUNT(*) AS n FROM nodes WHERE json_extract(metadata_json,'$._tombstone') = 1").get() as { n: number }).n,
+        })
+      } finally {
+        reader.close()
+      }
+    })
     store.retentionSweep()
+    expect(atFsync.length, 'the sweep never made an archive durable').toBeGreaterThan(0)
+    expect(atFsync[0]).toEqual({ archived: ['evictable ordering row'], rows: ['evictable ordering row', 'protected ordering row'], tombstones: 0 })
     const raw2 = new DatabaseSync(dbPath, { readOnly: true })
     try {
       const tombs = (raw2.prepare("SELECT COUNT(*) AS n FROM nodes WHERE json_extract(metadata_json,'$._tombstone') = 1").get() as { n: number }).n
       expect(tombs).toBe(1)
+      const left = (raw2.prepare("SELECT content FROM nodes WHERE COALESCE(json_extract(metadata_json,'$._tombstone'), 0) != 1").all() as Array<{ content: string | Uint8Array }>).map((r) => decodeContent(r.content))
+      expect(left).toEqual(['protected ordering row'])
     } finally {
       raw2.close()
     }
@@ -2031,24 +2053,36 @@ function pastedConfiguration(n: number): string {
 const storedBytes = (w: StorageWorld): number =>
   rawAll<{ b: number }>(w, 'SELECT COALESCE(SUM(LENGTH(CAST(content AS BLOB))), 0) AS b FROM nodes')[0]!.b
 
-/** Watch the archive files the sweep fsyncs. At each fsync of a file under
- *  `archiveDir` the observation is taken through a separate read-only
- *  handle on the store and from the file itself, then the real fsync runs. */
-function watchArchiveFsyncs(w: StorageWorld, evidence: WorkerValveEvidence): void {
+/** At each fsync of a file under `dir` (fsync or fdatasync, either makes
+ *  the file durable), `observe` runs with the file's path before the real
+ *  fsync does; restored at the scenario's end. */
+function onFsyncUnder(w: { defer: (fn: () => void) => void }, dir: string, observe: (path: string) => void): void {
   const realFsync = fs.fsyncSync
   const realFdatasync = fs.fdatasyncSync
   const pathOfFd = (fd: number): string | null => {
     try { return fs.readlinkSync(`/proc/self/fd/${fd}`) } catch { /* not Linux */ }
-    // Without /proc: the newest file in the archive directory is the one
-    // being written.
+    // Without /proc: the newest file in the directory is the one being
+    // written.
     try {
-      const files = readdirSync(evidence.archiveDir).map((f) => join(evidence.archiveDir, f))
+      const files = readdirSync(dir).map((f) => join(dir, f))
       return files.sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)[0] ?? null
     } catch { return null }
   }
-  const observe = (fd: number): void => {
+  const seen = (fd: number): void => {
     const path = pathOfFd(fd)
-    if (path === null || !path.startsWith(evidence.archiveDir)) return
+    if (path !== null && path.startsWith(dir)) observe(path)
+  }
+  fs.fsyncSync = ((fd: number) => { seen(fd); return realFsync(fd) }) as typeof fs.fsyncSync
+  fs.fdatasyncSync = ((fd: number) => { seen(fd); return realFdatasync(fd) }) as typeof fs.fdatasyncSync
+  syncBuiltinESMExports()
+  w.defer(() => { fs.fsyncSync = realFsync; fs.fdatasyncSync = realFdatasync; syncBuiltinESMExports() })
+}
+
+/** Watch the archive files the sweep fsyncs. At each fsync of a file under
+ *  `archiveDir` the observation is taken through a separate read-only
+ *  handle on the store and from the file itself, then the real fsync runs. */
+function watchArchiveFsyncs(w: StorageWorld, evidence: WorkerValveEvidence): void {
+  onFsyncUnder(w, evidence.archiveDir, (path) => {
     const file = JSON.parse(readFileSync(path, 'utf8')) as { nodes: Array<{ nodeId: string; content: string }> }
     const raw = new DatabaseSync(w.dbPath!, { readOnly: true })
     try {
@@ -2066,12 +2100,7 @@ function watchArchiveFsyncs(w: StorageWorld, evidence: WorkerValveEvidence): voi
     } finally {
       raw.close()
     }
-  }
-  // Both make the file durable: the observation is taken at either.
-  fs.fsyncSync = ((fd: number) => { observe(fd); return realFsync(fd) }) as typeof fs.fsyncSync
-  fs.fdatasyncSync = ((fd: number) => { observe(fd); return realFdatasync(fd) }) as typeof fs.fdatasyncSync
-  syncBuiltinESMExports()
-  w.defer(() => { fs.fsyncSync = realFsync; fs.fdatasyncSync = realFdatasync; syncBuiltinESMExports() })
+  })
 }
 
 export const storageWorkerRowsDefiner = (reg: Registry<StorageWorld>): void => {

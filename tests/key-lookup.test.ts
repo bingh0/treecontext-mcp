@@ -24,7 +24,8 @@ import { KEY_LOOKUP_PARAM, LAST_SIZES_SHOWN, isKeylessLeg, keyLookupReply, type 
 import { charactersOf } from '../src/runs.js'
 import { REPLY_CEILING_BYTES } from '../src/server/reply-ceiling.js'
 import { parseToolResult } from './helpers/mcp-result.js'
-import { type RunWorld, openRunWorld, hooksLeg, insertEchoed, subagentStartHook } from './journal/run-world.js'
+import { type RunWorld, openRunWorld, insertEchoed, subagentStartHook } from './journal/run-world.js'
+import { hooksLeg } from './journal/standins.js'
 import { drainStaging } from './journal/capture-harness.js'
 
 let tmpDir: string

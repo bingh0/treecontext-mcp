@@ -6,10 +6,11 @@
  *
  * Every Given here writes through the production writer of what it
  * establishes: checkpoints and briefs through the library's own writers
- * (writeCheckpoint, writeBrief), a hooks-door leg through the real
- * SubagentStart hook alone, which reads its role's brief in effect and
- * infers the leg's run and key from it (the hooks door, unit 4), a worker
- * through registerWorker, the library door a spawner registers through. Every Then reads the SQLite file through a
+ * (writeCheckpoint, writeBrief). Where a binding stands in for a platform,
+ * a model or a door's caller (a hooks-door leg through the real
+ * SubagentStart hook, a worker through the library door or a stand-in
+ * process through the real ticket door), it does so through the stand-in
+ * harness, ./standins.ts, and nowhere else. Every Then reads the SQLite file through a
  * separate read-only handle, or the production surface (a hook's stdout,
  * a tool's reply, the harness's lookup).
  */
@@ -22,7 +23,7 @@ import { type Registry } from 'gherkin-node-test/vitest'
 import { DatabaseSync } from 'node:sqlite'
 import { decodeContent } from '../../src/persistence/content-codec.js'
 import { hostProbe } from '../../src/persistence/process-probe.js'
-import { WORKER_AGENT_ID, type LegRef } from '../../src/persistence/leg-registry.js'
+import { type LegRef } from '../../src/persistence/leg-registry.js'
 import type { KeyLookup } from '../../src/key-lookup.js'
 import { mcpOver, parseTool, rawAll } from './world.js'
 import { TS_ROOT } from './proc.js'
@@ -201,59 +202,10 @@ export async function briefFor(w: RunWorld, role: string, run: string, key: stri
   return r.nodeId
 }
 
-/**
- * A hooks-door leg, as the hooks door makes one (D284, D320, D326): the
- * role's brief in effect names the run and the key (written here by the
- * harness unless one is in effect already), and the real SubagentStart
- * hook registers the subagent and infers its leg facts from that brief,
- * its start the checkpoint(s) then in effect. What the hook injected is
- * kept as `start:<name>`.
- */
-export async function hooksLeg(w: RunWorld, name: string, role: string, facts: {
-  run: string; key: string; checkpointer?: string | null; checkpointedBy?: string | null
-}, env: Record<string, string> = {}): Promise<LegRef> {
-  const inEffect = w.store!.briefsInEffect(role).filter((b) => b.run === facts.run && b.key === facts.key)
-  if (inEffect.length === 0) await briefFor(w, role, facts.run, facts.key, { checkpointer: facts.checkpointer ?? null, checkpointedBy: facts.checkpointedBy ?? null })
-  return hooksSubagent(w, name, role, env)
-}
-
-/** A subagent of the role started through the real SubagentStart hook and
- *  nothing else: whatever the hooks door makes of it from the store. */
-export function hooksSubagent(w: RunWorld, name: string, role: string, env: Record<string, string> = {}): LegRef {
-  const agentId = `a${name}${Math.random().toString(16).slice(2, 10)}`
-  w.facts ??= {}
-  w.legs ??= {}
-  w.facts[`start:${name}`] = subagentStartHook(w, agentId, role, env)
-  const ref = { sessionId: w.sessionId!, agentId }
-  w.legs![name] = ref
-  return ref
-}
-
 /** This test process as a live worker's process: a real pid with the
  *  start moment this host's OS reports for it. */
 export function liveProcess(): { pid: number; start: number | null; host: string; token: string | null } {
   return { pid: process.pid, start: hostProbe.startMoment(process.pid), host: hostname(), token: hostProbe.startToken?.(process.pid) ?? null }
-}
-
-/** A worker registered through the library door the spawner calls. */
-export async function workerLeg(w: RunWorld, name: string, opts: {
-  role: string; run: string | null; key: string | null; parent?: string
-  checkpointer?: string | null; startCheckpoints?: string[]; at?: number
-  process?: { pid: number | null; start: number | null; host: string; token?: string | null }
-}): Promise<LegRef> {
-  const leg = await w.store!.registerWorker({
-    door: 'library',
-    ticket: {
-      parent: { id: opts.parent ?? w.sessionId ?? 'p1' }, run: opts.run, key: opts.key, role: opts.role,
-      checkpointer: opts.checkpointer === undefined ? opts.role : opts.checkpointer, mintedAt: (opts.at ?? Date.now() / 1000) - 1,
-    },
-    process: opts.process ?? liveProcess(),
-    ...(opts.startCheckpoints ? { startCheckpoints: opts.startCheckpoints } : {}),
-    ...(opts.at !== undefined ? { at: opts.at } : {}),
-  })
-  const ref = { sessionId: leg.sessionId, agentId: WORKER_AGENT_ID }
-  w.legs![name] = ref
-  return ref
 }
 
 /** A real lock another process holds on the store: the whole store

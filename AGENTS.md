@@ -52,6 +52,26 @@ of scope" (the compaction lifecycle, D35, amended by D286). A fence may
 decline a promise, never a writer: anything that writes to the store is
 in the charter or out of the build.
 
+**Stand-ins live in one place.** Where a binding stands in for a party on
+the far side of a door (Claude Code firing the hooks, the model inside a
+headless worker, a spawner's library call, the `claude` a version check
+reads), it does so through `tests/journal/standins.ts`, whose header says
+what each stand-in stands in for, what it may and must never do, and the
+plan vocabulary of the two stand-in processes. The helpers carry names
+and confinement, not rules. The stand-in guard in
+`tests/feature-guards.test.ts` fails on any mention, outside comments and
+strings, of a door's own act (`GUARDED_DOOR_CALLS`: the registry's
+writers, FlatStore's door methods, `claimTicket`, the door rows' metadata
+builders, the echo heal), whether called, bracket-accessed by its name,
+`.call`/`.bind`-ed or imported under an alias, in any steps file, journal
+harness module or file under `tests/helpers`, and on a plain `insert(`
+naming a door's row kind (first-moment, send-back, subagent-summary);
+only `standins.ts` and the lines its allowlist names, each with a reason,
+are exempt. It does not see a name assembled at run time or a door row
+written through raw SQL. The binding state of every beta.3
+scenario on the failure ladder, and the review mutations still needing a
+scenario, are in `docs/beta3-bindings-audit.md`.
+
 ## Architecture
 
 - `src/flat-store.ts` — the journal. Insert/query/export, BM25 + trigram

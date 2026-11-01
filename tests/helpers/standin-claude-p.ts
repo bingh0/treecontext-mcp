@@ -14,46 +14,34 @@
  *    (`source: startup`), recording the context the hook handed it, and
  *    UserPromptSubmit with its prompt;
  *  - fires PostToolUse for each tool call its plan names (a Bash call),
- *    and writes a checkpoint through the library as the worker's leg when
- *    its plan says so (the store's own writer, as the other stand-in does);
+ *    and writes its notes and checkpoints the only way a real child can:
+ *    through its own tools (a real `treecontext serve` it starts with its
+ *    own environment), each treecontext_insert call echoed by PostToolUse,
+ *    a checkpoint under the run and key its ticket names;
  *  - fires Stop with its final message; a Stop the hook blocks is
  *    continued once with the hook's reason as its next instruction (its
  *    plan's `afterSendBack` step), and Stop fires again with
  *    `stop_hook_active`, as the client does;
  *  - prints its final message and exits.
  *
- * STANDIN_CLAUDE_PLAN (JSON): `{ tools?: number, checkpoint?: string, checkpoints?: string[],
- * afterSendBack?: { checkpoint?: string, tools?: number }, final?: string,
- * exit?: number, waitBeforeStop?: string, waitAfterStop?: string,
- * invalidRow?: boolean }`; a `wait*` names a file it waits for after
- * writing `<file>.ready`. STANDIN_LOG is the file its record line goes to;
- * STANDIN_DB the store file.
+ * STANDIN_CLAUDE_PLAN (JSON) is a `ClaudePPlan`: the vocabulary, and what
+ * a stand-in may and must never do, are spelled once in the stand-in
+ * harness (tests/journal/standins.ts), which launches it (`runWorker`).
+ * A `wait*` names a file it waits for after writing `<file>.ready`.
+ * STANDIN_LOG is the file its record line goes to; STANDIN_DB the store
+ * file.
  */
 import { appendFileSync, existsSync, writeFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { join } from 'node:path'
-import { DatabaseSync } from 'node:sqlite'
-import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
-import { FlatStore } from '../../src/flat-store.js'
-import { workerLaneOf } from '../../src/persistence/leg-registry.js'
-import { TICKET_ENV, WORKER_SESSION_ENV } from '../../src/ticket.js'
+import { TICKET_ENV, WORKER_SESSION_ENV, readTicket } from '../../src/ticket.js'
 import { sendBackReason } from '../../src/first-moment.js'
 import { TS_ROOT, tsxArgv } from '../journal/proc.js'
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio'
 import { Client } from '@modelcontextprotocol/client'
 import { CLI_TS, nodeTsArgs } from './cli-spawn.js'
-
-interface Plan {
-  /** Notes the child writes through its own tools: a real `treecontext
-   *  serve` it starts with its own environment, each a treecontext_insert
-   *  call whose PostToolUse echo it fires, as Claude Code does. */
-  toolNotes?: string[]
-  tools?: number; checkpoint?: string; afterSendBack?: { checkpoint?: string; tools?: number }
-  /** A child that checkpoints more than once: each is written in turn, numbered and superseding the one before by the store's own rule. */
-  checkpoints?: string[]
-  final?: string; exit?: number; waitBeforeStop?: string; waitAfterStop?: string; invalidRow?: boolean
-}
+import type { ClaudePPlan as Plan } from '../journal/standins.js'
 
 const plan = JSON.parse(process.env['STANDIN_CLAUDE_PLAN'] ?? '{}') as Plan
 const log = process.env['STANDIN_LOG']
@@ -80,44 +68,62 @@ function waitFor(path: string | undefined): void {
   while (!existsSync(path) && Date.now() < deadline) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20)
 }
 
+/** A Bash call's output: the plan's `toolText` (`{i}`, `{label}`), else
+ *  a test line naming this session. */
+function toolOutput(label: string, i: number): string {
+  return plan.toolText !== undefined
+    ? plan.toolText.replaceAll('{i}', String(i)).replaceAll('{label}', label)
+    : `login ${label} ${i}: green (${sessionId})`
+}
+
 function tools(n: number, label: string): void {
   for (let i = 1; i <= n; i++) {
     hook('post-tool-use', {
       hook_event_name: 'PostToolUse', permission_mode: 'default', tool_name: 'Bash',
       tool_input: { command: `npx vitest run login-${label}-${i}`, description: 'Run tests' },
-      tool_response: { stdout: `login ${label} ${i}: green (${sessionId})`, stderr: '', interrupted: false, isImage: false },
+      tool_response: { stdout: toolOutput(label, i), stderr: '', interrupted: false, isImage: false },
     })
   }
 }
 
-async function notesThroughTools(texts: string[]): Promise<void> {
-  if (texts.length === 0 || !dbPath) return
+// The child's own tools: one real `treecontext serve` it starts with its
+// own environment (its ticket and the lane the door named), as Claude Code
+// starts the MCP server it is configured with, kept for the whole run.
+let toolClient: Client | null = null
+async function tools_(): Promise<Client> {
+  if (toolClient) return toolClient
   const transport = new StdioClientTransport({
-    command: process.execPath, args: nodeTsArgs(CLI_TS, ['serve', '--lexical', '--store', dbPath]),
+    command: process.execPath, args: nodeTsArgs(CLI_TS, ['serve', '--lexical', '--store', dbPath!]),
     env: Object.fromEntries(Object.entries(process.env).filter((e): e is [string, string] => e[1] !== undefined)), cwd, stderr: 'ignore',
   })
   const client = new Client({ name: 'standin-claude-p', version: '0' })
   await client.connect(transport)
-  try {
-    for (const text of texts) {
-      const input = { content: text }
-      const res = await client.callTool({ name: 'treecontext_insert', arguments: input })
-      hook('post-tool-use', {
-        hook_event_name: 'PostToolUse', permission_mode: 'default', tool_name: 'mcp__treecontext__treecontext_insert',
-        tool_input: input, tool_response: (res as { content: unknown }).content,
-      })
-    }
-  } finally { await client.close() }
+  toolClient = client
+  return client
 }
 
-async function writeCheckpoint(text: string): Promise<string | null> {
-  if (!dbPath) return null
-  const store = await FlatStore.open({ database: openNodeSqlite(new DatabaseSync(dbPath)), retentionInterval: 1_000_000 })
-  try {
-    const leg = workerLaneOf((store.store.database as unknown as { prepare: DatabaseSync['prepare'] }), sessionId)
-    if (!leg || leg.run === null || leg.key === null) return null
-    return (await store.writeCheckpoint(text, { run: leg.run, key: leg.key, leg: { sessionId: leg.sessionId, agentId: leg.agentId } })).nodeId
-  } finally { await store.close() }
+/** A treecontext_insert call through the child's tools, and its PostToolUse
+ *  echo, as Claude Code fires it. */
+async function insertThroughTools(input: { content: string; metadata?: Record<string, unknown> }): Promise<void> {
+  const res = await (await tools_()).callTool({ name: 'treecontext_insert', arguments: input })
+  hook('post-tool-use', {
+    hook_event_name: 'PostToolUse', permission_mode: 'default', tool_name: 'mcp__treecontext__treecontext_insert',
+    tool_input: input, tool_response: (res as { content: unknown }).content,
+  })
+}
+
+async function notesThroughTools(texts: string[]): Promise<void> {
+  if (texts.length === 0 || !dbPath) return
+  for (const text of texts) await insertThroughTools({ content: text })
+}
+
+/** A checkpoint under the run and key its ticket names, written as a real
+ *  child can write one: through its tools, never the library. */
+async function writeCheckpoint(text: string): Promise<void> {
+  if (!dbPath) return
+  const t = readTicket(process.env[TICKET_ENV] ?? '')
+  if (!t.valid || t.noKey || t.ticket.run === null || t.ticket.key === null) return
+  await insertThroughTools({ content: text, metadata: { kind: 'checkpoint', run: t.ticket.run, key: t.ticket.key } })
 }
 
 const start = hook('session-start', { hook_event_name: 'SessionStart', source: 'startup' })
@@ -156,8 +162,10 @@ if (sentBack !== null) {
   // instruction, then stops again, flagged as continuing because of it.
   tools(plan.afterSendBack?.tools ?? 0, 'after')
   if (plan.afterSendBack?.checkpoint !== undefined) await writeCheckpoint(plan.afterSendBack.checkpoint)
+  for (const text of plan.afterSendBack?.checkpoints ?? []) await writeCheckpoint(text)
   stops.push(hook('stop', { hook_event_name: 'Stop', stop_hook_active: true, last_assistant_message: final }).stdout)
 }
+await (toolClient as Client | null)?.close()
 waitFor(plan.waitAfterStop)
 if (log) {
   appendFileSync(log, `${JSON.stringify({

@@ -16,17 +16,11 @@
  *  - prints its last output and exits as told: a code, or hanging until
  *    a signal ends it.
  *
- * Its plan is STANDIN_PLAN (JSON): `{ first: Step, rerun?: Step, claim?:
- * { prompt?: string } }`, a Step being `{ notes?: number, label?: string,
- * texts?: string[], checkpoint?: string, invalidRow?: boolean, print?:
- * string, exit?: number | 'hang', at?: number, waitFor?: string }`:
- * `texts` are rows written as given (`viaTools`: the notes and texts go
- * through a real `treecontext serve` the worker starts, as a real worker's
- * CLI writes them, instead of the library), and `waitFor` names a file it waits
- * for before printing and exiting, having written `<waitFor>.ready` (so a
- * scenario can act while it runs, or at the moment it exits). The run
- * that opens on the door's send-back message follows `rerun`. STANDIN_DB
- * is the store file; STANDIN_LOG the file its record lines go to.
+ * Its plan is STANDIN_PLAN (JSON), a `WorkerPlan`: the vocabulary, and
+ * what a stand-in may and must never do, are spelled once in the stand-in
+ * harness (tests/journal/standins.ts), which launches it through the real
+ * door (`runWorker`). STANDIN_DB is the store file; STANDIN_LOG the file
+ * its record lines go to.
  */
 import { appendFileSync, existsSync, writeFileSync } from 'node:fs'
 import { DatabaseSync } from 'node:sqlite'
@@ -40,11 +34,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/client/stdio'
 import { Client } from '@modelcontextprotocol/client'
 import { CLI_TS, nodeTsArgs } from './cli-spawn.js'
 
-interface Step {
-  notes?: number; label?: string; texts?: string[]; checkpoint?: string; checkpoints?: string[]; invalidRow?: boolean; print?: string
-  exit?: number | 'hang'; at?: number; waitFor?: string; viaTools?: boolean
-}
-interface Plan { first: Step; rerun?: Step; claim?: { prompt?: string } }
+import type { WorkerPlan as Plan, WorkerStep as Step } from '../journal/standins.js'
 
 const plan = JSON.parse(process.env['STANDIN_PLAN'] ?? '{"first":{}}') as Plan
 const dbPath = process.env['STANDIN_DB']
