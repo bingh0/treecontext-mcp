@@ -1,8 +1,9 @@
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, test } from 'vitest'
+import { afterEach, describe, expect, test, beforeEach } from 'vitest'
 import { applyIdleCompaction, upsertClaudeSettingsHooks } from '../../src/server/installer.js'
+import { redirectHome } from '../helpers/home.js'
 import {
   decideIdleCompaction, idleCompactionRow, idleCompactionSupport, idleCompactionOf, installLine,
   parseClaudeVersion, parseTolerantJson, readClaudeVersion, readIdleCompaction, withIdleCompactionOff,
@@ -121,7 +122,21 @@ describe('the words', () => {
 
 describe('applyIdleCompaction on a settings file', () => {
   const dirs: string[] = []
-  afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }) })
+  // applyIdleCompaction records the key it wrote in install's own state
+  // file under the home directory (D361); run under a sandboxed HOME, or
+  // every run leaves a temp-directory entry in the developer's real
+  // ~/.treecontext/install-state.json (found at the final gate, 2026-11-01:
+  // sixty such entries).
+  let restoreHome: (() => void) | null = null
+  beforeEach(() => {
+    const home = mkdtempSync(join(tmpdir(), 'tc-idle-home-'))
+    dirs.push(home)
+    restoreHome = redirectHome(home)
+  })
+  afterEach(() => {
+    restoreHome?.(); restoreHome = null
+    for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true })
+  })
   const fileWith = (body: string | null): string => {
     const d = mkdtempSync(join(tmpdir(), 'tc-idle-'))
     dirs.push(d)
@@ -135,6 +150,9 @@ describe('applyIdleCompaction on a settings file', () => {
   test('absent file and absent key: the file is made, carrying the key off', () => {
     const p = fileWith(null)
     expect(applyIdleCompaction(p, '2.1.302', false).written).toBe(true)
+    // The record of that write sits in the sandboxed home's state file.
+    const state = JSON.parse(readFileSync(join(process.env['HOME']!, '.treecontext', 'install-state.json'), 'utf8')) as { idleCompaction: Record<string, unknown> }
+    expect(Object.keys(state.idleCompaction)).toEqual([p])
     expect(read(p)).toEqual({ idleCompaction: false })
   })
 
