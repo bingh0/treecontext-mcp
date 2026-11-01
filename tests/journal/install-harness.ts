@@ -1,7 +1,7 @@
 import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, existsSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { meetsNodeFloor } from '../../src/server/installer.js'
 import { spawnSync } from 'node:child_process'
-import { basename, isAbsolute, join, relative, sep } from 'node:path'
+import { basename, delimiter, isAbsolute, join, relative, sep } from 'node:path'
 import { homedir, tmpdir } from 'node:os'
 import { getAgent, getConfigPath } from '../../src/server/agents.js'
 import { mcpLauncherPath } from '../../src/server/installer.js'
@@ -61,6 +61,15 @@ export interface InstallWorld extends World {
   iRunaway?: { stagingId: number; attempts: number; holderPid: number; holderHost: string }
   /** D265 README scenario: the upgrading section's text. */
   iReadmeSection?: string
+  /** D290 scenarios: the directory holding the fake `claude`, first on the CLI's PATH. */
+  iClaudeBin?: string
+  /** D290 scenarios: the settings file the real install writes, as it stood before it ran. */
+  iSettingsBefore?: string
+  /** D290 scenarios: the install run and the doctor run, kept apart. */
+  iInstallRun?: CliRun
+  iDoctorRun?: CliRun
+  /** D290 README scenario: the README's install section. */
+  iInstallSection?: string
 }
 
 /**
@@ -78,7 +87,32 @@ export interface InstallWorld extends World {
  * a redirected test that quietly installs for real is worse than no test.
  */
 export function tcCli(w: InstallWorld, args: string[], opts: { cwd?: string } = {}): CliRun {
-  return spawnCli(args, { home: w.ihome!, cwd: opts.cwd ?? TS_ROOT })
+  // A scenario that set a Claude Code version has put a fake `claude` in a
+  // directory of its own; it goes first on the child's PATH and nowhere else.
+  const env = w.iClaudeBin ? { PATH: pathWithFakeClaude(w) } : undefined
+  return spawnCli(args, { home: w.ihome!, cwd: opts.cwd ?? TS_ROOT, ...(env ? { env } : {}) })
+}
+
+/**
+ * A `claude` on the child's PATH whose `--version` answers as the scenario
+ * says: a version prints `<version> (Claude Code)` as the real client does,
+ * and null is a client whose version cannot be read (it prints nothing with
+ * a version in it and exits non-zero). Calling it again replaces the binary
+ * in place, which is how a scenario upgrades the client between two runs.
+ */
+export function setClaudeVersion(w: InstallWorld, version: string | null): void {
+  if (!w.iClaudeBin) {
+    w.iClaudeBin = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-fake-claude-')))
+    w.defer(() => rmSync(w.iClaudeBin!, { recursive: true, force: true }))
+  }
+  const win = process.platform === 'win32'
+  const answer = version === null ? 'claude: cannot report a version' : `${version} (Claude Code)`
+  const status = version === null ? 1 : 0
+  if (win) {
+    writeFileSync(join(w.iClaudeBin, 'claude.cmd'), `@echo off\r\necho ${answer}\r\nexit /b ${status}\r\n`)
+  } else {
+    writeFileSync(join(w.iClaudeBin, 'claude'), `#!/bin/sh\necho '${answer}'\nexit ${status}\n`, { mode: 0o755 })
+  }
 }
 
 /**
@@ -154,6 +188,21 @@ export async function openInstallWorld(w: InstallWorld, agentDirs: string[] = ['
     rmSync(w.ihome!, { recursive: true, force: true })
   })
   for (const d of agentDirs) mkdirSync(join(w.ihome, d), { recursive: true })
+  // Every install world has a `claude` of its own on the CLI's PATH, so a
+  // scenario behaves the same on a machine with Claude Code and on one
+  // without (D290: install and doctor read the client's version from it).
+  // A scenario about a version sets its own with setClaudeVersion; the
+  // scenarios that need the real client call it through agentCli, which
+  // never sees this one.
+  setClaudeVersion(w, DEFAULT_CLAUDE_VERSION)
+}
+
+/** The version the fake `claude` of an install world answers, unless the scenario sets another. */
+export const DEFAULT_CLAUDE_VERSION = '2.1.302'
+
+/** A PATH with the world's fake `claude` first (when it has one). */
+export function pathWithFakeClaude(w: InstallWorld, base: string = process.env['PATH'] ?? ''): string {
+  return w.iClaudeBin ? `${w.iClaudeBin}${delimiter}${base}` : base
 }
 
 /** Every file under a root, relative and sorted — the dry-run comparison. */

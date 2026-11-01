@@ -635,7 +635,7 @@ the visionary ratified on 2026-11-01, D345).
   set, and below the floor or at an unreadable version writes nothing
   and says the setting is not applicable; doctor carries the setting
   on its own row. The compaction interaction itself, when and why the
-  client compacts, stays with ccr. [ruled: D290, D304] Where the client honors the key but has no /config row, between `2.1.290` and `2.1.301`, install and doctor name the settings line alone. [ruled: D338]
+  client compacts, stays with ccr. [ruled: D290, D304, D361] Where the client honors the key but has no /config row, between `2.1.290` and `2.1.301`, install and doctor name the settings line alone. [ruled: D338]
 - **Electives (Phase 5½, 2026-10-31).** Every development and release
   dependency stays at its latest stable version at each release; a
   release with one behind is not ready. [ruled: D322] One store: a

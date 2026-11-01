@@ -62,6 +62,12 @@ npm install -g treecontext-mcp@beta
 treecontext install
 ```
 
+`treecontext install` also turns Claude Code's idle compaction off, because
+the client summarising an idle session throws away the prompt cache the
+journal exists to keep; turn it back on in the client's `/config` row
+(Idle compaction, Claude Code 2.1.302 and later) or with
+`"idleCompaction": true` in `~/.claude/settings.json`.
+
 Section 3 says what `treecontext install` writes and how to audit or
 restrict it; section 4 checks that it all landed.
 
@@ -147,7 +153,7 @@ This detects your installed agents and wires treecontext into them. Add
 | Path | What it is |
 | --- | --- |
 | `~/.claude.json` | registers the treecontext MCP server at user scope (the file Claude Code actually reads; `$CLAUDE_CONFIG_DIR/.claude.json` when that is set) |
-| `~/.claude/settings.json` | registers 7 hooks: `SessionStart`, `UserPromptSubmit`, `PostToolUse`, `Stop`, `PreCompact`, `SubagentStart`, `SubagentStop` |
+| `~/.claude/settings.json` | registers 7 hooks: `SessionStart`, `UserPromptSubmit`, `PostToolUse`, `Stop`, `PreCompact`, `SubagentStart`, `SubagentStop`; and sets `"idleCompaction": false` when the key is absent (see below) |
 | `~/.claude/hooks/tc-*` | the hook wrapper scripts themselves (`.cmd` on Windows) |
 | `~/.claude/skills/treecontext-reference/SKILL.md` | the reference skill your agent loads on demand |
 | `~/.treecontext/config.toml` | treecontext's own settings |
@@ -155,6 +161,23 @@ This detects your installed agents and wires treecontext into them. Add
 On Windows, `~` means `%USERPROFILE%`. Existing config is merged, not
 overwritten — your other MCP servers and hooks are left alone, and a
 corrupt config file is backed up to `.bak` rather than clobbered.
+
+**Idle compaction.** `treecontext install` turns Claude Code's idle
+compaction off, by writing `"idleCompaction": false` into
+`~/.claude/settings.json`, and says so in one line. The client otherwise
+summarises a long conversation while the session sits idle; that replaces
+the checkpoint-then-`/clear` boundary and throws away the prompt cache the
+journal exists to keep. To turn it back on, change the **Idle compaction**
+row in the client's `/config` (Claude Code 2.1.302 and later), or set
+`"idleCompaction": true` in that file (the only way on 2.1.290 to 2.1.301,
+which read the key but have no row). Install writes the key only when it is
+absent and the client reads it (2.1.290 and later), so a value you set,
+on or off, is never touched; on an older client, or one whose version
+cannot be read, it writes nothing and says the setting is not applicable,
+and an install run after you upgrade writes it then. Install says nothing
+about a key you set, on any run. `treecontext uninstall` takes out the key
+install wrote, only while the file still holds that value. `treecontext doctor`
+carries the setting on its own row, and warns while it is on.
 
 **Then restart Claude Code** (quit the CLI, or reload the VS Code window).
 Hooks and MCP servers are read at startup. A hook that fires before the

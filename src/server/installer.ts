@@ -21,6 +21,11 @@ import {
   type CcrConfigState,
 } from './ccr-pane.js'
 import { redactHome } from '../debug.js'
+import {
+  IDLE_COMPACTION_KEY, decideIdleCompaction, idleCompactionRow, installLine, readClaudeVersion,
+  installStatePath, readIdleCompaction, readSettingsObject, recordIdleCompactionWrite, removeIdleCompactionWritten,
+  withIdleCompactionOff, type IdleCompactionDecision, type IdleCompactionSetting,
+} from './idle-compaction.js'
 import { leaseHolders } from '../persistence/leases.js'
 import {
   type AgentDefinition, type Platform,
@@ -1671,8 +1676,55 @@ export function claudeHooksBlock(): Record<string, ClaudeHookMatcher[]> {
   return applyClaudeHookBlock({})
 }
 
+/**
+ * Claude Code's idle compaction, at install (D290, D304, D338): write the
+ * key off when the client is known to read it and the user's settings carry
+ * no such key; never write a key that is there; below the floor or at a
+ * version that cannot be read, write nothing and say so. Returns the
+ * decision and what it wrote, so the caller can report and a test can pin it.
+ */
+export function applyIdleCompaction(
+  settingsPath: string, version: string | null, dryRun: boolean,
+  // What the file said BEFORE the hooks step rewrote it: that step may have
+  // rebuilt a file it could not read, and the key must be looked for in the
+  // user's bytes, never in ours.
+  before: IdleCompactionSetting = readIdleCompaction(settingsPath),
+): { decision: IdleCompactionDecision; line: string | null; written: boolean; statePath: string | null } {
+  const decision = decideIdleCompaction(version, before)
+  let written = false
+  if (decision.action === 'write-off' && !dryRun) {
+    const read = readSettingsObject(settingsPath)
+    const merged = read.state === 'unreadable' ? null : withIdleCompactionOff(read.state === 'ok' ? read.data : {})
+    if (merged) {
+      atomicWrite(settingsPath, JSON.stringify(merged, null, 2) + '\n')
+      try {
+        recordIdleCompactionWrite(settingsPath)
+      } catch (e) {
+        // The key is written; without the record uninstall will leave it, the
+        // safe side. Say so rather than failing the whole agent over it.
+        console.error(`[warn] could not record the idle-compaction key in ${installStatePath()}: ${e instanceof Error ? e.message : String(e)}`)
+      }
+      written = true
+    }
+  }
+  // The record is a path install writes, so a dry run lists it as it lists the rest.
+  const statePath = decision.action === 'write-off' ? installStatePath() : null
+  return { decision, line: installLine(decision, version, settingsPath, dryRun), written, statePath }
+}
+
 export function upsertClaudeSettingsHooks(path: string, dryRun: boolean): ActionResult {
-  const data = readJsonSafe(path)
+  // Read the way Claude Code reads it (comments and trailing commas are the
+  // user's valid settings, and every key in them survives); a file that is
+  // not a settings object at all is backed up beside itself before it is
+  // rebuilt, as the MCP config is, never silently replaced.
+  const read = readSettingsObject(path)
+  let data: Record<string, unknown> = {}
+  if (read.state === 'ok') {
+    data = read.data
+  } else if (read.state === 'unreadable' && !dryRun) {
+    const bak = backupCorrupt(path)
+    console.error(`[warn] ${path} is not a settings object — backed up to ${bak}`)
+  }
   data.hooks = applyClaudeHookBlock((data.hooks ?? {}) as Record<string, ClaudeHookMatcher[]>)
 
   if (dryRun) return { type: 'hook-settings', path, status: 'dry-run' }
@@ -2654,6 +2706,8 @@ export async function install(opts: InstallOptions): Promise<AgentInstallResult[
         // Claude-format hooks (shared by Claude Code, VS Code, Cursor)
         const scriptResults = installClaudeHookScripts(opts.dryRun, opts.debug)
         agentResult.actions.push(...scriptResults)
+        // The user's key, read before the hooks step touches the file (D361).
+        const idleBefore = agent.slug === 'claude' ? readIdleCompaction(settingsPath) : null
         const settingsResult = upsertClaudeSettingsHooks(settingsPath, opts.dryRun)
         agentResult.actions.push(settingsResult)
         // Name the files, not just the events. A dry run that lists the
@@ -2674,6 +2728,14 @@ export async function install(opts: InstallOptions): Promise<AgentInstallResult[
         // The events listed are the block's own keys, so the summary can
         // never name fewer events than install wrote (D250).
         for (const line of claudeHookSummaryLines()) console.log(line)
+        // Claude Code's own idle compaction (D290): only Claude Code reads
+        // this key, so not the other clients that share the hook format.
+        if (agent.slug === 'claude' && idleBefore) {
+          const idle = applyIdleCompaction(settingsPath, await readClaudeVersion(), opts.dryRun, idleBefore)
+          if (idle.written) agentResult.actions.push({ type: 'hook-settings', path: settingsPath, status: 'updated', detail: `${IDLE_COMPACTION_KEY} off` })
+          if (idle.line) console.log(idle.line)
+          if (idle.statePath) console.log(`  install state: ${idle.statePath} [${opts.dryRun ? 'dry-run' : 'recorded'}]`)
+        }
       } else if (agent.hooks.format === 'vscode-hooks' && settingsPath) {
         agentResult.actions.push(...installAgentHookWrappers('vscode', opts.dryRun))
         const hookResult = upsertVscodeHooks(settingsPath, opts.force, opts.dryRun)
@@ -2962,6 +3024,17 @@ export async function uninstall(opts: {
     }
 
     if (agentResult.actions.length > 0 || agentResult.refused) results.push(agentResult)
+  }
+
+  // The idle-compaction key install wrote (D361): out again only while the
+  // file still holds the value install wrote, by install's own record.
+  if (!opts.hooksOnly && (fullScope || agents.some(a => a.slug === 'claude'))) {
+    for (const r of removeIdleCompactionWritten(opts.dryRun)) {
+      if (r.removed) {
+        results.push({ agent: 'Claude Code (idle compaction)', slug: 'claude', actions: [{ type: 'hook-settings', path: r.file, status: opts.dryRun ? 'dry-run' : 'updated', detail: `${IDLE_COMPACTION_KEY} removed` }] })
+        console.log(`Claude Code: idle compaction setting that install wrote removed from ${r.file}`)
+      }
+    }
   }
 
   // Wrappers of agents the loop above never reached.
@@ -5546,6 +5619,13 @@ export async function doctor(): Promise<DiagnosticResult[]> {
     }
     results.push(agentRow)
     agentRows.push(agentRow)
+    if (agent.slug === 'claude') {
+      const settingsPath = getHookSettingsPath(agent, platform)
+      if (settingsPath) {
+        const row = idleCompactionRow(await readClaudeVersion(), readIdleCompaction(settingsPath), settingsPath)
+        results.push({ check: 'Idle compaction', ...row })
+      }
+    }
     if (unmanagedRow) results.push(unmanagedRow)
   }
 

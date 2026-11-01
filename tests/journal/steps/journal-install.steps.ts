@@ -14,7 +14,7 @@ import { openNodeSqlite } from '../../../src/persistence/node-sqlite.js'
 import { FlatStore } from '../../../src/flat-store.js'
 import { LeaseClient, DRAIN_LEASE_TTL_SECS } from '../../../src/persistence/leases.js'
 import { MAX_INGEST_ATTEMPTS } from '../../../src/persistence/capture-constants.js'
-import { type InstallWorld, tcCli, agentCli, openInstallWorld, treeOf, pathsMentioned, installedCommands, interpreterRunsPackage, isBatchBody, toPosix, mcpLauncherIn, agentConfigPath, fakeGlobalInstall } from '../install-harness.js'
+import { type InstallWorld, pathWithFakeClaude, setClaudeVersion, tcCli, agentCli, openInstallWorld, treeOf, pathsMentioned, installedCommands, interpreterRunsPackage, isBatchBody, toPosix, mcpLauncherIn, agentConfigPath, fakeGlobalInstall } from '../install-harness.js'
 
 export const installDefiner = (reg: Registry<InstallWorld>): void => {
   // ── install wires only the agents that are present ──────────────────
@@ -77,7 +77,7 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
     // must not read the developer's real config/bindings through the
     // TREECONTEXT_* seams, and a never-started spawn must still print its
     // errno instead of an empty stderr.
-    w.irun = spawnNodeTs(w.iLinkedCommand!, ['doctor'], { home: w.ihome!, cwd: TS_ROOT })
+    w.irun = spawnNodeTs(w.iLinkedCommand!, ['doctor'], { home: w.ihome!, cwd: TS_ROOT, env: { PATH: pathWithFakeClaude(w) } })
   })
 
   reg.define(/^the subcommand prints its report$/, (w: InstallWorld) => {
@@ -771,13 +771,19 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
     await openInstallWorld(w, ['.claude'])
     const version = (JSON.parse(readFileSync(join(TS_ROOT, 'package.json'), 'utf8')) as { version: string }).version
     w.iOtherBuild = fakeGlobalInstall(w.ihome!, version)
+    // A Claude Code that reads the key, so doctor's idle-compaction row is a
+    // warning here like the other two (the key is absent, the client's
+    // default is on) and the scenario keeps proving that EVERY warning row
+    // names the one command and that the command clears every one (D290,
+    // D276). The world's fake is the same on every machine.
+    setClaudeVersion(w, '2.1.302')
     // Nothing of treecontext is wired: no global config, no launcher, no
     // agent entry.
     expect(existsSync(join(w.ihome!, '.treecontext', 'config.toml'))).toBe(false)
     expect(existsSync(mcpLauncherIn(w.ihome!))).toBe(false)
     expect(existsSync(join(w.ihome!, '.claude.json'))).toBe(false)
   })
-  const packageOnPath = (w: InstallWorld): string => [w.iOtherBuild!.bin, ...(process.env['PATH'] ?? '').split(delimiter).filter((d) => {
+  const packageOnPath = (w: InstallWorld): string => [w.iOtherBuild!.bin, ...(w.iClaudeBin ? [w.iClaudeBin] : []), ...(process.env['PATH'] ?? '').split(delimiter).filter((d) => {
     if (!d) return false
     try { return !readdirSync(d).some((f) => f === 'treecontext' || f.startsWith('treecontext.')) } catch { return true }
   })].join(delimiter)
@@ -799,8 +805,9 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
   reg.define(/^every warning row below it names that same command as its fix$/, (w: InstallWorld) => {
     const lines = w.irun!.stdout.split('\n')
     const failing = lines.map((l, i) => ({ l, i })).filter(({ l }) => /^\[(warn|err)]/.test(l))
-    // Every row the unwired state raises: the global config and the agent.
-    expect(failing.map(({ l }) => l.replace(/^\[\w+\]\s+/, '').split(':')[0]).sort()).toEqual(['Claude Code', 'Global config'])
+    // Every row the unwired state raises: the global config, the agent and
+    // the client's idle compaction, which install turns off.
+    expect(failing.map(({ l }) => l.replace(/^\[\w+\]\s+/, '').split(':')[0]).sort()).toEqual(['Claude Code', 'Global config', 'Idle compaction'])
     for (const { l, i } of failing) {
       expect(lines[i + 1], `the row does not name the headline's command: ${l}`).toBe('       fix: treecontext install')
     }
@@ -833,7 +840,7 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
   reg.define(/^doctor runs with that command first on PATH$/, (w: InstallWorld) => {
     w.irun = spawnCli(['doctor'], {
       home: w.ihome!, cwd: TS_ROOT,
-      env: { PATH: `${w.iOtherBuild!.bin}${delimiter}${process.env['PATH'] ?? ''}` },
+      env: { PATH: pathWithFakeClaude(w, `${w.iOtherBuild!.bin}${delimiter}${process.env['PATH'] ?? ''}`) },
     })
   })
 
@@ -906,7 +913,7 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
       try { return !readdirSync(d).some(f => f === 'treecontext' || f.startsWith('treecontext.')) } catch { return true }
     })
     expect(kept.length, 'no PATH directories survived the filter').toBeGreaterThan(0)
-    w.irun = spawnCli(['doctor'], { home: w.ihome!, cwd: TS_ROOT, env: { PATH: kept.join(delimiter) } })
+    w.irun = spawnCli(['doctor'], { home: w.ihome!, cwd: TS_ROOT, env: { PATH: pathWithFakeClaude(w, kept.join(delimiter)) } })
   })
 
   reg.define(/^the report says the command is absent and where this build lives$/, (w: InstallWorld) => {
@@ -934,12 +941,12 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
     expect(m, `fix line is not a runnable command: ${fix}`).not.toBeNull()
     const run = spawnNodeTs(m![1]!, m![2]!.split(' '), {
       home: w.ihome!, cwd: TS_ROOT,
-      env: { PATH: `${w.iOtherBuild!.bin}${delimiter}${process.env['PATH'] ?? ''}` },
+      env: { PATH: pathWithFakeClaude(w, `${w.iOtherBuild!.bin}${delimiter}${process.env['PATH'] ?? ''}`) },
     })
     expect(run.status, run.out).toBe(0)
     w.irun = spawnCli(['doctor'], {
       home: w.ihome!, cwd: TS_ROOT,
-      env: { PATH: `${w.iOtherBuild!.bin}${delimiter}${process.env['PATH'] ?? ''}` },
+      env: { PATH: pathWithFakeClaude(w, `${w.iOtherBuild!.bin}${delimiter}${process.env['PATH'] ?? ''}`) },
     })
   })
 
@@ -1207,6 +1214,182 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
     expect(first).toMatch(/keeps running against your store until its session ends/)
     expect(first).toMatch(/A `0\.1\.0-beta\.1` server has no such step-aside/)
   })
+
+  // ── Claude Code's idle compaction (D290, D304, D338) ────────────────
+  //
+  // The world is the real CLI in a redirected HOME with a fake `claude` on
+  // its PATH answering `--version` as the scenario says. The settings file
+  // is seeded with neighbours that must not be taken for the key (a related
+  // `autoCompactEnabled`, foreign settings), and every Then reads the file
+  // on disk or the CLI's own stdout.
+  const settingsFile = (w: InstallWorld): string => join(w.ihome!, '.claude', 'settings.json')
+  const settingsOnDisk = (w: InstallWorld): Record<string, unknown> =>
+    JSON.parse(readFileSync(settingsFile(w), 'utf8')) as Record<string, unknown>
+  const seedSettings = (w: InstallWorld, key: 'absent' | 'on' | 'off'): void => {
+    const seeded: Record<string, unknown> = {
+      model: 'opus',
+      autoCompactEnabled: true,
+      permissions: { allow: ['Bash(ls:*)'] },
+      ...(key === 'absent' ? {} : { idleCompaction: key === 'on' }),
+    }
+    mkdirSync(join(w.ihome!, '.claude'), { recursive: true })
+    writeFileSync(settingsFile(w), JSON.stringify(seeded, null, 2) + '\n')
+    w.iSettingsBefore = readFileSync(settingsFile(w), 'utf8')
+  }
+  const aClaudeCode = async (w: InstallWorld, version: string | null, key: 'absent' | 'on' | 'off'): Promise<void> => {
+    await openInstallWorld(w, ['.claude'])
+    setClaudeVersion(w, version)
+    seedSettings(w, key)
+  }
+  /** The install output's lines about idle compaction. */
+  const idleLines = (out: string): string[] => out.split('\n').filter(l => /idle.compaction/i.test(l))
+  /** Doctor's row for idle compaction: its line and the fix line printed under it. */
+  const idleRow = (out: string): string => {
+    const lines = out.split('\n')
+    const at = lines.findIndex(l => /^\[(ok|warn|err)\]\s+Idle compaction:/.test(l))
+    expect(at, `doctor printed no row for idle compaction:\n${out}`).toBeGreaterThanOrEqual(0)
+    const fix = lines[at + 1]?.trimStart().startsWith('fix:') ? `\n${lines[at + 1]}` : ''
+    return `${lines[at]}${fix}`
+  }
+  const KEY_LINE = '"idleCompaction": false'
+
+  reg.define(/^a Claude Code whose version (reads \d+\.\d+\.\d+|cannot be read) and whose settings carry no idle-compaction key$/,
+    async (w: InstallWorld, said: unknown) => {
+      const reading = String(said)
+      await aClaudeCode(w, reading.startsWith('reads ') ? reading.slice('reads '.length) : null, 'absent')
+      expect(Object.hasOwn(settingsOnDisk(w), 'idleCompaction'), 'the seeded settings already carry the key').toBe(false)
+    })
+
+  reg.define(/^a Claude Code whose version reads (\d+\.\d+\.\d+) and whose settings carry the idle-compaction key set to (on|off)$/,
+    async (w: InstallWorld, version: unknown, value: unknown) => {
+      await aClaudeCode(w, String(version), String(value) as 'on' | 'off')
+      expect(settingsOnDisk(w)['idleCompaction']).toBe(value === 'on')
+    })
+
+  reg.define(/^a Claude Code whose version reads (\d+\.\d+\.\d+), on which install wrote no idle-compaction key$/,
+    async (w: InstallWorld, version: unknown) => {
+      await aClaudeCode(w, String(version), 'absent')
+      w.irun = tcCli(w, ['install', '--yes'])
+      expect(w.irun.status, w.irun.out).toBe(0)
+      expect(Object.hasOwn(settingsOnDisk(w), 'idleCompaction'), 'install wrote the key for a client that does not read it').toBe(false)
+    })
+
+  reg.define(/^the developer runs install$/, (w: InstallWorld) => {
+    w.irun = tcCli(w, ['install', '--yes'])
+    w.iInstallRun = w.irun
+    expect(w.irun.status, w.irun.out).toBe(0)
+  })
+
+  reg.define(/^the developer runs install and then doctor$/, (w: InstallWorld) => {
+    w.iInstallRun = tcCli(w, ['install', '--yes'])
+    expect(w.iInstallRun.status, w.iInstallRun.out).toBe(0)
+    w.iDoctorRun = tcCli(w, ['doctor'])
+    w.irun = w.iDoctorRun
+  })
+
+  reg.define(/^the client is upgraded to (\d+\.\d+\.\d+) and the developer runs install again$/, (w: InstallWorld, version: unknown) => {
+    setClaudeVersion(w, String(version))
+    w.irun = tcCli(w, ['install', '--yes'])
+    w.iInstallRun = w.irun
+    expect(w.irun.status, w.irun.out).toBe(0)
+  })
+
+  reg.define(/^the settings file carries the idle-compaction key set to off$/, (w: InstallWorld) => {
+    const raw = readFileSync(settingsFile(w), 'utf8')
+    expect(settingsOnDisk(w)['idleCompaction'], raw).toBe(false)
+    expect(raw.match(/"idleCompaction"/g)?.length, 'the key is there more than once').toBe(1)
+  })
+
+  reg.define(/^the settings file still carries the idle-compaction key set to (on|off)$/, (w: InstallWorld, value: unknown) => {
+    const raw = readFileSync(settingsFile(w), 'utf8')
+    expect(settingsOnDisk(w)['idleCompaction'], raw).toBe(value === 'on')
+    expect(raw.match(/"idleCompaction"/g)?.length, 'the key is there more than once').toBe(1)
+  })
+
+  reg.define(/^the settings file has the idle-compaction key (written off|not written)$/, (w: InstallWorld, written: unknown) => {
+    const data = settingsOnDisk(w)
+    if (written === 'written off') {
+      expect(data['idleCompaction'], JSON.stringify(data)).toBe(false)
+    } else {
+      expect(Object.hasOwn(data, 'idleCompaction'), JSON.stringify(data)).toBe(false)
+    }
+  })
+
+  reg.define(/^the developer sees install say in one line that idle compaction was turned off, the reason, and that the client's \/config row turns it back on$/, (w: InstallWorld) => {
+    const said = idleLines(w.iInstallRun!.stdout)
+    expect(said, `install's output:\n${w.iInstallRun!.stdout}`).toHaveLength(1)
+    expect(said[0]).toMatch(/turned off/)
+    expect(said[0]).toMatch(/prompt-cache/)
+    expect(said[0]).toMatch(/\/config row/)
+    expect(said[0]).toMatch(/turns it back on/)
+  })
+
+  reg.define(/^the developer sees install say in one line that idle compaction was turned off$/, (w: InstallWorld) => {
+    const said = idleLines(w.iInstallRun!.stdout)
+    expect(said, `install's output:\n${w.iInstallRun!.stdout}`).toHaveLength(1)
+    expect(said[0]).toMatch(/turned off/)
+  })
+
+  reg.define(/^the developer sees install say nothing about having written it$/, (w: InstallWorld) => {
+    // D361: for a key the user set, install says nothing at all, now or on
+    // any later run (D290's sib: no fighting it on every reinstall).
+    expect(idleLines(w.iInstallRun!.out), `install's output:\n${w.iInstallRun!.out}`).toEqual([])
+  })
+
+  reg.define(/^the developer sees install say the setting is (turned off|not applicable to this client)$/, (w: InstallWorld, saidOf: unknown) => {
+    const said = String(saidOf)
+    const lines = idleLines(w.iInstallRun!.stdout)
+    expect(lines, `install's output:\n${w.iInstallRun!.stdout}`).toHaveLength(1)
+    expect(lines[0]).toContain(said)
+    // the other claim is not made beside it
+    expect(lines[0]).not.toContain(said === 'turned off' ? 'not applicable' : 'turned off')
+  })
+
+  reg.define(/^the developer sees doctor's row for idle compaction warn that treecontext recommends off, with the client's \/config row first and the settings line second$/, (w: InstallWorld) => {
+    const row = idleRow(w.irun!.stdout)
+    expect(row).toMatch(/^\[warn\]/)
+    expect(row).toContain('treecontext recommends off')
+    const configAt = row.indexOf('/config')
+    const lineAt = row.indexOf(KEY_LINE)
+    expect(configAt, row).toBeGreaterThan(-1)
+    expect(lineAt, row).toBeGreaterThan(-1)
+    expect(configAt, row).toBeLessThan(lineAt)
+  })
+
+  reg.define(/^the developer sees doctor's row for idle compaction say (off|the setting is not read by this client, version .+)$/, (w: InstallWorld, rowOf: unknown) => {
+    const row = String(rowOf)
+    const line = idleRow(w.iDoctorRun!.stdout)
+    const detail = line.replace(/^\[ok\]\s+Idle compaction: /, '')
+    expect(line, `not an ok row:\n${line}`).toMatch(/^\[ok\]\s+Idle compaction: /)
+    if (row === 'off') {
+      // The row says off, and which file it speaks for (D361's finding 8: a
+      // project, local or managed file can set the key too).
+      expect(detail.startsWith(`off in ${settingsFile(w)} (only that file was read`), line).toBe(true)
+    } else {
+      expect(detail, line).toBe(row)
+    }
+  })
+
+  // ── the README's install section (D290) ─────────────────────────────
+  reg.define(/^the developer reads the README's install section$/, (w: InstallWorld) => {
+    // Section 2, "Install": the section that gives the install command and
+    // the one D276's tester reads (D361). Its subsections are part of it.
+    const readme = readFileSync(join(TS_ROOT, 'README.md'), 'utf8')
+    const start = readme.indexOf('\n## 2. Install')
+    expect(start, 'the README has no install section (## 2. Install)').toBeGreaterThan(-1)
+    const rest = readme.slice(start + 1)
+    const end = rest.slice(3).search(/^## /m)
+    w.iInstallSection = end === -1 ? rest : rest.slice(0, end + 3)
+  })
+
+  reg.define(/^the developer reads that install turns Claude Code's idle compaction off, the reason, and where to turn it back on$/, (w: InstallWorld) => {
+    const paragraphs = w.iInstallSection!.split(/\n\s*\n/).map(p => p.replace(/\s+/g, ' '))
+    const about = paragraphs.filter(p => /idle compaction/i.test(p))
+    expect(about, 'the install section says nothing about idle compaction').toHaveLength(1)
+    const p = about[0]!
+    expect(p, 'it does not say install turns it off').toMatch(/`treecontext install` also turns Claude Code's idle compaction off/)
+    expect(p, 'it gives no reason').toMatch(/prompt cache/i)
+    expect(p, 'it does not name the /config row').toMatch(/`\/config`/)
+    expect(p, 'it does not name the settings line').toContain('"idleCompaction": true')
+  })
 }
-
-

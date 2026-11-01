@@ -142,18 +142,22 @@ runFeatures(join(HERE, '../../features'), {
     // wip-register.ts, partly bound by unit 1 on 2026-11-01: each ruling
     // carries the scenarios still unbound, with the unit that owns each.
     ...wholeFeatureWip(),
-    // The beta.3 subagent cut (2026-10-31): scenarios added to three bound
-    // files by the scope run, unbound until their build (D290, D304, D295,
-    // D319). Scenario-scoped so the rest of each file keeps gating.
+    // The beta.3 subagent cut (2026-10-31): scenarios added to bound files
+    // by the scope run, unbound until their build (D295, D319). Scenario-
+    // scoped so the rest of each file keeps gating. journal-install's seven
+    // idle-compaction scenarios (D290, D304, D338) bound with unit 8 and
+    // left this list, but one.
+    // The 2.1.295 scenario is unbound: its install clause ("install name
+    // the settings line as where to turn it back on") is asked of a run
+    // where the key is already on, and D361 rules that install says nothing
+    // about a key the user set. The scenario contradicts the ruling in its
+    // own words; the owner amends it (split: key absent at 2.1.295 is
+    // written off, naming the settings line and no /config row; key on is
+    // doctor's settings-line-only row). Until then the halves are held by
+    // tests/server/idle-compaction.test.ts, and the title stays open here.
     {
       feature: 'journal-install',
       scenarios: [
-        "install turns Claude Code's idle compaction off when the setting is absent, and says so",
-        'install never writes the idle-compaction key the user set to <value>',
-        'doctor warns while idle compaction is on, naming the /config row first',
-        "the README's install section says idle compaction is turned off and why",
-        'a Claude Code whose version <version> gets the idle-compaction key <written> and doctor says <row>',
-        'install writes the key on a later run once the client is upgraded',
         'a client that honors the key but has no /config row is pointed at the settings line alone',
       ],
     },

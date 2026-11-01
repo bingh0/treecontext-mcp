@@ -75,6 +75,9 @@ in the charter or out of the build.
   block, doctor (one row per documented client: mode, state, remedy); the
   Claude Code hooks block, and its verbatim (Codex) and translated
   (Gemini) copies behind `--experimental-capture`
+- `src/server/idle-compaction.ts` — Claude Code's idle-compaction key
+  (D290, D304, D338): the version parse and the 2.1.290 / 2.1.302 floors,
+  what install does about the key, and doctor's row for it
 - `src/handoff.ts` — the handoff door: the import rule (importer's marks,
   `_handoff_claims`, `handoff:` lanes), the export forms (`summaries`,
   `whole`, and a run's `skeleton`), the file's self-describing head, the
