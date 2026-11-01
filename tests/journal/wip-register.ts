@@ -26,6 +26,26 @@ export interface WholeFeatureWipRuling {
 }
 
 export const WHOLE_FEATURE_WIP: WholeFeatureWipRuling[] = [
+  // The beta.3 subagent cut (interview 2026-10-29 to 2026-10-31, rulings
+  // D279–D323): three surfaces scoped before their build, by design — the
+  // feature files are the contract the build is measured against. Each
+  // leaves the register when its scenarios bind. The release gate must
+  // name any still here as acceptable for `0.1.0-beta.3`.
+  {
+    feature: 'journal-legs',
+    reason: 'scoped 2026-10-31 before its build (D279–D285, D299, D305, D314, D320, D321): the leg contract through the hooks door; leaves the register when the send-back, the recovery leg and the key lookup bind against real hook subprocesses',
+    ruledOn: '2026-10-31',
+  },
+  {
+    feature: 'journal-workers',
+    reason: 'scoped 2026-10-31 before its build (D288, D291–D298, D303, D307, D313, D315–D317): the ticket door for headless workers; leaves the register when the door, the first-moment row and phantom retirement bind against real worker processes',
+    ruledOn: '2026-10-31',
+  },
+  {
+    feature: 'journal-runs',
+    reason: 'scoped 2026-10-31 before its build (D289, D296, D300–D302, D309–D312, D318): the run as a unit; leaves the register when the key lookup with run facts, the run export forms and nested runs bind against the store file',
+    ruledOn: '2026-10-31',
+  },
   // The hackathon re-cut (interview 2026-10-05 to 2026-10-07, rulings
   // D145–D202): four surfaces scoped before their build, by design — the
   // feature files are the contract the build is measured against. Each

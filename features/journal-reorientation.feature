@@ -235,3 +235,15 @@ Feature: Re-orientation after a clear — the first reply carries the thread
     Given a session whose chapter summary "plan: drop the login form" was retracted by a newer entry
     When the developer searches "drop the login form"
     Then the developer finds the retracted chapter summary
+
+  # The beta.3 subagent interview (D295, 2026-10-31): a headless child
+  # with a ticket is a worker, never the checkout's self.
+
+  @D295
+  Scenario: a `claude -p` child with a ticket opens on its brief and checkpoint, never on a self's packet
+    Given a checkout whose main session holds the chapter summary "plan: wire the login form" and a bookmark
+    And a brief row for the builder role on the run "r1" under the key "login-form", with checkpoint number 3 in effect under that key
+    And a ticket in the environment naming the parent "p1", the run "r1", the key "login-form", the role "builder" and the reviewer as the one who will checkpoint
+    When a `claude -p` process starts in that checkout and its session-start hook fires
+    Then the packet handed to it carries the builder's brief and checkpoint number 3
+    And the packet carries no chapter summary, no bookmark and no recent turns of the checkout's main session

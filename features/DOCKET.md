@@ -2068,7 +2068,7 @@ N32 2026-10-29 [V] orchestrating-developer 4
 # the other-readers-and-writers actor's outcome, Phase 1, the visionary's words; weight confirmed at Phase 1½ (2026-10-29); rests on D169 (any writer may append into any lane so long as the row names its writer) and N17 (attribution earned, never guessed): the store-written writer stamp is the evidence; which metadata a checkpoint row must carry is Phase 2/3 material
 
 D282 2026-10-29 [I>V]
-  resp:  the beta.3 subagent work lands in three new feature files, legs (the leg contract: brief and checkpoint at start, checkpoint on exit and the send-back-once, the designated checkpointer, the recovery leg, which checkpoint wins, the harness's key lookup), workers (the ticket door: a headless worker on any CLI registered under a parent of any CLI, its rows in its own lane with the right writer, retired on exit with its return as the summary, what a `claude -p` child is) and runs (a run as a unit: its legs in order, reconstructable by SQL, exportable, a poisoned checkpoint's writer determinable, phantoms retired); the rest lands as scenarios in the files that already own the surface, the subagent's orientation lines in the agent-surface and reorientation files, the dispatch skill and the Codex installer fixes in the install and clients files, the journal defects in storage and reorientation; names provisional until drafting [I>V]
+  resp:  the `beta.3` subagent work lands in three new feature files, legs (the leg contract: brief and checkpoint at start, checkpoint on exit and the send-back-once, the designated checkpointer, the recovery leg, which checkpoint wins, the harness's key lookup), workers (the ticket door: a headless worker on any CLI registered under a parent of any CLI, its rows in its own lane with the right writer, retired on exit with its return as the summary, what a `claude -p` child is) and runs (a run as a unit: its legs in order, reconstructable by SQL, exportable, a poisoned checkpoint's writer determinable, phantoms retired); the rest lands as scenarios in the files that already own the surface, the subagent's orientation lines in the agent-surface and reorientation files, the dispatch skill and the Codex installer fixes in the install and clients files, the journal defects in storage and reorientation; names provisional until drafting [I>V]
   ->     boundary
   serves: N27
   touches: D147 D150 D169
@@ -2086,6 +2086,7 @@ D283 2026-10-29 [I]
 D284 2026-10-29 [I>V]
   trig:  a leg of a role starts with a brief that names its key and the checkpointer, and a checkpoint of that key is in effect [I>V]
   resp:  at its first moment the leg sees the brief and the checkpoint in effect and has made no query; the checkpoints under a key carry a number that increases, the checkpoint the leg writes at the end is the next number and supersedes the one it started from; the leg's stop is not blocked and the main agent is handed a pointer to the leg's summary row, whose writer is the leg's role and which carries the run and the key [I>V]
+  sib:   none -- a leg that opens with a query for its own brief, or a checkpoint that does not say which one it replaces, is what this prevents, not a behaviour
   serves: N29 N30
   touches: D280 D281 D279 D227
 # Phase 2, 2026-10-29, the legs file's primary path walked aloud with concrete values (run `migrate-7`, key `chapter-3`, role `writer`, checkpoint 3 then 4); the visionary: "yes, that reads right". Three values were the interviewer's and were ratified by that yes: the increasing number under a key (a reading aid over D280's supersession, the number walks the same chain), the brief as the carrier of key and checkpointer (D281 restated), the run and key on the summary row (what lets N31's plain SQL reconstruct a run)
@@ -2107,8 +2108,518 @@ D286 2026-10-30 [I>V] amends D35
 
 D287 2026-10-30 [I>V]
   trig:  a treecontext_query reply, serialized, would exceed the reply ceiling; or a treecontext_export of one entry would [I>V]
-  resp:  the reply ceiling is a quarter of the client's {16 MB} stdio message guard; a query reply over it has its entries' contents cut, hits and window entries alike, at a cap that shrinks until the reply fits, each cut entry ending in a marker that says so and names the export door, the reply disclosing the ceiling, the cut and how many entries it touched; an export of one entry over the ceiling is refused with the entry's id and both sizes, never cut, because export promises the whole entry; the bounded preview stays the first defence and this is the last, for any producer the preview rule has not reached [I>V]
+  resp:  the reply ceiling is a quarter of the client's `16 MB` stdio message guard; a query reply over it has its entries' contents cut, hits and window entries alike, at a cap that shrinks until the reply fits, each cut entry ending in a marker that says so and names the export door, the reply disclosing the ceiling, the cut and how many entries it touched; an export of one entry over the ceiling is refused with the entry's id and both sizes, never cut, because export promises the whole entry; the bounded preview stays the first defence and this is the last, for any producer the preview rule has not reached [I>V]
   sib:   none -- a reply that ends the connection is what this prevents, not a behaviour
   serves: N1 N4
   touches: D4 D286 D47
 # the owner, 2026-10-30, with D286: the preview rule failed for one producer and the connection died; a ceiling under the guard means the next unreached producer costs a cut, not the session. A quarter of the guard sits far above any reply the preview bound produces (twenty hits with ten-entry windows at the 8000-char tool view is under 4 MB) and far below the point where the connection dies. Roads not taken: shielding (off by default, and a 30 MB file pointer is still a 30 MB read); failing the query outright (the agent loses the page for one oversized entry); cutting exports (an export that lies about being whole is worse than one refused)
+
+D288 2026-10-30 [I>V]
+  trig:  a headless worker on one CLI starts under a parent session on another, with a ticket in its environment that names its run, key, role and checkpointer, and exits [I>V]
+  resp:  the worker is registered under the parent the ticket names, whatever CLI the parent runs; every row it writes sits in the worker's own lane, each stamped with the worker's role as writer and with the parent session, none of them in the parent's lane; the worker is retired at exit and its last output is the summary row the pointer names [I>V]
+  sib:   none -- a worker's rows landing in the parent's lane under the parent's writer is what this prevents, not a behaviour
+  serves: N27 N32 N30
+  touches: D281 D169 D190 D284 D167
+# Phase 2, 2026-10-30, the workers file's primary path walked aloud with concrete values (Codex parent `S1`, ticket for role `reviewer` on run `migrate-7` key `chapter-3` naming `writer` as the one who checkpointed and `reviewer` as the one who will, `claude -p` writes three notes and checkpoint 5, exits); first put 2026-10-29 (journal 96c45de4), unanswered when the beta.2.1 hotfix interrupted the session, re-put verbatim and ratified: "yes". Three values were the interviewer's and were ratified by that yes: the ticket travels in the process's environment (the proposal's R1, declared not discovered), the worker's lane is its own with the parent recorded on each row rather than the rows entering the parent's lane (D169's lane model applied to a process no hook registered), the worker's last output is what becomes the summary row (the lifecycle the ticket door gets free, proposal §9.5)
+
+D289 2026-10-30 [I>V]
+  trig:  a run's legs have exited and the harness asks, with no model in the loop, for the newest checkpoint of a key on that run; or anyone with the store file reads the run back [I>V]
+  resp:  the harness asks by run and key together and receives the one checkpoint in effect under that key, with its writer, and each leg of the run reads as retired or live; the run's rows read back in the order of each row's own moment of capture, never the drain's order, every row naming its writer and its moment, every leg naming its run, its key and its parent session, so each captured row reaches the run and key through its leg's lane rather than carrying them itself, and no row of another run reads back among them [I>V]
+  serves: N28 N31 N32
+  touches: D280 D284 D288 D8 D169 D190
+# Phase 2, 2026-10-30, the runs file's primary path walked aloud with concrete values (run `migrate-7`, key `chapter-3`, the `writer` leg from checkpoint 3 to 4, the headless `reviewer` leg under Codex `S1` writing 5 over 4; the harness gets 5 alone, the person's SQL gets writer trail, 4, reviewer trail, 5); the visionary: "yes". Three values were the interviewer's and were ratified by that yes: run and key together as the harness's lookup (a key alone may recur across runs); the row's own moment as the order (D8's honest timestamp applied to a run); run and key on the leg's registration with every captured row reaching them through its lane (writing them on every captured row would stamp hook captures with facts the hook does not hold)
+
+D290 2026-10-30 [I>V] amends D35
+  trig:  treecontext install wires Claude Code on a machine whose client settings carry no idle-compaction key; or doctor runs where the key is set to on [I>V]
+  resp:  install turns Claude Code's idle compaction off by writing the key when it is absent, says so in its output with the reason in one line and where to turn it back on (the client's /config row), and never writes the key when the user has set it, on or off; doctor reports the setting on its own row, a warning while it is on that says treecontext recommends off and gives the /config row first and the settings line second; the README's install section says the same; the compaction interaction itself, when and why the client compacts, stays with ccr [I>V]
+  sib:   none -- install flipping a setting the user chose, or fighting it on every reinstall, is what this prevents, not a behaviour
+  serves: N1 N23
+  touches: D35 D286 D51 D276 D208 D161
+# the visionary, 2026-10-30, reframing the interviewer's four-door question ("which door reports it") into "how far install goes", with the reasons: (a) the client's summary replaces the checkpoint-then-/clear boundary and the journal as the session's recall source; (b) asked for a case where a treecontext user wants it on, the interviewer could name only a developer who leaves a 300K session idle without checkpointing and prefers a summary to one uncached re-read, a cost preference held by someone not following the protocol, and the setting only fires on subscription sessions so API-key users never see it; (c) /config's Idle compaction row is the fix most users prefer over editing JSON, so it is named first; (d) option 1 of three chosen. Roads not taken: install recommends and asks once interactively (every forced reinstall asks again unless the answer is remembered, and a no leaves a warning row forever); doctor row and README only, install writes nothing (a user who skips the note and never runs doctor meets it as a compaction packet they did not ask for). Verified before recording: install writes hooks and the MCP registration into the client's settings and no preference key today (src/server/installer.ts, no idleCompaction); the fence's compaction entry keeps the interaction with ccr (features/OUT-OF-SCOPE.md L98-115), amended here for the one key install now writes; idleCompaction honored by Claude Code from 2.1.290 and the /config row from 2.1.302 (journal fbc71fa1, from the settings reference). Open for coverage: an older client given the key, and the seed's "idle compaction fires PreCompact/PostCompact with trigger auto" for a session whose user turned it back on
+
+D291 2026-10-30 [I>V]
+  trig:  a ticketed headless worker on a CLI where no hook fires at exit finishes with no checkpoint under its key newer than its start, and the ticket names the worker as its checkpointer [I>V]
+  resp:  whatever spawned the worker through the ticket door, the library call or the `treecontext run` wrapper, sees the missing checkpoint at exit and runs the worker once more with the missing checkpoint named as the reason, under the rules of D279, once, on by default, never a second time, never when the store cannot be written; the second run is a fresh process that reads its own trail from the store to write the checkpoint; a worker that claimed a ticket with no wrapper gets no send-back, is retired as having ended without a checkpoint, visibly so to the harness's lookup, and the next leg of its role starts as a recovery leg [I>V]
+  sib:   none -- a hook-less worker sent back twice, or a wrapper writing the checkpoint for it, is what this prevents, not a behaviour
+  serves: N27 N28
+  touches: D279 D280 D281 D288
+# Phase 3, 2026-10-30, the first coverage question, from the workers path and D279; provenance named: the platform field report verified on 2.1.300 that Claude Code's hooks fire inside a headless `claude -p` (docs/orchestration-platform-field-report-2026-10-15.md L33), so D279's send-back reaches that worker, while `codex exec` and `agy -p` have no hook at exit. Option 1 of three chosen. Roads not taken: no send-back off the hooks door, the worker visibly ended and the next leg a recovery leg (a pipeline with no second leg of that role never gets its checkpoint; the gap is visible and nothing closes it); the ticket names the harness as checkpointer and the harness passes the checkpoint text at retire under its own writer stamp (a harness has no model, so its checkpoint is the worker's stdout relabelled). The stressing case shown and accepted: the re-run is D279's recovery leg in all but name
+
+D292 2026-10-30 [I>V]
+  trig:  a ticketed headless worker ends by a signal or a kill, the harness's timeout among them, before any checkpoint under its key [I>V]
+  resp:  an exit by signal is a cut: the worker is retired as cut with every row it wrote in its lane, no summary row and no send-back, the harness's lookup returns the checkpoint still in effect with the leg shown as cut, and the next leg of that role starts as a recovery leg; only a worker that exited on its own, whatever its exit code, gets the one send-back of D291 [I>V]
+  sib:   none -- a harness's timeout paid twice for a worker that was never going to finish is what this prevents, not a behaviour
+  serves: N27 N28
+  touches: D279 D291 D288
+# Phase 3, 2026-10-30, from the workers path and D279's "cut"; option 1 of three chosen. Roads not taken: every exit without a checkpoint is sent back once, signal or not (the timeout is paid twice); the spawner says cut or finished at retire and the wrapper falls back to the signal rule (a harness that never says `cut` lands on the double timeout). The stressing case shown and accepted: a worker that exits 1 on its own error counts as finished and is sent back once, a worker the harness killed is not
+
+D293 2026-10-30 [I>V]
+  resp:  when an agent, harness or process the store has never registered writes into it, through any door, a ticket it minted for itself included, the store refuses nothing and checks no identity, since it has no access control and gains none here; the control is the trace: every row such a writer leaves says when it was written, where (directory, worktree, branch as the door could read them), how (which door wrote it and whether the identity it carries was registered by a hook or declared by the writer), who (the writer stamp the store wrote and the parent as declared) and what; anyone reading the store can then judge the rows' validity or filter them out, and treecontext never judges for them [V]
+  ->     structural
+  serves: N32 N17 N31
+  touches: D169 D283 D190 D167 D288
+# the visionary, 2026-10-30, reframing the interviewer's unknown-parent question ("what does the store hold for a Codex parent it never registered": a registry row minted with the ticket, a name on the worker, or a refusal until the parent registers itself) into the principle under it: "we have no security for sqlite store in tc and it's too much. i think traceability so that if an unregistered agent/harness writes something - anyone else access the treecontext store can see when/where/how/who/what was written. they can then decide the validity of the information or to filter it out." D169's "any writer may append so long as the row names its writer" and N32's "the poisoner determinable by metadata" restated as the door rule for identities no hook vouched for; the abandoned axis and its option of refusing a ticket for an unregistered parent go to Roads not taken (a one-line harness grows a registration step, a script that forgets it spawns nothing, and the store would be pretending to a security it does not have)
+
+D294 2026-10-31 [I>V]
+  trig:  a ticket names a parent session no hook registered, a Codex or Antigravity main for one, and a worker is registered under it [I>V]
+  resp:  the store writes no row for a session that never spoke to it; each worker's registration carries what its own ticket declared about the parent, its id, CLI, directory, worktree and branch, marked declared, with the moment the ticket was minted; a parent a hook did register is linked by its id, never copied; a reader may group workers by the parent they declared, a view computed when read and never a stored row, and two tickets that describe one parent differently stay two descriptions, which the store never reconciles [I>V]
+  sib:   none -- a parent row minted from a claim, with first-wins reconciliation of what later tickets say, is what this prevents, not a behaviour
+  serves: N32 N31 N28
+  touches: D293 D283 D288 D190 D169
+# Phase 3, 2026-10-31, the question derived from D293's reframe (where the trace for a declared, never-registered parent lives); the visionary asked for the interviewer's view ("i don't know, what do you think the best behavior"), option 1 of three recommended with reasons and ratified: "yes, that reads right". Roads not taken: a declared-parent registry row written by the ticket door, reused by later tickets (the store would write a session it never saw, and two unrelated mains declaring one id share a row whose directory is the first one's); both the row and the per-worker copy (the disagreement is visible but the invented row remains). The stressing case shown and accepted: a parent that ran four workers has its directory written four times and the reader reconciles them, four witnesses rather than one record
+
+D295 2026-10-31 [I>V]
+  trig:  a `claude -p` worker starts with a ticket in its environment and the client's own session-start hook fires for it [I>V]
+  resp:  the ticket wins: the hook reads it and registers the child as a worker, its role, parent, run and key from the ticket, marked as the ticket door read by the hook; the child is not a main self, writes no beacon, opens on the brief and the checkpoint in effect rather than a self's packet, and its rows carry the role as writer and the parent as declared; the send-back for a missing checkpoint runs once per leg across both doors, whichever sees the exit first, never twice [I>V]
+  sib:   none -- a worker re-run by the hook and again by the wrapper for the one missing checkpoint is what this prevents, not a behaviour
+  serves: N29 N27 N32
+  touches: D288 D291 D294 D190 D167 D216
+# Phase 3, 2026-10-31, the proposal's R4; verified before asking: the session-start hook reads no identity from its environment today (src/hooks/shared.ts reads TREECONTEXT_DEBUG only) and registers every session as a self from its session id and git facts (src/persistence/session-registry.ts registerSelf). Option 1 of three chosen. Roads not taken: both identities with the ticket's on top, a session that is also a worker (the child's packet opens with the checkout's thread before the brief, N29's first moment spent twice); the hook wins and the ticket serves hook-less CLIs only (a Codex main spawning `claude -p` workers gets unparented Claude sessions in the main lane, and N32's poisoner reads as "main"). The stressing case shown and accepted: the once-per-leg send-back must hold across the hook and the wrapper
+
+D296 2026-10-31 [I>V]
+  trig:  the harness or a leg asks for the checkpoint in effect under a key, and the newest in effect was written by a writer other than the checkpointer the leg's brief or ticket named [I>V]
+  resp:  the lookup returns that checkpoint as the one in effect, its writer visible as on every row, and says in the same reply that its writer is not the checkpointer the brief or ticket named; nothing is withheld, re-ranked or judged, the harness or the next leg decides [I>V]
+  sib:   none -- a lookup that silently hands the next leg a stranger's checkpoint, or one that quietly drops a legitimate unnamed checkpointer's work, is what this prevents, not a behaviour
+  serves: N32 N28
+  touches: D280 D281 D293 D289
+# Phase 3, 2026-10-31, from the runs path and N32; option 1 of three chosen. Roads not taken: only a named checkpointer's rows count toward "in effect", the stranger's listed apart (amends D280, and a legitimate technical-writer leg that checkpointed without being named in the brief waits in the apart list too); pure D293 with no flag, the writer on the row and nothing more (N28's harness has no model and no brief in hand, so it resumes from the poison with nothing in the reply that said so). The stressing case shown and accepted: a harness script that reads "in effect" alone and never the flag resumes from the poison
+
+D297 2026-10-31 [I>V]
+  trig:  a worker's process is gone and nothing retired it, its spawner having crashed or never called retire [I>V]
+  resp:  every worker registration records its process id and host; whoever next reads the registry on that host, a lookup, a status call or a hook, checks the process and retires a gone one then, as a phantom, with the moment it was noticed and by whom, never with a guessed exit time, no checkpoint and no summary row; a worker registered on another host is left live and the reply says it cannot be checked from here [I>V]
+  sib:   none -- a phantom retired with an invented exit time, or a live worker on another host retired by this one, is what this prevents, not a behaviour
+  serves: N28 N27 N32
+  touches: D288 D292 D289 D190 D8
+# Phase 3, 2026-10-31, from D282's "phantoms retired" and N28's live-or-retired; verified before asking: the registry has no process-liveness check today and the one retirement rule is F3, a session's own start or /clear retiring every subagent left live under its id (src/hooks/session-start.ts L121-131), a moment a hook-less parent never has. Option 1 of three chosen. Roads not taken: F3 extended to workers, retired at the parent's next start or next ticket (a parent that never returns leaves the phantom live forever; two unrelated mains declaring one id retire each other's workers); never retired on its own, the registration age and the last row's age shown and a command to retire by hand (every model-less harness picks its own silence threshold). The stressing cases shown and accepted: a reused pid keeps the phantom live until that process also exits; a worker on another host is never retired from this one
+
+D298 2026-10-31 [I>V]
+  trig:  a ticketed worker starts, on a CLI with no hook to inject anything or as a `claude -p` child [I>V]
+  resp:  the ticket door composes the worker's first message as the brief, then the checkpoint in effect under its key with its number, writer and moment, then the spawner's own prompt, so the worker's first moment is its prompt and no query is made; the door writes that first moment as the first row of the worker's lane, the spawner's prompt text with references to the brief row and the checkpoint row it was composed from, never copies of them, so what the worker saw is reconstructable from the store alone with plain SQL and no file in the path; the hook-less door and the `claude -p` door leave the same row [I>V]
+  sib:   none -- a worker that starts cold with nothing in the store saying so, or a first moment that lives in a file the next commit can lose, is what this prevents, not a behaviour
+  serves: N29 N31 N27
+  touches: D288 D295 D284 D281 D283 D227
+# Phase 3, 2026-10-31, from N29's own comment ("how a headless worker with no hooks gets the same first moment is a coverage question"); provenance: the field report's SubagentStart injection and the proposal's withdrawal of it for the prompt (docs/proposal-workflow-legs-2026-10-15.md L806), the global instructions-file routine at L878. The visionary reframed the three options ("what is more reliable - prompt injection or file instructions ... it's mostly about re-creating the session; most reliable forensic reconstruction. i feel anything in the tc store is going to be more reliable than an file that can get deleted before commit"); the interviewer recommended the prompt with the first-moment row added, ratified: "yes, that reads right". Roads not taken: a file named in the ticket's environment, read first by the CLI's managed instructions file (a user who did not let install manage that file gets a worker that starts cold, N29 unmet silently); ids in the ticket and one fetch, N29 softened for hook-less CLIs (depends on the MCP server being wired in that CLI and the model obeying; no record that the worker read them). Open for coverage: whether the door cuts a very large checkpoint from the prompt (N27's "no leg pays for context it does not need")
+
+D299 2026-10-31 [I>V] amends D280
+  trig:  a leg or its designated checkpointer writes a checkpoint under a key; or the ticket door composes a worker's first message around a checkpoint of any size [I>V]
+  resp:  a checkpoint is the state of the work as it now stands and names what it supersedes and what it rests on, never the history pasted in, and the brief says so in words; a checkpoint written past {16000} characters is refused once with the reason and the shape asked for, a shorter checkpoint that references what it left out, and a second over-cap write under the same key by the same leg is accepted and marked as over the cap; the door composes the first message with the checkpoint in effect whole and never cuts it; the first-moment row carries the checkpoint's size so a reader sees what the leg paid [I>V]
+  spread: a checkpoint of <chars> characters is <verdict> on its first write and <verdict2> on the second
+  sib:   none -- a chain of original-plus-review checkpoints growing without bound, or a cut at read that drops the verdict at the end, is what this prevents, not a behaviour
+  serves: N27 N29 N28
+  touches: D280 D279 D298 D286 D4
+# Phase 3, 2026-10-31, the question D298 left open; the visionary asked for the interviewer's view ("what do you think will control unbounded checkpoints? use references to priors? or doesn't matter? or hard cap?") and ratified the recommendation: "yes, that reads right". Reasoning given: "doesn't matter" is out by the owner's own triage rule of 2026-10-30 (anything that grows without bound is a blocker the day it is found, the recovery snapshot's shape with a model in the loop); references are D280's designed shape and the brief's sentence is the only thing enforcing it against a model that pastes; the cap is the deterministic backstop placed where the information is, at write, in D279's once-only shape; a cut at read drops the end of original-plus-review, which is the verdict. The quantity: {16000} characters is the interviewer's number, about four thousand tokens, a size a leg orients on in one read and twice the 8000-character index boundary of captured tool output (D4/D261); the visionary: "16,000 stands since i have no concept of any other size", so the why is the interviewer's and the value is open to measurement at build without a reopening. Roads not taken: never cut and no cap, the checkpointer owns the size (the chain grows every leg and every leg pays for the whole chain); cut at a cap named in the ticket (keeps the original, drops the review the leg was spawned to act on)
+
+D300 2026-10-31 [I>V]
+  trig:  a run is exported as a unit, by an agent, a harness or a human, with or without a form named [I>V]
+  resp:  the default run export is the run's skeleton, every checkpoint under every key in order, each leg's summary row, each leg's first-moment row and the legs' registrations, enough to resume or review the run elsewhere and holding no captured tool output; the `whole` form adds every row of every leg behind the same secrets acknowledgement as today's whole journal; the caller picks the form, so a harness that wants the trails says so and takes the warning; a run export is the first that crosses writers, every leg's lane under the run [I>V]
+  sib:   none -- a run file that carries a teammate the secrets risk for a run they wanted to review, not replay, is what this prevents, not a behaviour
+  serves: N31 N28 N27
+  touches: D170 D199 D172 D289 D282
+# Phase 3, 2026-10-31, from D282's "exportable"; verified before answering: export today has two forms, `summaries` (default) and `whole` behind the secrets acknowledgement (src/handoff.ts L141, L190), plus one writer's trail; none crosses writers. The visionary asked how export works and put three shapes (a default and what it is; no default, the exporter chooses; the harness or main agent instructs): "I don't have an opinion ... I figure a 'safe' default is fine". The interviewer's view, ratified ("yes, that reads right, safe default with whole as the override"): (a) with (c) as its override, since instructing the exporter is the same door as choosing, a form argument. Roads not taken: every row of every leg always (a 30-leg run with shell trails is tens of megabytes and every importer takes the secrets risk); no run form, a run filter on the existing forms (the summaries form carries no checkpoints or first moments, so the default could not resume a run). The stressing case shown and accepted: a reviewer importing the skeleton asks why a checkpoint was written and the trail that explains it is on the other machine. PROTOCOL CRITIQUE for the run record, the visionary, same turn: "in these question offer the last choice to be a discussion like we have had for the last couple of questions. i often need more context and back and forth" — adopted from here: every option set carries a "discuss first" option
+
+D301 2026-10-31 [I>V]
+  trig:  the harness, or any caller, asks for the checkpoint in effect under a key on a run [I>V]
+  resp:  the reply carries the run's facts beside the checkpoint: how many legs have run on the run, how many checkpoints sit under this key, how long ago the run started, and the sizes of the last few checkpoints under the key; treecontext judges none of it, the harness reads the numbers and decides whether to spawn again, and a human gate is the harness's to build [I>V]
+  sib:   none -- a run that loops until someone looks, with the facts that would have shown it sitting unread in the store, is what this prevents, not a behaviour
+  serves: N28 N27 N31
+  touches: D289 D296 D293 D280
+# Phase 3, 2026-10-31, from seed C with provenance named as the platform developer's field report, not the visionary's words (docs/orchestration-platform-field-report-2026-10-15.md L77-80: one record, 11 runs, 18.6M tokens, one question to the human, never converged; a leg's own "not done" is not a brake; they are adding a script-read convergence measure and a human gate at a bounded interval). Option 1 of four chosen (the fourth, "discuss first", is the protocol addition of D300's turn). Roads not taken: bounds on the run's registration (leg cap, age) reported when crossed and never refused (a run opened with no bounds, the one-line harness's case, gets the facts and nothing more, so the facts are the floor either way); nothing, convergence as the harness's business alone (the field report's case). The stressing case shown and accepted: a harness that reads "in effect" alone, as in D296, sees none of it
+
+D302 2026-10-31 [I>V]
+  trig:  a harness expects a checkpoint to carry a shape it can parse and a leg's checkpoint does not; or a harness ends a run for any reason of its own [I>V]
+  resp:  the grammar is the harness's and lives in the brief; the store never parses or checks a checkpoint's shape; when the harness ends the run on a parse failure or any other reason it says so through the door as it retires the leg and closes the run, and the store records on the run that it ended there, by whom and why, so plain SQL shows the stop; a run has an opening, its first leg's registration or an explicit open, and a close the harness or main agent may declare with a reason [I>V]
+  sib:   none -- the store refusing a free-prose checkpoint, or a run that simply stops with nothing saying why, is what this prevents, not a behaviour
+  serves: N31 N28 N27
+  touches: D280 D299 D301 D289 D293
+# Phase 3, 2026-10-31, the rest of seed C, provenance the platform developer's field report (L82: hand-off line parsed against a fixed grammar, an unparsable line ends the run, "add the rule that a leg whose checkpoint does not parse ends the run"); option 1 of four chosen. Roads not taken: a declared checkpoint shape the store checks, refused once like D299's cap (every brief author writes a schema and D280's prose becomes the exception); no grammar anywhere, the harness reads the summary row and D301's facts and never parses the checkpoint (the field report's slipped line was the structured return, and the checkpoint is where the honest "not done" lived). The stressing case shown and accepted: a harness that does not say why it stopped leaves a run the store cannot tell from a crashed harness; the run's open and close enter the record here as the unit D282 named
+
+D303 2026-10-31 [I>V]
+  trig:  a worker starts with a ticket in its environment that the door, the hook on `claude -p` or the server on a hook-less CLI, cannot read whole: hand-edited, truncated, or minted in another shape by an older treecontext [I>V]
+  resp:  the worker is registered in its own lane with every field the door could read, each unreadable field marked absent and the raw ticket text kept on the registration, never as a self; its first moment is the statement that its instructions were invalid and the ask to write one row saying so and stop; the worker does no work; the leg ends visibly as having had no valid instructions, the harness's lookup says so, and the harness decides whether to mint again; a spawner that sees the fault before spawning writes that row itself and spawns nothing [V]
+  sib:   none -- a worker guessing at instructions it could not read, or its one row landing in the main lane as the main agent's, is what this prevents, not a behaviour
+  serves: N32 N27 N28
+  touches: D279 D293 D294 D298 D288
+# Phase 3, 2026-10-31; the interviewer recommended registering with what was read and never falling back to a self (so the rows never land in the main lane as `main`, N32's case), and the visionary reframed the worker's part: "rather than burn tokens on what could be wrong assumptions, the worker simply writes a checkpoint that it didn't get valid instructions?"; the two combined and ratified: "yes, that reads right". Roads not taken: run as if no ticket were present and record the damage on the self's registration (the rows land in the main lane, the misattribution the ticket door exists to prevent); register with what was read and let the worker work (the interviewer's draft, work done on a guessed brief); the spawner refuses to spawn on a ticket it cannot read (damage happens between mint and read, so the spawner sees only the version-skew case, and refuses a ticket the harness minted a minute ago). The stressing case accepted: a damaged ticket that still reads as a role, the wrong one, registers under it with only the raw text on the registration to compare against the mint
+
+D304 2026-10-31 [I>V] amends D290
+  trig:  install or doctor runs where the Claude Code found is older than {2.1.290}, the first release that reads the idle-compaction key, or where its version cannot be read [I>V]
+  resp:  install writes the key only when the client is known to honor it; below the floor or unknown it writes nothing and says the setting is not applicable to this client; doctor's row says the setting is not read by this client and names its version; an install run later on an upgraded client writes it then [I>V]
+  spread: a client at <version> gets <written> and doctor says <row>
+  sib:   none -- a key written into a client that does not read it, reported as a setting that took effect, is what this prevents, not a behaviour
+  serves: N1 N23
+  touches: D290 D276 D208
+# Phase 3, 2026-10-31, from D290's open item; option 2 of three chosen (the third "discuss first"). The quantity {2.1.290} is the client's, from Anthropic's settings reference (journal fbc71fa1); the /config row exists from 2.1.302. Roads not taken: write it anyway and say the client is older (harmless to a client that ignores it, in place when it upgrades; but install cannot always read the client's version and would then write and say nothing). The stressing case shown and accepted: a user who upgrades the client and never re-runs install has idle compaction turn on under them, with doctor the only thing that notices
+
+D305 2026-10-31 [I>V]
+  trig:  a subagent is spawned through the hooks door, with a brief that names a run and a key, or with no brief or no key [I>V]
+  resp:  the leg contract, the first-moment row, the checkpoint and its once-only send-back, and a place in the run's facts, applies to a subagent whose brief names a run and a key; a subagent spawned with no brief or no key is registered at its start and summarised at its stop exactly as today, with no ask at its stop, and nothing about today's subagent behaviour changes for it [I>V]
+  sib:   none -- a twenty-second lookup subagent paying a second turn for a checkpoint nobody reads is what this prevents, not a behaviour
+  serves: N27 N21 N29
+  touches: D279 D280 D284 D281 D301 D190
+# Phase 3, 2026-10-31, the survival question (what already-working behaviour must survive the legs contract: SubagentStart registration, the hand-back summary); "discuss first" taken, the interviewer's recommendation ratified ("ok"): the key is the switch because D280 made a checkpoint about a unit of work named by its key, and a successor can only pick up what a key names, so a keyless subagent is a fresh one-shot by construction. Roads not taken: every subagent a leg with a key minted from its role when absent (D279's "without ceremony" spent on every grep, the token burn the visionary named at D303); every subagent a leg with the send-back only under a key (the main session becomes a run whose leg count mixes lookups and work, and D301's facts mislead). The stressing case accepted: a main agent that forgets the key on a long leg gets no checkpoint and finds out at the next cold start; the summary row still lands, and the dispatch skill (seed B) is the surface that makes keying a leg the default
+
+D306 2026-10-31 [V]
+  resp:  the checklist sweep's Performance row is declined for the subagent work: no ruling of this program names a slowest acceptable lookup, first moment or export at the largest realistic run; Security is confirmed as already answered by D293, not re-probed [V]
+  ->     fence-declined
+  serves: N27
+  touches: D293
+# the Phase 3¼ triage, 2026-10-31, the protocol's one batched question over the ten checklist rows (provenance named: a standard checklist, not the visionary's words); selected for a question each: Reliability, Diagnosability, Lifecycle/Evolvability, Usability, Availability, Ops burden, Compliance; not selected: Performance, recorded here as declined with provenance; Security pre-answered by D293 and confirmed
+
+D307 2026-10-31 [I>V]
+  trig:  a worker's first moment or its exit arrives while the store is locked, busy or unreachable [I>V]
+  resp:  at the first moment the door waits the busy wait the raw opener already has, and, if the store still cannot be read, starts no worker and tells the spawner in words that the store was unreachable and nothing was written, so the spawner retries or gives up; at exit a checkpoint the store cannot take is lost from the store, never from the spawner, since the ticket door passes the worker's last output through, and the leg stays registered with no checkpoint under its key until it is retired as a phantom; readers of the key see the earlier checkpoint in effect [I>V]
+  sib:   none -- a worker that starts cold with no first-moment row and leaves a run that cannot be reconstructed in exactly the session where the store was flaky is what this prevents, not a behaviour
+  serves: N27 N28 N32
+  touches: D279 D291 D293 D297 D298 D303 D175
+# Phase 3¼, 2026-10-31, the Availability row (provenance named: a checklist category, not the visionary's words); the visionary's reading "the leg has a slight wait, and if nothing, returns no instructions?" sharpened by the interviewer into not-started, ratified: "yes, that reads right". Roads not taken: the cold start, the door composes the first moment from the spawner's prompt alone and tells the worker the checkpoint could not be read (the first-moment row cannot be written either, so the worker has rows with a writer and a parent but no first moment); a queued checkpoint held by the door until the store returns (a second writer path with its own failure modes, and the spawner already holds the text). The stressing case shown and accepted: the cost is one spawn retry by the harness, and a store that stays unreachable leaves the run with a live registration D297 retires only when the pid is next checked on that host
+
+D308 2026-10-31 [I>V]
+  resp:  the subagent work adds no operation a person runs by hand or on a schedule: a run nobody closed stays open and readable, a registration a dead host left live is retired when next noticed, and a store that grows by a first-moment row and a checkpoint per leg is the retention valve's to carry; after installation the only hands a person puts on treecontext are an upgrade and a doctor run for what doctor reports, and that holds for the installed life, not only the sprint's day D178 named [I>V]
+  ->     structural
+  serves: N26 N27 N28
+  touches: D178 D297 D302 D301 D290 D304
+# Phase 3¼, 2026-10-31, the Ops burden row (provenance named: a checklist category, not the visionary's words); the visionary's words: "nothing to run; from user perspective after installation, essentially zero maintenance other than to upgrade and fix issues that rise with doctor". N26 is confirmed and its horizon widened from the sprint's day to the installed life; the needs sketch carries the widening at drafting. The candidates put and absorbed: unclosed runs, live registrations on a host that never came back, per-leg store growth. Not a new need: N26 already owns the weight
+
+D309 2026-10-31 [I>V]
+  trig:  an agent is asked what ran, or what happened in a run, with no run id in hand [I>V]
+  resp:  a run is findable through the query the agent already has, by time and by the run's name, because every row a run is made of is a journal row carrying the run and the key: the first-moment row, each checkpoint, each worker's summary row, and the run's open and its close; a registration alone stays in the registry's own table, and nothing about a run lives only there; an agent asked what ran on a day finds that day's first-moment rows and walks the run from them [I>V]
+  sib:   none -- a run whose existence is recorded only in a table the query never reaches, so that the agent cannot answer "what ran last Tuesday" without the id, is what this prevents, not a behaviour
+  serves: N27 N28
+  touches: D289 D298 D299 D288 D302 D294 D8
+# Phase 3¼, 2026-10-31, the domain question (provenance named: the interviewer's priors), item 1; the visionary: "most human users would just ask agent to query the store. so if the agent can figure it out, that's all that's necessary"; ratified "yes, that reads right". Verified under rule 6 before recording: the registry is its own table (`src/persistence/session-registry.ts:34`, migration 027) and the query tool searches the journal's rows only; the status tool reads the registry for writer notes and never lists it (`src/server/server.ts:338`). Roads not taken: a run listing in the status tool; a run-lookup tool of its own (a ninth tool for what the query reaches once the rows carry the run)
+
+D310 2026-10-31 [I>V]
+  trig:  a run's legs write into more than one store: a leg ran in another repository or on another machine, or a design chosen later gives a worker a store of its own [I>V]
+  resp:  a run is reconstructable whole no matter how many stores its legs wrote into; a leg in a worktree of the same repository writes into the run's store as today; a leg that ran elsewhere writes into that place's store and comes back by the handoff that exists, a run export from there imported into the run's store under a handoff lane, after which the run's facts and a key lookup count its checkpoints as the run's; whether a worker ever gets a store of its own is an implementation decision deferred to the design pass, bound by this: any topology chosen leaves the run reconstructable from one store after the handoff [I>V]
+  sib:   none -- a run split across two files with no practice that reunites them, so that "what happened" has no single answer, is what this prevents, not a behaviour
+  serves: N27 N28 N22
+  touches: D300 D301 D289 D294 D196 D309
+# Phase 3¼, 2026-10-31, the domain question (provenance named: the interviewer's priors), item 2; the visionary: "no matter what design is chosen (single store, separate stores), there's a way to figure out what happened and there's handoff practices for subagents going out and coming back in"; laddered under rule 5: the need is reconstruction, single-or-separate is a means, queued for Phase 5½ under rule 3; ratified "yes, that reads right". Verified under rule 6: a linked worktree resolves to its primary checkout's store (`src/server/bindings.ts:578`, primaryRepoRoot), so worktrees already share one file; the handoff lane rule is the existing import (`src/handoff.ts`). Roads not taken: one store, always, by rule (forecloses a per-worker store the design pass may want); a store per worker with the run's store the index (two writer paths and a reunite step on every leg)
+
+D311 2026-10-31 [I>V]
+  trig:  a leg of a run spawns workers of its own that need a run and keys to checkpoint under [I>V]
+  resp:  a leg may open a run of its own; the inner run's open names the outer run and the leg that opened it, as declared facts the way a worker declares its parent; from the outer run that leg's facts say it opened a run and name it, so walking the outer run reaches the inner run's legs, and from the inner run the open names the way back; the outer run's facts count the opening leg as one leg and nothing more, its checkpoint under the outer key is what the outer harness reads, and the inner run's checkpoints stay the inner run's; depth is not limited, and the same link applies at each level [I>V]
+  sib:   none -- two runs in one store with no row that ties them, so that a subagent's subagents reconstruct as strangers, is what this prevents, not a behaviour
+  serves: N27 N28
+  touches: D294 D302 D301 D289 D309 D310
+# Phase 3¼, 2026-10-31, the domain question (provenance named: the interviewer's priors), item 3; the visionary: "we should be able to reconstruct a run within run since i imagine in the future, subagents may spawn more subagents in some situations"; ratified "yes, that reads right". Roads not taken: the inner workers join the outer run as its legs under keys of their own (the outer run's leg count and facts then mix two harnesses' work, and D301's brake reads the wrong number); nesting refused, one run per store at a time (forecloses the case the visionary named). The stressing case accepted: the link is declared by the opening leg's harness, so a harness that opens an inner run and declares no parent leaves two runs the reader ties by the declared parents of the workers alone
+
+D312 2026-10-31 [I>V] amends D301
+  trig:  a leg is alive and writing nothing, hung on a call or waiting, and a harness or an agent asks why the run is slow [I>V]
+  resp:  the run facts a key lookup returns also say, for each live leg, the moment it started and the moment it last wrote a row, so a leg two hours old with no row for ninety minutes is visible to the harness and to an agent asked; the store judges nothing and shows the moments; the timeout that cuts the leg stays the harness's, and the cut is recorded as D292 says [I>V]
+  sib:   none -- a hung leg that looks like a busy one until the harness's timeout fires, with the run's slowness unexplainable from the store, is what this prevents, not a behaviour
+  serves: N28 N27 N31
+  touches: D301 D297 D292 D289
+# Phase 3¼, 2026-10-31, the domain question (provenance named: the interviewer's priors), item 4, re-put in plain words after the visionary's "i don't know what you are asking"; option 1 of three chosen (the third "discuss first"). Roads not taken: nothing beyond, the harness's timeout is enough and the start moment is in the registry's table for SQL (the agent's lookup then cannot answer "why is the run slow" without the id and the table). The stressing case accepted: a leg that is busy on one long call shows the same moments as a hung one, and only the harness's timeout tells them apart
+
+D313 2026-10-31 [I>V] amends D298
+  trig:  the ticket door writes a worker's first-moment row from a spawner's prompt of any size, a pasted file among it [I>V]
+  resp:  the first-moment row keeps the whole prompt, with a bounded preview that search sees and the full text behind it fetched by export, exactly as captured tool output is kept today; nothing is cut and nothing is refused; the store grows as it already does for tool output and the retention valve carries it [I>V]
+  sib:   none -- a six-million-character run of first moments that no search can read, or a cut tail that the forensic reconstruction of D298 then lacks, is what this prevents, not a behaviour
+  serves: N29 N27 N23
+  touches: D298 D299 D4 D3 D141
+# Phase 3½, 2026-10-31, objection 1 (the first-moment row has no size rule while the checkpoint has {16000} and the insert tool `50000`, `src/server/server.ts:361`, and the door writes through the library, which has none); option 1 of four chosen (the fourth "discuss first"). Verified under rule 6: the preview boundary is a column any row carries (`preview_len`, `src/flat-store.ts:191`), not a capture-only path. Roads not taken: cut at the insert tool's cap and say how much was cut (the reconstruction loses the pasted tail); uncapped plain row as D298 read (an unbounded first moment beside a capped checkpoint, and no preview for search to see). The stressing case shown and accepted: twenty workers each handed a {300000}-character prompt write six million characters the valve must eventually archive
+
+D314 2026-10-31 [I>V] amends D307
+  trig:  a leg through the hooks door starts while the store is locked, busy or unreachable [I>V]
+  resp:  the leg starts, as the platform decides, since the subagent-start hook is context-only and cannot decline a spawn; its start is dropped like any hook event at an unreachable store and marked as a capture gap when the store is next written, so a reader sees the leg began with no brief and no first-moment row; the not-started rule of D307 stands for the ticket door, where the door is the spawner and can decline; the two doors differ because the platform makes them differ, and the record says so [I>V]
+  sib:   none -- a record that promises not-started at both doors while one door cannot deliver it, so that the hooks-door leg starts cold with nothing saying so, is what this prevents, not a behaviour
+  serves: N27 N28 N32
+  touches: D307 D298 D279 D305 D175 D2
+# Phase 3½, 2026-10-31, objection 2 (D307 names a door it cannot cover); option 1 of four chosen (the fourth "discuss first"). Verified under rule 6: Claude Code's hooks reference lists SubagentStart under "Context only ... No blocking or decision control" and its exit-code row as "No" for blocking, while SubagentStop blocks and delivers its reason as the subagent's next instruction (code.claude.com/docs/en/hooks, decision-control and exit-code tables, read 2026-10-31); the capture-gap marker for dropped events is charter (AGENTS.md, "Dropped events leave visible [capture gap] markers"). Roads not taken: a hook on the Agent tool call that denies the spawn while the store is unreachable (documented for tool calls generally, not for the Agent tool, so an inference until tried, and a hook run on every spawn inside the budget); start cold and spend the stop hook's one send-back on delivering the brief (the work done twice, and D279's send-back no longer about the checkpoint). The stressing case accepted: a hooks-door leg at a flaky store does its whole leg without its brief, and the gap marker is the only thing that says so
+
+D315 2026-10-31 [I>V] amends D298
+  trig:  the ticket door composes a worker's first moment and the checkpoint in effect under its key was written by a writer other than the checkpointer the brief names [I>V]
+  resp:  the first moment carries, in words beside the checkpoint, the sentence the lookup gives, that this checkpoint's writer is not the checkpointer the brief names, and the first-moment row carries the same flag, so the reconstruction shows the worker was told; the worker decides whether to start from it and the harness sees the flag in the facts; nothing is withheld [I>V]
+  sib:   none -- a poisoned key handed to the next worker as its starting state with only a writer name to notice, is what this prevents, not a behaviour
+  serves: N32 N29 N28
+  touches: D296 D298 D293 D301 D313
+# Phase 3½, 2026-10-31, objection 3 (D296's flag lives in the lookup's reply while D298's door composes with nobody in the loop to read it); option 1 of four chosen (the fourth "discuss first"). Roads not taken: the door starts no worker and returns the flag to the spawner (a harness gate on every poisoned key, one more spawn round); as ruled, the writer name in the first moment and the checkpointer in the brief are enough for a worker to compare (the worker is trusted to notice what the store already knows). The stressing case accepted: a worker told its starting state is a stranger's still starts from it, since the store judges nothing; the flag makes the choice visible, not safe
+
+D316 2026-10-31 [I>V] amends D291
+  trig:  a ticketed worker exits with no checkpoint under its key and the worker has no door of its own to write one: no treecontext tools registered in its CLI and no library call [I>V]
+  resp:  the ticket declares whether the worker has a way to write, as it declares everything else; a worker declared door-less gets no send-back, its last output lands as its summary row as D288 says, and the leg is retired as ended without a checkpoint, visibly, so the next leg of its role starts as a recovery leg under D279; nothing is run twice for a checkpoint that was never possible; a worker declared to have a door keeps the one send-back of D291 [I>V]
+  sib:   none -- the one send-back spent doing the same work twice for a worker that could never checkpoint, is what this prevents, not a behaviour
+  serves: N27 N28 N31
+  touches: D291 D288 D279 D295 D303 D302
+# Phase 3½, 2026-10-31, objection 4 (D291's re-run assumes a door the worker may not have); option 1 of three chosen (the third "discuss first"). Roads not taken: as ruled, sent back once regardless (one wasted run per door-less leg); the spawner writes the checkpoint from the worker's output (closed by D279: the main agent never writes a leg's checkpoint and the store never synthesizes one). The stressing case accepted: a ticket that declares a door the worker does not in fact have is sent back once for nothing, since the ticket is declared, not discovered, and the store checks nothing
+
+D317 2026-10-31 [I>V] amends D297
+  trig:  a worker's process number has been handed by the operating system to a new, unrelated process after the worker ended, and a reader checks the worker's liveness [I>V]
+  resp:  every worker registration records the process's start moment, as the operating system reports it, beside its id and host; a process found with that id and a different start is a different process, so the worker is gone and is retired as a phantom under D297, with the moment it was noticed and by whom; a process with that id and that start is the worker, alive [I>V]
+  sib:   none -- a phantom kept live by a stranger that inherited its number, until the host reboots, is what this prevents, not a behaviour
+  serves: N28 N27 N32
+  touches: D297 D288 D294 D312
+# Phase 3½, 2026-10-31, objection 5 (D297's liveness check is by number alone, and numbers are reused within hours on a busy host); option 1 of three chosen (the third "discuss first"). Roads not taken: as ruled, the number alone with the reuse recorded as a known limit. The stressing case accepted: a host whose process-start reading is unavailable to the door leaves the registration with the number alone, and the reader says the worker cannot be told from a successor, as D297 says of another host
+
+D318 2026-10-31 [I>V] amends D300
+  trig:  a run is exported in its default skeleton form and the first-moment rows it carries hold the spawners' prompts as written, pasted files among them [I>V]
+  resp:  the skeleton carries every first moment whole, because a review needs what each worker was told, and the export's reply says in one line that first moments carry the spawners' prompts as written and may hold what was pasted into them; no acknowledgement is asked for the skeleton; the `whole` form stays behind the acknowledgement of D300 [I>V]
+  sib:   none -- a token pasted into a worker's prompt travelling in the one export form that says nothing about secrets, is what this prevents, not a behaviour
+  serves: N31 N28 N29
+  touches: D300 D298 D313 D315
+# Phase 3½, 2026-10-31, objection 6 (D300's safe default holds no captured tool output but, after D298 and D313, holds every spawner's prompt whole); option 1 of four chosen (the fourth "discuss first"). Roads not taken: the skeleton carries each first moment's bounded preview with the whole prompt only under `whole` (a reviewer loses the pasted tail that may be the point); as ruled, whole with no warning (the exporter is not always the spawner and does not know what was pasted). The stressing case accepted: the warning names the risk and stops nothing; a token pasted into a prompt still travels in the skeleton
+
+D319 2026-10-31 [I>V] amends D313
+  trig:  the store is over its byte budget and the retention valve looks for whole sessions to archive, and a worker's lane holds its first-moment row [I>V]
+  resp:  the door writes the first-moment row as the worker's capture, so the valve archives it with the rest of that lane when the store is over budget, whole and fsynced before anything moves, as any session; a checkpoint, a summary row and the run's open and close are agent-authored and stay protected; a reconstruction of an archived leg is read from the archive, as any archived session is [I>V]
+  sib:   none -- a first-moment row kept forever because the door's writes count as notes, so that the growth D308 handed to the valve never reaches it, is what this prevents, not a behaviour
+  serves: N23 N27 N29
+  touches: D313 D308 D298 D141 D4 D3 D22
+# Phase 3½, 2026-10-31, objection 7, the interviewer against the record under rule 6: D308 and D313 each said the valve carries the first-moment rows' growth, and a read of the valve refuted it, since it evicts only rows labelled `auto-capture` and protects every agent-authored row (`src/flat-store.ts:217`), while nothing the door writes is capture today; returned to the visionary as a fresh decision point, option 1 of three chosen (the third "discuss first"). Road not taken: everything the door writes protected (the growth per worker then bounded by nothing). The stressing case accepted: an archived leg's first moment is in the archive file, not the live store, so a reconstruction of an old run reads two places
+
+D320 2026-10-31 [I>V] amends D289
+  trig:  the hooks door registers a subagent and is handed its id and its role but not the prompt that names its run and key; or more than one brief for that role is in effect at once [I>V]
+  resp:  the registration takes the run and key from the newest brief in effect for its role, marked as inferred; when more than one brief for that role is in effect the registration says the key is ambiguous and names the candidates; the leg's first write under a key settles its registration, marked as the leg's own; a leg that writes under no key stays keyless under D305 and the run's facts count it as such [I>V]
+  sib:   none -- two live legs of one role both registered under the newer brief's key, so that one leg's checkpoint lands under the other's work, is what this prevents, not a behaviour
+  serves: N29 N32 N28
+  touches: D289 D284 D305 D280 D294 D293 D301
+# Phase 3½, 2026-10-31, objection 8 (the hooks door cannot read the brief at the start); option 1 of four chosen (the fourth "discuss first"). Verified under rule 6: Claude Code's hooks reference gives SubagentStart's payload as the common fields plus `agent_id` and `agent_type`, with no prompt or task field, and the prompt as the Agent tool call's input seen by a hook on that call (code.claude.com/docs/en/hooks, SubagentStart section, read 2026-10-31). Roads not taken: bound only by the leg's own first write (a leg that forgot everything leaves no record of having had a key); the harness's to keep unambiguous, one live leg per role (the store then records the wrong key on both when the practice slips). The stressing case accepted: a leg of an ambiguous registration that writes nothing under a key is retired ambiguous, and the reader sees two candidates and no settlement
+
+D321 2026-10-31 [V] ratifies D299
+  resp:  the checkpoint cap of D299 stays a refusal once and an accepted, marked second write; the store nudges and records, and a leg that pays the mark gets its state in whole, with the first-moment row showing the next leg what it cost [V]
+  ->     structural
+  serves: N27 N29
+  touches: D299 D279 D313
+# objection 9 of the adversarial pass, 2026-10-31 (the second write makes the cap a one-time nudge a harness learns to pay); the visionary reaffirmed D299 as ruled, option 1 of three (the third "discuss first"). Road not taken: a binding cap, every over-cap write refused with the shape asked, so a leg that cannot write under it ends without a checkpoint, is sent back once and then leaves a recovery leg the trail (the chain cannot grow, and a legitimate long state has no way in); lands in the fence's Roads not taken at Phase 4
+
+D322 2026-10-31 [V]
+  resp:  every development and release dependency of the package stays at its latest stable version at each release: the build that ships `beta.3` updates what is behind, and a release with a dependency behind its latest stable is not ready [V]
+  ->     means N26
+  serves: N26 N1
+  touches: D178 D208 D276
+# Phase 5½, 2026-10-31, the first elective, the visionary's words: "just make sure all dev and release dependencies are up to date to latest stable"; a preference, laddered under rule 5 to the installed-life maintenance of N26 and D308 (a dependency left behind is a chore deferred to the user's upgrade) and to install working on current clients (N1); the bound stops at "latest stable": no pinning rule, no update cadence between releases, no tool named. Verified under rule 6 at ruling: `npm outdated` lists {2} of {22} declared packages behind, both one patch level (`@opencode-ai/plugin` 1.19.4 -> 1.19.5, `@types/node` 26.6.5 -> 26.6.6), the Node floor `>=24.16.0` unchanged; lands in DESIGN.md as a ruled constraint
+
+D323 2026-10-31 [I>V]
+  resp:  a worker spawned for a project writes into that project's store, as a worktree session does today; a worker in another repository or on another machine writes into that place's store and comes back by the handoff of D310; no store per worker and nothing new built for topology [I>V]
+  ->     means N31
+  serves: N31 N27 N28
+  touches: D310 D309 D288 D294
+# Phase 5½, 2026-10-31, the first queued elective (D310 deferred the topology to this pass); option 1 of three chosen (the third "discuss first"). The means serves reconstruction with plain SQL, N31: one file holds a run's legs on one machine. Verified under rule 6 at D310: a linked worktree resolves to its primary checkout's store (`src/server/bindings.ts:578`). Road not taken: leave the topology to the build bound by D310 alone (the builder chooses and the gate checks the bound); a store per worker was declined at D310. Lands in DESIGN.md as a ruled constraint
+
+D324 2026-10-31 [V]
+  resp:  the post-draft gate for the `beta.3` corpus is interactive: the audit runs before the visionary's read, drafting defects are fixed before it, and contract-level findings are put as questions during the read, their positions recorded as ratification order and excluded from the attention data [V]
+  ->     boundary
+  serves: N27
+  touches: D202 D282
+# the gate-mode decision, 2026-10-31, put before any audit of the drafted corpus ran (the protocol's rule: an audit already run forces the interactive label); option 1 of three chosen (the third "discuss first"). The audit is staffed as the visionary ruled at the readback: reviewers running the failure ladder, the interviewer as the gate on their findings
+
+D325 2026-10-31 [I>V] amends D299
+  trig:  a leg's first moment through the hooks door, the brief and the checkpoint in effect together, is longer than the client's cap on what a hook may inject [I>V]
+  resp:  a checkpoint is the state of the work as it now stands and names what it supersedes and what it rests on, never the history pasted in, and the brief says so in words; a checkpoint written past {16000} characters is refused once with the reason and the shape asked for, and a second over-cap write under the same key by the same leg is accepted and marked as over the cap; the ticket door composes the first message with the checkpoint in effect whole and never cuts it; the hooks door injects the brief and as much of the checkpoint as fits under the client's cap, ends with the checkpoint row's id and a line saying how many characters were left out, so the leg fetches the whole by export, and the first-moment row records the cut and the checkpoint's size; a first moment that fits is injected whole, with no query made [I>V]
+  spread: a first moment of <chars> characters through the hooks door is <injected>
+  sib:   none -- a packet the client replaces with a path to a file in its session directory, which the store never records and the leg is never asked to read, is what this prevents, not a behaviour
+  serves: N29 N27 N31
+  touches: D299 D284 D321 D298 D313 D314 D320
+# the post-draft pass, 2026-10-31, question 1 of the interactive gate (D324); option 1 of four chosen (the fourth "discuss first"). Verified under rule 6: Claude Code's hooks reference caps a hook's additionalContext, systemMessage, initialUserMessage and plain stdout at `10,000` characters each, writes a longer string to a file in the session directory and passes the path with a preview of up to `2,000` characters, and does not ask the agent to read the file (code.claude.com/docs/en/hooks, JSON output, read 2026-10-31); the client's cap is the client's quantity, backticked. Roads not taken: let the platform spill to its file (a path to a file the store never records); lower the checkpoint cap to fit under the client's cap at both doors (D299's {16000} reopened for a limit one door has). The stressing case accepted: a leg whose checkpoint is marked over the cap pays one fetch at every first moment, and N29's no-query first moment holds only for checkpoints that fit
+
+D326 2026-10-31 [I>V] amends D320
+  trig:  the hooks door registers a subagent and is handed its id and its role but not the prompt that names its run and key; or more than one brief for that role is in effect at once; or a leg registered under an inferred key stops having written nothing under any key [I>V]
+  resp:  the registration takes the run and key from the newest brief in effect for its role, marked as inferred, and the inferred key gives the leg its brief and the checkpoint in effect at its start and a place in the run's facts; when more than one brief for that role is in effect the registration says the key is ambiguous and names the candidates; the leg's first write under a key settles its registration, marked as the leg's own; only a key marked as the leg's own makes the stop ask for a checkpoint, so a leg whose key is inferred or ambiguous and that writes under no key stops as today, unasked, and the run's facts count it as keyless [I>V]
+  sib:   none -- a quick keyless lookup by a role with a brief in effect sent back for a checkpoint nobody wanted is what this prevents, not a behaviour
+  serves: N29 N32 N28 N21
+  touches: D320 D305 D279 D280 D284 D301
+# the post-draft pass, 2026-10-31, question 2 of the interactive gate (D324), the collision the legs reviewer found between D305 and D320; option 1 of three chosen (the third "discuss first"). Road not taken: an inferred key is a key and the send-back applies, with distinct role names for lookups as the dispatch practice (the practice slips and the lookup pays a turn). The stressing case accepted: a long leg that forgets to write anything under its key stops unasked too, visible only as a keyless leg in the run's facts
+
+D327 2026-10-31 [I>V]
+  trig:  the hooks door or a lookup asks which briefs are in effect for a role, and a brief for that role was written earlier on the same run, under the same or another key, or on a run since closed [I>V]
+  resp:  a brief is in effect until a newer brief for the same role under the same key names it as superseded, or the run it names is closed; two briefs for one role under different keys on an open run are both in effect, the ambiguous case of D320; nothing is deleted and the supersession trace is the same as a checkpoint's [I>V]
+  sib:   none -- every brief ever written for a role staying in effect for the store's life, so that the ambiguity rule fires forever, is what this prevents, not a behaviour
+  serves: N29 N27 N28
+  touches: D320 D326 D284 D281 D302 D227
+# the post-draft pass, 2026-10-31, question 3 of the interactive gate (D324), a gap the legs reviewer found under D320; option 1 of four chosen (the fourth "discuss first"). Roads not taken: a brief consumed by the first leg that starts under it (a recovery leg needs the brief written again, and parallel legs of one role can never share one); only a run's close ends its briefs (a role briefed twice on one run stays ambiguous until the close). The stressing case accepted: a brief for a role under a key on a run that is never closed stays in effect until a newer brief supersedes it
+
+D328 2026-10-31 [I>V]
+  trig:  a leg through the hooks door is killed or interrupted so that its stop hook never fires, and its session later starts, resumes or clears [I>V]
+  resp:  a leg still registered live when its session next starts, resumes or clears is retired as cut then, with the moment it was noticed and the session start as what noticed it, as the session-start hook already retires every subagent left live; the next leg of its role under its key starts as a recovery leg; until that moment the leg reads as live, with its start and last write in the run's facts for the harness to judge; the store never guesses an exit time [I>V]
+  sib:   none -- a cut leg that reads as live forever, so that no recovery leg ever starts, or a cut guessed from silence, is what this prevents, not a behaviour
+  serves: N27 N28 N32
+  touches: D279 D292 D297 D312 D320 D190
+# the post-draft pass, 2026-10-31, question 4 of the interactive gate (D324), the gap the legs reviewer called the most consequential; option 1 of three chosen (the third "discuss first"). Verified under rule 6: the session-start hook retires every subagent still registered live at a start, resume or clear and none mid-session (`src/hooks/session-start.ts:121`, F3). Road not taken: also retire a live leg of a role when a newer leg of that role starts on the same key (two deliberate parallel legs of one role on one key become impossible, against D320). The stressing case accepted: a leg cut early in a long session reads as live until the session restarts, and only D312's ages hint at it
+
+D329 2026-10-31 [I>V] amends D284
+  trig:  a leg of a role starts with a brief that names its key and the checkpointer, and one checkpoint, two checkpoints or none is in effect under that key; or two legs under one key write their checkpoints having started from the same one [I>V]
+  resp:  at its first moment the leg sees the brief and what is in effect under its key and has made no query: one checkpoint whole, or both with a line saying two are in effect for the brief's checkpointer to decide, or a line saying none is; the first-moment row references every checkpoint the first moment carried; the store numbers a checkpoint when it lands, so two legs that started from one checkpoint write the next two numbers, never the same number twice, and each names the one it started from as what it supersedes, so both stay in effect and the lookup returns two, never a silent pick; the leg's stop is not blocked and the main agent is handed a pointer to the leg's summary row, whose writer is the leg's role and which carries the run and the key; the same first moment holds at the ticket door [I>V]
+  sib:   none -- two checkpoints numbered 4 under one key, or a first moment that picked one of two in effect without saying so, is what this prevents, not a behaviour
+  serves: N29 N30 N28 N32
+  touches: D284 D280 D298 D320 D296 D315 D325
+# the post-draft pass, 2026-10-31, question 5 of the interactive gate (D324), the numbering race and the two-in-effect first moment both reviewers found; option 1 of three chosen (the third "discuss first"). Road not taken: one live leg per key at a time, a second start on a live key refused and the spawner told (parallel work on one key impossible, and the store refuses something, against D293). The stressing case accepted: two parallel legs on one key leave two checkpoints in effect that only the brief's checkpointer reconciles, and a harness that reads "in effect" alone sees two until then
+
+D330 2026-10-31 [I>V]
+  trig:  a leg through the hooks door finishes and the platform returns the subagent's own final message to the main agent [I>V]
+  resp:  treecontext adds its one line to what the main agent receives when the Agent tool returns, naming the leg's summary row, its writer, run and key; the subagent's own final message stays the platform's and treecontext withholds none of it, so the main agent's context is kept small by the dispatch practice of a short final message, not by the store; the ticket door hands the same line to the spawner at the worker's exit [I>V]
+  sib:   none -- a pointer emitted where only the subagent can read it, so that the main agent never receives it, is what this prevents, not a behaviour
+  serves: N30 N27
+  touches: D284 D285 D288 D329
+# the post-draft pass, 2026-10-31, question 6 of the interactive gate (D324), the pointer channel both reviewers found unbound; option 1 of three chosen (the third "discuss first"). Verified under rule 6: Claude Code delivers a stop hook's context to the subagent and says that to inject context into the parent after a subagent returns a hook on the Agent tool's result is the way (code.claude.com/docs/en/hooks, SubagentStop section, read 2026-10-31). Road not taken: the stop hook's output as the pointer (lands with the subagent, not the parent). The stressing case accepted: N30's "never carry the leg's working state" is met by practice, a short final message, since the platform returns the subagent's final message whole whatever treecontext does
+
+D331 2026-10-31 [I>V]
+  trig:  a leg writes a checkpoint under its key that names nothing as superseded, or names a checkpoint other than the one it started from [I>V]
+  resp:  a checkpoint that names nothing as superseded is stamped by the store as superseding the checkpoint the leg started from, read from the leg's own registration, and marked as stamped by the store rather than written by the leg; a checkpoint that names another, a reviewer naming the original, is taken at its word; the store synthesizes no fact, it carries one the leg's registration already holds [I>V]
+  sib:   none -- a forgetful leg leaving a pile of checkpoints in effect under one key, or a supersession the store invented with no registration behind it, is what this prevents, not a behaviour
+  serves: N28 N29 N32
+  touches: D280 D284 D299 D329 D283
+# the post-draft pass, 2026-10-31, question 7 of the interactive gate (D324), the legs reviewer's "who names the superseded checkpoint"; option 1 of three chosen (the third "discuss first"). Road not taken: the leg names it or nothing is superseded (a forgetful leg leaves two in effect every time, and the next leg sees two). The stressing case accepted: a leg that started from one checkpoint and meant its write as a sibling, not a successor, is stamped as superseding unless it names what it meant
+
+D332 2026-10-31 [I>V] amends D325
+  trig:  a leg's first moment is composed, through the hooks door or the ticket door, whatever the brief says about checkpoints; or a checkpoint is written past the cap; or a hooks-door first moment is longer than the client's cap [I>V]
+  resp:  a checkpoint is the state of the work as it now stands and names what it supersedes and what it rests on, never the history pasted in, and treecontext's own line saying so is in every first moment, in the subagent-start hook's context and in the ticket door's first message, whether or not the brief repeats it; a checkpoint written past {16000} characters is refused once with the reason and the shape asked for, and a second over-cap write under the same key by the same leg is accepted and marked as over the cap; the ticket door composes the first message with the checkpoint in effect whole and never cuts it; the hooks door injects the brief and as much of the checkpoint as fits under the client's cap, ends with the checkpoint row's id and a line saying how many characters were left out, so the leg fetches the whole by export, and the first-moment row records the cut and the checkpoint's size; a first moment that fits is injected whole, with no query made [I>V]
+  spread: a checkpoint of <chars> characters is <verdict> on its first write and <verdict2> on the second
+  sib:   none -- a promise that lives in a brief treecontext never writes, so that a harness's own briefs omit it, is what this prevents, not a behaviour
+  serves: N29 N27 N31
+  touches: D325 D299 D284 D298 D329
+# the post-draft pass, 2026-10-31, question 8 of the interactive gate (D324), the legs reviewer's carrier question; option 1 of three chosen (the third "discuss first"). Road not taken: the brief carries it and the dispatch skill writes briefs that say it (a harness writing its own briefs may omit it). The stressing case accepted: one more line in every first moment, counted against the client's cap at the hooks door
+
+D333 2026-10-31 [V]
+  resp:  the remaining questions of the interactive gate go through an adversarial review before any reaches the visionary: a question the record can settle, from rulings in effect, the charter or a verified platform fact, is settled there with its derivation written down and ratified at the read; only a question the record cannot settle returns to the visionary, in plain language with the context it needs [V]
+  ->     boundary
+  serves: N27
+  touches: D324 D202
+# the gate, 2026-10-31, after eight questions ruled (D325 to D332); the visionary: "these are a little bit too technical for me without more context. can i suggest an adversarial review of these, if they are clean, any of these that cannot be resolved, bring back to me?"; a protocol critique, counted in the run record
+
+D334 2026-10-31 [I]
+  trig:  a leg through the hooks door, sent back once, stops again with no checkpoint; or a leg whose start was dropped at an unreachable store stops with the store writable again [I]
+  resp:  a leg that ended without a checkpoint after its one send-back is followed by a recovery leg of its role, as a cut leg is: the next leg's first moment says its predecessor ended without a checkpoint, names its lane and starts from the checkpoint still in effect; a leg the store never saw start has no registration and no key marked as its own, so its stop is asked nothing, its summary row lands as today, and no registration is invented for it [I]
+  sib:   none -- a twice-failed leg whose successor starts fresh with nothing telling it to read the trail, or a registration invented at a stop, is what this prevents, not a behaviour
+  serves: N27 N28 N29
+  touches: D279 D291 D316 D314 D326 D305
+# the gate's adversarial review under D333, 2026-10-31, question 9, resolved from the record and awaiting ratification: D316 and D291 each read "ended without a checkpoint" as leading to a recovery successor ("so the next leg of its role starts as a recovery leg under D279"), and no ruling makes a successor non-recovery; D326 asks at a stop only for a key marked as the leg's own, which an unregistered leg cannot have, and D314's accepted case says the gap marker is the only thing that says so. Verified: an unregistered stop with an agent type is captured as a subagent summary today and its retire is a no-op (`src/hooks/subagent-stop.ts:65`). Residual, not ruled: whether a write under a key by an unregistered leg should create a registration
+
+D335 2026-10-31 [I]
+  trig:  the ticket door's spawner runs a worker once more for its missing checkpoint, as a fresh process [I]
+  resp:  the re-run is the same leg in the same lane under the same registration, which records the second process's id and start moment beside the first's, never overwriting them, so a liveness check while the second process runs reads the leg as live; the lane holds one first-moment row, then the first run's rows, then a row with the second run's first message naming the missing checkpoint, then the second run's rows, so what the re-run saw is reconstructable from the store [I]
+  sib:   none -- a re-run registered as a new leg and so entitled to a send-back of its own, or a registration that forgets the first process, is what this prevents, not a behaviour
+  serves: N27 N31 N32
+  touches: D291 D295 D317 D298 D300 D283
+# the gate's adversarial review under D333, 2026-10-31, question 13, resolved from the record and awaiting ratification: D295 says the send-back "runs once per leg across both doors, never twice", so a re-run that were a new leg would earn a second send-back; D291 says the re-run "reads its own trail"; D317's liveness check by id and start moment would retire a registration that held only the first process while the re-run is alive; D283 and N31 keep the first process's facts; D298 makes the first-moment row the first row of the lane and D300's skeleton carries one per leg, so the re-run's opening message is a row in the lane, not a second first moment
+
+D336 2026-10-31 [I] amends D289
+  trig:  a run's legs have exited and the harness asks, with no model in the loop, for the newest checkpoint of a key on that run; or anyone with the store file reads the run back [I]
+  resp:  the harness asks by run and key together and receives the one checkpoint in effect under that key, with its writer, a pointer to the summary row of the leg that wrote it or a line saying that leg left none, and each leg of the run reads as retired or live; the run's rows read back in the order of each row's own moment of capture, never the drain's order, every row naming its writer and its moment, every leg naming its run, its key and its parent session, so each captured row reaches the run and key through its leg's lane rather than carrying them itself, and no row of another run reads back among them [I]
+  sib:   none -- a ratified need for the leg's return with no reply that carries it is what this prevents, not a behaviour
+  serves: N28 N31 N32 N30
+  touches: D289 D284 D285 D301 D330
+# the gate's adversarial review under D333, 2026-10-31, question 15, resolved from the record and awaiting ratification: N28 asks for "the newest checkpoint of any leg of its run and that leg's return", and the record fixes a leg's return as the pointer to its summary row (N30's ruled means, D284, D285 "comes back every time, one line"), which D284 makes identifiable by run and key; D289's reply carried the checkpoint, writer and leg states and not the return
+
+D337 2026-10-31 [I]
+  trig:  an agent, not a harness through the library, asks for the checkpoint in effect under a key on a run, or declares a run open or closed [I]
+  resp:  an agent receives through treecontext's tools the same reply the harness receives, the checkpoint in effect with its writer and flag, the run's facts and the pointer to the leg's return, and declares a run's open and close through the tools with the same record the harness's door leaves; no ninth tool is added, and which of the eight carries each is the design pass's to choose [I]
+  sib:   none -- an agent working out "in effect" by judgment from search hits, which N28 exists to keep away from a model, is what this prevents, not a behaviour
+  serves: N28 N31 N27
+  touches: D301 D302 D309 D296 D336 D312
+# the gate's adversarial review under D333, 2026-10-31, question 16, resolved from the record and awaiting ratification: D301 promises the facts to "the harness, or any caller", D302 lets "the harness or main agent" declare a close, and D309 declined a ninth tool; the behaviour is ruled and the carrier is a means below it. Verified: today `treecontext_query` needs a non-empty query and takes a key-value `metadata_filter` (`src/server/server.ts:548`), `treecontext_insert` takes arbitrary metadata minus the stamped keys, and nothing in the server knows a run. The reviewer's recommendation, a run-and-key lookup mode on the query tool and recognised open and close kinds on insert, goes to DESIGN.md as a chosen constraint
+
+D338 2026-10-31 [I] amends D304
+  trig:  install or doctor runs where the Claude Code found is older than {2.1.290}, the first release that reads the idle-compaction key, where its version cannot be read, or where it honors the key but has no /config row for it [I]
+  resp:  install writes the key only when the client is known to honor it; below the floor or unknown it writes nothing and says the setting is not applicable to this client; doctor's row says the setting is not read by this client and names its version; where the client honors the key but has no /config row, install and doctor name the settings line alone, never a row the client lacks; an install run later on an upgraded client writes it then [I]
+  spread: a client at <version> gets <written> and doctor says <row>
+  sib:   none -- a remedy naming a /config row the client does not have is what this prevents, not a behaviour
+  serves: N1 N23
+  touches: D304 D290 D276 D208
+# the gate's adversarial review under D333, 2026-10-31, question 18, resolved from the record and awaiting ratification: D290 orders the two remedies and its own note records the /config row from `2.1.302`, while D304's principle is that nothing is reported that does not hold for this client, so the settings line alone is the only honest remedy between `2.1.290` and `2.1.301`
+
+D339 2026-10-31 [I] amends D319
+  trig:  the retention valve runs and a ticketed worker's session holds its first-moment row [I]
+  resp:  the door writes the first-moment row as the worker's capture, so the valve treats it as it treats captured tool output: when the session cap evicts the worker's session, the row is archived whole with the rest of that session, fsynced before any row moves; when the store is over its byte budget, the row may be demoted to its bounded preview, archived first, with its full length and archive path on the row; a checkpoint, a summary row and the run's open and close are agent-authored and stay protected; an archived or demoted first moment is read from the archive, as any archived capture is [I]
+  sib:   none -- a first-moment row kept forever because the door's writes count as notes, or a ruling that has the byte budget evict whole sessions against the storage charter, is what this prevents, not a behaviour
+  serves: N23 N27 N29
+  touches: D319 D313 D48 D55 D141 D169
+# the gate's adversarial review under D333, 2026-10-31, question 19, resolved from the record and awaiting ratification: D319 as ruled had the byte budget archive whole sessions, while D48 in effect makes the session cap the eviction and the byte budget a demotion backstop (journal-storage's retention paragraph; `src/flat-store.ts` evicts by `maxSessions` and over budget runs demotion only, both skipping protected rows at L211); a ticketed worker has a session of its own, so its lane is a session for the valve. Left to the design pass: which demotion class a first-moment row falls in
+
+D340 2026-10-31 [I>V] amends D316
+  trig:  a ticketed worker exits with no checkpoint under its key, and its ticket declares that it has no door, declares that it has one, or says nothing about it [I>V]
+  resp:  the ticket declares whether the worker has a way to write, as it declares everything else; a worker declared door-less gets no send-back, its last output lands as its summary row, and the leg is retired as ended without a checkpoint, visibly, so the next leg of its role starts as a recovery leg; a worker declared to have a door keeps the one send-back of D291; a ticket that says nothing about the door is read as declaring one, so the send-back is on by default as D279 and D291 have it, and the cost when the guess is wrong is one run, the cost D316 already accepted for a ticket that mis-declares [I>V]
+  sib:   none -- a capable worker that forgot its checkpoint and never gets the reminder because its ticket left a field out is what this prevents, not a behaviour
+  serves: N27 N28 N31
+  touches: D316 D291 D279 D303
+# the gate, 2026-10-31, question 12 of the pass, returned to the visionary in plain language under D333 (the record could not decide a default); option 1 of four chosen (the fourth "discuss first"). Roads not taken: assume door-less (a capable worker never gets the reminder); a silent ticket is broken under D303 (the whole spawn lost whenever a harness leaves the field out)
+
+D341 2026-11-01 [I>V]
+  trig:  a ticket that reads whole names its run and role and either says in words that the worker has no key, or leaves the key blank [I>V]
+  resp:  a ticket that says in words the worker has no key starts a one-off worker: registered in its own lane under its declared parent with its role as writer, summarised and retired at exit, never sent back, counted in the run's facts as a keyless leg, as a keyless subagent is through the hooks door; a ticket whose key is merely blank is damage, read as D303 reads an unreadable ticket, so the worker writes one row saying its instructions were invalid and stops; a one-off is declared, never inferred from an empty field [I>V]
+  sib:   none -- a harness that forgot the key by mistake getting a worker that runs as if nothing were owed, is what this prevents, not a behaviour
+  serves: N32 N27 N28
+  touches: D303 D305 D288 D326 D340
+# the gate, 2026-11-01, question 11 of the pass, returned to the visionary in plain language under D333; option 3 of four chosen (the fourth "discuss first"), against the interviewer's recommendation of reading a blank key as a one-off. Roads not taken: a blank key as a one-off helper (a harness that forgot the field gets a worker that owes nothing); a blank key as damage with no explicit one-off at all (a harness that wants a quick headless lookup cannot use the ticket door). The stressing case accepted: one more field every harness must get right, and a ticket minted by an older treecontext that never knew the field reads as damaged
+
+D342 2026-11-01 [I>V] amends D303
+  trig:  a worker starts with a ticket in its environment that the door, the hook on `claude -p` or the server on a hook-less CLI, cannot read whole: hand-edited, truncated, or minted in another shape by an older treecontext; and the harness later asks how that worker ended [I>V]
+  resp:  the worker is registered in its own lane with every field the door could read, each unreadable field marked absent and the raw ticket text kept on the registration, never as a self; its first moment is the statement that its instructions were invalid and the ask to write one row saying so and stop; the worker does no work; the leg ends visibly as having had no valid instructions: the spawner is told so in the line it receives at the worker's exit, and the lookup lists the worker under the run, or the run and key, its ticket still named, while a worker whose ticket named neither is reachable only through that exit line and the parent it declared; the store matches nothing against the raw text; the harness decides whether to mint again; a spawner that sees the fault before spawning writes that row itself and spawns nothing [I>V]
+  sib:   none -- a worker guessing at instructions it could not read, or a lookup that searches garbled text for the run the harness asked about, is what this prevents, not a behaviour
+  serves: N32 N27 N28
+  touches: D303 D289 D330 D294 D293 D336
+# the gate, 2026-11-01, question 10 of the pass, returned to the visionary in plain language under D333 (D303 promised "the harness's lookup says so" while D289's lookup is by run and key, the fields that were garbled); option 1 of four chosen (the fourth "discuss first"). Roads not taken: search the kept raw ticket text for the asked run and key (fuzzy matching in a store that never judges, D293); a lookup by parent or by process (a new door, wider than D289's). The stressing case accepted: a worker whose ticket lost both run and key is invisible to every lookup and known only from its exit line and its declared parent
+
+D343 2026-11-01 [I>V] amends D310
+  trig:  a run's legs write into more than one store, and a checkpoint imported from another store under a handoff lane names a local checkpoint of the same run and key as the one it supersedes [I>V]
+  resp:  a run is reconstructable whole no matter how many stores its legs wrote into; a leg in a worktree of the same repository writes into the run's store as today; a leg that ran elsewhere writes into that place's store and comes back by the handoff, a run export from there imported into the run's store under a handoff lane, after which the run's facts and a key lookup count its checkpoints as the run's; an imported checkpoint's claim that it supersedes a local checkpoint is believed by the key lookup: the imported one comes back as the one in effect, flagged as arrived by import, as D296 flags a stranger, and the local checkpoint is untouched, no longer the newest, still readable, its lane's pointers unchanged by any other lane's writer; the claim stays recorded as the file's claim, not promoted to identity; whether a worker ever gets a store of its own stays with the design pass under D323 [I>V]
+  sib:   none -- every run with a remote leg ending in a tie the harness must break by itself, on the one path the record promised would work across machines, is what this prevents, not a behaviour
+  serves: N27 N28 N22 N32
+  touches: D310 D323 D165 D169 D280 D296 D300 D336
+# the gate, 2026-11-01, question 14 of the pass, returned to the visionary in plain language under D333 (D165 keeps a handoff file's claims as data while D310 counts imported checkpoints as the run's, and D280 returns two in effect); option 1 of four chosen (the fourth "discuss first"). Verified: import keeps the file's node id (`src/flat-store.ts`, importJson, `fileId ?? randomUUID()`), so a claim naming a local checkpoint resolves to it; the import turns a claimed `supersedes` into `refs` and keeps the claim under `_handoff_claims` (`src/handoff.ts:95`), which this ruling leaves as is and reads at lookup. Roads not taken: never believe it, both stay in effect (every cross-machine run stalls on a tie); believe it only when it names the local checkpoint and carries the next number (stricter, more machinery). The stressing case accepted: a tampered handoff file can name a local checkpoint as superseded, and the flag is what makes that visible, not what prevents it
+
+D344 2026-11-01 [I>V] amends D301
+  trig:  the harness, or any caller, asks for the checkpoint in effect under a key on a run [I>V]
+  resp:  the reply carries the run's facts beside the checkpoint: how many legs have run on the run, how many checkpoints sit under this key, how long ago the run started, and the sizes of the last {3} checkpoints under the key; treecontext judges none of it, the harness reads the numbers and decides whether to spawn again, and a human gate is the harness's to build [I>V]
+  why:   {3} was the interviewer's draft number in the runs file, put to the visionary at the gate and chosen over {5} and a deferred value: enough to see a trend, small enough to read in one line [I>V]
+  spread: a key with <count> checkpoints returns the sizes of the last <shown>
+  sib:   none -- a run that loops until someone looks, with the facts that would have shown it sitting unread in the store, is what this prevents, not a behaviour
+  serves: N28 N27 N31
+  touches: D301 D312 D336 D337
+# the gate, 2026-11-01, question 17 of the pass, the one quantity the interviewer had written without putting it; option 1 of four chosen (the fourth "discuss first"). Roads not taken: {5} (a longer trend, a longer line); marked TBR until the build shows what a harness needs
+
+D345 2026-11-01 [V] ratifies D283
+  resp:  the reopening condition of the faithful-journal assumption stands as the visionary's: a ruling that would have the store synthesize, rewrite or drop a row's writer or moment, let a lookup return what the journal does not hold, or let a leg's rows enter without the writer and moment the rest of the journal carries, reopens it [V]
+  ->     structural
+  serves: N27 N32
+  touches: D283
+# the read's ratification, 2026-11-01, "Ratify all eight", item 8; the Named-assumption fence entry drops its "unratified" note
+
+D346 2026-11-01 [V] ratifies D334
+  resp:  after any end without a checkpoint the next leg of the role starts as a recovery leg, and a leg the store never saw start is asked nothing at its stop, as D334 reads [V]
+  ->     structural
+  serves: N27 N28 N29
+  touches: D334
+# the read's ratification, 2026-11-01, item 1
+
+D347 2026-11-01 [V] ratifies D335
+  resp:  a worker's re-run for its missing checkpoint is the same leg in the same lane under one registration that records both processes, as D335 reads [V]
+  ->     structural
+  serves: N27 N31 N32
+  touches: D335
+# the read's ratification, 2026-11-01, item 2
+
+D348 2026-11-01 [V] ratifies D336
+  resp:  the key lookup's reply carries the pointer to the return of the leg that wrote the checkpoint, or a line saying it left none, as D336 reads for the whole chain of D289 [V]
+  ->     structural
+  serves: N28 N30 N31 N32
+  touches: D336 D289
+# the read's ratification, 2026-11-01, item 3
+
+D349 2026-11-01 [V] ratifies D337
+  resp:  an agent receives through the eight tools the same lookup reply the harness receives and declares a run's open and close through them, the carrier the design pass's, as D337 reads [V]
+  ->     structural
+  serves: N28 N31 N27
+  touches: D337
+# the read's ratification, 2026-11-01, item 4
+
+D350 2026-11-01 [V] ratifies D338
+  resp:  a client that honors the idle-compaction key but has no /config row is pointed at the settings line alone, as D338 reads for the whole chain of D290 [V]
+  ->     structural
+  serves: N1 N23
+  touches: D338 D304 D290
+# the read's ratification, 2026-11-01, item 5
+
+D351 2026-11-01 [V] ratifies D339
+  resp:  a worker's first-moment row is the worker's capture to the retention valve, evicted with its session under the session cap and demoted under the byte budget, while checkpoints, summary rows and the run's open and close stay protected, as D339 reads for the whole chain of D319 [V]
+  ->     structural
+  serves: N23 N27 N29
+  touches: D339 D319 D313
+# the read's ratification, 2026-11-01, item 6
+
+D352 2026-11-01 [V] ratifies D332
+  resp:  the checkpoint chain stands as D332 reads: state not history said in every first moment by treecontext's own line, the cap refused once and accepted marked on the second write, the ticket door composing whole, the hooks door cutting at the client's cap with the row id to fetch the rest [V]
+  ->     structural
+  serves: N29 N27 N31
+  touches: D332 D325 D321 D299
+# the read's ratification, 2026-11-01, of the chain the gate amended under the visionary's own ratification of D299 (D321); items 1 to 8 ratified in one answer, "Ratify all eight", the ledger ladderings of N28 and N31 (item 7) among them, which carry no entry of their own
