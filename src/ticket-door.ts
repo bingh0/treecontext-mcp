@@ -356,6 +356,16 @@ export function notStartedLine(where: string, err: unknown): string {
     + 'no worker was started and nothing was written.'
 }
 
+/** The line the spawner reads when the store was read but refused the
+ *  door's own write (the registration, the run's open, the first-moment
+ *  row, or a refused ticket's row): the cause is the refusal, never a
+ *  wait that did not happen (unit 11's review, 2026-11-01). The
+ *  transaction rolled back, so nothing was written (D298, D302, D307). */
+export function refusedStartLine(where: string, err: unknown): string {
+  return `${DOOR_LINE_PREFIX} the store ${where} refused the worker's start (${errText(err)}); `
+    + 'no worker was started and nothing was written.'
+}
+
 function empty(o: Partial<WorkerRunResult>): WorkerRunResult {
   return {
     started: false, ended: 'not-started', sessionId: null, leg: null, ticket: null, firstMessage: null, firstMomentId: null,
@@ -399,7 +409,7 @@ export async function spawnWorker(o: SpawnWorkerOptions): Promise<WorkerRunResul
             + `no worker was started, and the row ${r.nodeId}, by its spawner, says so, with the raw ticket text.`,
         })
       } catch (err) {
-        return empty({ ticket: reading, line: notStartedLine(where, err) })
+        return empty({ ticket: reading, line: refusedStartLine(where, err) })
       }
     }
     const cwd = o.cwd ?? process.cwd()
@@ -407,7 +417,7 @@ export async function spawnWorker(o: SpawnWorkerOptions): Promise<WorkerRunResul
     try {
       started = store.startWorker({ reading, prompt, where: gitSelfOf(cwd), host: probe.host(), at: clock(), probe })
     } catch (err) {
-      return empty({ ticket: reading, line: notStartedLine(where, err) })
+      return empty({ ticket: reading, line: refusedStartLine(where, err) })
     }
     const ref: LegRef = { sessionId: started.leg.sessionId, agentId: WORKER_AGENT_ID }
     const env: NodeJS.ProcessEnv = { ...(o.env ?? process.env), [TICKET_ENV]: raw, [WORKER_SESSION_ENV]: ref.sessionId }

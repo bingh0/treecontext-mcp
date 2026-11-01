@@ -258,6 +258,9 @@ export interface StandinRecord {
   /** The stand-in `claude -p` child's own: its Claude Code session, the
    *  context its session-start hook handed it, what its stop hook said. */
   ccSession?: string; context?: string | null; systemMessage?: string | null; sentBack?: string | null; stops?: string[]
+  /** The stand-in `claude -p` child's: its session-start hook's stdout,
+   *  whole, as Claude Code reads it. */
+  startStdout?: string
 }
 
 /** What spawns the worker: the wrapper, the library call, or nothing (a

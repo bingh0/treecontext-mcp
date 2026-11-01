@@ -2110,7 +2110,7 @@ export const storageWorkerRowsDefiner = (reg: Registry<StorageWorld>): void => {
   const autoRow = (session: string) => ({ source: 'auto-capture', role: 'tool', session_id: session })
 
   /** A ticketed worker, started and finished through the real wrapper. */
-  async function aTicketedWorker(w: StorageWorld, chars: number, checkpoints: number, how: { child?: boolean; developerPrompt?: boolean } = {}): Promise<WorkerValveEvidence> {
+  async function aTicketedWorker(w: StorageWorld, chars: number, checkpoints: number, how: { child?: boolean; developerPrompt?: boolean; tools?: number } = {}): Promise<WorkerValveEvidence> {
     await openRunWorld(w, { sessionStart: false })
     // The developer's own words, through the real UserPromptSubmit hook and
     // the drain, before the worker starts: older than any row of its lane.
@@ -2131,7 +2131,7 @@ export const storageWorkerRowsDefiner = (reg: Registry<StorageWorld>): void => {
     // A hook-less worker, or a `claude -p` child whose own hooks capture
     // what it does into its lane at the drain (D295).
     const out = how.child
-      ? await runWorker(w, { spawner: 'wrapper', prompt, ticket, plan: { first: {} }, claudeP: { tools: 2, checkpoints: Array.from({ length: checkpoints }, (_, i) => stateOf(i)), final: WORKER_SUMMARY } })
+      ? await runWorker(w, { spawner: 'wrapper', prompt, ticket, plan: { first: {} }, claudeP: { tools: how.tools ?? 2, checkpoints: Array.from({ length: checkpoints }, (_, i) => stateOf(i)), final: WORKER_SUMMARY } })
       : await runWorker(w, { spawner: 'wrapper', prompt, ticket, plan: { first: { checkpoints: Array.from({ length: checkpoints }, (_, i) => stateOf(i)), print: WORKER_SUMMARY } } })
     expect(out.exitCode, `the wrapper said: ${out.line}`).toBe(0)
     if (how.child) await drainStaging(w)
@@ -2163,7 +2163,7 @@ export const storageWorkerRowsDefiner = (reg: Registry<StorageWorld>): void => {
 
   /** A fresh handle on the store file with the valve's knobs (the wrapper's
    *  own handles are long closed). */
-  async function sweepingStore(w: StorageWorld, knobs: { maxSessions?: number; maxStoreBytes?: number }): Promise<FlatStore> {
+  async function sweepingStore(w: StorageWorld, knobs: { maxSessions?: number; maxStoreBytes?: number; maxAutoEntries?: number }): Promise<FlatStore> {
     const store = await FlatStore.open({
       database: openNodeSqlite(new DatabaseSync(w.dbPath!)), ownsDatabase: true, retentionInterval: 1_000_000_000, ...knobs,
     })
@@ -2210,6 +2210,56 @@ export const storageWorkerRowsDefiner = (reg: Registry<StorageWorld>): void => {
       w.workerValve = evidence
       w.store = await sweepingStore(w, { maxStoreBytes: budget })
       expect(storedBytes(w), 'the store is over its byte budget').toBeGreaterThan(budget)
+    })
+
+  // D339, D319, D48: the entry cap evicts whole sessions. A `claude -p`
+  // child under the real wrapper is the worker: everything it does is
+  // fired through the real hooks (UserPromptSubmit, a PostToolUse per Bash
+  // call and per treecontext_insert of its checkpoints, Stop) and landed in
+  // its lane by the drain as capture (auto-capture). Its lane's capture
+  // rows beside the door's first-moment row are exactly 300: its prompt,
+  // its Bash calls, the echoes of its 2 checkpoint calls and its last
+  // message (296 Bash calls make the 300; the Given counts the lane by SQL
+  // rather than trust that sum). Its checkpoints are agent-authored and
+  // its summary row is the door's at its exit. One newer session follows.
+  // The store is under its session cap and byte budget and over its entry
+  // cap by less than the lane, so a valve that peeled entries rather than
+  // sessions would leave part of the lane behind.
+  const ENTRY_CAP = 200
+  /** The lane's capture rows other than the first moment, from the file. */
+  const laneCaptureRows = (w: StorageWorld, lane: string, firstMomentId: string): Array<{ node_id: string }> => rawAll<{ node_id: string }>(w,
+    "SELECT node_id FROM nodes WHERE session_key = ? AND source_label = 'auto-capture' AND node_id <> ?", lane, firstMomentId)
+  reg.define(/^a store under its session cap and byte budget whose entry cap is exceeded by a ticketed worker's lane of (\d+) captured rows beside its first-moment row, (\d+) checkpoints and a summary row, with a newer session after it$/,
+    async (w: StorageWorld, ...caps) => {
+      const n = Number(caps[0])
+      const checkpoints = Number(caps[1])
+      // The child's own captured rows besides its Bash calls: its prompt,
+      // one echo per checkpoint call, its last message.
+      const evidence = await aTicketedWorker(w, 4000, checkpoints, { child: true, tools: n - checkpoints - 2 })
+      const captured = laneCaptureRows(w, evidence.lane, evidence.firstMomentId)
+      expect(captured, 'the lane\'s capture rows beside its first moment').toHaveLength(n)
+      expect(rawAll(w, "SELECT 1 FROM nodes WHERE session_key = ? AND source_label = 'auto-capture' AND json_extract(metadata_json, '$.tool_name') = 'Bash'", evidence.lane),
+        'most of them the child\'s Bash calls, each through the real PostToolUse hook').toHaveLength(n - checkpoints - 2)
+      expect(evidence.captureIds, 'the first-moment row is the lane\'s capture').toContain(evidence.firstMomentId)
+      expect(evidence.captureIds.length).toBe(n + 1)
+      // A newer session after it: one captured row, later than the lane.
+      const now = Date.now() / 1000
+      await w.store!.insert('newer-session: a captured tool call', { metadata: autoRow('newer-session'), createdAt: now + 600 })
+      const captureSessions = new Set(rawAll<{ s: string | null }>(w, "SELECT session_key AS s FROM nodes WHERE source_label = 'auto-capture'").map((r) => r.s))
+      expect([...captureSessions].sort(), 'the lane and one newer captured session').toEqual([evidence.lane, 'newer-session'].sort())
+      const captureCount = rawAll<{ n: number }>(w, "SELECT COUNT(*) AS n FROM nodes WHERE source_label = 'auto-capture'")[0]!.n
+      expect(captureCount, 'the store is over its entry cap').toBeGreaterThan(ENTRY_CAP)
+      // Over by less than the lane: peeling the oldest entries alone would
+      // stop with part of the lane still in the store.
+      expect(captureCount - ENTRY_CAP).toBeLessThan(evidence.captureIds.length)
+      const budget = storedBytes(w) * 10
+      evidence.totalBefore = rawAll<{ n: number }>(w, 'SELECT COUNT(*) AS n FROM nodes')[0]!.n
+      w.workerValve = evidence
+      w.store = await sweepingStore(w, { maxSessions: 10, maxStoreBytes: budget, maxAutoEntries: ENTRY_CAP })
+      // Under its session cap and byte budget.
+      const sessions = new Set(rawAll<{ s: string | null }>(w, 'SELECT session_key AS s FROM nodes').map((r) => r.s))
+      expect(sessions.size, 'under the session cap').toBeLessThanOrEqual(10)
+      expect(storedBytes(w), 'under the byte budget').toBeLessThan(budget)
     })
 
   reg.define(/^the retention sweep runs$/, (w: StorageWorld) => {
@@ -2274,6 +2324,45 @@ export const storageWorkerRowsDefiner = (reg: Registry<StorageWorld>): void => {
     // kept, one byte of budget) leaves every one of them as it was.
     const harsh = await sweepingStore(w, { maxSessions: 1, maxStoreBytes: 1 })
     harsh.retentionSweep()
+    protectedRowsAreUntouched(w)
+  })
+
+  reg.define(/^the worker's capture rows, all (\d+) and the first-moment row, are archived whole and evicted together, none left behind$/, (w: StorageWorld, ...caps) => {
+    const v = w.workerValve!
+    const n = Number(caps[0])
+    // The archive, read off the disk through the tombstone that names it.
+    const tombs = rawAll<{ m: string }>(w, "SELECT metadata_json AS m FROM nodes WHERE json_extract(metadata_json, '$._archived_session') = ?", v.lane)
+    expect(tombs, 'a tombstone records the worker\'s session').toHaveLength(1)
+    const tomb = JSON.parse(tombs[0]!.m) as Record<string, unknown>
+    const onDisk = JSON.parse(readFileSync(tomb['_archive_path'] as string, 'utf8')) as {
+      nodes: Array<{ nodeId: string; content: string; sourceLabel: string | null; metadata: Record<string, unknown> | null }>
+    }
+    // In the archive: the 300 capture rows and the first moment, whole.
+    const archivedCapture = onDisk.nodes.filter((x) => x.sourceLabel === 'auto-capture' && x.nodeId !== v.firstMomentId)
+    expect(archivedCapture, 'the lane\'s capture rows in the archive').toHaveLength(n)
+    for (const x of archivedCapture) expect(x.content, `capture row ${x.nodeId} archived whole`).toBe(v.captureTexts.get(x.nodeId))
+    const first = onDisk.nodes.filter((x) => x.nodeId === v.firstMomentId)
+    expect(first.map((x) => [x.metadata?.['kind'], x.content]), 'the first moment, archived whole').toEqual([['first-moment', v.prompt]])
+    // Gone together: of the archived rows none is left in the store (read
+    // through a separate handle), and the lane holds no capture row.
+    const ids = onDisk.nodes.map((x) => x.nodeId)
+    expect(ids.length, 'the archive holds the lane\'s capture and nothing else').toBe(n + 1)
+    const left = rawAll<{ n: number }>(w, `SELECT COUNT(*) AS n FROM nodes WHERE node_id IN (${ids.map(() => '?').join(',')})`, ...ids)[0]!.n
+    expect(left, 'rows of the lane left behind').toBe(0)
+    expect(rawAll<{ n: number }>(w, "SELECT COUNT(*) AS n FROM nodes WHERE session_key = ? AND source_label = 'auto-capture'", v.lane)[0]!.n,
+      'capture rows of the lane left behind').toBe(0)
+    expect([v.sweep!.evicted, tomb['_archive_entries']]).toEqual([n + 1, n + 1])
+    // The newer session stays: the cap was met by the lane, whole.
+    expect(rawAll(w, "SELECT 1 FROM nodes WHERE session_key = 'newer-session'"), 'the newer session').toHaveLength(1)
+  })
+
+  reg.define(/^the (\d+) checkpoints and the summary row remain in the store$/, (w: StorageWorld, ...caps) => {
+    const v = w.workerValve!
+    expect(v.checkpointIds).toHaveLength(Number(caps[0]))
+    const kept = rawAll<{ node_id: string; kind: string }>(w,
+      "SELECT node_id, json_extract(metadata_json, '$.kind') AS kind FROM nodes WHERE session_key = ? AND node_id IN (?, ?, ?)",
+      v.lane, ...v.checkpointIds, v.summaryId)
+    expect(kept.map((r) => r.kind).sort()).toEqual(['checkpoint', 'checkpoint', 'subagent-summary'])
     protectedRowsAreUntouched(w)
   })
 

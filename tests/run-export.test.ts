@@ -182,6 +182,26 @@ describe('the file and its reply', () => {
     expect(out.built.notes).toHaveLength(2)
   })
 
+  it('a door\'s line that arrived by import is named by the leg the file claims, not by its handoff lane', async () => {
+    const s = await open('a')
+    await makeRun(s)
+    // A hooks-door reviewer's first moment from build-02, imported: its
+    // sender's stamps sit under the file's claims (D360).
+    await s.importJson(JSON.stringify({ nodes: [{
+      nodeId: 'remote-first', content: hooksFirstMomentText('reviewer', 'a1b2', 'r1', 'login-form', 1, 1), createdAt: 3_500,
+      metadata: { kind: 'first-moment', source: 'auto-capture', role: 'user', run: 'r1', key: 'login-form', session_id: 'build-02-session', _writer: 'reviewer', _writer_agent_id: 'a1b2' },
+    }] }), { handoff: { file: 'handoffs/b2.json', importer: 'laptop' } })
+    const m = metaIn('a', 'remote-first')
+    expect(m['_writer_agent_id']).toBeUndefined()
+    expect((m[HANDOFF_CLAIMS_KEY] as Record<string, unknown>)['_writer_agent_id']).toBe('a1b2')
+    const out = exportRun(s, { run: 'r1', project: 'proj', path: null, inlineLimit: 100 })
+    await s.close()
+    expect(out.status).toBe('built')
+    if (out.status !== 'built') return
+    const note = out.built.notes[1]!
+    expect(/^1 of the 3 first moments is the door's own line, not a prompt \((.*)\): /.exec(note)?.[1]).toBe('reviewer (agent a1b2)')
+  })
+
   it('a first moment is a door\'s line only when it reads as one', () => {
     expect(isDoorLine(hooksFirstMomentText('builder', 'a1', 'r1', 'k', 1, 0))).toBe(true)
     expect(isDoorLine('please build the thing. treecontext: the first moment of nothing; not seen by this door.')).toBe(false)

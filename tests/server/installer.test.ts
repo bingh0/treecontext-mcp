@@ -79,6 +79,17 @@ describe('mcpCommand', () => {
 })
 
 describe('buildMcpEntry', () => {
+  it('forwards the worker ticket variables to Codex CLI (toml-codex carries env_vars)', () => {
+    // Codex forwards a parent's environment to an MCP server only for the
+    // names in env_vars; a `codex exec` worker's checkpoint otherwise lands
+    // in no lane (live run, 2026-11-01).
+    const entry = buildMcpEntry(makeAgent({ configFormat: 'toml-codex' }), false)
+    expect(entry['env_vars']).toEqual(['TREECONTEXT_TICKET', 'TREECONTEXT_WORKER_SESSION'])
+    for (const f of ['json-mcpServers', 'json-servers', 'json-opencode'] as const) {
+      expect(buildMcpEntry(makeAgent({ configFormat: f }), false)['env_vars'], f).toBeUndefined()
+    }
+  })
+
   it('builds json-mcpServers entry (Claude/Gemini/Cursor/etc)', () => {
     const agent = makeAgent({ configFormat: 'json-mcpServers' })
     const entry = buildMcpEntry(agent, false)
@@ -386,9 +397,26 @@ describe('upsertTomlMcp', () => {
       '[mcp_servers.treecontext]',
       'command = "old"',
       'args = ["serve", "--capture", "--code-index"]',
+      'env_vars = ["TREECONTEXT_TICKET", "TREECONTEXT_WORKER_SESSION"]',
     ].join('\n'))
     const r = upsertTomlMcp(p, { command: 'new' }, false, false)
     expect(r.status).toBe('skipped')
+  })
+
+  it('updates an entry an earlier build wrote without the worker env_vars (converges, no force)', () => {
+    // Without env_vars Codex forwards no ticket to the server and every
+    // `codex exec` worker's rows land in no lane (live run, 2026-11-01).
+    const p = join(dir, 'config.toml')
+    writeFileSync(p, [
+      '[mcp_servers.treecontext]',
+      'command = "old"',
+      'args = ["serve", "--capture", "--code-index"]',
+    ].join('\n'))
+    const entry = { command: 'new', args: ['serve', '--capture'], env_vars: ['TREECONTEXT_TICKET', 'TREECONTEXT_WORKER_SESSION'] }
+    const r = upsertTomlMcp(p, entry, false, false)
+    expect(r.status).toBe('updated')
+    const servers = (parseToml(readFileSync(p, 'utf8')) as { mcp_servers: Record<string, unknown> }).mcp_servers
+    expect(servers['treecontext']).toEqual(entry)
   })
 
   it('overwrites when force=true', () => {

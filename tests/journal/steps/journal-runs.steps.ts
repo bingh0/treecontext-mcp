@@ -15,9 +15,9 @@ import { SUBAGENT_SUMMARY_KIND } from '../../../src/handoff.js'
 import { STORE_WRITER } from '../../../src/persistence/session-registry.js'
 import {
   type RunWorld, openRunWorld, seedCheckpoints, sessionClient, localMoment, readerOf,
-  rawOne, rawMetaOf, rawContentOf, rawRowOf, rawRegistration, rawCheckpoints, cpLabel, stringSteps, insertEchoed, subagentStopHook,
+  rawOne, rawMetaOf, rawContentOf, rawRowOf, rawRegistration, rawCheckpoints, cpLabel, stringSteps, insertEchoed, subagentStopHook, sessionStartHook,
 } from '../run-world.js'
-import { runWorker, hooksLeg, workerLeg, retiredWithoutReturn, cutByTimeout, exitedWithSummary, harnessRetiresLeg } from '../standins.js'
+import { runWorker, hooksLeg, hooksSubagent, workerLeg, retiredWithoutReturn, cutByTimeout, exitedWithSummary, harnessRetiresLeg } from '../standins.js'
 
 // ── journal-runs ────────────────────────────────────────────────────────
 //
@@ -1139,7 +1139,11 @@ export const runsDefiner = (reg: Registry<RunsWorld>): void => {
     expect(given.stdout).toMatch(/Wrote \d+ entries of the run "r1" \(whole\) to handoffs\/r1-whole\.json\./)
   })
 
-  define(/^the file holds the (\d+) tool calls under each leg's lane$/, (w, calls) => {
+  define(/^the file holds the (\d+) tool calls under each leg's lane$/, (w, calls) => { wholeFileHoldsCalls(w, calls!) })
+
+  /** The whole form's file, read off the disk: the run's captured calls
+   *  under each leg's lane, as the store holds them. */
+  function wholeFileHoldsCalls(w: RunsWorld, calls: string): void {
     const file = readRunFile(join(w.proj!, 'handoffs', 'r1-whole.json'))
     expect(file.head['form']).toBe('whole')
     expect(file.head['run']).toBe('r1')
@@ -1172,7 +1176,7 @@ export const runsDefiner = (reg: Registry<RunsWorld>): void => {
     // Every row of every leg: the reviewer's send-back row, which the
     // skeleton leaves out, is a row of its lane.
     expect(kindsIn(file, 'send-back').map((n) => laneOf(n.nodeId))).toEqual([reviewer.sessionId])
-  })
+  }
 
   // ── D318: first moments whole, and the reply says what they are ──
 
@@ -1278,8 +1282,9 @@ export const runsDefiner = (reg: Registry<RunsWorld>): void => {
     const m = w.facts!['machines'] as { local: string; remote: string }
     expect([remoteName, localName]).toEqual([m.remote, m.local])
     const remote = w.facts!['remote'] as RunsWorld
-    const cp2 = w.cps![cpLabel(run!, 'login-form', 2)]!
-    w.before!['cp2'] = rawRowOf(w, cp2)
+    // The laptop's own number 2, where the run has one, kept as SQLite held it.
+    const cp2 = w.cps![cpLabel(run!, 'login-form', 2)]
+    if (cp2 !== undefined) w.before!['cp2'] = rawRowOf(w, cp2)
     const out = await callTool(await toolClient(remote), 'treecontext_export', { run, path: 'handoffs/r1-from-build-02.json' })
     expect(out.isError, out.text).toBe(false)
     w.facts!['back-file'] = readRunFile(join(remote.proj!, 'handoffs', 'r1-from-build-02.json'))
@@ -1387,5 +1392,430 @@ export const runsDefiner = (reg: Registry<RunsWorld>): void => {
     for (const r of imported) expect(r.writer).toBe('imported from handoffs/r1-from-build-02.json')
     expect(imported.find((r) => r.node_id === id)).toBeTruthy()
     expect(rows.filter((r) => r.writer === 'builder' || r.writer === null || !r.writer.startsWith('imported')).length).toBeGreaterThan(0)
+  })
+
+  // ── D343, D310: a hooks-door leg that ran elsewhere, its return in its handoff lane ──
+  //
+  // build-02 runs the reviewer as Claude Code runs a subagent: the real
+  // SubagentStart hook registers it under the parent session there, it
+  // writes its checkpoints through the real insert tool with their echoes,
+  // and the real SubagentStop hook stages its report, which the drain
+  // writes as its summary row in the parent session's lane under its agent
+  // id. The laptop's builder is a real worker through the ticket door.
+
+  define(/^a run "([^"]+)" in the store on "([^"]+)" with a builder leg, and a reviewer leg of "([^"]+)" that ran as a Claude Code subagent on "([^"]+)" and wrote checkpoint number (\d+) under "([^"]+)" there, naming number (\d+) as superseded$/, async (w, run, local, run2, remoteName, num, key, namedNum) => {
+    expect(run2).toBe(run)
+    expect([Number(num), Number(namedNum)]).toEqual([2, 1])
+    await openRunWorld(w, { sessionStart: false })
+    w.facts!['machines'] = { local, remote: remoteName }
+    await runWorker(w, {
+      spawner: 'library', prompt: 'build the login form',
+      ticket: { run: run!, key: key!, role: 'builder', checkpointer: 'builder', parent: { id: w.sessionId! } },
+      plan: { first: { checkpoint: `state of ${key} on ${local}: the builder wired it`, print: 'builder done on the laptop' } },
+    }, 'builder')
+    const one = w.store!.checkpointsInEffect(run!, key!)
+    expect(one.map((c) => c.number)).toEqual([1])
+    w.cps![cpLabel(run!, key!, 1)] = one[0]!.nodeId
+    // The run is handed to build-02 by its skeleton, through the tools.
+    const remote = await otherMachine(w)
+    w.facts!['remote'] = remote
+    sessionStartHook(remote)
+    const out = await callTool(await toolClient(w), 'treecontext_export', { run, path: 'handoffs/to-build-02.json' })
+    expect(out.isError, out.text).toBe(false)
+    carry(w, remote, 'handoffs/to-build-02.json')
+    const into = await callTool(await toolClient(remote), 'treecontext_import', { path: 'handoffs/to-build-02.json' })
+    expect(into.isError, into.text).toBe(false)
+    // The reviewer, a Claude Code subagent on build-02. Its two checkpoints
+    // are numbered by build-02's own sequence (the laptop's imported number
+    // 1 takes none there): its number 2 names its number 1 as superseded.
+    const ref = await hooksLeg(remote, 'reviewer', 'reviewer', { run: run!, key: key!, checkpointer: 'reviewer' })
+    const agent = { agentId: ref.agentId, agentType: 'reviewer' }
+    for (const i of [1, 2]) {
+      await insertEchoed(remote, agent, `state of ${key} on ${remoteName} after the reviewer: review ${i} done`, { kind: 'checkpoint', run, key })
+    }
+    const report = 'review done on build-02: the login form holds'
+    w.facts!['reviewer-report'] = report
+    subagentStopHook(remote, ref.agentId, 'reviewer', report)
+    await drainStaging(remote)
+    const there = rawCheckpoints(remote, run!, key!).filter((c) => !String(rawRowOf(remote, c.node_id)['session_key']).startsWith('handoff:'))
+    expect(there.map((c) => c.n)).toEqual([1, 2])
+    expect(there[1]!.m['supersedes']).toEqual([there[0]!.node_id])
+    expect(there.map((c) => c.m['_writer_agent_id'])).toEqual([ref.agentId, ref.agentId])
+    // The summary row the hook staged and the drain wrote, in the session's lane under the agent.
+    const sum = rawAll<{ node_id: string }>(remote,
+      "SELECT node_id FROM nodes WHERE session_key = ? AND json_extract(metadata_json, '$.kind') = 'subagent-summary' AND json_extract(metadata_json, '$._writer_agent_id') = ?", remote.sessionId, ref.agentId)
+    expect(sum).toHaveLength(1)
+    expect(rawContentOf(remote, sum[0]!.node_id)).toBe(report)
+    // Under the same parent on build-02, after the reviewer, an explorer
+    // subagent of no run: the real SubagentStart and SubagentStop hooks, its
+    // report the newest summary row of the session's lane.
+    const explorer = hooksSubagent(remote, 'explorer', 'explorer')
+    subagentStopHook(remote, explorer.agentId, 'explorer', 'explored the repository layout for build-02')
+    await drainStaging(remote)
+    const lane = rawAll<{ node_id: string; agent: string; created_at: number }>(remote,
+      "SELECT node_id, json_extract(metadata_json, '$._writer_agent_id') AS agent, created_at FROM nodes WHERE session_key = ? AND json_extract(metadata_json, '$.kind') = 'subagent-summary' ORDER BY created_at, rowid", remote.sessionId)
+    expect(lane.map((r) => r.agent)).toEqual([ref.agentId, explorer.agentId])
+    expect(lane[1]!.created_at).toBeGreaterThan(lane[0]!.created_at)
+    // build-02's developer also hands the laptop the journal's default
+    // handoff (its chapter and subagent summaries), as the handoff is used
+    // between machines; so the laptop's handoff lane of build-02's session
+    // holds both subagents' summaries, the explorer's the newest.
+    const sums = await callTool(await toolClient(remote), 'treecontext_export', { path: 'handoffs/build-02-summaries.json' })
+    expect(sums.isError, sums.text).toBe(false)
+    carry(remote, w, 'handoffs/build-02-summaries.json')
+    const took = await callTool(await toolClient(w), 'treecontext_import', { path: 'handoffs/build-02-summaries.json' })
+    expect(took.isError, took.text).toBe(false)
+    const landed = rawAll<{ node_id: string }>(w,
+      "SELECT node_id FROM nodes WHERE session_key = ? AND json_extract(metadata_json, '$.kind') = 'subagent-summary' ORDER BY created_at, rowid", `handoff:${remote.sessionId}`)
+    expect(landed.map((r) => r.node_id)).toEqual([sum[0]!.node_id, lane[1]!.node_id])
+    w.ids!['explorer-summary'] = lane[1]!.node_id
+    w.ids!['third-cp'] = there[1]!.node_id
+    w.ids!['reviewer-summary'] = sum[0]!.node_id
+    w.ids!['third-session'] = remote.sessionId!
+    w.ids!['reviewer-agent'] = ref.agentId
+  })
+
+  define(/^the harness on "([^"]+)" looking up the key "([^"]+)" on the run "([^"]+)" counts (\d+) legs, one of them imported$/, async (w, machine, key, run, legs) => {
+    expect(machine).toBe((w.facts!['machines'] as { local: string }).local)
+    const l = w.store!.lookupKey({ run: run!, key: key! })
+    w.lookups![run!] = l
+    expect(l.facts.legsRun).toBe(Number(legs))
+    expect(l.legs).toHaveLength(Number(legs))
+    const arrived = l.legs.filter((g) => g.imported !== null)
+    expect(arrived.map((g) => [g.sessionId, g.agentId, g.role, g.state, g.imported!.file]))
+      .toEqual([[w.ids!['third-session'], w.ids!['reviewer-agent'], 'reviewer', 'retired', 'handoffs/r1-from-build-02.json']])
+    expect(l.facts.importedLegs).toBe(1)
+    // The other leg is the laptop's own builder, registered here.
+    expect(l.legs.filter((g) => g.imported === null).map((g) => [g.sessionId, g.role])).toEqual([[w.legs!['builder']!.sessionId, 'builder']])
+    expect(rawAll(w, 'SELECT 1 FROM session_registry WHERE session_id = ? AND agent_id = ?', w.ids!['third-session'], w.ids!['reviewer-agent'])).toHaveLength(0)
+    const agent = parseTool(await (await toolClient(w)).callTool({ name: 'treecontext_query', arguments: { [KEY_LOOKUP_PARAM]: { run, key } } })) as unknown as KeyLookupReply
+    expect([agent.facts.legs_run, agent.facts.imported_legs]).toEqual([Number(legs), 1])
+  })
+
+  define(/^the imported number (\d+) is the one in effect, flagged as arrived by import$/, (w, num) => {
+    const l = harnessLookup(w)
+    expect(l.checkpoints.map((c) => [c.nodeId, c.number, c.claimedNumber, c.imported])).toEqual([[w.ids!['third-cp'], null, Number(num), true]])
+    expect(l.checkpoints[0]!.flag).toMatch(new RegExp(`^Checkpoint number ${num} as numbered there arrived by import from "handoffs/r1-from-build-02\\.json", written there by "reviewer"; `
+      + 'the file claims it supersedes checkpoint number 1 as numbered there'))
+    expect(rawRowOf(w, l.checkpoints[0]!.nodeId)['session_key']).toBe(`handoff:${w.ids!['third-session']}`)
+  })
+
+  define(/^its return pointer names the reviewer's summary row in the handoff lane and says it arrived by import$/, (w) => {
+    const ret = harnessLookup(w).checkpoints[0]!.legReturn
+    expect(ret.summary, ret.line).not.toBeNull()
+    // The reviewer's summary row, as it landed here: the same row, in its handoff lane.
+    const id = ret.summary!.nodeId
+    // Picked by its agent, not as the lane's newest: the explorer's row is newer in the same lane.
+    const lane = rawAll<{ node_id: string }>(w,
+      "SELECT node_id FROM nodes WHERE session_key = ? AND json_extract(metadata_json, '$.kind') = 'subagent-summary' ORDER BY created_at DESC, rowid DESC", `handoff:${w.ids!['third-session']}`)
+    expect(lane.map((r) => r.node_id)).toEqual([w.ids!['explorer-summary'], w.ids!['reviewer-summary']])
+    expect(id).toBe(w.ids!['reviewer-summary'])
+    expect(rawRowOf(w, id)['session_key']).toBe(`handoff:${w.ids!['third-session']}`)
+    expect(rawMetaOf(w, id)['kind']).toBe('subagent-summary')
+    expect(rawContentOf(w, id)).toBe(w.facts!['reviewer-report'])
+    expect([ret.leg?.role, ret.leg?.agentId]).toEqual(['reviewer', w.ids!['reviewer-agent']])
+    expect(ret.line).toContain(`the summary row ${id} in the handoff lane handoff:${w.ids!['third-session']}`)
+    expect(ret.line).toContain('which arrived by import')
+  })
+
+  // ── D360, D310: a run carried back into the store it came from ──
+
+  define(/^a run "([^"]+)" in the store on "([^"]+)" with a builder leg and a reviewer leg, (\d+) checkpoints under the key "([^"]+)" and (\d+) summary rows$/, async (w, run, local, cps, key, sums) => {
+    expect([Number(cps), Number(sums)]).toEqual([3, 2])
+    await openRunWorld(w)
+    w.facts!['machines'] = { local }
+    // The builder, a hooks-door leg: two checkpoints through the tools, its report at its stop.
+    const ref = await hooksLeg(w, 'builder', 'builder', { run: run!, key: key!, checkpointer: 'builder' })
+    for (const i of [1, 2]) {
+      await insertEchoed(w, { agentId: ref.agentId, agentType: 'builder' }, `state of ${key} after the builder: step ${i} done`, { kind: 'checkpoint', run, key })
+    }
+    subagentStopHook(w, ref.agentId, 'builder', 'builder done: login-form wired')
+    await drainStaging(w)
+    // The reviewer, a worker through the ticket door: one checkpoint, its last output its summary row.
+    await runWorker(w, {
+      spawner: 'library', prompt: `review the login form on ${run}`,
+      ticket: { run: run!, key: key!, role: 'reviewer', checkpointer: 'reviewer', parent: { id: w.sessionId! } },
+      plan: { first: { checkpoint: `state of ${key} after the reviewer: review done`, print: 'reviewer done: login-form holds' } },
+    }, 'reviewer')
+    expect(rawCheckpoints(w, run!, key!).map((c) => c.n)).toEqual([1, 2, 3])
+    expect(rawAll(w, "SELECT 1 FROM nodes WHERE json_extract(metadata_json, '$.kind') = 'subagent-summary' AND json_extract(metadata_json, '$.run') = ?", run)).toHaveLength(Number(sums))
+  })
+
+  define(/^the run "([^"]+)" is exported on "([^"]+)" and that same file is imported on "([^"]+)"$/, async (w, run, from, to) => {
+    const m = w.facts!['machines'] as { local: string }
+    expect([from, to]).toEqual([m.local, m.local])
+    // Every row of the run, and every registration, as SQLite held them before.
+    w.facts!['run-rows-before'] = rawAll<Record<string, unknown>>(w,
+      `SELECT * FROM nodes WHERE node_id IN (SELECT node_id FROM (${RUN_ROWS_SQL})) ORDER BY rowid`, run, run)
+    w.facts!['nodes-before'] = rawAll<{ n: number }>(w, 'SELECT COUNT(*) AS n FROM nodes')[0]!.n
+    w.facts!['registry-before'] = rawAll<Record<string, unknown>>(w, 'SELECT * FROM session_registry WHERE run = ? ORDER BY session_id, agent_id', run)
+    const agent = await toolClient(w)
+    const out = await callTool(agent, 'treecontext_export', { run, path: 'handoffs/r1-roundtrip.json' })
+    expect(out.isError, out.text).toBe(false)
+    w.facts!['export-file'] = readRunFile(join(w.proj!, 'handoffs', 'r1-roundtrip.json'))
+    const into = await callTool(agent, 'treecontext_import', { path: 'handoffs/r1-roundtrip.json' })
+    expect(into.isError, into.text).toBe(false)
+    w.facts!['import-reply'] = into.json
+  })
+
+  define(/^the harness on "([^"]+)" looking up the key "([^"]+)" on the run "([^"]+)" still counts (\d+) legs and none imported$/, (w, machine, key, run, legs) => {
+    expect(machine).toBe((w.facts!['machines'] as { local: string }).local)
+    const l = w.store!.lookupKey({ run: run!, key: key! })
+    w.lookups![run!] = l
+    expect(l.facts.legsRun).toBe(Number(legs))
+    expect(l.facts.importedLegs).toBe(0)
+    // Exactly the two legs this store registered, each counted once and neither marked as arrived by import.
+    const want = (['builder', 'reviewer'] as const).map((role) => [w.legs![role]!.sessionId, w.legs![role]!.agentId, role, null])
+    expect(l.legs.map((g) => [g.sessionId, g.agentId, g.role, g.imported]).sort()).toEqual(want.sort())
+  })
+
+  define(/^the store holds each of the run's rows once, unchanged byte for byte, and one registration per leg$/, (w) => {
+    const file = w.facts!['export-file'] as RunFile
+    const before = w.facts!['run-rows-before'] as Array<Record<string, unknown>>
+    // The file carried the run's rows and the two registrations as data.
+    expect(kindsIn(file, 'leg-registration')).toHaveLength(2)
+    expect(kindsIn(file, 'checkpoint')).toHaveLength(3)
+    // Every row the file carried was already here: none landed.
+    const reply = w.facts!['import-reply'] as Record<string, unknown>
+    expect([reply['landed'], reply['already_present']]).toEqual([0, file.nodes.length])
+    // Each row of the run, once and byte for byte as before.
+    const after = rawAll<Record<string, unknown>>(w,
+      `SELECT * FROM nodes WHERE node_id IN (SELECT node_id FROM (${RUN_ROWS_SQL})) ORDER BY rowid`, 'r1', 'r1')
+    expect(before.length).toBeGreaterThan(file.nodes.length - 2)
+    expect(after).toEqual(before)
+    expect(rawAll<{ n: number }>(w, 'SELECT COUNT(*) AS n FROM nodes')[0]!.n).toBe(w.facts!['nodes-before'])
+    for (const n of file.nodes.filter((x) => x.metadata?.['kind'] !== 'leg-registration')) {
+      expect(rawAll(w, 'SELECT 1 FROM nodes WHERE node_id = ?', n.nodeId), n.nodeId).toHaveLength(1)
+    }
+    // No handoff lane and no registration row: one registration per leg, the registry's own.
+    expect(rawAll<{ n: number }>(w, "SELECT COUNT(*) AS n FROM nodes WHERE session_key LIKE 'handoff:%' OR json_extract(metadata_json, '$.kind') = 'leg-registration'")[0]!.n).toBe(0)
+    const regs = rawAll<Record<string, unknown>>(w, 'SELECT * FROM session_registry WHERE run = ? ORDER BY session_id, agent_id', 'r1')
+    expect(regs).toEqual(w.facts!['registry-before'])
+    expect(regs.map((r) => [r['agent_type'], r['session_id'], r['agent_id']]).sort()).toEqual(
+      (['builder', 'reviewer'] as const).map((role) => [role, w.legs![role]!.sessionId, w.legs![role]!.agentId]).sort())
+  })
+
+  // ── D310, D289: a leg's whole export, read back by plain SQL ──
+
+  define(/^a run "([^"]+)" whose reviewer leg ran on "([^"]+)" and made (\d+) captured tool calls there$/, async (w, run, remoteName, calls) => {
+    await openRunWorld(w, { sessionStart: false })
+    w.facts!['machines'] = { local: 'laptop', remote: remoteName }
+    await runWorker(w, {
+      spawner: 'library', prompt: 'build the login form',
+      ticket: { run: run!, key: 'login-form', role: 'builder', checkpointer: 'builder', parent: { id: w.sessionId! } },
+      plan: { first: { checkpoint: 'state of login-form on the laptop: the builder wired it', print: 'builder done on the laptop' } },
+    }, 'builder')
+    const remote = await otherMachine(w)
+    w.facts!['remote'] = remote
+    sessionStartHook(remote)
+    const out = await callTool(await toolClient(w), 'treecontext_export', { run, path: 'handoffs/to-build-02.json' })
+    expect(out.isError, out.text).toBe(false)
+    carry(w, remote, 'handoffs/to-build-02.json')
+    const into = await callTool(await toolClient(remote), 'treecontext_import', { path: 'handoffs/to-build-02.json' })
+    expect(into.isError, into.text).toBe(false)
+    // The reviewer there: a `claude -p` child through build-02's wrapper,
+    // its tool calls captured by the real hooks into its own lane.
+    const done = await runWorker(remote, {
+      spawner: 'wrapper', prompt: `review the login form the builder wired on ${run}`,
+      ticket: { run: run!, key: 'login-form', role: 'reviewer', checkpointer: 'reviewer', parent: { id: remote.sessionId!, cli: 'claude-code' } },
+      plan: { first: {} },
+      claudeP: { tools: Number(calls), toolText: 'reviewer case-{i}: 1 passed (okapi-reviewer-{i})', checkpoint: 'state of login-form after the reviewer: review done', final: 'reviewer done on build-02' },
+    }, 'reviewer')
+    expect(done.exitCode, done.stderr).toBe(0)
+    await drainStaging(remote)
+    const lane = done.sessionId!
+    w.ids!['reviewer-session'] = lane
+    expect(rawAll<{ n: number }>(remote, "SELECT COUNT(*) AS n FROM nodes WHERE session_key = ? AND content LIKE '%okapi-reviewer-%'", lane)[0]!.n).toBe(Number(calls))
+  })
+
+  define(/^the run "([^"]+)" is exported whole on "([^"]+)", the warning acknowledged, and imported on "([^"]+)"$/, async (w, run, remoteName, localName) => {
+    const m = w.facts!['machines'] as { local: string; remote: string }
+    expect([remoteName, localName]).toEqual([m.remote, m.local])
+    const remote = w.facts!['remote'] as RunsWorld
+    // build-02's harness, through the shell: the warning first, nothing written; then acknowledged.
+    const rel = 'handoffs/r1-whole-from-build-02.json'
+    const args = ['export', rel, '--run', run!, '--whole', '--store', remote.dbPath!, '--project-dir', remote.proj!, '--no-debug']
+    const asked = spawnCli(args, { home: remote.home!, cwd: remote.proj! })
+    expect(asked.status, asked.stderr).toBe(1)
+    expect(asked.stderr).toMatch(/can hold secrets, tokens and keys/)
+    expect(existsSync(join(remote.proj!, rel))).toBe(false)
+    const given = spawnCli([...args, '--yes'], { home: remote.home!, cwd: remote.proj! })
+    expect(given.status, given.stderr).toBe(0)
+    w.facts!['back-file'] = readRunFile(join(remote.proj!, rel))
+    carry(remote, w, rel)
+    // The laptop's own rows, every column as SQLite held them before the import.
+    w.facts!['laptop-before'] = rawAll<Record<string, unknown>>(w, 'SELECT * FROM nodes ORDER BY rowid')
+    w.moments!['import'] = Date.now() / 1000
+    const into = await callTool(await toolClient(w), 'treecontext_import', { path: rel })
+    expect(into.isError, into.text).toBe(false)
+  })
+
+  define(/^a reader on "([^"]+)" with the store file and plain SQL reads the run's rows with the reviewer's (\d+) captured rows among them, in the order of their own moments, each naming its writer as imported from the file$/, (w, machine, calls) => {
+    expect(machine).toBe((w.facts!['machines'] as { local: string }).local)
+    const raw = readerOf(w)
+    const rows = raw.prepare(RUN_ROWS_SQL).all('r1', 'r1') as Array<{ node_id: string; created_at: number; writer: string | null; leg_session: string | null; leg_role: string | null }>
+    w.sqlRows = rows as unknown as Array<Record<string, unknown>>
+    // In the order of their own moments, the whole read.
+    expect(rows.map((r) => r.created_at)).toEqual(rows.map((r) => r.created_at).sort((a, b) => a - b))
+    const contentOf = (id: string): string => rawContentOf(w, id)
+    const captured = rows.filter((r) => contentOf(r.node_id).includes('okapi-reviewer-'))
+    expect(captured).toHaveLength(Number(calls))
+    // Each call's own moment, as the file carried it from build-02: not the import's.
+    const file = w.facts!['back-file'] as RunFile
+    const sent = new Map(file.nodes.map((n) => [n.nodeId, n.createdAt]))
+    for (const r of captured) {
+      expect(r.created_at).toBe(sent.get(r.node_id))
+      expect(r.created_at).toBeLessThan(w.moments!['import']!)
+    }
+    // The calls in the order they were made: call 1 first, call 30 last.
+    const order = captured.map((r) => Number(/okapi-reviewer-(\d+)/.exec(contentOf(r.node_id))![1]))
+    expect(order).toEqual([...order].sort((a, b) => a - b))
+    expect(new Set(order).size).toBe(Number(calls))
+    for (const r of captured) expect(r.writer).toBe('imported from handoffs/r1-whole-from-build-02.json')
+  })
+
+  define(/^the captured rows reach the run through the reviewer's imported registration, no row of "([^"]+)" renamed$/, (w, machine) => {
+    expect(machine).toBe((w.facts!['machines'] as { local: string }).local)
+    const lane = `handoff:${w.ids!['reviewer-session']}`
+    const raw = readerOf(w)
+    // The captured rows name no run of their own: their lane does, through the registration row the file carried.
+    const captured = raw.prepare("SELECT node_id, metadata_json AS m FROM nodes WHERE content IS NOT NULL AND session_key = ? AND json_extract(metadata_json, '$.run') IS NULL").all(lane) as Array<{ node_id: string; m: string }>
+    const calls = captured.filter((r) => rawContentOf(w, r.node_id).includes('okapi-reviewer-'))
+    expect(calls).toHaveLength(30)
+    const reg = raw.prepare(`SELECT g.node_id, json_extract(g.metadata_json, '$._handoff_claims._leg_registration.run') AS run,
+        json_extract(g.metadata_json, '$._handoff_claims._leg_registration.role') AS role,
+        json_extract(g.metadata_json, '$._handoff_claims._leg_registration.session_id') AS session
+      FROM nodes g WHERE g.session_key = ? AND json_extract(g.metadata_json, '$.kind') = 'leg-registration'`).all(lane) as Array<Record<string, unknown>>
+    expect(reg.map((r) => [r['run'], r['role'], r['session']])).toEqual([['r1', 'reviewer', w.ids!['reviewer-session']]])
+    // An imported registration, not one of this store's.
+    expect(raw.prepare('SELECT 1 FROM session_registry WHERE session_id = ?').all(w.ids!['reviewer-session']!)).toHaveLength(0)
+    // The reader's run read reaches each call through that registration: the leg it names is the reviewer's.
+    const byId = new Map((w.sqlRows as Array<{ node_id: string; leg_session: string | null; leg_role: string | null }>).map((r) => [r.node_id, r]))
+    for (const c of calls) expect([byId.get(c.node_id)?.leg_session, byId.get(c.node_id)?.leg_role]).toEqual([w.ids!['reviewer-session'], 'reviewer'])
+    // No row of the laptop renamed: every row it held is as it was, column for column.
+    const before = w.facts!['laptop-before'] as Array<Record<string, unknown>>
+    expect(before.length).toBeGreaterThan(0)
+    const after = new Map((raw.prepare('SELECT * FROM nodes').all() as Array<Record<string, unknown>>).map((r) => [r['node_id'], r]))
+    for (const r of before) expect(after.get(r['node_id']), String(r['node_id'])).toEqual(r)
+    // The laptop's builder's rows among the run's, still in its own lane, read by the same plain SQL.
+    const builder = w.legs!['builder']!.sessionId
+    expect((w.sqlRows as Array<{ node_id: string }>).filter((r) => rawRowOf(w, r.node_id)['session_key'] === builder).length).toBeGreaterThanOrEqual(3)
+  })
+
+  // ── D300: the whole form through the tools, behind the acknowledgement ──
+
+  define(/^an agent asks the export tool for the run "([^"]+)" in the whole form without acknowledging the secrets warning$/, async (w, run) => {
+    const reply = await callTool(await toolClient(w), 'treecontext_export', { run, form: 'whole', path: 'handoffs/r1-whole.json' })
+    w.facts!['whole-reply'] = reply
+    w.facts!['whole-file-after-ask'] = existsSync(join(w.proj!, 'handoffs', 'r1-whole.json'))
+  })
+
+  define(/^the reply is the warning that captured tool output can hold secrets, tokens and keys, and no file is written$/, (w) => {
+    const reply = w.facts!['whole-reply'] as ToolReply
+    expect(reply.isError, reply.text).toBe(false)
+    expect(Object.keys(reply.json)[0]).toBe('warning')
+    expect(String(reply.json['warning'])).toMatch(/^Captured tool output can hold secrets, tokens and keys/)
+    expect(reply.json['written']).toBe(false)
+    expect(reply.json['file']).toBeUndefined()
+    expect(w.facts!['whole-file-after-ask'], 'the file was written before the acknowledgement').toBe(false)
+    expect(existsSync(join(w.proj!, 'handoffs', 'r1-whole.json'))).toBe(false)
+  })
+
+  define(/^when the agent asks again acknowledging it, the file is written and holds the (\d+) tool calls under each leg's lane$/, async (w, calls) => {
+    const reply = await callTool(await toolClient(w), 'treecontext_export', { run: 'r1', form: 'whole', path: 'handoffs/r1-whole.json', secrets_acknowledged: true })
+    expect(reply.isError, reply.text).toBe(false)
+    expect([reply.json['file'], reply.json['form']]).toEqual(['handoffs/r1-whole.json', 'whole'])
+    wholeFileHoldsCalls(w, calls!)
+  })
+
+  // ── D318, D368: the reply names the legs whose first moment is the door's line ──
+
+  define(/^a run "([^"]+)" with a builder leg through the ticket door, whose first-moment row holds the spawner's prompt, and a reviewer leg through the hooks door, whose first-moment row is the door's own line$/, async (w, run) => {
+    await openRunWorld(w)
+    const prompt = `build the login form for ${run}, from the pasted spec`
+    w.facts!['builder-prompt'] = prompt
+    await runWorker(w, {
+      spawner: 'library', prompt,
+      ticket: { run: run!, key: 'login-form', role: 'builder', checkpointer: 'builder', parent: { id: w.sessionId! } },
+      plan: { first: { checkpoint: 'state of login-form: built', print: 'builder done' } },
+    }, 'builder')
+    const ref = await hooksLeg(w, 'reviewer', 'reviewer', { run: run!, key: 'login-form', checkpointer: 'reviewer' })
+    const firsts = rawAll<{ node_id: string; session_key: string; m: string }>(w,
+      "SELECT node_id, session_key, metadata_json AS m FROM nodes WHERE json_extract(metadata_json, '$.kind') = 'first-moment' AND json_extract(metadata_json, '$.run') = ? ORDER BY rowid", run)
+    expect(firsts).toHaveLength(2)
+    const builderRow = firsts.find((r) => r.session_key === w.legs!['builder']!.sessionId)!
+    const reviewerRow = firsts.find((r) => (JSON.parse(r.m) as Record<string, unknown>)['_writer_agent_id'] === ref.agentId)!
+    expect(rawContentOf(w, builderRow.node_id)).toBe(prompt)
+    // The hooks door never saw the reviewer's prompt: its row is its own line, saying so.
+    const line = rawContentOf(w, reviewerRow.node_id)
+    expect(line).toMatch(/not seen by this door\.$/)
+    // The spawner's words are in the builder's row and in no other first moment.
+    expect(firsts.filter((r) => rawContentOf(w, r.node_id).includes('pasted spec')).map((r) => r.node_id)).toEqual([builderRow.node_id])
+    w.ids!['reviewer-first'] = reviewerRow.node_id
+  })
+
+  define(/^after the line about first moments the reply carries one line naming the reviewer leg as the one whose prompt rode on the Agent tool and was not seen by the door$/, (w) => {
+    const reply = w.facts!['export-reply'] as ToolReply
+    const keys = Object.keys(reply.json)
+    expect(reply.json['first_moments']).toBe("First moments carry the spawners' prompts as written and may hold what was pasted into them.")
+    // The next line of the reply, right after the first-moments line.
+    expect(keys.indexOf('door_lines')).toBe(keys.indexOf('first_moments') + 1)
+    const line = reply.json['door_lines']
+    expect(typeof line).toBe('string')
+    expect(String(line).split('\n')).toHaveLength(1)
+    expect(String(line)).toContain(`reviewer (agent ${w.legs!['reviewer']!.agentId})`)
+    // It quotes what the reviewer's own row says of the prompt.
+    const said = rawContentOf(w, w.ids!['reviewer-first']!)
+    const sentence = said.slice(said.lastIndexOf('. ') + 2)
+    expect(sentence).toBe('Its prompt rode on the Agent tool and is not seen by this door.')
+    expect(String(line)).toContain(`"${sentence}"`)
+  })
+
+  define(/^that line names the reviewer leg alone$/, (w) => {
+    const line = String((w.facts!['export-reply'] as ToolReply).json['door_lines'])
+    // The legs the line names, among the run's two: the reviewer's agent, and nothing of the builder's.
+    const legs: Array<[string, string[]]> = [
+      ['builder', ['builder', w.legs!['builder']!.sessionId]],
+      ['reviewer', ['reviewer', w.legs!['reviewer']!.agentId]],
+    ]
+    expect(legs.filter(([, marks]) => marks.some((m) => line.includes(m))).map(([name]) => name)).toEqual(['reviewer'])
+    // And the list the line gives is exactly that one leg, one of two first moments.
+    expect(/^1 of the 2 first moments is the door's own line, not a prompt \((.*)\): /.exec(line)?.[1]).toBe(`reviewer (agent ${w.legs!['reviewer']!.agentId})`)
+  })
+
+  // ── D318: the file's own head says what its first moments are ──
+
+  define(/^a run "([^"]+)" whose builder's first-moment row holds the spawner's prompt$/, async (w, run) => {
+    await openRunWorld(w, { sessionStart: false })
+    const prompt = `build the login form for ${run}; the spec pasted below is the point`
+    await runWorker(w, {
+      spawner: 'wrapper', prompt,
+      ticket: { run: run!, key: 'login-form', role: 'builder', checkpointer: 'builder', parent: { id: w.sessionId! } },
+      plan: { first: { checkpoint: 'state of login-form: built from the spec', print: 'builder done' } },
+    }, 'builder')
+    const row = rawOne<{ node_id: string }>(w, "SELECT node_id FROM nodes WHERE json_extract(metadata_json, '$.kind') = 'first-moment' AND json_extract(metadata_json, '$.run') = ?", run)
+    expect(row).toBeTruthy()
+    expect(rawContentOf(w, row!.node_id)).toBe(prompt)
+    w.ids!['first-moment'] = row!.node_id
+  })
+
+  define(/^the file's head says in one line that first moments carry the spawners' prompts as written and may hold what was pasted into them$/, (w) => {
+    const file = w.facts!['export-file'] as RunFile
+    const said = file.head['first_moments']
+    expect(said).toBe("First moments carry the spawners' prompts as written and may hold what was pasted into them.")
+    expect(String(said).split('\n')).toHaveLength(1)
+    // Said of this file's own first moments: the builder's prompt is among its rows.
+    expect(file.nodes.filter((n) => n.metadata?.['kind'] === 'first-moment').map((n) => n.nodeId)).toEqual([w.ids!['first-moment']])
+  })
+
+  define(/^a reader of the file alone, with no reply in hand, reads it there$/, (w) => {
+    // A reader with the file and nothing else: its text off the disk, the line in its head, before any entry.
+    const text = readFileSync(join(w.proj!, 'handoffs', 'r1.json'), 'utf8')
+    const line = "First moments carry the spawners' prompts as written and may hold what was pasted into them."
+    const at = text.indexOf(JSON.stringify(line))
+    expect(at).toBeGreaterThan(-1)
+    expect(at).toBeLessThan(text.indexOf('"nodes"'))
+    const parsed = JSON.parse(text) as Record<string, unknown>
+    expect(Object.keys(parsed).indexOf('first_moments')).toBeLessThan(Object.keys(parsed).indexOf('nodes'))
   })
 }

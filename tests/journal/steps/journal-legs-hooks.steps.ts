@@ -1,5 +1,6 @@
 import { chmodSync, existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { claudeHooksBlock } from '../../../src/server/installer.js'
 import { expect } from 'vitest'
 import { type ChildProcess } from 'node:child_process'
@@ -130,6 +131,14 @@ function hookGaps(w: HooksWorld, hook: string): Array<{ content: string; created
   return rawAll<{ node_id: string; created_at: number; m: string }>(w,
     "SELECT node_id, created_at, metadata_json AS m FROM nodes WHERE json_extract(metadata_json, '$.source') = 'capture-gap' AND json_extract(metadata_json, '$.hook') = ?", hook)
     .map((r) => ({ content: rawContentOf(w, r.node_id), created_at: r.created_at, m: JSON.parse(r.m) as Record<string, unknown> }))
+}
+
+/** The first-moment refusal dropped: the store takes the row again. */
+function dropFirstMomentRefusal(w: HooksWorld): void {
+  if (!w.facts!['refuse-first-moment']) return
+  const db = new DatabaseSync(w.dbPath!)
+  try { db.exec('DROP TRIGGER IF EXISTS refuse_first_moment') } finally { db.close() }
+  w.facts!['refuse-first-moment'] = false
 }
 
 /** The store locked whole by another process, this one let go of it. */
@@ -803,6 +812,12 @@ export function hooksDoorSteps(define: Define): void {
   })
 
   define(/^the context the subagent-start hook emits for the builder carries no brief$/, (w) => {
+    // The hook ran and emitted nothing at all on its stdout, which is what
+    // the platform reads: no context, so no brief, though the Given wrote a
+    // brief row for the role.
+    expect(w.ids!['brief'], 'a brief row was written for the role').toMatch(/^[0-9a-f]{32}$/)
+    expect(w.facts!['start:builder'], 'the SubagentStart hook ran for the builder').toBeTypeOf('string')
+    expect((w.facts!['start:builder'] as string).trim()).toBe('')
     expect(startContext(w.facts!['start:builder'] as string)).toBeNull()
   })
 
@@ -817,6 +832,61 @@ export function hooksDoorSteps(define: Define): void {
     expect([gaps[0]!.m['agent_id'], gaps[0]!.m['agent_type'], gaps[0]!.m['session_id']]).toEqual([agentId, 'builder', w.sessionId])
     expect(gaps[0]!.content).toMatch(/^\[capture gap\] The subagent-start event of the builder subagent/)
     expect(gaps[0]!.content).toContain('started cold')
+  })
+
+  // D314, D298: a store that takes the registration but refuses the
+  // first-moment row. The fault is the store's own, made with raw SQL on
+  // the file (no stand-in): a trigger that raises on any insert of a row
+  // whose metadata kind is first-moment, so the hooks door, which writes a
+  // leg's registration facts and its first moment in one transaction,
+  // cannot land the one without the other.
+  define(/^a store that refuses the first-moment row at the moment a builder subagent starts$/, (w) => {
+    const db = new DatabaseSync(w.dbPath!)
+    try {
+      db.exec(`CREATE TRIGGER refuse_first_moment BEFORE INSERT ON nodes
+        WHEN json_extract(NEW.metadata_json, '$.kind') = 'first-moment'
+        BEGIN SELECT RAISE(ABORT, 'this store refuses the first-moment row'); END`)
+    } finally { db.close() }
+    expect(rawAll(w, "SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND name = 'refuse_first_moment'")).toHaveLength(1)
+    w.facts!['refuse-first-moment'] = true
+    w.defer(() => dropFirstMomentRefusal(w))
+  })
+
+  define(/^the store, once it takes writes again, holds no leg registration and no first-moment row for the builder, and carries a capture-gap marker at the builder's start naming the dropped event$/, async (w) => {
+    dropFirstMomentRefusal(w)
+    expect(rawAll(w, "SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND name = 'refuse_first_moment'")).toHaveLength(0)
+    await drainStaging(w)
+    const agentId = w.legs!['builder']!.agentId
+    const firstMoments = (id: string): unknown[] => rawAll(w,
+      "SELECT 1 FROM nodes WHERE json_extract(metadata_json, '$.kind') = 'first-moment' AND json_extract(metadata_json, '$._writer_agent_id') = ?", id)
+    /** The registration's leg facts: what makes a subagent a leg. */
+    const legFacts = (id: string): Array<Record<string, unknown>> => rawAll<Record<string, unknown>>(w,
+      `SELECT door, identity, run, run_key, key_src, key_candidates, brief_id, checkpointer, checkpointed_by, start_checkpoints
+         FROM session_registry WHERE session_id = ? AND agent_id = ?`, w.sessionId, id)
+    // No first-moment row for the builder.
+    expect(firstMoments(agentId)).toHaveLength(0)
+    // No leg registration: the builder is registered at most as a plain
+    // subagent, every leg fact unset.
+    const regs = legFacts(agentId)
+    expect(regs.length, JSON.stringify(regs)).toBeLessThanOrEqual(1)
+    for (const r of regs) expect(Object.values(r).every((v) => v === null), JSON.stringify(r)).toBe(true)
+    // The marker at the builder's start, naming the dropped event and why.
+    const gaps = hookGaps(w, 'subagent-start')
+    expect(gaps).toHaveLength(1)
+    const g = gaps[0]!
+    expect([g.m['agent_id'], g.m['agent_type'], g.m['session_id']]).toEqual([agentId, 'builder', w.sessionId])
+    expect(g.content).toMatch(/^\[capture gap\] The subagent-start event of the builder subagent/)
+    expect(g.content).toContain('this store refuses the first-moment row')
+    expect(g.content).toContain('started cold')
+    // The control, after the absences are read: with the store taking the
+    // row again, a builder started through the same hook is a leg with its
+    // first-moment row, and the same two reads find them.
+    hooksSubagent(w, 'control', 'builder')
+    const control = w.legs!['control']!.agentId
+    expect(firstMoments(control)).toHaveLength(1)
+    const c = legFacts(control)
+    expect(c.map((r) => [r['door'], r['run'], r['run_key'], r['key_src'], r['brief_id']])).toEqual([['hooks', RUN, 'login-form', 'inferred', w.ids!['brief']]])
+    expect(startContext(w.facts!['start:control'] as string), 'the control builder was handed its brief').not.toBeNull()
   })
 
   define(/^a builder leg whose start was dropped at an unreachable store, with a capture-gap marker at its start$/, async (w) => {
@@ -1170,6 +1240,56 @@ export function hooksDoorSteps(define: Define): void {
 
   define(/^the builder stops without writing again$/, (w) => {
     stopLeg(w, 'builder', 'builder', 'stopping; the checkpoint was refused')
+  })
+
+  // D321: the over-the-cap mark is the store's alone. A leg that puts its
+  // own `_over_cap` in a checkpoint's metadata is not believed: the row
+  // carries no mark, and the lookup reads no mark.
+  define(/^the leg writes a (\d+)-character checkpoint carrying its own over-the-cap mark in its metadata$/, async (w, chars) => {
+    const n = Number(chars)
+    const text = textOf(n)
+    expect(charactersOf(text)).toBe(n)
+    const leg = w.legs!['builder']!
+    await sessionClient(w)
+    // The leg's own forged mark, in the shape the store's mark takes.
+    const forged = { size: 20000, cap: 16000, second: true }
+    const input = { content: text, metadata: { kind: 'checkpoint', run: RUN, key: 'login-form', _over_cap: forged } }
+    const res = await w.client!.callTool({ name: 'treecontext_insert', arguments: input })
+    runHookEcho(w, leg, 'builder', input, res)
+    await drainStaging(w)
+    const r = parseTool(res)
+    expect(r['refused'], JSON.stringify(r)).not.toBe(true)
+    expect(r['node_id'], JSON.stringify(r)).toMatch(/^[0-9a-f]{32}$/)
+    w.ids!['self-marked'] = r['node_id'] as string
+    w.facts!['self-marked-request'] = input.metadata
+    w.facts!['self-marked-size'] = n
+  })
+
+  define(/^the store accepts the checkpoint as number (\d+) with no over-the-cap mark on it$/, (w, num) => {
+    const id = w.ids!['self-marked']!
+    // The row as the file holds it, read through a separate handle.
+    const m = rawMetaOf(w, id)
+    expect([m['kind'], m['run'], m['key'], m['_checkpoint_number']]).toEqual(['checkpoint', RUN, 'login-form', Number(num)])
+    expect(rawCheckpoints(w, RUN, 'login-form').map((c) => [c.node_id, c.n])).toEqual([[id, Number(num)]])
+    expect(charactersOf(rawContentOf(w, id))).toBe(w.facts!['self-marked-size'])
+    // The control: the request did carry the mark under that very key, so
+    // the absence below is the store dropping it, not a mark never sent.
+    const sent = w.facts!['self-marked-request'] as Record<string, unknown>
+    expect(Object.hasOwn(sent, '_over_cap')).toBe(true)
+    expect(sent['_over_cap']).toEqual({ size: 20000, cap: 16000, second: true })
+    expect(Object.hasOwn(m, '_over_cap'), JSON.stringify(m)).toBe(false)
+    // Nor under any other spelling: no key of the row holds the forged mark.
+    expect(Object.entries(m).filter(([, v]) => JSON.stringify(v) === JSON.stringify(sent['_over_cap'])), JSON.stringify(m)).toEqual([])
+  })
+
+  define(/^the harness looking up the key "([^"]+)" receives it with size (\d+) and no mark$/, (w, key, size) => {
+    const l = legLookup(w, key!)
+    expect(l.checkpoints.map((c) => c.nodeId)).toEqual([w.ids!['self-marked']])
+    const cp = l.checkpoints[0]!
+    expect([cp.number, cp.size, cp.overCap]).toEqual([1, Number(size), null])
+    // The agent's door and the harness's are one reply (D337).
+    const reply = keyLookupReply(l).checkpoints[0]!
+    expect([reply.size, reply.over_cap]).toEqual([Number(size), null])
   })
 
   define(/^a builder leg whose second write of a (\d+)-character checkpoint under the key "([^"]+)" was accepted$/, async (w, chars, key) => {

@@ -5,6 +5,7 @@
  * and injects instruction files.
  */
 
+import { TICKET_ENV, WORKER_SESSION_ENV } from '../ticket.js'
 import {
   existsSync, readFileSync, writeFileSync, renameSync, mkdirSync,
   unlinkSync, readdirSync, lstatSync, statSync, rmSync,  realpathSync, readlinkSync,
@@ -552,6 +553,11 @@ export function mcpCommand(useNpx: boolean, lexical = false): { command: string;
   return { command: mcpLauncherPath(), args: serveArgs }
 }
 
+/** The environment a headless worker's ticket travels in (D288): the
+ *  variables the ticket door sets on the worker, which the worker's own
+ *  MCP server must receive for the worker's tool rows to land in its lane. */
+export const WORKER_ENV_VARS: readonly string[] = [TICKET_ENV, WORKER_SESSION_ENV]
+
 export function buildMcpEntry(agent: AgentDefinition, useNpx: boolean, lexical = false): Record<string, unknown> {
   const { command, args } = mcpCommand(useNpx, lexical)
   switch (agent.configFormat) {
@@ -559,6 +565,12 @@ export function buildMcpEntry(agent: AgentDefinition, useNpx: boolean, lexical =
       return { type: 'stdio', command, args }
     case 'json-opencode':
       return { type: 'local', command: [command, ...args] }
+    case 'toml-codex':
+      // Codex CLI forwards a parent's environment to an MCP server only for
+      // the names its `env_vars` lists (developers.openai.com/codex/mcp);
+      // without them a `codex exec` worker's checkpoint lands in no lane
+      // and names no writer (live run, 2026-11-01, D370).
+      return { command, args, env_vars: [...WORKER_ENV_VARS] }
     default:
       return { command, args }
   }
@@ -709,7 +721,11 @@ export function upsertTomlMcp(
     // between desired and existing must trigger an update even without --force.
     const desiredArgs = (entry.args ?? []) as string[]
     const lexicalMismatch = desiredArgs.includes('--lexical') !== existingArgs.includes('--lexical')
-    if (!bareLegacyCmd && !staleInterpreter && hasCapture && !lexicalMismatch) {
+    // Converge the forwarded worker environment too: an entry an earlier
+    // build wrote without `env_vars` strands every Codex worker's rows.
+    const existingEnvVars = Array.isArray(existing.env_vars) ? (existing.env_vars as unknown[]) : []
+    const envVarsMissing = WORKER_ENV_VARS.some((v) => !existingEnvVars.includes(v))
+    if (!bareLegacyCmd && !staleInterpreter && hasCapture && !lexicalMismatch && !envVarsMissing) {
       return { type: 'mcp-config', path, status: 'skipped', detail: 'already configured' }
     }
   }

@@ -62,7 +62,7 @@ Unit 9's own changes to the bindings are marked "(unit 9)" in the rows.
 
 ## Per feature
 
-### journal-legs.feature (46 scenarios, two outlines of 4 rows; 0 open)
+### journal-legs.feature (48 scenarios after unit 11, two outlines of 4 rows; 0 open)
 
 Every leg here is registered by the real SubagentStart hook (`hooksLeg`/`hooksSubagent`), writes through the real insert tool with its PostToolUse echo (`insertEchoed`), and stops through the real SubagentStop hook; earlier checkpoints and briefs are library writes by a declared role.
 
@@ -115,7 +115,7 @@ Every leg here is registered by the real SubagentStart hook (`hooksLeg`/`hooksSu
 | 339 | a leg that ended without a checkpoint after its one send-back is followed by a recovery leg | hook SubagentStart; Given SubagentStop ×2 (the second marked as the platform marks it) | hook-out + file | — | |
 | 345 | a leg whose start was dropped stops unasked and its summary still lands | hook SubagentStop; Given SubagentStart against a locked store | hook-out + file | — | |
 
-### journal-workers.feature (39 scenarios; 1 outline row open)
+### journal-workers.feature (42 scenarios after unit 11; 1 outline row open, the Antigravity parent)
 
 A worker here is a stand-in process launched through the real door (the feature's own words): the library's `spawnWorker` or the `treecontext run` wrapper launching `standin-worker` (the hook-less CLI's model) or `standin-claude-p` (Claude Code's headless client firing the real hooks). The CLI a row names (`codex exec`, `agy -p`, `claude -p`) selects the stand-in only where a step names a hook or a `claude -p` child.
 
@@ -127,7 +127,7 @@ A worker here is a stand-in process launched through the real door (the feature'
 | 50 | the ticket door composes a worker's first message from the brief, the checkpoint in effect and the spawner's prompt | ticket door (`spawnWorker`, standin-worker) | stand-in-log + file + return | — | "no query" is a counter on the in-process store's `query` |
 | 57 | a first moment with no checkpoint in effect is the brief and the prompt | ticket door (`spawnWorker`) | stand-in-log + file | — | |
 | 64 | the first-moment row is the first row of the worker's lane through the `<door>` (2 rows) | ticket door (`treecontext run`) with standin-worker, and with standin-claude-p firing the real hooks | file + stand-in-log | half-lit | the `claude -p` row names the child's session-start hook as the door, but that hook writes no first-moment row: the wrapper writes it before the child starts, and the hook links the lane. The named door's promise is unbound (and the scenario's wording is an owner item) |
-| 76 | both doors leave the same first-moment row, readable with plain SQL alone | ticket door ×2 (`treecontext run`: standin-worker, then standin-claude-p) | file (read-only handle) + stand-in-log + return (recomposition) | half-lit | as 64: both rows are the wrapper's; the `claude -p` child's session-start hook, the door the scenario's other half names, writes none (an owner item on the wording) |
+| 76 | a hook-less worker and a `claude -p` child leave the same first-moment row, readable with plain SQL alone | ticket door ×2 (`treecontext run`: standin-worker, then standin-claude-p) | file (read-only handle) + stand-in-log + return (recomposition) | half-lit | as 64: both rows are the wrapper's; the `claude -p` child's session-start hook, the door the scenario's other half names, writes none (an owner item on the wording) |
 | 83 | an empty spawner prompt still leaves the first-moment row | ticket door (`treecontext run`) | file + stand-in-log | — | |
 | 89 | a first-moment row keeps a pasted prompt whole behind a bounded preview | ticket door (`treecontext run`, 300,000 characters) | file + stand-in-log + tool-reply | — | |
 | 97 | a stranger's checkpoint reaches the worker's first moment flagged in words | ticket door (`spawnWorker`) | stand-in-log + file + return | — | |
@@ -161,7 +161,7 @@ A worker here is a stand-in process launched through the real door (the feature'
 | 328 | a ticket whose key is merely blank is damage | ticket door (`treecontext run`) | stand-in-log + file | — | |
 | 335 | a worker whose ticket still named its run is listed under that run; one that named neither is reachable only by its exit line and parent | library `lookupKey`; Given ticket door (`spawnWorker` ×2) | return + file + spawner line | — | |
 
-### journal-runs.feature (24 scenarios; 0 open)
+### journal-runs.feature (30 scenarios after unit 11; 0 open)
 
 | line | scenario | door (act; Given if different) | Then's evidence | rung | note |
 | ---- | -------- | ------------------------------ | --------------- | ---- | ---- |
@@ -190,7 +190,7 @@ A worker here is a stand-in process launched through the real door (the feature'
 | 181 | an agent closes a run through the tools and the record is the same as the harness's | tool+echo `treecontext_insert` run-close; Given library (legs retired by `retiredWithoutReturn`) | tool-reply + file | — | "the same as the harness's" is pinned field by field on the close row, not by a second close |
 | 187 | a key with `<count>` checkpoints returns the sizes of the last `<shown>` (4 rows) | library `lookupKey`; Given library | return + file | — | all four rows |
 
-### journal-install.feature (7 beta.3 scenarios; 1 open)
+### journal-install.feature (9 beta.3 scenarios after the final gate's split and unit 11; 0 open)
 
 | line | scenario | door | Then's evidence | rung | note |
 | ---- | -------- | ---- | --------------- | ---- | ---- |
@@ -199,7 +199,8 @@ A worker here is a stand-in process launched through the real door (the feature'
 | 355 | doctor warns while idle compaction is on, naming the /config row first | cli `doctor` | cli-out | — | |
 | 361 | the README's install section says idle compaction is turned off and why | none (README read) | fs (README.md) | — | |
 | 366 | a Claude Code whose version `<version>` gets the idle-compaction key `<written>` and doctor says `<row>` (4 rows) | cli `install --yes`, then `doctor` | fs + cli-out | — | all four rows |
-| 381 | a client that honors the key but has no /config row is pointed at the settings line alone | — | — | absent (open) | held open in `wip:`: its install clause asks for a line D361 forbids; its halves are library tests in tests/server/idle-compaction.test.ts (`installLine` for 2.1.295 with the key absent, `idleCompactionRow` for 2.1.295 with the key on), outside the charter |
+| 381 | a client that honors the key but has no /config row is told the settings line alone (the owner's split, D367) | cli `install --yes` with a fake `claude` at 2.1.295 | fs (settings.json) + cli-out | — | was open: its install clause asked for a line D361 forbids; split at the final gate 2026-11-01 |
+| 388 | doctor warns with the settings line alone where the client has no /config row (the owner's split, D367) | cli `doctor` | cli-out | — | the other half |
 | 388 | install writes the key on a later run once the client is upgraded | cli `install --yes` twice, the fake client upgraded between | fs + cli-out | — | |
 
 No beta.3 install scenario touches an unreadable settings file. The older corrupt-config scenario (line 68, D51) bound `~/.claude.json` only through unit 8; (unit 9) its Given now makes both of the reference agent's config files unparseable, `~/.claude.json` and `~/.claude/settings.json`, and both Thens are held for each. A cleaner binding would corrupt each file in its own run, keeping the Given singular; not required, carried forward.
@@ -224,7 +225,7 @@ No beta.3 install scenario touches an unreadable settings file. The older corrup
 | ---- | -------- | ---- | --------------- | ---- | ---- |
 | 243 | a `claude -p` child with a ticket opens on its brief and checkpoint, never on a self's packet | hook SessionStart (`clear`) with a ticket in its environment; Given hooks, tool and library | hook-out + file | — | the hook is fired directly as the platform fires it; no stand-in process |
 
-### journal-storage.feature (2 beta.3 scenarios)
+### journal-storage.feature (3 beta.3 scenarios after unit 11)
 
 | line | scenario | door | Then's evidence | rung | note |
 | ---- | -------- | ---- | --------------- | ---- | ---- |
@@ -240,7 +241,8 @@ with its disposition at this tree:
 - **lit now**: a binding was strengthened inside its scenario's words and
   the mutation, run in a copy of the tree, turns that scenario red. It was
   green against the same scenario at 572cf9c.
-- **needs a scenario**: no scenario's words reach the mutation. The
+- **needs a scenario**: no scenario's words reach the mutation (every such row was
+  bound in unit 11 at the final gate and now reads `lit (unit 11, the final gate)`). The
   one-line scenario the owner would need is given.
 - **lit at the charter**: a scenario as it already stands turns red on
   the mutation at this tree (the review's note predates that binding).
@@ -254,29 +256,29 @@ one exists.
 | unit | mutation (as the review named it) | disposition | evidence or the scenario needed |
 | ---- | --------------------------------- | ----------- | -------------------------------- |
 | 2 | the whole form bound through hooks-door legs only | **lit now** | journal-runs "the whole form adds every row of every leg behind the secrets acknowledgement": its Given's reviewer is a `claude -p` worker through the wrapper. Mutant: the run's rows (`RUN_ROWS_SQL`) reach no worker lane (`AND COALESCE(r.kind, '') != 'worker'` on the registry join). Red at the Then "the file holds the 120 tool calls under each leg's lane" (100 of 120); green at 572cf9c |
-| 2 | the cross-store leg through a ticket-door worker only | **needs a scenario** | The scenario has one leg crossing back, so either door bound there leaves the other unbound; a door swap moves the half-lighting, it does not remove it. Scenario: *"a hooks-door leg that ran on another machine comes back into the run by the handoff, its return found in the handoff lane by its agent"* (or an outline over the third leg's door). No mutant distinguishing the two doors was built: with one subagent in the sender's lane, the agent-id paths of the import rule pick the same rows either way |
-| 3 | `startWorker` atomicity (M16: a first-moment row the store refuses leaves a registration or an open row) | **needs a scenario** | *"a worker whose first-moment row the store cannot write is not registered and opens no run"*. Held outside the charter: tests/ticket-door.test.ts "a first-moment row the store refuses leaves no registration and no open row (M16)" |
-| 3 | the door's phantom pass (M8: the ticket door retires a gone predecessor before composing) | **needs a scenario** | the phantom outline (journal-workers line 210) names three readers; the ticket door would be a fourth Examples row, *"ticket door"*, with the recovery line in the next worker's first message. Held outside: tests/ticket-door.test.ts (M8) |
-| 3 | any writer's checkpoint counting (M14: only the worker's own checkpoint counts against the send-back) | **needs a scenario** | *"a worker whose key another writer checkpointed while it ran is not sent back"*. Held outside: tests/ticket-door.test.ts (M14, D291) |
-| 4 | P09: the hooks door's first-moment row atomic with the registration | **needs a scenario** | *"a subagent whose first-moment row the store cannot write is not registered as a leg and its start is marked as a gap"*. No unit test names it |
-| 4 | P16: an identity line that repeats the first moment | **needs a scenario** | the review's probe is not described in the tree beyond its name; the session-start identity line of a `claude -p` child is bound only by "contains `worker of the lane`" (journal-workers line 76) |
+| 2 | the cross-store leg through a ticket-door worker only | **lit (unit 11, the final gate)** | The scenario has one leg crossing back, so either door bound there leaves the other unbound; a door swap moves the half-lighting, it does not remove it. Scenario: *"a hooks-door leg that ran on another machine comes back into the run by the handoff, its return found in the handoff lane by its agent"* (or an outline over the third leg's door). No mutant distinguishing the two doors was built: with one subagent in the sender's lane, the agent-id paths of the import rule pick the same rows either way |
+| 3 | `startWorker` atomicity (M16: a first-moment row the store refuses leaves a registration or an open row) | **lit (unit 11, the final gate)** | *"a worker whose first-moment row the store cannot write is not registered and opens no run"*. Held outside the charter: tests/ticket-door.test.ts "a first-moment row the store refuses leaves no registration and no open row (M16)" |
+| 3 | the door's phantom pass (M8: the ticket door retires a gone predecessor before composing) | **lit (unit 11, the final gate)** | the phantom outline (journal-workers line 210) names three readers; the ticket door would be a fourth Examples row, *"ticket door"*, with the recovery line in the next worker's first message. Held outside: tests/ticket-door.test.ts (M8) |
+| 3 | any writer's checkpoint counting (M14: only the worker's own checkpoint counts against the send-back) | **lit (unit 11, the final gate)** | *"a worker whose key another writer checkpointed while it ran is not sent back"*. Held outside: tests/ticket-door.test.ts (M14, D291) |
+| 4 | P09: the hooks door's first-moment row atomic with the registration | **lit (unit 11, the final gate)** | *"a subagent whose first-moment row the store cannot write is not registered as a leg and its start is marked as a gap"*. No unit test names it |
+| 4 | P16: an identity line that repeats the first moment | **lit (unit 11, the final gate)** | the review's probe is not described in the tree beyond its name; the session-start identity line of a `claude -p` child is bound only by "contains `worker of the lane`" (journal-workers line 76) |
 | 4 | the D305 scenario's silence on a pointer for a plain subagent | **lit (unit 4); verified** | journal-legs line 182 fires the Agent tool's return through the real PostToolUse hook and asserts its stdout empty |
-| 5 | M6: a caller's own `_over_cap` kept on its checkpoint | **needs a scenario** | the cap outline's writes carry no caller metadata; a forged mark is not in its words. *"a leg that marks its own checkpoint over the cap is not believed: the mark is the store's"*. Held outside: tests/checkpoint-cap.test.ts (the forged `_over_cap` through the library and the tool). Mutant (drop `_over_cap` from `WRITER_STAMP_KEYS`) confirmed green on journal-legs at this tree |
+| 5 | M6: a caller's own `_over_cap` kept on its checkpoint | **lit (unit 11, the final gate)** | the cap outline's writes carry no caller metadata; a forged mark is not in its words. *"a leg that marks its own checkpoint over the cap is not believed: the mark is the store's"*. Held outside: tests/checkpoint-cap.test.ts (the forged `_over_cap` through the library and the tool). Mutant (drop `_over_cap` from `WRITER_STAMP_KEYS`) confirmed green on journal-legs at this tree |
 | 5 | M11: a refusal counted by the retention sweep's insert counter | **cannot be lit within the words** | the counter is the valve's internal schedule; no owner-language scenario names it. Held outside: tests/checkpoint-cap.test.ts "a refusal is not an insert (M11)" |
 | 6 | M1: the skeleton carrying a send-back row | **lit now** | journal-runs "a run's default export is its skeleton, with no captured tool output": its Given's reviewer is sent back once by its Stop hook, so the store holds a send-back row of the run. Mutant: `'send-back'` added to `SKELETON_KINDS`. Red at the Then that enumerates what the file holds, whose exact kind set is the rows D360 lists; green at 572cf9c |
-| 6 | M3: the tool's whole form ungated | **needs a scenario** | the whole-form scenario's exporter is "a harness" (a program: the CLI door); the tool is the agent's door. *"an agent exporting a run whole through the tools gets the warning first and the file only after acknowledging"*. Held outside: tests/run-export.test.ts (the tool's acknowledged call). Mutant (`acknowledged: true` at the tool) confirmed green on journal-runs at this tree |
-| 6 | M6: the own-registration skip on import | **needs a scenario** | the cross-store Then counts the laptop's legs through the lookup, which already leaves out a leg registered here. *"a run exported, carried back and imported again lands none of this store's own legs twice"* |
-| 6 | M9: the door-line note naming the wrong legs | **needs a scenario** | no ruling names a door-line note (D318 rules one reply line, `first_moments`; D300 none), so no binding asserts it: unit 6's `toContain` pair and unit 9's exact assertion are both withdrawn. Mutant (the note names every first moment's leg) confirmed green on journal-runs at this tree. *"a run whose legs came through both doors: the export's reply names the hooks-door legs whose first moment is the door's line, and no other"* |
-| 6 | M15: the reader's SQL dropping imported captured rows | **needs a scenario** | imported captured rows arrive only by a whole-form handoff; the cross-store scenario's export names no form (the skeleton). *"a leg's whole export carried back and imported reads back with the run by plain SQL, its captured rows through its imported registration"*. Mutant (drop the handoff-lane branch of `RUN_ROWS_SQL`) confirmed green on journal-runs at this tree |
-| 6 | M18: the file's head dropping `first_moments` | **needs a scenario** | D318's words are about the reply; the head is the file's. *"the run's export file says in its head what its first moments are"*. Mutant confirmed green on journal-runs at this tree |
-| 7 | M15: fragment eviction | **needs a scenario** | the two worker-row scenarios use the session cap and the byte budget; the entry-count safety net, which also evicts whole sessions, is not in their words. *"a worker's lane past the entry cap is evicted whole, never in part"* |
+| 6 | M3: the tool's whole form ungated | **lit (unit 11, the final gate)** | the whole-form scenario's exporter is "a harness" (a program: the CLI door); the tool is the agent's door. *"an agent exporting a run whole through the tools gets the warning first and the file only after acknowledging"*. Held outside: tests/run-export.test.ts (the tool's acknowledged call). Mutant (`acknowledged: true` at the tool) confirmed green on journal-runs at this tree |
+| 6 | M6: the own-registration skip on import | **lit (unit 11, the final gate)** | the cross-store Then counts the laptop's legs through the lookup, which already leaves out a leg registered here. *"a run exported, carried back and imported again lands none of this store's own legs twice"* |
+| 6 | M9: the door-line note naming the wrong legs | **lit (unit 11, the final gate)** | no ruling names a door-line note (D318 rules one reply line, `first_moments`; D300 none), so no binding asserts it: unit 6's `toContain` pair and unit 9's exact assertion are both withdrawn. Mutant (the note names every first moment's leg) confirmed green on journal-runs at this tree. *"a run whose legs came through both doors: the export's reply names the hooks-door legs whose first moment is the door's line, and no other"* |
+| 6 | M15: the reader's SQL dropping imported captured rows | **lit (unit 11, the final gate)** | imported captured rows arrive only by a whole-form handoff; the cross-store scenario's export names no form (the skeleton). *"a leg's whole export carried back and imported reads back with the run by plain SQL, its captured rows through its imported registration"*. Mutant (drop the handoff-lane branch of `RUN_ROWS_SQL`) confirmed green on journal-runs at this tree |
+| 6 | M18: the file's head dropping `first_moments` | **lit (unit 11, the final gate)** | D318's words are about the reply; the head is the file's. *"the run's export file says in its head what its first moments are"*. Mutant confirmed green on journal-runs at this tree |
+| 7 | M15: fragment eviction | **lit (unit 11, the final gate)** | the two worker-row scenarios use the session cap and the byte budget; the entry-count safety net, which also evicts whole sessions, is not in their words. *"a worker's lane past the entry cap is evicted whole, never in part"* |
 | 7 | the D55 ordering binding blind to write-after-delete (pre-existing; journal-storage line 79) | **lit now** | "the ordering is archive written, then tombstone, then deletion": the second sweep is now watched at the archive's fsync, the archive file read and the store read through a separate handle at that moment. Mutant: inside the eviction transaction the rows are deleted, then the archive is written (from the same connection, so it holds nothing), then the tombstone. Red (`archived: []`); green at 572cf9c, whose fault injection rolls the whole transaction back |
-| 8 | M2: the /config row's start moved from 2.1.302 to 2.1.301 | **needs a scenario** | the version outline (journal-install line 366) has no 2.1.301 row; a row *"2.1.301: written off, the settings line alone, no /config row"* would light it. Mutant confirmed green on journal-install at this tree. Held outside: tests/server/idle-compaction.test.ts (2.1.301 settings-line, 2.1.302 config-row) |
-| 8 | M11: the turned-off line naming /config at 2.1.295 | **needs line 381's split** | the scenario that would reach 2.1.295 with the key absent is the open one (line 381), whose install clause D361 rules out; its split (the key absent at 2.1.295 is written off naming the settings line and no /config row) lights it. Mutant confirmed green on journal-install at this tree. Held outside: tests/server/idle-compaction.test.ts ("the /config row appears from 2.1.302 and never before") |
+| 8 | M2: the /config row's start moved from 2.1.302 to 2.1.301 | **lit (unit 11, the final gate)** | the version outline (journal-install line 366) has no 2.1.301 row; a row *"2.1.301: written off, the settings line alone, no /config row"* would light it. Mutant confirmed green on journal-install at this tree. Held outside: tests/server/idle-compaction.test.ts (2.1.301 settings-line, 2.1.302 config-row) |
+| 8 | M11: the turned-off line naming /config at 2.1.295 | **lit now** (the owner's split at the final gate, D367) | the scenario that would reach 2.1.295 with the key absent is the open one (line 381), whose install clause D361 rules out; its split (the key absent at 2.1.295 is written off naming the settings line and no /config row) lights it. Mutant confirmed green on journal-install at this tree. Held outside: tests/server/idle-compaction.test.ts ("the /config row appears from 2.1.302 and never before") |
 | 8 | M13: doctor saying "off" for an absent key on a reading client | **lit at the charter** | journal-install line 216 (D276, "doctor says in one line that nothing is set up yet", re-pinned by unit 8): its Then "every warning row below it names that same command as its fix" requires the Idle compaction warning among the rows at 2.1.302 with no key. Mutant (an absent key reads as off) red there at this tree. Also held by tests/server/idle-compaction-cli.test.ts |
 | 8 | M16: the absent-key doctor fix not being `treecontext install` | **lit at the charter** | the same D276 Then: every warning row's fix is `treecontext install`, the Idle compaction row's among them. Mutant (the fix is the settings line) red there at this tree. Also held by tests/server/idle-compaction-cli.test.ts |
 | 8 | the corrupt-config binding covering `~/.claude.json` only (journal-install line 68, D51) | **lit now** | "a corrupt config file is backed up, not destroyed": the reference agent's two config files install writes are both made unparseable and both held to both Thens. Mutant: the settings writer rebuilds an unreadable `settings.json` with no backup. Red; green at 572cf9c |
-| 8 | the halves of scenario 6 (journal-install line 381) in tests/server/idle-compaction.test.ts | **needs the owner's amendment** | the scenario asks install for a line with the key already on, which D361 rules out; the halves are library tests (`installLine` at 2.1.295 with the key absent; `idleCompactionRow` at 2.1.295 with the key on). The split the register comment proposes binds both through the CLI |
+| 8 | the halves of scenario 6 (journal-install line 381) in tests/server/idle-compaction.test.ts | **lit now** (the owner's split at the final gate, D367) | the scenario asks install for a line with the key already on, which D361 rules out; the halves are library tests (`installLine` at 2.1.295 with the key absent; `idleCompactionRow` at 2.1.295 with the key on). The split the register comment proposes binds both through the CLI |
 
 One further strengthening, not a review note: journal-legs line 333 ("every
 first moment says in treecontext's own words…") compared the hook's
@@ -287,24 +289,31 @@ at 572cf9c line 333 was green and only the ticket door's line 300 went red.
 
 ### Owner items from the table (fifteen)
 
-Thirteen scenarios the words do not reach, one probe to describe before
-its scenario can be written, and one amendment:
+Thirteen scenarios the words did not reach, one probe to describe before
+its scenario could be written, and one amendment. All fifteen were done at
+the final gate (2026-11-01): the amendment as D367, the rest as unit 11,
+whose scenarios the owner approved as drafted and which bind through the
+real doors (each red under a mutation; the audit table's dispositions say
+`lit (unit 11, the final gate)`). Unit 11 found one product defect: the key
+lookup never found an imported hooks-door leg's return, because it read the
+sender's agent stamp at the top level where D360 keeps it under the file's
+claims (src/key-lookup.ts, importedReturnOf). Original list:
 
-1. a hooks-door leg that ran on another machine comes back into the run by the handoff, its return found in the handoff lane by its agent
-2. a worker whose first-moment row the store cannot write is not registered and opens no run
-3. the phantom outline gains a "ticket door" reader row
-4. a worker whose key another writer checkpointed while it ran is not sent back
-5. a subagent whose first-moment row the store cannot write is not registered as a leg and its start is marked as a gap
-6. a leg that marks its own checkpoint over the cap is not believed: the mark is the store's
-7. an agent exporting a run whole through the tools gets the warning first and the file only after acknowledging
-8. a run exported, carried back and imported again lands none of this store's own legs twice
-9. a run whose legs came through both doors: the export's reply names the hooks-door legs whose first moment is the door's line, and no other (M9)
-10. a leg's whole export carried back and imported reads back with the run by plain SQL, its captured rows through its imported registration
-11. the run's export file says in its head what its first moments are
-12. a worker's lane past the entry cap is evicted whole, never in part
-13. the version outline (journal-install line 366) gains a 2.1.301 row (unit 8's M2)
-14. (P16) the `claude -p` child's identity line, once its probe is described
-15. journal-install line 381 split as its register comment proposes (D361), which also lights unit 8's M11
+1. ~~a hooks-door leg that ran on another machine comes back into the run by the handoff, its return found in the handoff lane by its agent~~ — bound in unit 11, 2026-11-01 (the final gate)
+2. ~~a worker whose first-moment row the store cannot write is not registered and opens no run~~ — bound in unit 11, 2026-11-01 (the final gate)
+3. ~~the phantom outline gains a "ticket door" reader row~~ — bound in unit 11, 2026-11-01 (the final gate)
+4. ~~a worker whose key another writer checkpointed while it ran is not sent back~~ — bound in unit 11, 2026-11-01 (the final gate)
+5. ~~a subagent whose first-moment row the store cannot write is not registered as a leg and its start is marked as a gap~~ — bound in unit 11, 2026-11-01 (the final gate)
+6. ~~a leg that marks its own checkpoint over the cap is not believed: the mark is the store's~~ — bound in unit 11, 2026-11-01 (the final gate)
+7. ~~an agent exporting a run whole through the tools gets the warning first and the file only after acknowledging~~ — bound in unit 11, 2026-11-01 (the final gate)
+8. ~~a run exported, carried back and imported again lands none of this store's own legs twice~~ — bound in unit 11, 2026-11-01 (the final gate)
+9. ~~a run whose legs came through both doors: the export's reply names the hooks-door legs whose first moment is the door's line, and no other (M9)~~ — bound in unit 11, 2026-11-01 (the final gate)
+10. ~~a leg's whole export carried back and imported reads back with the run by plain SQL, its captured rows through its imported registration~~ — bound in unit 11, 2026-11-01 (the final gate)
+11. ~~the run's export file says in its head what its first moments are~~ — bound in unit 11, 2026-11-01 (the final gate)
+12. ~~a worker's lane past the entry cap is evicted whole, never in part~~ — bound in unit 11, 2026-11-01 (the final gate)
+13. ~~the version outline (journal-install line 366) gains a 2.1.301 row (unit 8's M2)~~ — bound in unit 11, 2026-11-01 (the final gate)
+14. ~~(P16) the `claude -p` child's identity line, once its probe is described~~ — bound in unit 11, 2026-11-01 (the final gate)
+15. ~~journal-install line 381 split as its register comment proposes (D361), which also lights unit 8's M11~~ — done at the final gate, 2026-11-01 (D367)
 
 ### Other open items found by the audit
 
@@ -316,3 +325,14 @@ its scenario can be written, and one amendment:
 - journal-install line 68 (D51): its Given now corrupts both config files at once; corrupting each in its own run would keep the Given singular (a cleaner binding, not required).
 - journal-legs line 236: the whole rows' "with no query made" is not read from the staging table as line 22 reads it.
 - journal-capture line 193 and journal-recall line 160 stage the recovery snapshot themselves; the session-start hook that stages it in production does not run in them.
+
+## Unit 11's own review (the final gate, 2026-11-01)
+
+The unit's bindings went through the same ladder. Findings and what was done:
+
+1. **Blocker, hollow:** the "no /config row" clause of the three settings-line Thens (journal-install, the two split 2.1.295 scenarios and the way-back outline's 2.1.301 row) held only a tail match, which a /config clause prepended to the remedy passed. Each now asserts the absence with a `step-lint: allow unearned-absence` marker naming its prover (the same outline's 2.1.302 row, or the /config-first doctor scenario), red under that mutation.
+2. **Blocker, product:** the ticket door reported a refused write with the busy-wait line (false cause). `refusedStartLine` in `src/ticket-door.ts`; the D307 lock scenario and the refused-first-moment scenario both stay green.
+3. **Note, binding strength:** the cross-store hooks-door return scenario had one summary in the sender's lane, so dropping the agent filter stayed green. It now runs an explorer subagent under the same parent with a newer summary, and the Given carries that summary across by a summaries handoff beside the run's skeleton (a step the scenario's words do not name; owner to see). Red under the reviewer's mutation; a unit test covers the claims path.
+4. **Note, vacuous:** the ticket-door phantom row compared `noticed_at` to the next worker's `started_at`, moments one transaction stamps alike; dropped, `noticed_by` names the reader.
+5. **Note, over-assertion:** the door-line sentence shape, the full import-flag sentence, the D291 scenario's exact lane kinds, the empty hook stdout for "carries no brief", the 2.1.302 remedy wording. Left as they are: each pins a product sentence beyond the words; none lets a clause go.
+6. **Note, same-class defect:** `firstMomentLegName` read top-level stamps an imported row lacks; fixed with a unit test. The gate also found the file's head joining the door-line note into `first_moments`; it is `door_lines` now, as in the reply.

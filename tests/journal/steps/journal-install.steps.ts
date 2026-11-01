@@ -1344,6 +1344,61 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
     expect(said[0]).toMatch(/turned off/)
   })
 
+  reg.define(/^the developer sees install say in one line that idle compaction was turned off, naming the settings line "idleCompaction": true as where to turn it back on, and no \/config row$/, (w: InstallWorld) => {
+    // D338 at 2.1.295: the client honors the key and has no /config row, so
+    // the one line names the settings line as the way back and no row the
+    // client lacks.
+    const said = idleLines(w.iInstallRun!.stdout)
+    expect(said, `install's output:\n${w.iInstallRun!.stdout}`).toHaveLength(1)
+    expect(said[0]).toMatch(/turned off/)
+    // The settings line, as the user would type it, is the way back; and
+    // no /config row stands anywhere in the line, a row this client lacks.
+    // The needle is proved by the outline "install's way back on at
+    // <version>" whose 2.1.302 row holds the /config remedy in this same
+    // build's line (the review's mutation: the /config clause prepended
+    // to the settings-line remedy, caught here and nowhere by a tail).
+    expect(said[0]).toMatch(/; set "idleCompaction": true there to turn it back on$/)
+    expect(said[0]).not.toContain('/config') // step-lint: allow unearned-absence -- the same outline's 2.1.302 row asserts the /config remedy positively on this build
+  })
+
+  reg.define(/^the developer sees install's one line name (the settings line "idleCompaction": true, no \/config row|the client's \/config row) as where to turn it back on$/, (w: InstallWorld, remedyOf: unknown) => {
+    // D338 at the 2.1.302 boundary: below it the client honors the key with
+    // no /config row, so the way back is the settings line; from it, the
+    // client's /config row. The remedy ends install's one line, so an exact
+    // tail leaves no room for the other remedy to stand in its slot.
+    const said = idleLines(w.iInstallRun!.stdout)
+    expect(said, `install's output:\n${w.iInstallRun!.stdout}`).toHaveLength(1)
+    expect(said[0]).toMatch(/turned off/)
+    const tail = String(remedyOf).startsWith('the settings line')
+      ? '; set "idleCompaction": true there to turn it back on'
+      : "; the client's /config row (Idle compaction) turns it back on"
+    expect(said[0]!.endsWith(tail), `install's line: ${said[0]}\nexpected it to end: ${tail}`).toBe(true)
+    // The line holds one remedy: the tail's own clause is its last "; ".
+    expect(said[0]!.slice(said[0]!.lastIndexOf('; ')), said[0]).toBe(tail)
+    // "no /config row": the settings-line row names the /config row nowhere
+    // in the line (the review's mutation prepended it as an earlier clause,
+    // which a tail check let through). The needle is proved by this same
+    // step's 2.1.302 row, whose tail is the /config remedy.
+    if (String(remedyOf).startsWith('the settings line')) {
+      expect(said[0]).not.toContain('/config') // step-lint: allow unearned-absence -- this step's 2.1.302 row asserts the /config remedy positively
+    }
+  })
+
+  reg.define(/^the developer sees doctor's row for idle compaction warn with the settings line only$/, (w: InstallWorld) => {
+    // D338 at 2.1.295 with the key on: the warn row's remedy is the settings
+    // line alone, never a /config row this client does not have.
+    const row = idleRow(w.irun!.stdout)
+    expect(row).toMatch(/^\[warn\]/)
+    expect(row).toContain('treecontext recommends off')
+    // The fix line is the settings line and nothing else: an exact match,
+    // so a /config remedy this client lacks cannot stand beside it; and the
+    // row's detail line names no /config row either. The needle is proved
+    // by "doctor warns while idle compaction is on, naming the /config row
+    // first", which asserts /config in this same row on this build.
+    expect(row.split('\n')[1]?.trim(), row).toBe(`fix: set ${KEY_LINE} in ${settingsFile(w)}`)
+    expect(row).not.toContain('/config') // step-lint: allow unearned-absence -- the /config-first doctor scenario asserts the needle positively in this row
+  })
+
   reg.define(/^the developer sees install say nothing about having written it$/, (w: InstallWorld) => {
     // D361: for a key the user set, install says nothing at all, now or on
     // any later run (D290's sib: no fighting it on every reinstall).

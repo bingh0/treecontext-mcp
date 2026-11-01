@@ -178,6 +178,13 @@ Feature: Legs — a subagent's bounded unit of work, briefed at its start and ch
     Then the harness receives that checkpoint whole, marked as over the cap, with its size 20000
     And the store holds the next builder's first-moment row carrying the checkpoint size 20000
 
+  @D321 @D299
+  Scenario: a leg that marks its own checkpoint as over the cap is not believed: the mark is the store's
+    Given a builder leg under the key "login-form"
+    When the leg writes a 900-character checkpoint carrying its own over-the-cap mark in its metadata
+    Then the store accepts the checkpoint as number 1 with no over-the-cap mark on it
+    And the harness looking up the key "login-form" receives it with size 900 and no mark
+
   @D305
   Scenario: a subagent with no brief or no key is registered and summarised exactly as today
     Given an orchestrating session with no brief row for the explorer role, that spawns an explorer subagent with the prompt "find where the login form is rendered"
@@ -231,6 +238,14 @@ Feature: Legs — a subagent's bounded unit of work, briefed at its start and ch
     When a builder subagent starts
     Then the context the subagent-start hook emits for the builder carries no brief
     And the store, once writable, holds no first-moment row for the builder and carries a capture-gap marker at the builder's start naming the dropped event
+
+  @D314 @D298
+  Scenario: a subagent whose first-moment row the store cannot write is not registered as a leg, and its start is marked as a gap
+    Given a brief row for the builder role naming the key "login-form"
+    And a store that refuses the first-moment row at the moment a builder subagent starts
+    When the builder subagent starts
+    Then the context the subagent-start hook emits for the builder carries no brief
+    And the store, once it takes writes again, holds no leg registration and no first-moment row for the builder, and carries a capture-gap marker at the builder's start naming the dropped event
 
   @D325 @D299
   Scenario Outline: a first moment of <chars> characters through the hooks door is <injected>

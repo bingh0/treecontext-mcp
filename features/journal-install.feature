@@ -378,11 +378,28 @@ Feature: Journal install — setup is auditable, reversible, and honest
       | cannot be read | not written | not applicable to this client  | the setting is not read by this client, version unknown    |
 
   @D338 @D290
-  Scenario: a client that honors the key but has no /config row is pointed at the settings line alone
+  Scenario Outline: install's way back on at <version> is <remedy>
+    Given a Claude Code whose version reads <version> and whose settings carry no idle-compaction key
+    When the developer runs install
+    Then the developer sees install's one line name <remedy> as where to turn it back on
+
+    Examples:
+      | version | remedy                                                   |
+      | 2.1.301 | the settings line "idleCompaction": true, no /config row |
+      | 2.1.302 | the client's /config row                                 |
+
+  @D338 @D290
+  Scenario: a client that honors the key but has no /config row is told the settings line alone
+    Given a Claude Code whose version reads 2.1.295 and whose settings carry no idle-compaction key
+    When the developer runs install
+    Then the settings file carries the idle-compaction key set to off
+    And the developer sees install say in one line that idle compaction was turned off, naming the settings line "idleCompaction": true as where to turn it back on, and no /config row
+
+  @D338 @D290
+  Scenario: doctor warns with the settings line alone where the client has no /config row
     Given a Claude Code whose version reads 2.1.295 and whose settings carry the idle-compaction key set to on
-    When the developer runs install and then doctor
-    Then the developer sees install name the settings line as where to turn it back on, and no /config row
-    And the developer sees doctor's row for idle compaction warn with the settings line only
+    When doctor runs
+    Then the developer sees doctor's row for idle compaction warn with the settings line only
 
   @D304
   Scenario: install writes the key on a later run once the client is upgraded

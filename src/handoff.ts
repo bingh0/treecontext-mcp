@@ -332,7 +332,12 @@ export function buildHandoff(store: HandoffExporter, opts: BuildHandoffOptions):
     holds: holdsSentence(form, nodes.length, opts.run, nodes),
     to_import: importStep(opts.path, opts.outsideProject === true),
     form,
-    ...(opts.run !== undefined ? { run: opts.run, first_moments: notes.join(' '), ...(innerRuns.length > 0 ? { inner_runs: innerRuns } : {}) } : {}),
+    // D318's line and, after it, D368's door-line note: the head carries
+    // them as the tool's reply does, each under its own key, so a reader of
+    // the file alone reads the same two lines (`first_moments`, `door_lines`).
+    ...(opts.run !== undefined
+      ? { run: opts.run, first_moments: notes[0], ...(notes[1] ? { door_lines: notes[1] } : {}), ...(innerRuns.length > 0 ? { inner_runs: innerRuns } : {}) }
+      : {}),
     node_count: nodes.length,
     version: 1,
     namespace: store.namespace,

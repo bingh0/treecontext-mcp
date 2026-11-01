@@ -10,7 +10,8 @@ Feature: Other clients — a dated matrix and a doctor that knows each one
   remediation.
 
   Rulings D152, D153, D161 of the hackathon interview, 2026-10-05 to
-  2026-10-06; survey of official documentation 2026-10-05.
+  2026-10-06; survey of official documentation 2026-10-05. D370 of the
+  beta.3 final gate, 2026-11-01: the orchestration matrix, its own table.
 
   @D153
   Scenario: every matrix row carries its client, its events, its documentation date and one status
@@ -18,6 +19,14 @@ Feature: Other clients — a dated matrix and a doctor that knows each one
     When a developer reads it
     Then the developer sees every row name the client, the hook events it offers, the date or release of the documentation checked, and one status
     And the developer sees exactly one row reading "verified live", Claude Code
+
+  @D370
+  Scenario: the orchestration matrix is its own table, one cell per client and role, each with one status and its date
+    Given the documentation's orchestration matrix
+    When a developer reads it
+    Then the developer sees a table apart from the compatibility matrix, one row each for Claude Code, Codex CLI and Antigravity CLI, and one column per orchestration role
+    And the developer sees every cell carry one of "verified live", "verified through a stand-in", "documented only" or "not possible", with the date it was checked against
+    And the developer sees every "not possible" cell name what the client lacks
 
   @D161 @D208
   Scenario Outline: doctor reports <client> as a client that <mode>

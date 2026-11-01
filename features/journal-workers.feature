@@ -68,12 +68,12 @@ Feature: Workers — a headless worker on any CLI, through the ticket door
     And that row holds no copy of the brief or the checkpoint
 
     Examples:
-      | door                                      |
-      | hook-less door of a `codex exec` worker   |
-      | session-start hook of a `claude -p` child |
+      | door                                                                    |
+      | hook-less door of a `codex exec` worker                                 |
+      | wrapper of a `claude -p` child, whose session-start hook links the lane |
 
   @D298
-  Scenario: both doors leave the same first-moment row, readable with plain SQL alone
+  Scenario: a hook-less worker and a `claude -p` child leave the same first-moment row, readable with plain SQL alone
     Given a brief row and a checkpoint row under the key "login-form"
     When a `codex exec` worker and a `claude -p` child each start with the spawner's prompt "wire the submit button"
     Then a reader with the store file and plain SQL sees the two first-moment rows equal column for column apart from their writer stamps, lanes and moments
@@ -113,6 +113,13 @@ Feature: Workers — a headless worker on any CLI, through the ticket door
       | spawner                  |
       | `treecontext run` wrapper |
       | library call              |
+
+  @D291
+  Scenario: a worker whose key another writer checkpointed while it ran is not sent back
+    Given a `codex exec` worker started by the wrapper under the key "login-form", with the ticket naming the worker as its checkpointer
+    When the main agent writes checkpoint number 2 under "login-form" while the worker runs, and the worker then exits having written none itself
+    Then the wrapper runs the worker no second time, and its registration reads retired with no send-back counted
+    And the harness's lookup receives number 2 as the one in effect, flagged against the named checkpointer
 
   @D291
   Scenario: the wrapper never runs a worker a third time
@@ -166,6 +173,13 @@ Feature: Workers — a headless worker on any CLI, through the ticket door
     And the store holds no self registration and no beacon for it
     And every row the child writes carries the writer "builder" and the parent "p1" as declared
 
+  @D295 @D298
+  Scenario: a `claude -p` child started by the wrapper is told who it is in one line, and its first moment is not spent twice
+    Given a `claude -p` worker started by the wrapper under the key "login-form", with a brief and a checkpoint in effect
+    When the child's session-start hook fires
+    Then the context the hook emits is one line naming the worker's role, run, key and lane and its first-moment row by id, and saying no re-orientation packet follows
+    And that line holds none of the brief's or the checkpoint's text, which the child already received as its prompt
+
   @D295
   Scenario: the stop hook's send-back is the leg's one, and the wrapper starts no run after it
     Given a `claude -p` worker started by the wrapper, naming itself as checkpointer, whose stop hook fires before its process exits
@@ -218,6 +232,7 @@ Feature: Workers — a headless worker on any CLI, through the ticket door
       | harness's lookup            |
       | status call                 |
       | session-start hook          |
+      | ticket door                 |
 
   @D297
   Scenario: a worker on another host is left live and the reply says it cannot be checked from here
@@ -279,6 +294,13 @@ Feature: Workers — a headless worker on any CLI, through the ticket door
     Then the ticket door waits the busy wait and then starts no worker
     And the spawner is told in words that the store was unreachable and nothing was written
     And once the lock clears, the store holds no registration and no row for that worker
+
+  @D298 @D302 @D307
+  Scenario: a worker whose first-moment row the store cannot write is not registered and opens no run
+    Given a brief row for the builder role naming the key "login-form", and a store that refuses the first-moment row at the moment the ticket door composes it
+    When the ticket door is asked to start a builder worker under the key "login-form" on a run "r9" no leg has opened
+    Then the ticket door starts no worker and the spawner is told in words that nothing was written
+    And once the store takes writes again, it holds no registration for that worker, no first-moment row and no open row for "r9"
 
   @D307
   Scenario: a checkpoint the store cannot take at exit is lost from the store, not from the spawner

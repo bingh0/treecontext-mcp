@@ -137,3 +137,7 @@ export function isDoorCapture(meta: Record<string, unknown> | null | undefined):
 export function isRunAuthored(meta: Record<string, unknown> | null | undefined): boolean {
   return runRowKindOf(meta) !== null
 }
+
+/** Where an imported row keeps its file's claims (handoff.ts, D165): a
+ *  leaf here, so the run export can read a claim without a cycle. */
+export const HANDOFF_CLAIMS_KEY = '_handoff_claims'

@@ -207,6 +207,43 @@ describe('an imported checkpoint\'s claim (D343)', () => {
   })
 })
 
+describe('the return of an imported hooks-door leg (D310, D343, D360)', () => {
+  it('is the summary row its claimed agent wrote in the handoff lane, not the lane\'s newest of another agent', async () => {
+    const s = await open()
+    const [one] = await seed(s, 1)
+    // build-02's session lane: the reviewer subagent's registration, its
+    // checkpoint and its summary, and an explorer's newer summary in the
+    // same session, every stamp the sender's (the import puts them under
+    // the file's claims).
+    const lane = 'build-02-session'
+    const file = { nodes: [
+      { nodeId: 'reg-rev', content: 'treecontext: registration of the reviewer leg', createdAt: 1_500,
+        metadata: { kind: 'leg-registration', run: 'r1', key: 'k', session_id: lane,
+          _leg_registration: { session_id: lane, agent_id: 'agent-rev', role: 'reviewer', kind: 'subagent', door: 'hooks', run: 'r1', key: 'k', key_src: 'inferred', ended: 'retired', started_at: 1_500, stopped_at: 1_700 } } },
+      { nodeId: 'cp-rev', content: 'state: reviewed on build-02', createdAt: 1_600,
+        metadata: { kind: 'checkpoint', run: 'r1', key: 'k', _checkpoint_number: 1, supersedes: [one], session_id: lane, _writer: 'reviewer', _writer_agent_id: 'agent-rev' } },
+      { nodeId: 'sum-rev', content: 'review done on build-02', createdAt: 1_700,
+        metadata: { kind: 'subagent-summary', run: 'r1', key: 'k', session_id: lane, _writer: 'reviewer', _writer_agent_id: 'agent-rev' } },
+      { nodeId: 'sum-exp', content: 'explored the layout', createdAt: 1_800,
+        metadata: { kind: 'subagent-summary', session_id: lane, _writer: 'explorer', _writer_agent_id: 'agent-exp' } },
+    ] }
+    await s.importJson(JSON.stringify(file), { handoff: { file: 'handoffs/b2.json', importer: 'laptop' } })
+    const l = s.lookupKey({ run: 'r1', key: 'k' })
+    await s.close()
+    // The agent is the file's claim only: no imported row carries it at its top level.
+    for (const id of ['sum-rev', 'sum-exp']) {
+      expect(meta(id)['_writer_agent_id']).toBeUndefined()
+      expect((meta(id)['_handoff_claims'] as Record<string, unknown>)['_writer_agent_id']).toBe(id === 'sum-rev' ? 'agent-rev' : 'agent-exp')
+      expect(row(id)['session_key']).toBe(`handoff:${lane}`)
+    }
+    expect(l.checkpoints.map((c) => c.nodeId)).toEqual(['cp-rev'])
+    const ret = l.checkpoints[0]!.legReturn
+    expect(ret.leg).toEqual({ sessionId: lane, agentId: 'agent-rev', role: 'reviewer', state: 'retired' })
+    expect(ret.summary?.nodeId).toBe('sum-rev')
+    expect(ret.line).toContain(`the summary row sum-rev in the handoff lane handoff:${lane}`)
+  })
+})
+
 describe('the flag in words (D296)', () => {
   it('names the writer and the checkpointer the brief names, for every checkpoint in effect, and withholds nothing', async () => {
     const s = await open()

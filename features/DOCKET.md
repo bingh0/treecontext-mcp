@@ -2690,3 +2690,66 @@ D361 2026-11-01 [I] amends D290
   serves: N1 N23
   touches: D290 D304 D338 D51 D276
 # the build, 2026-11-01, unit 8's gate on its failure-ladder review (findings 1, 4, 6): the build had install print a "left alone, recommends off" line on every run for a user-set key, reading the scenario "a client that honors the key but has no /config row is pointed at the settings line alone" whose install clause asks for "where to turn it back on" with the key already on, a contradiction in the scenario's own words; uninstall left `idleCompaction: false` behind; the README paragraph sat in section 3 where D276's tester reads section 2. Resolved from the record under D333: D290 says install "never writes the key when the user has set it, on or off" and its sib declines "fighting it on every reinstall"; D51's uninstall removes what install wrote and leaves foreign keys; D290 forbids touching a value the user set, so only install's own record can tell its key from the user's; D276 names section 2 as the install section. The scenario's install clause is a charter defect for the owner to amend (split: the key absent at 2.1.295 is written off and the line names `"idleCompaction": true` with no /config row; the key on at 2.1.295 is doctor's settings-line-only row); until then that scenario stays open. Awaiting ratification
+
+D362 2026-11-01 [V] ratifies D357
+  resp:  the query tool carries `key_lookup`, a run and a key together, returning the harness's lookup reply in place of hits, and no parameter for orientation, as D357 reads D264 [V]
+  ->     structural
+  serves: N31 N28 N14
+  touches: D357 D264 D337 D349
+# the visionary, 2026-11-01, at the final gate over the ten units, "Ratify all five" to the five put in plain words (a lookup on the query tool; the hooks writing a leg's own rows; the cap refusing only a writer the store can name; an imported run a review, never a replay; install silent about a key the user set), under D333's rule that gate questions are resolved from the record first and brought back only with their derivation
+
+D363 2026-11-01 [V] ratifies D358
+  resp:  the hooks door writes a leg's own rows directly through the library, each in the transaction of the registration fact it belongs to, every platform event still staged and a refused write a visible gap, as D358 has it [V]
+  ->     structural
+  serves: N27 N29 N30 N32
+  touches: D358 D298 D302 D330 D314
+# the visionary, 2026-11-01, at the final gate, the same "Ratify all five" as D362
+
+D364 2026-11-01 [V] ratifies D359
+  resp:  the cap refuses only a writer the store identifies exactly, a refusal made under a non-exact stamp is pending with its candidates until the call's echo moves it to its writer, a second write still unattributable is refused again and never accepted blind, and the tool's content bound does not apply to a checkpoint under a run's key, as D359 reads D299 [V]
+  ->     structural
+  serves: N27 N29 N31 N32
+  touches: D359 D299 D321 D326
+# the visionary, 2026-11-01, at the final gate, the same "Ratify all five" as D362
+
+D365 2026-11-01 [V] ratifies D360
+  resp:  a run that arrives by import is a review of what happened elsewhere and never a replay: an imported brief is in effect for no role, an imported close ends no brief, an imported checkpoint keeps its sender's number as a claim and takes none here, the sender's stamps and trace sit under the file's claims, and a registration that differs lands as an imported row saying so, as D360 reads D343 [V]
+  ->     structural
+  serves: N22 N27 N28 N32
+  touches: D360 D343 D300 D310 D311
+# the visionary, 2026-11-01, at the final gate, the same "Ratify all five" as D362
+
+D366 2026-11-01 [V] ratifies D361
+  resp:  install says nothing about an idle-compaction key the user set and writes nothing, records the key it wrote and into which file, and uninstall removes that key only when the record exists and the file still holds install's value, the README's install section saying why in one sentence, as D361 reads D290 [V]
+  ->     structural
+  serves: N1 N23
+  touches: D361 D290 D304 D338 D51 D276
+# the visionary, 2026-11-01, at the final gate, the same "Ratify all five" as D362
+
+D367 2026-11-01 [V] amends D338
+  resp:  the scenario "a client that honors the key but has no /config row is pointed at the settings line alone" is split in two, since its install clause asked for a line of a run where the key was already on, which D361 rules out: with the key absent, install writes it off and its one line names the settings line, `"idleCompaction": true`, as where to turn it back on and no /config row; with the key on, doctor's row warns with the settings line only; both halves bind and the file has no open scenario [V]
+  ->     structural
+  serves: N1 N23
+  touches: D338 D361 D366 D290 D304
+# the visionary, 2026-11-01, at the final gate over the ten units, "Split as proposed" to the two halves shown in full (the register comment under D361 had proposed exactly this split); the charter edit is the owner's, made in the gate session with its bindings
+
+D368 2026-11-01 [V] amends D318
+  resp:  after the first-moments line the export's reply carries one line naming each leg whose first-moment row is the hooks door's own line and not a prompt, quoting that its prompt rode on the Agent tool and was not seen by the door, and naming no other leg; the file's head carries the same line; a run with no such leg has no such line [V]
+  ->     structural
+  serves: N31 N28
+  touches: D318 D300 D330 D360
+# the visionary, 2026-11-01, at the final gate over the ten units, "Approve as written" to the unit 11 charter draft (the bindings audit's owner items: thirteen scenarios the words did not reach, the `claude -p` child's identity line once its probe was described as one line naming who it is and its first-moment row and never the first moment again, the phantom outline's ticket-door row, the @D360 tag on the skeleton scenario, and the two `claude -p` rows' wording). Unit 6 had added the reply's second line (`door_lines`) with no ruling naming it, which the audit found (M9); this ruling names it
+
+D369 2026-11-01 [V] amends D285
+  resp:  the pointer to a leg's summary row comes back every time the Agent tool returns the leg; a leg launched in the background, whose PostToolUse fires at the launch and whose return is the platform's task notification that no hook touches, gets no pointer line, its summary row landing and the key lookup finding it as for any leg; declined to the fence, reopening if the client grows a hook on the notification or the owner asks for late delivery at the parent's next hook [V]
+  ->     fence-declined background-leg-pointer
+  serves: N30 N27
+  touches: D285 D330 D284
+# the visionary, 2026-11-01, at the final gate over the ten units, "Fence it: no pointer for a background leg" to decision 4 of the gate's queue (the three roads shown: fence it; deliver it late at the parent's next UserPromptSubmit or PostToolUse, new design and a build before release; leave the CHANGELOG disclosure alone). Unit 4 had disclosed it in the CHANGELOG with no ruling; verified there: Claude Code's Agent tool returns `status: "async_launched"` at the launch and the subagent's final report arrives as a task notification
+
+D370 2026-11-01 [V] amends D153
+  resp:  the documentation carries a second compatibility matrix, the orchestration matrix, its own table apart from the hook-support matrix: one row per client (Claude Code, Codex CLI, Antigravity CLI, the last reinstated as a row of the matrix only, no agent entry), one column per orchestration role (a headless worker through the ticket door; the worker's pen, how treecontext's tools reach it; the worker's own tool calls captured; a main that registers itself and spawns workers; subagent legs through the hooks door; the pointer on the Agent tool's return), every cell one of `verified live`, `verified through a stand-in`, `documented only` or `not possible`, each with the date or release it was checked against, a `not possible` cell naming the vendor's gap; for `0.1.0-beta.3` Claude Code is the primary client and Codex CLI and Antigravity CLI are secondary, headless workers through the ticket door with the pen as the matrix says it reaches them; `0.1.0-beta.3.1` targets every cell the client makes possible, verified live, parity being the matrix filled rather than a word; capture stays promised only where verified live (D153) and the archived-build platforms stay out of the agent table (D109) [V]
+  ->     structural
+  serves: N23 N31 N27 N32
+  touches: D153 D152 D109 D30 D288 D294 D295
+# the visionary, 2026-11-01, at the final gate's discussion of the secondary-client story: "for beta.3 i think it is reasonable to document claude code primary and codex and agy are secondary to start as a mvp/poc, with the roadmap to be eventual parity"; then "client differences between claude code, codex, and agy most likely will need a compatibility matrix table of some sort. but beta.3.1 will target the maximum currently supported functionality within that matrix?"; then "yes, record it as one ruling and run the live worker runs. i think the table should be new - too much data in one table sounds confusing." Verified at the gate: Antigravity CLI 1.4.12's hooks (antigravity.google/docs/hooks, read 2026-11-01) live in `~/.gemini/config/hooks.json`, carry camelCase payloads (`conversationId`, `workspacePaths`), inject context through `injectSteps`, and have no SubagentStart, SubagentStop or PreCompact event, so its subagent-legs cell is `not possible`; its MCP servers are added with `agy mcp add`; install writes nothing for it. Codex CLI's hook set (README matrix, checked 2026-10-05) includes SubagentStart and SubagentStop. Roads not taken: parity written as a README sentence alone (moves the clients fence in spirit with no ruling); the orchestration roles as columns of the hook-support matrix (one table with two kinds of fact, the visionary's "too much data in one table")

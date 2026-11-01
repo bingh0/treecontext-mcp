@@ -320,6 +320,22 @@ re-decided, and the previous text is in git history.
   when more than one is in effect, settled by the leg's first write. A
   hook on the Agent tool call that pairs the prompt with the spawn is
   left to the build, bound by that behavior. (D320, 2026-10-31)
+- **A pointer for a background leg** — a leg launched as a background
+  Agent (Claude Code's async launch) gets no pointer line: the PostToolUse
+  hook fires at the launch, before the subagent has finished, and its
+  return arrives later as a task notification no hook touches. Its summary
+  row still lands and the key lookup finds it; the pointer of D285 "comes
+  back every time" for a leg the Agent tool returns, not for one it hands
+  to a notification. Reopens if the client grows a hook on the task
+  notification, or if the owner asks for late delivery at the parent's
+  next hook. (D369 amends D285, 2026-11-01)
+- **Antigravity CLI as an agent entry** — stays out of the agent table
+  with the other archived-build platforms (D109); it returns only as a row
+  of the orchestration matrix, documented-only or verified live cell by
+  cell, its workers reaching the tools by a line the user adds (`agy mcp
+  add`). Reopens as an ordinary agent entry when a hooks adapter earns its
+  live-payload pass, or when the owner asks install to write its MCP
+  configuration. (D370, 2026-11-01)
 
 ## Roads not taken
 

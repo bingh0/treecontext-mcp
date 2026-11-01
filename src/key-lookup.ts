@@ -264,6 +264,10 @@ const endedWords: Record<Exclude<LegState['state'], 'live'>, string> = {
  * imported registration row of the run: no registration of this store),
  * its return the newest summary row of that lane, which sits in the
  * handoff lane too and is pointed to there, named as arrived by import.
+ * A subagent's summary row is told from its session's other agents by the
+ * writer agent the file claims for it, read from the claims alone: every
+ * row of a handoff lane landed through the import rule, which keeps the
+ * sender's stamps under the file's claims and never at the top (D360).
  * Without the leg's registration in the file, or without a summary row,
  * the line says which, never a guess.
  */
@@ -286,7 +290,7 @@ function importedReturnOf(db: RunReadHandle & RegistryHandle, treeId: number | n
   const worker = leg.kind === 'worker' || leg.agentId === WORKER_AGENT_ID
   const row = db.prepare(
     `SELECT node_id, created_at, metadata_json FROM nodes
-      WHERE ${treeClause(treeId)} AND session_key = ?${worker ? '' : " AND json_extract(metadata_json, '$._writer_agent_id') = ?"}
+      WHERE ${treeClause(treeId)} AND session_key = ?${worker ? '' : ` AND json_extract(metadata_json, '$.${HANDOFF_CLAIMS_KEY}._writer_agent_id') = ?`}
         AND json_extract(metadata_json, '$.kind') = '${SUBAGENT_SUMMARY_KIND}'
       ORDER BY created_at DESC, rowid DESC LIMIT 1`,
   ).get(...treeParams(treeId), lane, ...(worker ? [] : [leg.agentId])) as { node_id: string; created_at: number; metadata_json: string | null } | undefined

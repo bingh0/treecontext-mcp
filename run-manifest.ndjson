@@ -47,6 +47,7 @@
 {"file":"features/journal-clients.feature","title":"doctor reports OpenCode as a client that offers no shell hooks, so the tools are its whole surface [5]","status":"passed"}
 {"file":"features/journal-clients.feature","title":"doctor reports VS Code as a client that reads the Claude settings file when its Claude-hooks setting is on [3]","status":"passed"}
 {"file":"features/journal-clients.feature","title":"every matrix row carries its client, its events, its documentation date and one status","status":"passed"}
+{"file":"features/journal-clients.feature","title":"the orchestration matrix is its own table, one cell per client and role, each with one status and its date","status":"passed"}
 {"file":"features/journal-clients.feature","title":"without the experimental flag a copying client gets tools only","status":"passed"}
 {"file":"features/journal-handoff.feature","title":"12000 entries exported inline write 10000 and state 2000 omitted [1]","status":"passed"}
 {"file":"features/journal-handoff.feature","title":"500 entries exported inline write 500 and state 0 omitted [2]","status":"passed"}
@@ -68,7 +69,7 @@
 {"file":"features/journal-install.feature","title":"a Claude Code whose version reads 2.1.289 gets the idle-compaction key not written and doctor says the setting is not read by this client, version 2.1.289 [1]","status":"passed"}
 {"file":"features/journal-install.feature","title":"a Claude Code whose version reads 2.1.290 gets the idle-compaction key written off and doctor says off [2]","status":"passed"}
 {"file":"features/journal-install.feature","title":"a Claude Code whose version reads 2.1.302 gets the idle-compaction key written off and doctor says off [3]","status":"passed"}
-{"file":"features/journal-install.feature","title":"a client that honors the key but has no /config row is pointed at the settings line alone","status":"unbound"}
+{"file":"features/journal-install.feature","title":"a client that honors the key but has no /config row is told the settings line alone","status":"passed"}
 {"file":"features/journal-install.feature","title":"a corrupt config file is backed up, not destroyed","status":"passed"}
 {"file":"features/journal-install.feature","title":"a forced reinstall rewrites only the agent it names","status":"passed"}
 {"file":"features/journal-install.feature","title":"an interpreter that cannot run this package is reported, not tolerated","status":"passed"}
@@ -82,6 +83,7 @@
 {"file":"features/journal-install.feature","title":"doctor says in one line that nothing is set up yet","status":"passed"}
 {"file":"features/journal-install.feature","title":"doctor says so when the command is on no PATH at all","status":"passed"}
 {"file":"features/journal-install.feature","title":"doctor warns while idle compaction is on, naming the /config row first","status":"passed"}
+{"file":"features/journal-install.feature","title":"doctor warns with the settings line alone where the client has no /config row","status":"passed"}
 {"file":"features/journal-install.feature","title":"doctor's database row names the SQLite the running Node carries","status":"passed"}
 {"file":"features/journal-install.feature","title":"existing configuration is merged, never clobbered","status":"passed"}
 {"file":"features/journal-install.feature","title":"experimental capture is an opt-in by name","status":"passed"}
@@ -91,6 +93,8 @@
 {"file":"features/journal-install.feature","title":"install turns Claude Code's idle compaction off when the setting is absent, and says so","status":"passed"}
 {"file":"features/journal-install.feature","title":"install wires only the agents that are present","status":"passed"}
 {"file":"features/journal-install.feature","title":"install writes the key on a later run once the client is upgraded","status":"passed"}
+{"file":"features/journal-install.feature","title":"install's way back on at 2.1.301 is the settings line \"idleCompaction\": true, no /config row [1]","status":"passed"}
+{"file":"features/journal-install.feature","title":"install's way back on at 2.1.302 is the client's /config row [2]","status":"passed"}
 {"file":"features/journal-install.feature","title":"nothing the installer writes invokes a bare interpreter","status":"passed"}
 {"file":"features/journal-install.feature","title":"project instructions refresh in place","status":"passed"}
 {"file":"features/journal-install.feature","title":"reinstalling converges instead of duplicating","status":"passed"}
@@ -126,6 +130,7 @@
 {"file":"features/journal-legs.feature","title":"a leg starting while two checkpoints are in effect is handed both, flagged","status":"passed"}
 {"file":"features/journal-legs.feature","title":"a leg that ended without a checkpoint after its one send-back is followed by a recovery leg","status":"passed"}
 {"file":"features/journal-legs.feature","title":"a leg that finishes with no checkpoint is sent back once with the missing checkpoint named","status":"passed"}
+{"file":"features/journal-legs.feature","title":"a leg that marks its own checkpoint as over the cap is not believed: the mark is the store's","status":"passed"}
 {"file":"features/journal-legs.feature","title":"a leg that writes under no key stays keyless, stops unblocked, and the run's facts count it as such","status":"passed"}
 {"file":"features/journal-legs.feature","title":"a leg through the hooks door starts cold when the store is unreachable, and the gap is marked","status":"passed"}
 {"file":"features/journal-legs.feature","title":"a leg whose brief names another role as checkpointer is never sent back","status":"passed"}
@@ -137,6 +142,7 @@
 {"file":"features/journal-legs.feature","title":"a run's close ends its briefs","status":"passed"}
 {"file":"features/journal-legs.feature","title":"a second over-cap write by another leg or under another key is refused again","status":"passed"}
 {"file":"features/journal-legs.feature","title":"a subagent whose brief names a run and a key gets the leg contract","status":"passed"}
+{"file":"features/journal-legs.feature","title":"a subagent whose first-moment row the store cannot write is not registered as a leg, and its start is marked as a gap","status":"passed"}
 {"file":"features/journal-legs.feature","title":"a subagent with no brief or no key is registered and summarised exactly as today","status":"passed"}
 {"file":"features/journal-legs.feature","title":"an inferred key gives way to the key the leg first writes under","status":"passed"}
 {"file":"features/journal-legs.feature","title":"an inferred key never makes the stop ask for a checkpoint","status":"passed"}
@@ -268,6 +274,7 @@
 {"file":"features/journal-reorientation.feature","title":"the tail keeps its shape with 6 turns since the bookmark [3]","status":"passed"}
 {"file":"features/journal-runs.feature","title":"a checkpoint by the named checkpointer comes back with no flag","status":"passed"}
 {"file":"features/journal-runs.feature","title":"a harness may open a run explicitly before any leg","status":"passed"}
+{"file":"features/journal-runs.feature","title":"a hooks-door leg that ran on another machine comes back into the run by the handoff, its return found in its handoff lane","status":"passed"}
 {"file":"features/journal-runs.feature","title":"a key that holds no checkpoint yet comes back as an honest nothing","status":"passed"}
 {"file":"features/journal-runs.feature","title":"a key with 0 checkpoints returns the sizes of the last 0 [1]","status":"passed"}
 {"file":"features/journal-runs.feature","title":"a key with 1 checkpoints returns the sizes of the last 1 [2]","status":"passed"}
@@ -276,20 +283,25 @@
 {"file":"features/journal-runs.feature","title":"a leg opens a run of its own and both runs reach each other","status":"passed"}
 {"file":"features/journal-runs.feature","title":"a leg that left no return is said so, never guessed","status":"passed"}
 {"file":"features/journal-runs.feature","title":"a leg that ran on another machine comes back into the run by the handoff, and its claim is believed, flagged","status":"passed"}
+{"file":"features/journal-runs.feature","title":"a leg's whole export carried back and imported reads back with the run by plain SQL, its captured rows through its imported registration","status":"passed"}
+{"file":"features/journal-runs.feature","title":"a run exported, carried back and imported again lands none of this store's own legs twice","status":"passed"}
 {"file":"features/journal-runs.feature","title":"a run opens on its first leg's registration","status":"passed"}
 {"file":"features/journal-runs.feature","title":"a run's default export is its skeleton, with no captured tool output","status":"passed"}
 {"file":"features/journal-runs.feature","title":"a run's open and close are journal rows the query reaches","status":"passed"}
 {"file":"features/journal-runs.feature","title":"a run's rows read back by plain SQL in the order of their own moments, each naming its writer and moment, each leg naming its run and key","status":"passed"}
 {"file":"features/journal-runs.feature","title":"a stranger's checkpoint comes back as the one in effect, flagged against the named checkpointer","status":"passed"}
 {"file":"features/journal-runs.feature","title":"an agent closes a run through the tools and the record is the same as the harness's","status":"passed"}
+{"file":"features/journal-runs.feature","title":"an agent exporting a run whole through the tools gets the warning first and the file only after acknowledging","status":"passed"}
 {"file":"features/journal-runs.feature","title":"an agent finds a run by its name","status":"passed"}
 {"file":"features/journal-runs.feature","title":"an agent finds a run by time with no id in hand","status":"passed"}
 {"file":"features/journal-runs.feature","title":"an agent gets the same lookup reply as the harness through the tools","status":"passed"}
 {"file":"features/journal-runs.feature","title":"every key lookup carries the run's facts beside the checkpoint","status":"passed"}
 {"file":"features/journal-runs.feature","title":"nesting is not limited to one level","status":"passed"}
+{"file":"features/journal-runs.feature","title":"the export's reply names the legs whose first moment is the door's own line, and no other","status":"passed"}
 {"file":"features/journal-runs.feature","title":"the harness asks by run and key with no model and receives the one checkpoint in effect","status":"passed"}
 {"file":"features/journal-runs.feature","title":"the harness closes a run with a reason and plain SQL shows who ended it and why","status":"passed"}
 {"file":"features/journal-runs.feature","title":"the lookup reply carries the pointer to the return of the leg that wrote the checkpoint","status":"passed"}
+{"file":"features/journal-runs.feature","title":"the run's export file says in its head what its first moments are","status":"passed"}
 {"file":"features/journal-runs.feature","title":"the run's facts show each live leg's start and last write","status":"passed"}
 {"file":"features/journal-runs.feature","title":"the skeleton carries first moments whole and its reply says they are the spawners' prompts as written","status":"passed"}
 {"file":"features/journal-runs.feature","title":"the whole form adds every row of every leg behind the secrets acknowledgement","status":"passed"}
@@ -355,6 +367,7 @@
 {"file":"features/journal-storage.feature","title":"a store built by a deleted backend refuses loudly and loses nothing","status":"passed"}
 {"file":"features/journal-storage.feature","title":"a store that cannot get under budget says so","status":"passed"}
 {"file":"features/journal-storage.feature","title":"a worker's first-moment row evicts with its session under the session cap, and its checkpoints and summary row stay","status":"passed"}
+{"file":"features/journal-storage.feature","title":"a worker's lane past the entry cap is evicted whole, never in part","status":"passed"}
 {"file":"features/journal-storage.feature","title":"an additive migration also runs behind a backup","status":"passed"}
 {"file":"features/journal-storage.feature","title":"an over-budget store names the knob that raises its budget","status":"passed"}
 {"file":"features/journal-storage.feature","title":"concurrent sessions do not corrupt each other","status":"passed"}
@@ -376,6 +389,7 @@
 {"file":"features/journal-storage.feature","title":"the store does not grow without bound","status":"passed"}
 {"file":"features/journal-storage.feature","title":"what goes in comes back out, byte for byte","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a `agy -p` worker under a Antigravity parent writes into its own lane with its role as writer [3]","status":"unbound"}
+{"file":"features/journal-workers.feature","title":"a `claude -p` child started by the wrapper is told who it is in one line, and its first moment is not spent twice","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a `claude -p` child with a ticket is registered as a worker by the hook, never as a self","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a `claude -p` worker under a Codex parent writes into its own lane with its role as writer [2]","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a `codex exec` worker under a Claude Code parent writes into its own lane with its role as writer [1]","status":"passed"}
@@ -385,6 +399,8 @@
 {"file":"features/journal-workers.feature","title":"a gone worker nobody retired is retired as a phantom by the next harness's lookup on its host [1]","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a gone worker nobody retired is retired as a phantom by the next session-start hook on its host [3]","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a gone worker nobody retired is retired as a phantom by the next status call on its host [2]","status":"passed"}
+{"file":"features/journal-workers.feature","title":"a gone worker nobody retired is retired as a phantom by the next ticket door on its host [4]","status":"passed"}
+{"file":"features/journal-workers.feature","title":"a hook-less worker and a `claude -p` child leave the same first-moment row, readable with plain SQL alone","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a hook-less worker that finishes without a checkpoint is run once more by the `treecontext run` wrapper that started it [1]","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a hook-less worker that finishes without a checkpoint is run once more by the library call that started it [2]","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a host whose process start moment cannot be read leaves the number alone, and the reply says so","status":"passed"}
@@ -401,6 +417,8 @@
 {"file":"features/journal-workers.feature","title":"a worker on another host is left live and the reply says it cannot be checked from here","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a worker that claimed a ticket with no wrapper gets no send-back and ends visibly without a checkpoint","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a worker that exits on its own error is finished and gets the one send-back","status":"passed"}
+{"file":"features/journal-workers.feature","title":"a worker whose first-moment row the store cannot write is not registered and opens no run","status":"passed"}
+{"file":"features/journal-workers.feature","title":"a worker whose key another writer checkpointed while it ran is not sent back","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a worker whose ticket declares no door gets no send-back","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a worker whose ticket is hand-edited so that the run is missing is registered with what was read, told its instructions were invalid, and ends visibly through the session-start hook of a `claude -p` child [2]","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a worker whose ticket is minted in an older shape that still reads as the role \"reviewer\" is registered with what was read, told its instructions were invalid, and ends visibly through the hook-less door of a `codex exec` worker [3]","status":"passed"}
@@ -415,9 +433,8 @@
 {"file":"features/journal-workers.feature","title":"an exit by signal is a cut, never sent back, and the next leg of the role is a recovery leg","status":"passed"}
 {"file":"features/journal-workers.feature","title":"an unregistered writer's row through the library call is accepted and traced, never refused [2]","status":"passed"}
 {"file":"features/journal-workers.feature","title":"an unregistered writer's row through the ticket door, with a self-minted ticket is accepted and traced, never refused [1]","status":"passed"}
-{"file":"features/journal-workers.feature","title":"both doors leave the same first-moment row, readable with plain SQL alone","status":"passed"}
 {"file":"features/journal-workers.feature","title":"the first-moment row is the first row of the worker's lane through the hook-less door of a `codex exec` worker [1]","status":"passed"}
-{"file":"features/journal-workers.feature","title":"the first-moment row is the first row of the worker's lane through the session-start hook of a `claude -p` child [2]","status":"passed"}
+{"file":"features/journal-workers.feature","title":"the first-moment row is the first row of the worker's lane through the wrapper of a `claude -p` child, whose session-start hook links the lane [2]","status":"passed"}
 {"file":"features/journal-workers.feature","title":"the stop hook's send-back is the leg's one, and the wrapper starts no run after it","status":"passed"}
 {"file":"features/journal-workers.feature","title":"the ticket door composes a worker's first message from the brief, the checkpoint in effect and the spawner's prompt","status":"passed"}
 {"file":"features/journal-workers.feature","title":"the ticket door that sees the fault before spawning writes the row itself and spawns nothing","status":"passed"}

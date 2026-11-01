@@ -33,7 +33,7 @@
 import { createHash } from 'node:crypto'
 import {
   RUN_OPEN_KIND, RUN_CLOSE_KIND, BRIEF_KIND, CHECKPOINT_KIND, FIRST_MOMENT_KIND, SUBAGENT_SUMMARY_KIND,
-  LEG_REGISTRATION_KIND, LEG_REGISTRATION_KEY, RUN_META_KEY, KEY_META_KEY,
+  LEG_REGISTRATION_KIND, LEG_REGISTRATION_KEY, RUN_META_KEY, KEY_META_KEY, HANDOFF_CLAIMS_KEY,
 } from './run-kinds.js'
 import { STORE_WRITER } from './persistence/session-registry.js'
 import { legWriterOf, type LegRegistration, type LegKind, type LegDoor, type LegIdentity, type KeySource, type LegEnding } from './persistence/leg-registry.js'
@@ -236,8 +236,20 @@ export function registrationNode(leg: LegRegistration): RunExportNode {
 /** The leg a first-moment row belongs to, by the row's own metadata, for
  *  the reply to name: its lane's session and the writer the row carries. */
 export function firstMomentLegName(meta: Record<string, unknown> | null): string {
-  const writer = typeof meta?.['_writer'] === 'string' ? meta['_writer'] : null
-  const agent = typeof meta?.['_writer_agent_id'] === 'string' && meta['_writer_agent_id'] !== '' ? ` (agent ${meta['_writer_agent_id']})` : ''
+  // A row that arrived by import carries its sender's stamps under the
+  // file's claims, never at its top level (D360): the leg is named from
+  // there when the row's own stamps are absent.
+  const claims = meta?.[HANDOFF_CLAIMS_KEY]
+  const claimed = claims !== null && typeof claims === 'object' && !Array.isArray(claims) ? claims as Record<string, unknown> : {}
+  const stamp = (k: string): string | null => {
+    const own = meta?.[k]
+    if (typeof own === 'string' && own !== '') return own
+    const c = claimed[k]
+    return typeof c === 'string' && c !== '' ? c : null
+  }
+  const writer = stamp('_writer')
+  const agentId = stamp('_writer_agent_id')
+  const agent = agentId !== null ? ` (agent ${agentId})` : ''
   const session = typeof meta?.['session_id'] === 'string' ? meta['session_id'] : null
   return `${writer ?? 'a leg'}${agent}${session !== null && agent === '' ? ` in session ${session}` : ''}`
 }

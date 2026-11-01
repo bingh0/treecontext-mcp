@@ -144,23 +144,14 @@ runFeatures(join(HERE, '../../features'), {
     ...wholeFeatureWip(),
     // The beta.3 subagent cut (2026-10-31): scenarios added to bound files
     // by the scope run, unbound until their build (D295, D319). Scenario-
-    // scoped so the rest of each file keeps gating. journal-install's seven
+    // scoped so the rest of each file keeps gating. journal-install's
     // idle-compaction scenarios (D290, D304, D338) bound with unit 8 and
-    // left this list, but one.
-    // The 2.1.295 scenario is unbound: its install clause ("install name
-    // the settings line as where to turn it back on") is asked of a run
-    // where the key is already on, and D361 rules that install says nothing
-    // about a key the user set. The scenario contradicts the ruling in its
-    // own words; the owner amends it (split: key absent at 2.1.295 is
-    // written off, naming the settings line and no /config row; key on is
-    // doctor's settings-line-only row). Until then the halves are held by
-    // tests/server/idle-compaction.test.ts, and the title stays open here.
-    {
-      feature: 'journal-install',
-      scenarios: [
-        'a client that honors the key but has no /config row is pointed at the settings line alone',
-      ],
-    },
+    // left this list, but one: the 2.1.295 scenario's install clause asked
+    // for a line of a run where the key was already on, which D361 rules
+    // out. The owner split it at the final gate (2026-11-01, D367): the key
+    // absent at 2.1.295 is written off naming the settings line and no
+    // /config row; the key on at 2.1.295 is doctor's settings-line-only row.
+    // Both halves bind, and the file has no open scenario.
     // journal-workers left the whole-feature register 2026-11-01 (unit 4).
     // The parent outline's Antigravity row is unbound: this build writes no
     // hooks for Antigravity (an archived-build platform, MCP config only),

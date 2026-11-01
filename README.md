@@ -368,6 +368,27 @@ differs on and the same command to rewrite it; VS Code's row reads
 `chat.useClaudeHooks` from VS Code's own `settings.json`; Cursor's and
 OpenCode's remedy is nothing to do. No row calls capture verified.
 
+### Orchestration matrix
+
+Orchestration (runs, legs and headless workers, beta.3) is a second
+matrix, apart from the hook-support one above because it answers a
+different question: not which hooks a client offers, but which part a
+client can play. Claude Code is the primary client in beta.3; Codex CLI
+and Antigravity CLI are secondary, headless workers through the ticket
+door. Each cell is one of **verified live** (run on that client here),
+**verified through a stand-in** (bound through the real door with a
+stand-in where the client's model would be), **documented only** (read
+in the vendor's docs, never run), or **not possible** (the client lacks
+what the role needs; the gap is named), each with the date it was
+checked. beta.3.1 targets every cell a client makes possible, verified
+live; parity is this matrix filled, not a word.
+
+| Client | Headless worker through the ticket door | The worker's pen (how the tools reach it) | The worker's own tool calls captured | A main that registers itself and spawns workers | Subagent legs through the hooks door | The pointer on the Agent tool's return |
+| --- | --- | --- | --- | --- | --- | --- |
+| Claude Code | verified through a stand-in (`claude -p` under its real hooks, 2026-11-01) | install writes its MCP entry (verified live, 2026-11-01) | verified through a stand-in (its real hooks, 2026-11-01) | verified through a stand-in (its real SessionStart hook, 2026-11-01) | verified through a stand-in (its real SubagentStart and SubagentStop hooks, 2026-11-01) | verified through a stand-in (its real PostToolUse hook, 2026-11-01) |
+| Codex CLI | verified live (`codex exec` 0.166.0 through `treecontext run`, 2026-11-01) | install writes its MCP entry with the ticket variables forwarded (`env_vars`; a hand-written entry needs that line too; verified live: its checkpoint landed in its lane, 2026-11-01) | documented only (the experimental hooks copy, 2026-10-05) | documented only (its SessionStart hook in the copy, 2026-10-05) | documented only (SubagentStart and SubagentStop in its hook set, 2026-10-05) | documented only (PostToolUse in its hook set, 2026-10-05) |
+| Antigravity CLI | verified live (`agy -p` 1.4.12 through `treecontext run`, 2026-11-01) | one line you add, `agy mcp add treecontext -- treecontext serve` (verified live: its checkpoint landed in its lane through that server, 2026-11-01) | documented only: no adapter yet, and its PostToolUse payload carries no tool output (hooks docs read 2026-11-01) | documented only: no adapter yet (hooks docs read 2026-11-01) | not possible: no SubagentStart or SubagentStop event (hooks docs read 2026-11-01) | not possible: no event fires on a subagent's return (hooks docs read 2026-11-01) |
+
 ### Copilot capture (preview)
 
 The Copilot adapter has been rewritten against Copilot's documented

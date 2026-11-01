@@ -109,6 +109,28 @@ export function parseMatrix(readme: string): MatrixRow[] {
   })
 }
 
+/** The orchestration matrix (D370): the table under the README's
+ *  "Orchestration matrix" heading, its own table apart from the hook-support
+ *  matrix, read as cells. Columns are the roles; rows the clients. */
+export function parseOrchestrationMatrix(readme: string): { header: string[]; rows: Array<{ client: string; cells: string[] }> } {
+  const lines = readme.split('\n')
+  const head = lines.findIndex(l => /^#{2,4} .*Orchestration matrix/i.test(l))
+  expect(head, 'README.md has no "Orchestration matrix" heading').toBeGreaterThanOrEqual(0)
+  const tableStart = lines.findIndex((l, i) => i > head && l.startsWith('|'))
+  expect(tableStart, 'no table under the orchestration matrix heading').toBeGreaterThan(head)
+  const table: string[] = []
+  for (let i = tableStart; i < lines.length && lines[i]!.startsWith('|'); i++) table.push(lines[i]!)
+  const split = (l: string): string[] => l.replace(/^\|/, '').replace(/\|\s*$/, '').split('|').map(cellText)
+  const header = split(table[0]!)
+  expect(table[1], 'the orchestration matrix header has no delimiter row').toMatch(/^\|\s*-{3}/)
+  const rows = table.slice(2).map((l) => {
+    const cells = split(l)
+    expect(cells, `an orchestration row has ${cells.length} cells, the header ${header.length}: ${l}`).toHaveLength(header.length)
+    return { client: cells[0]!, cells: cells.slice(1) }
+  })
+  return { header: header.slice(1), rows }
+}
+
 /** Doctor's row for one check: its header line and the lines under it. */
 function doctorRow(out: string, check: string): string {
   const lines = out.split('\n')
@@ -292,6 +314,54 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
   reg.define(/^the developer sees exactly one row reading "verified live", Claude Code$/, (w: ClientsWorld) => {
     const live = w.matrix!.filter(r => r.status === 'verified live')
     expect(live.map(r => r.client)).toEqual(['Claude Code'])
+  })
+
+  // ── the orchestration matrix, its own table (D370) ─────────────────────
+  reg.define(/^the documentation's orchestration matrix$/, (w: ClientsWorld) => {
+    w.readme = readFileSync(join(TS_ROOT, 'README.md'), 'utf8')
+  })
+  reg.define(/^the developer sees a table apart from the compatibility matrix, one row each for Claude Code, Codex CLI and Antigravity CLI, and one column per orchestration role$/, (w: ClientsWorld) => {
+    const m = parseOrchestrationMatrix(w.readme!)
+    // Apart: its heading is its own, after the compatibility matrix's, and
+    // the two tables do not share a line.
+    const lines = w.readme!.split('\n')
+    const compat = lines.findIndex(l => /^#{2,4} .*Compatibility matrix/i.test(l))
+    const orch = lines.findIndex(l => /^#{2,4} .*Orchestration matrix/i.test(l))
+    expect(orch, 'the orchestration matrix has no heading of its own').toBeGreaterThan(compat)
+    // The compatibility matrix is still the six documented clients' and
+    // nothing else: every row names one of them (Antigravity CLI is a row of
+    // this table only).
+    const compatRows = parseMatrix(w.readme!)
+    expect(compatRows).toHaveLength(DOCUMENTED_CLIENTS.length)
+    for (const r of compatRows) expect(DOCUMENTED_CLIENTS.some(c => r.client.startsWith(c)), `a compatibility row outside the six: ${r.client}`).toBe(true)
+    expect(m.rows.map(r => r.client)).toEqual(['Claude Code', 'Codex CLI', 'Antigravity CLI'])
+    // One column per role: each names a role of the beta.3 cut, and the
+    // six roles the ruling names are all there.
+    const roles = m.header.map(h => h.toLowerCase())
+    for (const role of ['headless worker', 'pen', 'tool calls captured', 'main that registers itself', 'subagent legs', 'pointer']) {
+      expect(roles.some(h => h.includes(role)), `no column for the role "${role}" (columns: ${m.header.join(' | ')})`).toBe(true)
+    }
+    expect(m.header).toHaveLength(6)
+  })
+  reg.define(/^the developer sees every cell carry one of "verified live", "verified through a stand-in", "documented only" or "not possible", with the date it was checked against$/, (w: ClientsWorld) => {
+    const m = parseOrchestrationMatrix(w.readme!)
+    const ONE_STATUS = /verified live|verified through a stand-in|documented only|not possible/g
+    for (const r of m.rows) for (const [i, cell] of r.cells.entries()) {
+      const where = `${r.client} / ${m.header[i]}: "${cell}"`
+      // Exactly one status in the cell, never two, never none.
+      expect(cell.match(ONE_STATUS) ?? [], `${where} carries no single status`).toHaveLength(1)
+      // Shape, not truth (as D153 reads): the cell carries the date it was
+      // checked; whether the date is right is read on the vendor's page.
+      expect(cell, `${where} carries no date`).toMatch(/\b\d{4}-\d{2}-\d{2}\b/)
+    }
+  })
+  reg.define(/^the developer sees every "not possible" cell name what the client lacks$/, (w: ClientsWorld) => {
+    const m = parseOrchestrationMatrix(w.readme!)
+    const impossible = m.rows.flatMap(r => r.cells.filter(c => c.includes('not possible')).map(c => `${r.client}: ${c}`))
+    // The needle fires: the matrix as written has such cells (Antigravity's
+    // subagent legs and pointer), so a table with none is a changed table.
+    expect(impossible.length, 'no "not possible" cell to read').toBeGreaterThan(0)
+    for (const c of impossible) expect(c, `${c} names no gap`).toMatch(/not possible: no \w/)
   })
 
   // ── without the experimental flag a copying client gets tools only (D208)

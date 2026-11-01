@@ -30,7 +30,7 @@ import { legFromFacts } from './run-export.js'
 import type { LegRegistration } from './persistence/leg-registry.js'
 import {
   CHECKPOINT_KIND, BRIEF_KIND, RUN_OPEN_KIND, RUN_CLOSE_KIND, RUN_META_KEY, KEY_META_KEY,
-  LEG_REGISTRATION_KIND, LEG_REGISTRATION_KEY, REGISTRATION_DIFFERS_KEY,
+  LEG_REGISTRATION_KIND, LEG_REGISTRATION_KEY, REGISTRATION_DIFFERS_KEY, HANDOFF_CLAIMS_KEY,
 } from './run-kinds.js'
 
 export {
@@ -219,7 +219,7 @@ export const RUN_ROW_INDEX_DDL =
   `CREATE INDEX IF NOT EXISTS idx_nodes_run ON nodes (json_extract(metadata_json, '$.${RUN_META_KEY}'), created_at) WHERE ${RUN_ROW_WHERE};`
 
 /** Where an imported row keeps its file's claims (handoff.ts, D165). */
-export const HANDOFF_CLAIMS_KEY = '_handoff_claims'
+export { HANDOFF_CLAIMS_KEY }
 
 // ── Plain-SQL reconstruction (D289, N31) ───────────────────────────
 

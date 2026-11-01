@@ -373,3 +373,10 @@ Feature: Journal storage — the store is durable, bounded, and honest about los
     When the retention sweep runs
     Then the first-moment row is demoted to its bounded preview, with its full length and its archive path on the row, after the archive is written
     And the 2 checkpoints and the summary row are untouched
+
+  @D339 @D319 @D48
+  Scenario: a worker's lane past the entry cap is evicted whole, never in part
+    Given a store under its session cap and byte budget whose entry cap is exceeded by a ticketed worker's lane of 300 captured rows beside its first-moment row, 2 checkpoints and a summary row, with a newer session after it
+    When the retention sweep runs
+    Then the worker's capture rows, all 300 and the first-moment row, are archived whole and evicted together, none left behind
+    And the 2 checkpoints and the summary row remain in the store

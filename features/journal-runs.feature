@@ -14,7 +14,8 @@ Feature: Runs — a run is a unit the harness reads by key and anyone reconstruc
   handoff, and a run opened inside a run is reachable from both ends.
 
   Rulings D289, D296, D300, D301, D302, D309, D310, D311, D312, D318,
-  D336, D337, D343, D344 of the beta.3 interview, 2026-10-30 to 2026-10-31. The legs are
+  D336, D337, D343, D344 of the beta.3 interview, 2026-10-30 to 2026-10-31,
+  and D360, D368 of the build's gates, 2026-11-01. The legs are
   journal-legs; the workers are journal-workers.
 
   @D289
@@ -120,6 +121,28 @@ Feature: Runs — a run is a unit the harness reads by key and anyone reconstruc
     And checkpoint number 2 is unchanged byte for byte and still readable by its id
     And the imported row keeps its claim under the file's claims, not as its own identity
 
+  @D343 @D310
+  Scenario: a hooks-door leg that ran on another machine comes back into the run by the handoff, its return found in its handoff lane
+    Given a run "r1" in the store on "laptop" with a builder leg, and a reviewer leg of "r1" that ran as a Claude Code subagent on "build-02" and wrote checkpoint number 2 under "login-form" there, naming number 1 as superseded
+    When the run "r1" is exported on "build-02" and imported on "laptop"
+    Then the harness on "laptop" looking up the key "login-form" on the run "r1" counts 2 legs, one of them imported
+    And the imported number 2 is the one in effect, flagged as arrived by import
+    And its return pointer names the reviewer's summary row in the handoff lane and says it arrived by import
+
+  @D360 @D310
+  Scenario: a run exported, carried back and imported again lands none of this store's own legs twice
+    Given a run "r1" in the store on "laptop" with a builder leg and a reviewer leg, 3 checkpoints under the key "login-form" and 2 summary rows
+    When the run "r1" is exported on "laptop" and that same file is imported on "laptop"
+    Then the harness on "laptop" looking up the key "login-form" on the run "r1" still counts 2 legs and none imported
+    And the store holds each of the run's rows once, unchanged byte for byte, and one registration per leg
+
+  @D310 @D289
+  Scenario: a leg's whole export carried back and imported reads back with the run by plain SQL, its captured rows through its imported registration
+    Given a run "r1" whose reviewer leg ran on "build-02" and made 30 captured tool calls there
+    When the run "r1" is exported whole on "build-02", the warning acknowledged, and imported on "laptop"
+    Then a reader on "laptop" with the store file and plain SQL reads the run's rows with the reviewer's 30 captured rows among them, in the order of their own moments, each naming its writer as imported from the file
+    And the captured rows reach the run through the reviewer's imported registration, no row of "laptop" renamed
+
   @D311
   Scenario: a leg opens a run of its own and both runs reach each other
     Given a run "r1" whose reviewer leg, under the key "login-form", spawns 2 workers under a run "r1.review" it opens, with their own key "login-form"
@@ -136,7 +159,7 @@ Feature: Runs — a run is a unit the harness reads by key and anyone reconstruc
     Then the reader reaches the legs of "r1.review.fix" through "r1.review"
     And the open row of "r1.review.fix" names "r1.review" and the leg that opened it
 
-  @D300
+  @D300 @D360
   Scenario: a run's default export is its skeleton, with no captured tool output
     Given a run "r1" with a builder leg and a reviewer leg, 4 checkpoints under the key "login-form" and 2 under the key "search-box", 2 summary rows, 2 first-moment rows and 120 captured tool calls
     When an agent exports the run "r1" without naming a form
@@ -151,6 +174,13 @@ Feature: Runs — a run is a unit the harness reads by key and anyone reconstruc
     Then the reply carries the warning that captured tool output can hold secrets, tokens and keys, and the file is written only after it
     And the file holds the 120 tool calls under each leg's lane
 
+  @D300
+  Scenario: an agent exporting a run whole through the tools gets the warning first and the file only after acknowledging
+    Given a run "r1" with 120 captured tool calls across its legs
+    When an agent asks the export tool for the run "r1" in the whole form without acknowledging the secrets warning
+    Then the reply is the warning that captured tool output can hold secrets, tokens and keys, and no file is written
+    And when the agent asks again acknowledging it, the file is written and holds the 120 tool calls under each leg's lane
+
   @D318
   Scenario: the skeleton carries first moments whole and its reply says they are the spawners' prompts as written
     Given a run "r1" whose builder's first-moment row holds a 300000-character prompt
@@ -158,6 +188,20 @@ Feature: Runs — a run is a unit the harness reads by key and anyone reconstruc
     Then the file holds all 300000 characters of that first-moment row
     And the reply says in one line that first moments carry the spawners' prompts as written and may hold what was pasted into them
     And no acknowledgement is asked for
+
+  @D318 @D368
+  Scenario: the export's reply names the legs whose first moment is the door's own line, and no other
+    Given a run "r1" with a builder leg through the ticket door, whose first-moment row holds the spawner's prompt, and a reviewer leg through the hooks door, whose first-moment row is the door's own line
+    When an agent exports the run "r1" without naming a form
+    Then after the line about first moments the reply carries one line naming the reviewer leg as the one whose prompt rode on the Agent tool and was not seen by the door
+    And that line names the reviewer leg alone
+
+  @D318
+  Scenario: the run's export file says in its head what its first moments are
+    Given a run "r1" whose builder's first-moment row holds the spawner's prompt
+    When an agent exports the run "r1" without naming a form
+    Then the file's head says in one line that first moments carry the spawners' prompts as written and may hold what was pasted into them
+    And a reader of the file alone, with no reply in hand, reads it there
 
   @D336 @D289
   Scenario: the lookup reply carries the pointer to the return of the leg that wrote the checkpoint
