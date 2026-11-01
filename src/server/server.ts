@@ -1547,6 +1547,11 @@ export interface StartServerOptions {
   /** The project directory the server was started for — see
    *  CreateServerOptions.projectDir. */
   projectDir?: string
+  /** The session this server's rows belong to, when its starter knows it
+   *  exactly — see CreateServerOptions.ccSessionId. `serve` passes the
+   *  worker's lane the ticket door named (D288, ticket.ts
+   *  WORKER_SESSION_ENV). */
+  ccSessionId?: string
   /** Transport type. Default: 'stdio'. */
   transport?: McpTransport
   /** Byte threshold for output shielding. 0 = disabled. */
@@ -1699,6 +1704,7 @@ export async function startServer(opts: StartServerOptions): Promise<void> {
   if (info) createOpts.info = info
   if (opts.lockHook) createOpts.lockHook = opts.lockHook
   if (opts.projectDir) createOpts.projectDir = opts.projectDir
+  if (opts.ccSessionId) createOpts.ccSessionId = opts.ccSessionId
 
   if (resolvedPolicy !== 'full') {
     dbg('startup', `Policy: ${resolvedPolicy} — limited tool set`)

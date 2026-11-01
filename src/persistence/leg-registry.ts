@@ -64,10 +64,15 @@ export type KeySource = 'declared' | 'inferred' | 'ambiguous' | 'own'
  *  by a reader), or ended with no valid instructions. */
 export type LegEnding = 'retired' | 'cut' | 'phantom' | 'invalid'
 
-/** Who noticed a phantom (D297): the three readers of the registry. */
+/** Who noticed a phantom (D297): the readers of the registry. */
 export const NOTICED_BY_LOOKUP = 'lookup'
 export const NOTICED_BY_STATUS = 'status call'
 export const NOTICED_BY_SESSION_START = 'session-start hook'
+/** The ticket door is a reader of the registry too (D297): before it
+ *  composes a worker's first moment it retires the run's gone workers on
+ *  its host, so a predecessor nobody retired is known gone, and the new
+ *  worker starts as its recovery leg (D279, D291). */
+export const NOTICED_BY_TICKET_DOOR = 'ticket door'
 
 /** The registry columns migration 031 adds, in one spelling for the
  *  migration and for hasLegColumns. */
@@ -419,20 +424,31 @@ export function registerWorkerLeg(db: RegistryHandle, start: WorkerStart): LegRe
   return legOf(db, ref)!
 }
 
-/** A worker's re-run for its missing checkpoint (D335): the same leg in
- *  the same lane under the same registration, the second process recorded
- *  BESIDE the first, never over it. The pid and start columns keep the
- *  first process; `processes` holds every one in order, and a liveness
- *  check reads the newest. */
-export function recordWorkerProcess(db: RegistryHandle, ref: LegRef, proc: WorkerProcess): LegRegistration {
+/** A process a worker runs as, recorded BESIDE any before it, never
+ *  over it (D297, D317, D335): the pid and start columns keep the first
+ *  process, `processes` holds every one in order, and a liveness check
+ *  reads the newest. Recording the first process after its spawn changes
+ *  nothing about how the leg ended: a damaged ticket's worker whose one
+ *  row landed first stays `invalid`. A re-run (`rerun`) for the leg's
+ *  missing checkpoint makes the leg live again only when it was retired
+ *  as finished (the other door may have retired it before this door saw
+ *  the exit); a leg cut, found gone, or ended with no valid instructions
+ *  is never undone. */
+export function recordWorkerProcess(db: RegistryHandle, ref: LegRef, proc: WorkerProcess, opts: { rerun?: boolean } = {}): LegRegistration {
   const leg = legOf(db, ref)
   if (!leg) throw new Error(`No leg registered for ${ref.sessionId}/${ref.agentId}`)
   const processes = [...leg.processes, proc]
   db.prepare(
     `UPDATE session_registry SET processes = ?, host = COALESCE(host, ?), pid = COALESCE(pid, ?), proc_start = COALESCE(proc_start, ?),
-       proc_start_token = COALESCE(proc_start_token, ?), stopped_at = NULL, ended = NULL, noticed_at = NULL, noticed_by = NULL
+       proc_start_token = COALESCE(proc_start_token, ?)
      WHERE session_id = ? AND agent_id = ?`,
   ).run(JSON.stringify(processes), proc.host, proc.pid, proc.start, proc.token ?? null, ref.sessionId, ref.agentId)
+  if (opts.rerun) {
+    db.prepare(
+      `UPDATE session_registry SET stopped_at = NULL, ended = NULL, noticed_at = NULL, noticed_by = NULL
+        WHERE session_id = ? AND agent_id = ? AND ended = 'retired'`,
+    ).run(ref.sessionId, ref.agentId)
+  }
   return legOf(db, ref)!
 }
 

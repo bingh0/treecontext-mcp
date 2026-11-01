@@ -277,7 +277,9 @@ describe('the registry around legs and workers', () => {
     try {
       expect(liveSubagents(db, 'w')).toEqual([])
       expect(retireAllSubagents(db, 'w', 5)).toBe(0)
-      expect(resolveWriter(db, 'w')).toEqual({ src: 'declared', writer: 'reviewer', agentId: WORKER_AGENT_ID })
+      // Its tools rows carry the parent as its ticket declared it (D288,
+      // D293), the same trace a library write as the leg carries.
+      expect(resolveWriter(db, 'w')).toEqual({ src: 'declared', writer: 'reviewer', agentId: WORKER_AGENT_ID, trace: { _parent: 'p1', _parent_src: 'declared' } })
     } finally { db.close() }
     expect(registration('w', WORKER_AGENT_ID)['stopped_at']).toBeNull()
   })

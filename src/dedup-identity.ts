@@ -6,7 +6,7 @@
  * path, and a migration cannot import flat-store without a cycle —
  * so both import this leaf module instead.
  */
-import { runRowKindOf, RUN_DEDUP_CLASS } from './run-kinds.js'
+import { isIdentityRow, RUN_DEDUP_CLASS } from './run-kinds.js'
 
 /** Sentinel session key for rows with no resolvable session identity.
  *  Deliberately not NULL: dedup windows, retention grouping, and the
@@ -57,7 +57,8 @@ export function dedupClassOf(
   // D329: a run's rows (a checkpoint, a brief, a run's open and close) are
   // identified by their place in the run, never by their text: two legs
   // that write the same state write two checkpoints, numbered apart.
-  return runRowKindOf(meta) !== null ? RUN_DEDUP_CLASS : 'curated'
+  // D303: a refused ticket's row is a fault at its moment, never deduped.
+  return isIdentityRow(meta) ? RUN_DEDUP_CLASS : 'curated'
 }
 
 /** The dedup class as the shipped ladder rungs 021–023 computed it,

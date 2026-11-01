@@ -45,22 +45,29 @@ import { roleWeightVector } from './persistence/fts.js'
 import { BOOKMARK_KIND, checkpointKindOf, placeChaptersAboveBookmarks, searchCheckpointKindOf, sessionChainWith } from './checkpoints.js'
 import { metadataFilterSql } from './persistence/metadata-filter.js'
 import { AMBIGUOUS_LANE, laneWriterOf, referencedBy, refIdsOf } from './references.js'
-import { resolveWriter, selfOf, selfWriterOf, agentWriterOf, MAIN_WRITER, STORE_WRITER, type WriterStamp } from './persistence/session-registry.js'
+import { resolveWriter, selfOf, selfWriterOf, agentWriterOf, stampMetadata, legTraceOf, MAIN_WRITER, STORE_WRITER, type WriterStamp, type GitSelf } from './persistence/session-registry.js'
 import {
   legOf, legsOfRun, workersOfParent, registerSubagentLeg, registerWorkerLeg, recordWorkerProcess, recordOpenedRun, recordSendBack,
-  retireLeg, retirePhantoms, settleLegKey, legWriterOf, hasLegColumns, mintWorkerSessionId, legReturnStamp,
+  retireLeg, retirePhantoms, settleLegKey, legWriterOf, hasLegColumns, mintWorkerSessionId, legReturnStamp, isLiveLeg, WORKER_AGENT_ID,
+  NOTICED_BY_TICKET_DOOR,
   type LegRef, type LegFacts, type LegDoor, type LegIdentity, type LegRegistration, type LegEnding, type WorkerStart,
   type WorkerProcess, type PhantomPass,
 } from './persistence/leg-registry.js'
 import type { ProcessProbe } from './persistence/process-probe.js'
 import {
-  CHECKPOINT_KIND, BRIEF_KIND, RUN_OPEN_KIND, RUN_CLOSE_KIND, runRowKindOf, nextCheckpointNumber, checkpointsInEffect, briefsInEffect,
+  CHECKPOINT_KIND, BRIEF_KIND, RUN_OPEN_KIND, RUN_CLOSE_KIND, runRowKindOf, nextCheckpointNumber, checkpointsInEffect, checkpointsUnder, briefsInEffect,
   runOpenOf, storeSupersedesFor, CHECKPOINT_NUMBER_KEY, SUPERSEDES_KEY, SUPERSEDES_SRC_KEY, SUPERSEDES_BY_WRITER, SUPERSEDES_BY_STORE,
   SUPERSEDES_PENDING, RESTS_ON_KEY, CHECKPOINTER_KEY, CHECKPOINTED_BY_KEY, BRIEF_FOR_KEY, OPENED_BY_KEY, OPENED_VIA_KEY,
   PARENT_RUN_KEY, PARENT_LEG_KEY, CLOSED_BY_KEY, REASON_KEY, BY_SRC_KEY, BY_PENDING, runOpenLine, runCloseLine, DOOR_KEY, IDENTITY_KEY, CWD_KEY, PARENT_KEY, PARENT_SRC_KEY,
   type CheckpointRecord, type BriefRecord,
 } from './runs.js'
 import { lookupKey, keyLookupReply, type KeyLookup, type KeyLookupReply } from './key-lookup.js'
+import {
+  firstMomentFactsOf, composeFirstMessage, invalidInstructionsMessage, firstMomentMetadata, sendBackMetadata, laneRowsOf,
+  type FirstMomentFacts,
+} from './first-moment.js'
+import { trustedWorkerLane, type TicketReading } from './ticket.js'
+import { FIRST_MOMENT_KIND, SEND_BACK_KIND, TICKET_REFUSED_KIND, RUN_META_KEY } from './run-kinds.js'
 import { retireMeta } from './persistence/writer-heal.js'
 import {
   DEDUP_WINDOW_SECS,
@@ -68,6 +75,10 @@ import {
   MAX_STORE_BYTES_DEFAULT,
   MAX_SESSIONS_DEFAULT,
 } from './persistence/capture-constants.js'
+
+/** The rows the ticket door writes in a worker's lane on its behalf:
+ *  none of them is the worker's own write (D303's "its one row"). */
+const DOOR_ROW_KINDS: ReadonlySet<string> = new Set([FIRST_MOMENT_KIND, SEND_BACK_KIND])
 
 export interface FlatStoreOptions {
   database: Database
@@ -559,10 +570,7 @@ export class FlatStore implements MemoryStore {
       _writer_agent_id: leg.agentId,
       [DOOR_KEY]: ref.door ?? 'library',
       [IDENTITY_KEY]: leg.identity ?? 'declared',
-      ...(leg.parentSession ? { [PARENT_KEY]: leg.parentSession, [PARENT_SRC_KEY]: leg.parentSrc } : {}),
-      ...(leg.cwd ? { [CWD_KEY]: leg.cwd } : {}),
-      ...(leg.worktree ? { _worktree: leg.worktree } : {}),
-      ...(leg.branch ? { _branch: leg.branch } : {}),
+      ...legTraceOf(leg),
     }
   }
 
@@ -654,9 +662,9 @@ export class FlatStore implements MemoryStore {
   }
 
   /** A worker's re-run (D335): the second process beside the first. */
-  recordWorkerRerun(ref: LegRef, proc: WorkerProcess): LegRegistration {
+  recordWorkerRerun(ref: LegRef, proc: WorkerProcess, opts: { rerun?: boolean } = {}): LegRegistration {
     this.ensureOpen()
-    return recordWorkerProcess(this.db, ref, proc)
+    return recordWorkerProcess(this.db, ref, proc, opts)
   }
 
   /** Record how a leg ended, at the moment its door saw it (D279, D291,
@@ -827,6 +835,32 @@ export class FlatStore implements MemoryStore {
     return checkpointsInEffect(this.db, this.treeId, run, key)
   }
 
+  /** What a leg's first moment is composed from (first-moment.ts): the
+   *  brief(s) and checkpoints in effect, the flags, the predecessor. */
+  firstMomentFacts(opts: Parameters<typeof firstMomentFactsOf>[2]): FirstMomentFacts {
+    this.ensureOpen()
+    return firstMomentFactsOf(this.db, this.treeId, opts)
+  }
+
+  /** The worker lane an environment may be honoured as (ticket.ts). */
+  trustedWorkerLane(env: NodeJS.ProcessEnv = process.env): string | null {
+    this.ensureOpen()
+    return trustedWorkerLane(this.db, env)
+  }
+
+  /** Every checkpoint under a run's key, in number order (runs.ts). */
+  checkpointsUnder(run: string, key: string): CheckpointRecord[] {
+    this.ensureOpen()
+    return checkpointsUnder(this.db, this.treeId, run, key)
+  }
+
+  /** The rows a leg left in its lane, the door's own not counted
+   *  (first-moment.ts laneRowsOf). */
+  laneRowsOf(leg: Pick<LegRegistration, 'kind' | 'agentId' | 'sessionId'>): number {
+    this.ensureOpen()
+    return laneRowsOf(this.db, leg)
+  }
+
   briefsInEffect(role: string): BriefRecord[] {
     this.ensureOpen()
     return briefsInEffect(this.db, this.treeId, role)
@@ -854,6 +888,178 @@ export class FlatStore implements MemoryStore {
   legReturnStamp(ref: LegRef): Record<string, string> {
     this.ensureOpen()
     return legReturnStamp(this.db, ref)
+  }
+
+  // ── The ticket door (D288, D291, D298, D303, D307, D335) ───────────
+  //
+  // The store half of the ticket door (ticket-door.ts holds the process
+  // half): each call is one immediate transaction, so a store that cannot
+  // be written leaves nothing half-done, and the door can tell its spawner
+  // so (D307).
+
+  /** A row the door records in a leg's lane, inside the caller's
+   *  transaction: the leg's capture (first moment, a re-run's message, a
+   *  run's output), written as captured rows are, its dedup anchor in the
+   *  leg's own session. */
+  private insertDoorRowSync(content: string, metadata: Record<string, unknown>, createdAt: number): string {
+    const nodeId = randomUUID().replace(/-/g, '')
+    const source = effectiveSource(null, metadata)
+    const inserted = this.persistence.insertNode(this.treeId, {
+      nodeId, treeId: this.treeId, parentId: null, depth: 0, isLeaf: true, content, summary: '',
+      createdAt, updatedAt: Date.now() / 1000, summaryStale: false, readOnly: false, decayExempt: false,
+      decayRate: undefined, utilityScore: 0.5, sourceLabel: source, metadata,
+    })
+    if (!inserted) throw new Error(`The door's ${String(metadata['kind'])} row was refused`)
+    if (isAutoCaptureSource(source)) this.persistence.upsertAnchor(this.treeId, sessionOf(metadata), contentFingerprint(content), nodeId, createdAt)
+    return nodeId
+  }
+
+  /**
+   * Start a worker at the ticket door (D288, D294, D298, D303, D315, D329,
+   * D332, D341): in one transaction, register it in its own lane under
+   * the ticket's parent (its process recorded once it runs, D297), open
+   * its run at this first leg's registration (D302), read what its first
+   * moment is composed from, and write that first moment as the first row
+   * of its lane: the prompt as written, with references to the brief and
+   * checkpoint rows (first-moment.ts). A ticket the door could not read
+   * whole registers the worker with what was read and the raw text, and
+   * its first message is the invalid-instructions statement (D303, D342).
+   */
+  startWorker(input: {
+    reading: TicketReading
+    prompt: string
+    sessionId?: string
+    door?: Exclude<LegDoor, 'hooks'>
+    where?: Partial<GitSelf>
+    host: string
+    at?: number
+    probe?: ProcessProbe
+  }): { leg: LegRegistration; facts: FirstMomentFacts | null; firstMessage: string; firstMomentId: string } {
+    this.ensureOpen()
+    const at = input.at ?? Date.now() / 1000
+    const t = input.reading.ticket
+    const sessionId = input.sessionId ?? mintWorkerSessionId()
+    const keyed = input.reading.valid && t.run !== null && t.key !== null && t.role !== null
+    return this.db.transaction(() => {
+      // D297: the door reads the registry, so it retires the run's gone
+      // workers on this host first; a predecessor left live by a worker
+      // nobody watched is then known gone (first-moment.ts predecessorOf).
+      if (t.run !== null) retirePhantoms(this.db, { noticedBy: NOTICED_BY_TICKET_DOOR, run: t.run, at, ...(input.probe ? { probe: input.probe } : {}) })
+      const start = keyed ? checkpointsInEffect(this.db, this.treeId, t.run!, t.key!).map((c) => c.nodeId) : []
+      const brief = keyed ? briefsInEffect(this.db, this.treeId, t.role!).find((b) => b.run === t.run && b.key === t.key) : undefined
+      // D281: the checkpointer is the ticket's, else the in-effect brief's
+      // for the role and key, in each tense, recorded on the registration,
+      // which the send-back and the recovery read. Both silent: nobody.
+      const named = {
+        checkpointer: t.checkpointer ?? brief?.checkpointer ?? null,
+        checkpointedBy: t.checkpointedBy ?? brief?.checkpointedBy ?? null,
+      }
+      const leg = registerWorkerLeg(this.db, {
+        sessionId, ticket: { ...t, ...named }, door: input.door ?? 'ticket', ...(input.where ? { where: input.where } : {}),
+        process: { pid: null, start: null, host: input.host }, briefId: brief?.nodeId ?? null, startCheckpoints: start, at,
+      })
+      this.openRunOnRegistrationSync(leg)
+      const ref = { sessionId, agentId: WORKER_AGENT_ID }
+      let facts: FirstMomentFacts | null = null
+      let firstMessage: string
+      if (input.reading.valid) {
+        facts = firstMomentFactsOf(this.db, this.treeId, {
+          run: t.run!, key: t.key, role: t.role!, noKey: t.noKey === true,
+          checkpointer: named.checkpointer, checkpointedBy: named.checkpointedBy, self: ref,
+        })
+        firstMessage = composeFirstMessage(facts, input.prompt)
+      } else {
+        firstMessage = invalidInstructionsMessage(input.reading.absent, { role: t.role, run: t.run, key: t.key })
+      }
+      const meta = {
+        ...firstMomentMetadata({
+          sessionId, run: t.run, key: t.noKey ? null : t.key, prompt: input.prompt, firstMessage, facts,
+          ...(input.reading.valid ? {} : { invalid: { absent: input.reading.absent } }),
+        }),
+        ...this.legStampFor({ ...ref, door: 'ticket' }),
+      }
+      const firstMomentId = this.insertDoorRowSync(input.prompt, meta, at)
+      return { leg: legOf(this.db, ref)!, facts, firstMessage, firstMomentId }
+    }, { mode: 'immediate' })
+  }
+
+  /**
+   * A worker's one send-back (D279, D291, D295, D335): in one transaction,
+   * count it on the registration (refused when the leg was already sent
+   * back, by either door) and write the row holding the second run's first
+   * message, naming the missing checkpoint, between the first run's rows
+   * and the second's. What the first run printed went to its spawner and
+   * is not a row (no scenario rules one in; the build leaves it out).
+   * Returns null when the leg had already spent its send-back.
+   */
+  recordWorkerSendBack(ref: LegRef, o: { message: string; refs: string[]; at?: number }): { sendBackId: string } | null {
+    this.ensureOpen()
+    const at = o.at ?? Date.now() / 1000
+    return this.db.transaction(() => {
+      const leg = legOf(this.db, ref)
+      if (!leg || leg.sendBacks >= 1 || leg.run === null || leg.key === null) return null
+      recordSendBack(this.db, ref)
+      const sendBackId = this.insertDoorRowSync(o.message,
+        { ...sendBackMetadata({ sessionId: ref.sessionId, run: leg.run, key: leg.key, message: o.message, refs: o.refs }), ...this.legStampFor({ ...ref, door: 'ticket' }) }, at)
+      return { sendBackId }
+    }, { mode: 'immediate' })
+  }
+
+  /**
+   * A worker's return at its exit (D288, D284, D336): its last output as
+   * the summary row in its lane, stamped with its run and key from its
+   * registration (legReturnStamp), by its role; then the leg retired as
+   * its door saw it end. The summary lands first, so a store that takes
+   * the summary and then refuses leaves a live leg with its return, never
+   * a retired leg that seems to have left none.
+   */
+  async retireWorker(ref: LegRef, o: { output: string; how: Exclude<LegEnding, 'phantom'>; summary: boolean; at?: number }): Promise<{ summaryId: string | null }> {
+    this.ensureOpen()
+    const at = o.at ?? Date.now() / 1000
+    let summaryId: string | null = null
+    if (o.summary) {
+      const r = await this.insert(o.output, {
+        leg: { ...ref, door: 'ticket' }, createdAt: at,
+        metadata: { kind: SUBAGENT_SUMMARY_KIND, ...legReturnStamp(this.db, ref) },
+      })
+      summaryId = r.nodeId
+    }
+    this.db.transaction(() => { retireLeg(this.db, ref, o.how, at) }, { mode: 'immediate' })
+    return { summaryId }
+  }
+
+  /**
+   * D303, D342: a spawner that sees a ticket's fault before spawning writes
+   * the row itself and spawns nothing: one row in the spawner's lane, by
+   * the spawner (its registered self's stamp when it has one, its declared
+   * role otherwise), saying the ticket was invalid and keeping the raw text.
+   */
+  async writeRefusedTicket(o: { reading: TicketReading; spawner?: { sessionId?: string | null; role?: string | null }; cwd?: string; at?: number }): Promise<InsertResult> {
+    this.ensureOpen()
+    const r = o.reading
+    const content = `treecontext: a worker's ticket was invalid, so no worker was started. It could not be read whole `
+      + `(unreadable: ${r.absent.join(', ') || 'none named'}). The raw ticket text, as the spawner handed it:\n${r.raw}`
+    const meta: Record<string, unknown> = {
+      kind: TICKET_REFUSED_KIND, ticket_raw: r.raw, ticket_absent: r.absent,
+      ...(r.ticket.run ? { [RUN_META_KEY]: r.ticket.run } : {}),
+      ...(r.ticket.role ? { ticket_role: r.ticket.role } : {}),
+    }
+    const session = o.spawner?.sessionId ?? null
+    const self = session !== null ? selfOf(this.db, session) : null
+    if (session !== null && self !== null) {
+      const stamp = resolveWriter(this.db, session)
+      return this.insert(content, {
+        ...(o.at !== undefined ? { createdAt: o.at } : {}),
+        metadata: { ...meta, _cc_session_id: session, ...stampMetadata(stamp), [DOOR_KEY]: 'ticket', [IDENTITY_KEY]: 'hook' },
+      })
+    }
+    // D294: a spawner the store never registered is written as it
+    // declared itself, in no session's lane it never spoke from.
+    return this.insert(content, {
+      ...(o.at !== undefined ? { createdAt: o.at } : {}),
+      declared: { role: o.spawner?.role ?? session ?? 'spawner', door: 'ticket', ...(o.cwd ? { cwd: o.cwd } : {}) },
+      metadata: meta,
+    })
   }
 
   /** Rows with `content` decoded to plaintext (C1: the column may hold a
@@ -1080,6 +1286,13 @@ export class FlatStore implements MemoryStore {
       if (meta && meta['_writer_src'] === 'declared' && typeof meta['key'] === 'string' && meta['key'].trim() !== '' && typeof meta['run'] === 'string') {
         const leg = this.writingLegOf(meta)
         if (leg) settleLegKey(this.db, leg, meta['run'], meta['key'], nodeId)
+      }
+      // D303, D342: a worker whose ticket the door could not read whole
+      // ends with no valid instructions once its one row lands, whichever
+      // door it wrote through; the door's own rows in its lane are not it.
+      if (meta && typeof meta['_writer_agent_id'] === 'string' && !DOOR_ROW_KINDS.has(String(meta['kind'] ?? ''))) {
+        const leg = this.writingLegOf(meta)
+        if (leg && leg.kind === 'worker' && leg.ticketAbsent.length > 0 && isLiveLeg(leg)) retireLeg(this.db, leg, 'invalid', createdAt)
       }
       const sup = this.applySupersedes(withPriorBookmarks(nodeId), nodeId)
       return { nodeId, path: [nodeId], depth: 0, deduplicated: false, driftDetected: false, staleNodes: [], ...withForeign(sup, split.foreign, true), ...runOut }

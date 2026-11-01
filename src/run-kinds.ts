@@ -29,14 +29,34 @@ export const RUN_CLOSE_KIND = 'run-close'
  *  door); defined here so the run's reads and the dedup identity know it. */
 export const FIRST_MOMENT_KIND = 'first-moment'
 
+/** A leg's summary row, its return (D284, D288, D336): the SubagentStop
+ *  report the drain stamps, or the worker's last output the ticket door
+ *  writes at its exit. Defined here, the leaf, so the dedup identity can
+ *  name it; handoff.ts re-exports it under the same name. */
+export const SUBAGENT_SUMMARY_KIND = 'subagent-summary'
+
+/** D335: the row holding a worker's second run's first message, naming
+ *  the missing checkpoint, between the first run's rows and the second's.
+ *  The door's capture in the worker's lane, like the first moment. */
+export const SEND_BACK_KIND = 'send-back'
+
+/** D303, D342: the row a spawner's door writes in the spawner's lane when
+ *  it sees before spawning that a ticket cannot be read whole, keeping the
+ *  raw ticket text; no worker is started. */
+export const TICKET_REFUSED_KIND = 'ticket-refused'
+
 /** The metadata keys a run's rows carry (D284, D289). */
 export const RUN_META_KEY = 'run'
 export const KEY_META_KEY = 'key'
 
 /** The kinds whose identity is their place in the run, never their
  *  content: two checkpoints that read alike are two checkpoints (D329),
- *  so these rows never deduplicate by text. */
-export const RUN_ROW_KINDS: readonly string[] = [CHECKPOINT_KIND, BRIEF_KIND, RUN_OPEN_KIND, RUN_CLOSE_KIND]
+ *  so these rows never deduplicate by text. A leg's summary row naming
+ *  its run is one of them (D288, D336): two workers that print the same
+ *  last line leave two returns, each in its own lane, never one row in
+ *  the first lane. (A first moment is the leg's capture, deduplicated
+ *  within its own session only, so it needs no class of its own.) */
+export const RUN_ROW_KINDS: readonly string[] = [CHECKPOINT_KIND, BRIEF_KIND, RUN_OPEN_KIND, RUN_CLOSE_KIND, SUBAGENT_SUMMARY_KIND]
 
 const named = (v: unknown): v is string => typeof v === 'string' && v.trim() !== ''
 
@@ -59,3 +79,15 @@ export function runRowKindOf(meta: Record<string, unknown> | null | undefined): 
 /** The dedup class of a run's rows (dedup-identity.ts dedupClassOf):
  *  outside both content classes, by identity alone. */
 export const RUN_DEDUP_CLASS = 'run'
+
+/** Rows identified by their moment, never their text, whether or not they
+ *  name a run: a ticket refused twice is two faults, two rows (D303). */
+export const IDENTITY_ROW_KINDS: readonly string[] = [TICKET_REFUSED_KIND]
+
+/** Whether a row is identified by its place or moment rather than its
+ *  text: a run's row, or one of IDENTITY_ROW_KINDS. */
+export function isIdentityRow(meta: Record<string, unknown> | null | undefined): boolean {
+  if (runRowKindOf(meta) !== null) return true
+  const kind = meta?.['kind']
+  return typeof kind === 'string' && IDENTITY_ROW_KINDS.includes(kind)
+}

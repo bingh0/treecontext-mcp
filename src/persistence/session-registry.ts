@@ -322,6 +322,28 @@ export interface WriterStamp {
   worktree?: string
   branch?: string
   candidates?: Array<{ agent_id: string; agent_type: string | null }>
+  /** A leg's trace (legTraceOf): the parent as linked or declared and the
+   *  directory, carried on every row its lane gets (D288, D293). */
+  trace?: Record<string, unknown>
+}
+
+/**
+ * The trace a registered leg's rows carry (D288, D293): its parent, linked
+ * by id when a hook registered that parent and declared otherwise, and the
+ * directory, worktree and branch its door read. One spelling for the
+ * library's leg stamp (FlatStore.legStampFor) and the tools door's
+ * (resolveWriter's worker branch), so a worker's row says the same thing
+ * whichever door it came through. The keys are runs.ts PARENT_KEY,
+ * PARENT_SRC_KEY and CWD_KEY, spelled here because runs.ts reads this
+ * module's neighbours and this one is a leaf of the registry.
+ */
+export function legTraceOf(l: { parentSession: string | null; parentSrc: string | null; cwd: string | null; worktree: string | null; branch: string | null }): Record<string, unknown> {
+  return {
+    ...(l.parentSession ? { _parent: l.parentSession, _parent_src: l.parentSrc } : {}),
+    ...(l.cwd ? { _cwd: l.cwd } : {}),
+    ...(l.worktree ? { _worktree: l.worktree } : {}),
+    ...(l.branch ? { _branch: l.branch } : {}),
+  }
 }
 
 export function resolveWriter(db: RegistryHandle, sessionId: string | null): WriterStamp {
@@ -330,12 +352,14 @@ export function resolveWriter(db: RegistryHandle, sessionId: string | null): Wri
   // tools write is the worker's, under the role its ticket declared.
   if (registryHasColumn(db, 'kind')) {
     const w = db.prepare(
-      "SELECT agent_type, worktree, branch FROM session_registry WHERE session_id = ? AND agent_id = 'worker' AND kind = 'worker'",
-    ).get(sessionId) as { agent_type: string | null; worktree: string | null; branch: string | null } | undefined
+      `SELECT agent_type, worktree, branch, cwd, parent_session, parent_src FROM session_registry
+        WHERE session_id = ? AND agent_id = 'worker' AND kind = 'worker'`,
+    ).get(sessionId) as { agent_type: string | null; worktree: string | null; branch: string | null; cwd: string | null; parent_session: string | null; parent_src: string | null } | undefined
     if (w) {
       return {
         src: 'declared', writer: agentWriterOf(w.agent_type, null) || 'worker', agentId: 'worker',
         ...(w.worktree ? { worktree: w.worktree } : {}), ...(w.branch ? { branch: w.branch } : {}),
+        trace: legTraceOf({ parentSession: w.parent_session, parentSrc: w.parent_src, cwd: w.cwd, worktree: w.worktree, branch: w.branch }),
       }
     }
   }
@@ -372,5 +396,6 @@ export function stampMetadata(stamp: WriterStamp): Record<string, unknown> {
   if (stamp.worktree !== undefined) m['_worktree'] = stamp.worktree
   if (stamp.branch !== undefined) m['_branch'] = stamp.branch
   if (stamp.candidates !== undefined) m['_writer_candidates'] = stamp.candidates
+  if (stamp.trace !== undefined) Object.assign(m, stamp.trace)
   return m
 }

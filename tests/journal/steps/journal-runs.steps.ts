@@ -11,6 +11,7 @@ import {
   type RunWorld, openRunWorld, hooksLeg, workerLeg, seedCheckpoints, sessionClient, localMoment, readerOf,
   rawOne, rawMetaOf, rawContentOf, rawRowOf, rawRegistration, rawCheckpoints, cpLabel, stringSteps, insertEchoed, subagentStopHook,
 } from '../run-world.js'
+import { runWorker } from './journal-workers.steps.js'
 
 // ── journal-runs ────────────────────────────────────────────────────────
 //
@@ -107,6 +108,84 @@ async function finishedWorker(w: RunsWorld, name: string, role: string, run: str
 
 export const runsDefiner = (reg: Registry<RunsWorld>): void => {
   const define = stringSteps(reg)
+
+  // ── D309: a run found by time through the rows the ticket door wrote ──
+  //
+  // Each worker is a real process (the stand-in) started through the real
+  // ticket door, the library call; the door's clock is set to the run's
+  // own day, so the first-moment rows, the registrations and the summary
+  // rows carry that day's moments, and the stand-in writes its checkpoint
+  // at a moment of the same day. Nothing else is staged.
+
+  /** The local start of the most recent Tuesday before today. */
+  const lastTuesday = (): number => {
+    const d = new Date()
+    const back = ((d.getDay() - 2 + 7) % 7) || 7
+    d.setDate(d.getDate() - back)
+    d.setHours(0, 0, 0, 0)
+    return d.getTime() / 1000
+  }
+
+  define(/^a store holding a run from last Tuesday with (\d+) first-moment rows, and runs from other days$/, async (w, n) => {
+    await openRunWorld(w)
+    const tuesday = lastTuesday()
+    w.moments!['tuesday'] = tuesday
+    const day = [
+      { run: 'the-tuesday-run', base: tuesday + 10 * HOUR, workers: Number(n) },
+      { run: 'the-monday-run', base: tuesday - 14 * HOUR, workers: 1 },
+      { run: 'the-latest-run', base: null, workers: 1 },
+    ]
+    const keys = ['login-form', 'login-api', 'login-tests']
+    for (const d of day) {
+      for (let i = 0; i < d.workers; i++) {
+        let t = (d.base ?? Date.now() / 1000) + i * 600
+        const clock = d.base === null ? undefined : (): number => (t += 1)
+        const key = keys[i % keys.length]!
+        await runWorker(w, {
+          spawner: 'library', prompt: `build the login piece ${key} for ${d.run}`,
+          ticket: { run: d.run, key, role: 'builder', checkpointer: 'builder', parent: { id: w.sessionId! } },
+          plan: { first: { checkpoint: `state: login piece ${key} done`, print: `login piece ${key} done`, ...(d.base !== null ? { at: t + 30 } : {}) } },
+          ...(clock ? { clock } : {}),
+        }, `${d.run}:${i}`)
+      }
+    }
+  })
+
+  define(/^an agent queries for what ran last Tuesday$/, async (w) => {
+    const after = w.moments!['tuesday']!
+    w.facts!['hits'] = await query(w, 'login piece', { top_k: 20, time_range: { after, before: after + 24 * HOUR } })
+  })
+
+  define(/^the agent's hits include that run's (\d+) first-moment rows, each carrying the run and its key$/, (w, n) => {
+    const hits = w.facts!['hits'] as Hit[]
+    const firsts = hits.filter((h) => h.metadata?.['kind'] === 'first-moment')
+    expect(firsts).toHaveLength(Number(n))
+    expect(new Set(firsts.map((h) => h.metadata!['run']))).toEqual(new Set(['the-tuesday-run']))
+    expect(firsts.map((h) => h.metadata!['key']).sort()).toEqual(['login-api', 'login-form', 'login-tests'])
+    // The rows are the ones the door wrote, at the run's own moments,
+    // and nothing from another day's run is among the hits.
+    const tuesday = w.moments!['tuesday']!
+    for (const h of firsts) {
+      const r = rawOne<{ t: number; s: string }>(w, 'SELECT created_at AS t, source_label AS s FROM nodes WHERE node_id = ?', h.nodeId)!
+      expect(r.t).toBeGreaterThanOrEqual(tuesday)
+      expect(r.t).toBeLessThan(tuesday + 24 * HOUR)
+      expect(r.s).toBe('auto-capture')
+    }
+    expect(hits.every((h) => h.metadata?.['run'] === undefined || h.metadata['run'] === 'the-tuesday-run')).toBe(true)
+    w.facts!['found-run'] = firsts[0]!.metadata!['run']
+  })
+
+  define(/^a query filtered by the run those rows carry returns the run's checkpoints and summary rows$/, async (w) => {
+    const run = w.facts!['found-run'] as string
+    const hits = await query(w, 'login piece', { top_k: 20, metadata_filter: { run } })
+    const want = rawAll<{ node_id: string }>(w,
+      `SELECT node_id FROM nodes WHERE json_extract(metadata_json, '$.run') = ? AND json_extract(metadata_json, '$.kind') IN ('checkpoint', ?)`, run, SUBAGENT_SUMMARY_KIND)
+      .map((r) => r.node_id)
+    expect(want).toHaveLength(6)
+    const got = new Set(hits.map((h) => h.nodeId))
+    for (const id of want) expect(got.has(id), `the run's row ${id} among the filtered hits`).toBe(true)
+    expect(hits.every((h) => h.metadata?.['run'] === run)).toBe(true)
+  })
   // ── D289: the harness's lookup, by run and key, with no model ──
 
   define(/^a run "([^"]+)" with (\d+) legs, all exited, whose key "([^"]+)" holds checkpoints number 1 to (\d+), number \4 written by the reviewer role$/, async (w, run, legs, key, last) => {
@@ -619,7 +698,7 @@ export const runsDefiner = (reg: Registry<RunsWorld>): void => {
     // Moments and states, no verdict: the leg's fields are the registry's
     // facts and its last write, and no word of the reply judges it.
     expect(Object.keys(leg).sort()).toEqual([
-      'agent_id', 'key', 'key_src', 'keyless', 'kind', 'last_write_at', 'noticed_at', 'noticed_by',
+      'agent_id', 'checkpoints_written', 'key', 'key_src', 'keyless', 'kind', 'last_write_at', 'noticed_at', 'noticed_by',
       'opened_runs', 'role', 'session_id', 'started_at', 'state', 'stopped_at',
     ])
     expect(leg.state).toBe('live')

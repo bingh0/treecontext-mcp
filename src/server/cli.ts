@@ -552,6 +552,10 @@ Usage:
   treecontext init [--force] [--dry-run]
   treecontext config checkpoint-interval <value> [--store X]
   treecontext hook <event>
+  treecontext run [--run R --role ROLE (--key K | --no-key) --parent ID [--checkpointer ROLE] [--checkpointed-by ROLE]
+                  [--parent-cli CLI] [--door | --no-door] | --ticket JSON] [--prompt TEXT | --prompt-file PATH]
+                  [--timeout SECONDS] [--check-ticket] [--spawner SESSION] [--message-arg] [--store X]
+                  [--project-dir D] -- <command> [args...]
   treecontext backup <dst> [--store X] [--force]
   treecontext export <path> [--whole --yes] [--force] [--store X] [--namespace N]
   treecontext import <path> [--store X] [--namespace N]
@@ -574,6 +578,27 @@ Commands:
                        "20 rounds or 45 minutes" (the default), or "off".
                        Echoes the setting back as it will behave.
   hook <event>         Dispatch a hook event (session-start, pre-compact, etc.)
+  run -- <command>     Spawn a headless worker (claude -p, codex exec, agy -p)
+                       through the ticket door: its ticket, minted from
+                       --run, --key (or --no-key), --role, --parent and
+                       optionally --checkpointer, --checkpointed-by,
+                       --parent-cli and --door or --no-door (whether it
+                       has a way to write), or given by --ticket or
+                       TREECONTEXT_TICKET, goes in its environment; its
+                       first message (brief, checkpoint in effect, then
+                       --prompt) on its stdin (--message-arg: as its last
+                       argument). Its stdout passes through byte for
+                       byte, nothing inserted (every run's, in order); at
+                       its exit it is retired with its output as its
+                       summary row, or run once more for a missing
+                       checkpoint it owes, never twice. The boundary is
+                       stderr: one line there, starting "treecontext:",
+                       says how it ended. --timeout <s> signals it and all
+                       it started (a cut); --check-ticket refuses a ticket
+                       that cannot be read whole, its row by --spawner's
+                       registered session, else declared by the ticket's
+                       parent. Exit: the worker's own code, 128 + signal,
+                       75 (store unreadable), 65 (ticket refused).
   export <path>        Write a handoff file for a teammate: this project's
                        chapter summaries and subagent summaries, the same
                        file the export tool writes. --whole exports the
@@ -1385,6 +1410,18 @@ async function main(): Promise<void> {
     return
   }
 
+  // The ticket door from a shell (D291): `<cli> run [...] -- <command>`.
+  // Everything after `--` is the worker's, so the command dispatches
+  // before parseArgs, which would refuse the worker's own flags.
+  if (process.argv[2] === 'run') {
+    armFailFastStdio()
+    const { runCommand } = await import('./run-command.js')
+    process.exitCode = await runCommand(process.argv.slice(3), {
+      dbPathFor: (store, projectDir) => resolveStorePath(store ?? resolveAutoStore(projectDir)),
+    })
+    return
+  }
+
   const args = parseArgs(process.argv)
 
   // The stdio disposition, chosen the moment the command is known and
@@ -1777,10 +1814,17 @@ async function main(): Promise<void> {
     // hooks), stranding roles for one TTL — bounded at 90s for the
     // namespace, and the drain self-heals per tick regardless.
     process.once('exit', releaseLeases)
+    // D288, D335: a server started inside a worker the ticket door
+    // registered stamps the worker's rows into the worker's own lane.
+    // Only a lane registered for the ticket in this same environment is
+    // honoured; anything else falls to the ordinary identity ladder.
+    const { trustedWorkerLane } = await import('../ticket.js')
+    const workerSession = trustedWorkerLane(db, process.env)
     await startServer({
       database: db,
       migrate: true,
       ...serveOpts,
+      ...(workerSession !== null ? { ccSessionId: workerSession } : {}),
       // Runtime-derived, not args-derived: capture requires owning the
       // drain, and info carries resolved paths.
       capture: args.capture,

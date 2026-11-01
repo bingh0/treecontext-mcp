@@ -90,6 +90,11 @@ export interface LegState {
   state: 'live' | 'retired' | 'cut' | 'phantom' | 'invalid'
   /** D320, D326, D341: see isKeylessLeg. */
   keyless: boolean
+  /** D279, D291, D316: how many checkpoints the leg wrote in its lane
+   *  under the run's key it is registered for; null for a leg with no key
+   *  of its own or declared. An ended leg with none ended without a
+   *  checkpoint, visibly so; the store says the count, never a verdict. */
+  checkpointsWritten: number | null
   startedAt: number
   /** D312: the moment of the newest row in the leg's lane, by the row's
    *  own moment, never the drain's; read for a live leg, null otherwise
@@ -102,11 +107,11 @@ export interface LegState {
   registration: LegRegistration
 }
 
-export function legStateOf(leg: LegRegistration, lastWriteAt: number | null = null): LegState {
+export function legStateOf(leg: LegRegistration, lastWriteAt: number | null = null, checkpointsWritten: number | null = null): LegState {
   const state: LegState['state'] = isLiveLeg(leg) ? 'live' : (leg.ended ?? 'retired')
   return {
     sessionId: leg.sessionId, agentId: leg.agentId, role: leg.role, kind: leg.kind, key: leg.key, keySrc: leg.keySrc,
-    state, keyless: isKeylessLeg(leg), startedAt: leg.startedAt, lastWriteAt, stoppedAt: leg.stoppedAt,
+    state, keyless: isKeylessLeg(leg), checkpointsWritten, startedAt: leg.startedAt, lastWriteAt, stoppedAt: leg.stoppedAt,
     noticedAt: leg.noticedAt, noticedBy: leg.noticedBy, openedRuns: leg.openedRuns, registration: leg,
   }
 }
@@ -120,6 +125,16 @@ function laneWhere(leg: Pick<LegRegistration, 'kind' | 'agentId'>): string {
 }
 function laneParams(leg: Pick<LegRegistration, 'kind' | 'agentId' | 'sessionId'>): unknown[] {
   return leg.kind === 'worker' || leg.agentId === WORKER_AGENT_ID ? [leg.sessionId] : [leg.sessionId, leg.agentId]
+}
+
+/** The checkpoints a leg wrote in its own lane under a run's key (D279,
+ *  D291): none means it ended, or is live, without one. */
+export function checkpointsWrittenBy(
+  db: RunReadHandle, treeId: number | null, leg: Pick<LegRegistration, 'kind' | 'agentId' | 'sessionId'>, run: string, key: string,
+): CheckpointRecord[] {
+  const worker = leg.kind === 'worker' || leg.agentId === WORKER_AGENT_ID
+  return checkpointsUnder(db, treeId, run, key)
+    .filter((c) => !c.imported && c.sessionKey === leg.sessionId && (worker || c.writerAgentId === leg.agentId))
 }
 
 /** D312: the moment of the newest row in a leg's lane, or null. */
@@ -340,7 +355,9 @@ export function lookupKey(db: RunReadHandle & RegistryHandle, treeId: number | n
     }
   }
   const registrations = legsOfRun(db, opts.run)
-  const legs = registrations.map((leg) => legStateOf(leg, isLiveLeg(leg) ? lastWriteOf(db, treeId, leg) : null))
+  const legs = registrations.map((leg) => legStateOf(leg, isLiveLeg(leg) ? lastWriteOf(db, treeId, leg) : null,
+    leg.run !== null && leg.key !== null && (leg.keySrc === 'own' || leg.keySrc === 'declared')
+      ? checkpointsWrittenBy(db, treeId, leg, leg.run, leg.key).length : null))
   const all = checkpointsUnder(db, treeId, opts.run, opts.key)
   const named = namedCheckpointerOf(db, treeId, opts.run, opts.key, registrations)
   const checkpoints: LookupCheckpoint[] = inEffectAmong(all).map((cp) => ({
@@ -428,6 +445,8 @@ export interface KeyLookupReply {
     key_src: string | null
     state: LegState['state']
     keyless: boolean
+    /** D279, D291, D316: see LegState.checkpointsWritten. */
+    checkpoints_written: number | null
     started_at: number
     last_write_at: number | null
     stopped_at: number | null
@@ -470,7 +489,7 @@ export function keyLookupReply(l: KeyLookup): KeyLookupReply {
     },
     legs: l.legs.map((g) => ({
       session_id: g.sessionId, agent_id: g.agentId, role: g.role, kind: g.kind, key: g.key, key_src: g.keySrc,
-      state: g.state, keyless: g.keyless, started_at: g.startedAt, last_write_at: g.lastWriteAt,
+      state: g.state, keyless: g.keyless, checkpoints_written: g.checkpointsWritten, started_at: g.startedAt, last_write_at: g.lastWriteAt,
       stopped_at: g.stoppedAt, noticed_at: g.noticedAt, noticed_by: g.noticedBy, opened_runs: g.openedRuns,
     })),
     named_checkpointer: { names: l.namedCheckpointer.names, by: l.namedCheckpointer.by },

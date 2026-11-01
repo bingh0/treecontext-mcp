@@ -64,7 +64,7 @@ in the charter or out of the build.
   `@modelcontextprotocol/server`), 8 tools
 - `src/server/cli.ts` — CLI: serve, install/uninstall, doctor, init, hook,
   backup, stores, ccr, export/import (the handoff file's shell door),
-  config checkpoint-interval
+  config checkpoint-interval, run (the ticket door's shell door)
 - `src/server/ingestion.ts` — drains staged events into the journal
   (honest timestamps, dedup, byte valve, poison dead-letter); stamps a
   captured row's `_writer` from the hook payload's agent fields and runs
@@ -96,7 +96,10 @@ in the charter or out of the build.
 - `src/persistence/process-probe.ts` — what this host's OS says about a
   process (exists, start moment) for the phantom pass
 - `src/run-kinds.ts` — the row kinds a run is made of (checkpoint, brief,
-  run-open, run-close, first-moment), a leaf the dedup identity reads
+  run-open, run-close, first-moment, the leg's summary) and the rows the
+  ticket door writes in a worker's lane (send-back) or the spawner's
+  (ticket-refused, identified by its moment), a leaf the dedup identity
+  reads
 - `src/runs.ts` — a run's reads: checkpoints in effect (an imported
   one's supersedes claim believed), the store's numbering, briefs in
   effect and of a key, a run's open and close, and `RUN_ROWS_SQL`, the
@@ -105,6 +108,23 @@ in the charter or out of the build.
   through the library and the agent's through the query tool's
   `key_lookup` mode: the checkpoint(s) in effect, the flag in words, the
   pointer to the writing leg's return, the run's facts, each leg's state
+  and the checkpoints it wrote
+- `src/ticket.ts` — the ticket a headless worker carries in its
+  environment (`TREECONTEXT_TICKET`, one JSON object) and the lane the
+  door named (`TREECONTEXT_WORKER_SESSION`): minting, and the one reader
+  every door uses, whole, damaged, blank-keyed, keyless or silent
+- `src/first-moment.ts` — a leg's first moment for both doors: what it is
+  composed from (brief, checkpoint(s) in effect, flags, the predecessor a
+  recovery leg recovers), the first message, treecontext's own lines
+  (state, not history; invalid instructions; the send-back reason), and
+  the metadata and boundaries of the rows the door writes in the lane
+- `src/ticket-door.ts` — the ticket door's process half: `spawnWorker`
+  (the library spawner; `treecontext run` is the same call), the
+  send-back decision, the not-started rule, retirement at exit with the
+  summary row, `claimTicket` for a worker with no wrapper
+- `src/server/run-command.ts` — `treecontext run`: the ticket from flags,
+  `--ticket` or the environment, the worker's stdout passed through, the
+  door's one line on stderr, the worker's exit code
 - `src/persistence/writer-heal.ts` — the echo heal that sets a
   tool-written row's writer exactly at the drain, and undoes what a wrong
   first stamp did across lanes
@@ -190,6 +210,22 @@ node dist/server/cli.js doctor      # after a build
 - Imported rows live in `handoff:` lanes (`session_id` =
   `handoff:<claimed session>`); the file's identity claims sit under
   `_handoff_claims`, never at the top level
+- The ticket door writes a worker's first moment and a re-run's message
+  as the worker's capture (`source` auto-capture, in its own session), so
+  the valve reaches them; what a run printed is not a row; its
+  summary row is agent-authored, and a summary naming its run is a run
+  row (`RUN_ROW_KINDS`), never deduplicated by its text. Never let a
+  door row count as the worker's own write: a damaged ticket's worker is
+  retired `invalid` when its first row of its own lands
+  (`DOOR_ROW_KINDS` in flat-store.ts)
+- A worker's lane is its whole session; the door hands the session to the
+  worker in `TREECONTEXT_WORKER_SESSION` and `serve` stamps tool rows into
+  it, but only through `trustedWorkerLane`: the registration there must be
+  the one the ticket in the same environment describes. Never honour the
+  variable alone. The door spawns a worker as its own process group and
+  signals the group. A door that cannot write the store at a worker's exit records
+  nothing and leaves the leg for the phantom pass: never retry that
+  write, never guess an exit moment
 - The curated unique index is partial: `dedup_class = 'curated'` outside
   handoff lanes (`CURATED_INDEX_WHERE`). Inside a handoff lane identity
   decides, not content; any rebuild must reuse the shared DDL

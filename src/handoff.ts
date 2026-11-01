@@ -23,6 +23,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import { randomBytes } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { sessionOf, NO_SESSION } from './dedup-identity.js'
+import { SUBAGENT_SUMMARY_KIND } from './run-kinds.js'
 
 /** Where an import came from and who ran it — the importer's own marks. */
 export interface HandoffSource {
@@ -128,8 +129,10 @@ export function exporterName(): string {
 // the file here, so the same store and form write the same bytes.
 
 /** A subagent summary's metadata kind — the contract with the
- *  orchestration chunk, which stamps it from the SubagentStop capture. */
-export const SUBAGENT_SUMMARY_KIND = 'subagent-summary'
+ *  orchestration chunk, which stamps it from the SubagentStop capture, and
+ *  with the ticket door, which writes a worker's return under it. Spelled
+ *  once in run-kinds.ts, the leaf the dedup identity reads it from. */
+export { SUBAGENT_SUMMARY_KIND }
 
 /** The client's own internal agent's report kind and writer (D263),
  *  spelled in the persistence layer beside the other writers. */

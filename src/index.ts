@@ -44,11 +44,11 @@ export type { CheckpointRecord, BriefRecord, RunReadHandle } from './runs.js'
 // D301, D312, D336, D337, D343, D344).
 export {
   LAST_SIZES_SHOWN, KEY_LOOKUP_PARAM, lookupKey, keyLookupReply, legStateOf, isKeylessLeg, lastWriteOf,
-  namedCheckpointerOf, isNamedCheckpointer, checkpointerFlag, importFlag, legReturnOf, checkpointName,
+  namedCheckpointerOf, isNamedCheckpointer, checkpointerFlag, importFlag, legReturnOf, checkpointName, checkpointsWrittenBy,
 } from './key-lookup.js'
 export type { LegState, KeyLookup, KeyLookupReply, LookupCheckpoint, LegReturn, RunFacts, NamedCheckpointer } from './key-lookup.js'
 export {
-  WORKER_AGENT_ID, NOTICED_BY_LOOKUP, NOTICED_BY_STATUS, NOTICED_BY_SESSION_START,
+  WORKER_AGENT_ID, NOTICED_BY_LOOKUP, NOTICED_BY_STATUS, NOTICED_BY_SESSION_START, NOTICED_BY_TICKET_DOOR,
   hasLegColumns, isLiveLeg, legWriterOf, legOf, legsOfRun, workersOfParent, workerOfSession,
   registerSubagentLeg, registerWorkerLeg, recordWorkerProcess, retireLeg, recordSendBack, settleLegKey,
   recordOpenedRun, mintWorkerSessionId, retirePhantoms, legReturnStamp,
@@ -58,4 +58,27 @@ export type {
   LegRegistration, LegFacts, WorkerTicket, WorkerStart, PhantomCheck, PhantomPass,
 } from './persistence/leg-registry.js'
 export { hostProbe, START_TOLERANCE_SECS } from './persistence/process-probe.js'
+// The ticket door (D288, D291, D298, D303, D307, D335, D340, D341): the
+// ticket a headless worker carries in its environment, the first moment
+// both doors compose, and the library spawner (`treecontext run` is the
+// same call from a shell).
+export {
+  TICKET_ENV, WORKER_SESSION_ENV, TICKET_VERSION, REQUIRED_TICKET_FIELDS, TICKET_FIELDS, mintTicket, readTicket,
+  ticketTextIn, workerSessionIn, declaresDoor, ticketMatches, trustedWorkerLane,
+} from './ticket.js'
+export type { TicketFields, TicketReading } from './ticket.js'
+export {
+  STATE_NOT_HISTORY_LINE, PROMPT_HEADING, FIRST_MOMENT_PREVIEW_LEN, FIRST_MOMENT_META_KEY, invalidInstructionsMessage,
+  sendBackReason, momentText, laneRowsOf, owesCheckpoint, predecessorOf, recoveryLine, firstMomentFactsOf, composeFirstMessage,
+  composeSendBackMessage, doorRowBoundaries, firstMomentMetadata, sendBackMetadata, NO_CHECKPOINTER_LINE,
+} from './first-moment.js'
+export type { FirstMomentFacts, Predecessor } from './first-moment.js'
+export {
+  spawnWorker, claimTicket, sendBackDecision, openDoorStore, notStartedLine, DOOR_BUSY_WAIT_MS, NOT_STARTED_EXIT,
+  TICKET_REFUSED_EXIT, SPAWN_FAILED_EXIT, TIMEOUT_GRACE_MS, STDOUT_DRAIN_MS, DOOR_LINE_PREFIX,
+} from './ticket-door.js'
+export type {
+  SpawnWorkerOptions, WorkerRunResult, WorkerRunRecord, WorkerEnding, SendBackInput, SendBackVerdict, ClaimedTicket,
+} from './ticket-door.js'
+export { SUBAGENT_SUMMARY_KIND, SEND_BACK_KIND, TICKET_REFUSED_KIND, IDENTITY_ROW_KINDS, isIdentityRow } from './run-kinds.js'
 export type { ProcessProbe } from './persistence/process-probe.js'

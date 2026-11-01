@@ -109,44 +109,28 @@ export const WHOLE_FEATURE_WIP: WholeFeatureWipRuling[] = [
   },
   {
     feature: 'journal-workers',
-    reason: 'scoped 2026-10-31 before its build (D288, D291–D298, D303, D307, D313, D315–D317); on 2026-11-01 unit 1 bound the registry half of the ticket door (the parent declared or linked, what a registration carries, phantoms retired by the registry\'s readers against real processes, a library writer traced); leaves the register when the door and the first-moment row bind through real worker processes',
+    reason: 'scoped 2026-10-31 before its build (D288, D291–D298, D303, D307, D313, D315–D317); on 2026-11-01 unit 1 bound the registry half of the ticket door (the parent declared or linked, what a registration carries, phantoms retired by the registry\'s readers against real processes, a library writer traced); on 2026-11-01 unit 3 bound the ticket door itself through real worker processes, the library call and the `treecontext run` wrapper each starting the stand-in headless worker (the ticket read from the environment, whole, damaged, blank-keyed or keyless, the first message and the first-moment row, the send-back once, the cut, the not-started rule, the exit the store cannot take, the self-minted ticket); leaves the register when the `claude -p` child binds through its hooks (unit 4): its registration as a worker, the first-moment row through its session-start hook, the send-back once across both doors',
     ruledOn: '2026-11-01',
+    // Two outlines are bound in part: their rows through the hook-less door
+    // of a `codex exec` worker (the wrapper) run on 2026-11-01, unit 3; the
+    // rows through the session-start hook of a `claude -p` child wait on
+    // unit 4, so the outlines stay listed until those rows bind —
+    //   "the first-moment row is the first row of the worker's lane through the <door>"
+    //   'a worker whose ticket is <damage> is registered with what was read, told its instructions were invalid, and ends visibly through the <door>'
+    // The parent outline is bound in part too: its Claude Code row (the
+    // real session-start hook) and its Codex row (the session-start command
+    // of the verbatim copy `install --experimental-capture --agent codex`
+    // writes, run as Codex runs it) bind; its Antigravity row cannot, since
+    // this build writes no hooks for Antigravity (an archived-build platform,
+    // MCP config only), so no unit owns it until Antigravity gets a hook
+    // adapter, and the outline stays listed. Standing it in with another
+    // CLI's hook would bind the row against something it does not name.
     scenarios: [
-      // unit 3, the ticket door: the ticket read from the environment,
-      // the first message and first-moment row, the wrapper and the
-      // library spawner's send-back once, retirement at exit with the
-      // summary row, a damaged or keyless ticket, the not-started rule
-      // (D288, D291, D292, D293, D298, D303, D307, D313, D315, D316,
-      // D329, D332, D335, D340, D341, D342)
       'a <worker> worker under a <parent> parent writes into its own lane with its role as writer',
-      'a worker is retired at exit and its last output is the summary row the pointer names',
-      "the ticket door composes a worker's first message from the brief, the checkpoint in effect and the spawner's prompt",
-      'a first moment with no checkpoint in effect is the brief and the prompt',
+      // unit 4, the hooks door for a `claude -p` child (D295, D298, D303, D342)
       "the first-moment row is the first row of the worker's lane through the <door>",
       'both doors leave the same first-moment row, readable with plain SQL alone',
-      'an empty spawner prompt still leaves the first-moment row',
-      'a first-moment row keeps a pasted prompt whole behind a bounded preview',
-      "a stranger's checkpoint reaches the worker's first moment flagged in words",
-      'a hook-less worker that finishes without a checkpoint is run once more by the <spawner> that started it',
-      'the wrapper never runs a worker a third time',
-      'a worker that claimed a ticket with no wrapper gets no send-back and ends visibly without a checkpoint',
-      'a worker whose ticket names another role as checkpointer is never sent back',
-      'a worker whose ticket declares no door gets no send-back',
-      'an exit by signal is a cut, never sent back, and the next leg of the role is a recovery leg',
-      'a worker that exits on its own error is finished and gets the one send-back',
-      "an unregistered writer's row through the <door> is accepted and traced, never refused",
       'a worker whose ticket is <damage> is registered with what was read, told its instructions were invalid, and ends visibly through the <door>',
-      'the ticket door that sees the fault before spawning writes the row itself and spawns nothing',
-      'a worker is not started while the store cannot be read, and the spawner is told',
-      'a checkpoint the store cannot take at exit is lost from the store, not from the spawner',
-      "a worker's first message carries both checkpoints when two are in effect",
-      "the ticket door's first message says in treecontext's own words that a checkpoint is state, not history",
-      "a worker's re-run for its missing checkpoint is the same leg in the same lane",
-      'a ticket that says nothing about the door is read as declaring one',
-      'a ticket that says in words the worker has no key starts a one-off worker',
-      'a ticket whose key is merely blank is damage',
-      'a worker whose ticket still named its run is listed under that run; one that named neither is reachable only by its exit line and parent',
-      // unit 4, the hooks door for a `claude -p` child (D295)
       'a `claude -p` child with a ticket is registered as a worker by the hook, never as a self',
       "the stop hook's send-back is the leg's one, and the wrapper starts no run after it",
       "when the stop hook could not ask, the wrapper's send-back is the leg's one",
@@ -154,7 +138,7 @@ export const WHOLE_FEATURE_WIP: WholeFeatureWipRuling[] = [
   },
   {
     feature: 'journal-runs',
-    reason: 'scoped 2026-10-31 before its build (D289, D296, D300–D302, D309–D312, D318); on 2026-11-01 unit 1 bound the plain-SQL read-back, the open and close, the run found by name, nested runs and the harness\'s lookup by run and key; on 2026-11-01 unit 2 bound the key lookup\'s whole reply (the flag in words against the brief\'s checkpointer, the run\'s facts and the sizes of the last three, a live leg\'s start and last write, the pointer to the writing leg\'s return or the line that it left none) and the agent\'s door to it and to a run\'s close through the tools; leaves the register when a run found by time binds through the first-moment and summary rows the doors write (units 3 and 4), and the run export forms and the run come back by the handoff (D343) bind against the store file (unit 6)',
+    reason: 'scoped 2026-10-31 before its build (D289, D296, D300–D302, D309–D312, D318); on 2026-11-01 unit 1 bound the plain-SQL read-back, the open and close, the run found by name, nested runs and the harness\'s lookup by run and key; on 2026-11-01 unit 2 bound the key lookup\'s whole reply (the flag in words against the brief\'s checkpointer, the run\'s facts and the sizes of the last three, a live leg\'s start and last write, the pointer to the writing leg\'s return or the line that it left none) and the agent\'s door to it and to a run\'s close through the tools; on 2026-11-01 unit 3 bound the run found by time through the first-moment, checkpoint and summary rows real workers left through the ticket door; leaves the register when the run export forms and the run come back by the handoff (D343) bind against the store file (unit 6)',
     ruledOn: '2026-11-01',
     // Bound on 2026-11-01 through run-world.ts hooksLeg (the real
     // SubagentStart hook, then registerLeg): to be re-bound through the
@@ -163,8 +147,6 @@ export const WHOLE_FEATURE_WIP: WholeFeatureWipRuling[] = [
     //   'the lookup reply carries the pointer to the return of the leg that wrote the checkpoint' (unit 2)
     //   'an agent gets the same lookup reply as the harness through the tools' (unit 2)
     scenarios: [
-      // units 3 and 4: first-moment rows and summary rows carrying the run (D309)
-      'an agent finds a run by time with no id in hand',
       // unit 6: run export forms and the handoff back (D300, D318, D343)
       'a leg that ran on another machine comes back into the run by the handoff, and its claim is believed, flagged',
       "a run's default export is its skeleton, with no captured tool output",

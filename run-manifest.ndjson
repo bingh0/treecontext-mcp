@@ -283,7 +283,7 @@
 {"file":"features/journal-runs.feature","title":"a stranger's checkpoint comes back as the one in effect, flagged against the named checkpointer","status":"passed"}
 {"file":"features/journal-runs.feature","title":"an agent closes a run through the tools and the record is the same as the harness's","status":"passed"}
 {"file":"features/journal-runs.feature","title":"an agent finds a run by its name","status":"passed"}
-{"file":"features/journal-runs.feature","title":"an agent finds a run by time with no id in hand","status":"unbound"}
+{"file":"features/journal-runs.feature","title":"an agent finds a run by time with no id in hand","status":"passed"}
 {"file":"features/journal-runs.feature","title":"an agent gets the same lookup reply as the harness through the tools","status":"passed"}
 {"file":"features/journal-runs.feature","title":"every key lookup carries the run's facts beside the checkpoint","status":"passed"}
 {"file":"features/journal-runs.feature","title":"nesting is not limited to one level","status":"passed"}
@@ -377,50 +377,50 @@
 {"file":"features/journal-storage.feature","title":"what goes in comes back out, byte for byte","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a `agy -p` worker under a Antigravity parent writes into its own lane with its role as writer [3]","status":"unbound"}
 {"file":"features/journal-workers.feature","title":"a `claude -p` child with a ticket is registered as a worker by the hook, never as a self","status":"unbound"}
-{"file":"features/journal-workers.feature","title":"a `claude -p` worker under a Codex parent writes into its own lane with its role as writer [2]","status":"unbound"}
-{"file":"features/journal-workers.feature","title":"a `codex exec` worker under a Claude Code parent writes into its own lane with its role as writer [1]","status":"unbound"}
-{"file":"features/journal-workers.feature","title":"a checkpoint the store cannot take at exit is lost from the store, not from the spawner","status":"unbound"}
-{"file":"features/journal-workers.feature","title":"a first moment with no checkpoint in effect is the brief and the prompt","status":"unbound"}
-{"file":"features/journal-workers.feature","title":"a first-moment row keeps a pasted prompt whole behind a bounded preview","status":"unbound"}
+{"file":"features/journal-workers.feature","title":"a `claude -p` worker under a Codex parent writes into its own lane with its role as writer [2]","status":"passed"}
+{"file":"features/journal-workers.feature","title":"a `codex exec` worker under a Claude Code parent writes into its own lane with its role as writer [1]","status":"passed"}
+{"file":"features/journal-workers.feature","title":"a checkpoint the store cannot take at exit is lost from the store, not from the spawner","status":"passed"}
+{"file":"features/journal-workers.feature","title":"a first moment with no checkpoint in effect is the brief and the prompt","status":"passed"}
+{"file":"features/journal-workers.feature","title":"a first-moment row keeps a pasted prompt whole behind a bounded preview","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a gone worker nobody retired is retired as a phantom by the next harness's lookup on its host [1]","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a gone worker nobody retired is retired as a phantom by the next session-start hook on its host [3]","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a gone worker nobody retired is retired as a phantom by the next status call on its host [2]","status":"passed"}
-{"file":"features/journal-workers.feature","title":"a hook-less worker that finishes without a checkpoint is run once more by the `treecontext run` wrapper that started it [1]","status":"unbound"}
-{"file":"features/journal-workers.feature","title":"a hook-less worker that finishes without a checkpoint is run once more by the library call that started it [2]","status":"unbound"}
+{"file":"features/journal-workers.feature","title":"a hook-less worker that finishes without a checkpoint is run once more by the `treecontext run` wrapper that started it [1]","status":"passed"}
+{"file":"features/journal-workers.feature","title":"a hook-less worker that finishes without a checkpoint is run once more by the library call that started it [2]","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a host whose process start moment cannot be read leaves the number alone, and the reply says so","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a live worker with its own start moment stays live","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a parent a hook did register is linked by id, never copied","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a parent no hook registered is carried on each worker's registration as declared, never as a row of its own","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a reused process number is told from the worker by the process's start moment","status":"passed"}
-{"file":"features/journal-workers.feature","title":"a stranger's checkpoint reaches the worker's first moment flagged in words","status":"unbound"}
-{"file":"features/journal-workers.feature","title":"a ticket that says in words the worker has no key starts a one-off worker","status":"unbound"}
-{"file":"features/journal-workers.feature","title":"a ticket that says nothing about the door is read as declaring one","status":"unbound"}
-{"file":"features/journal-workers.feature","title":"a ticket whose key is merely blank is damage","status":"unbound"}
-{"file":"features/journal-workers.feature","title":"a worker is not started while the store cannot be read, and the spawner is told","status":"unbound"}
-{"file":"features/journal-workers.feature","title":"a worker is retired at exit and its last output is the summary row the pointer names","status":"unbound"}
+{"file":"features/journal-workers.feature","title":"a stranger's checkpoint reaches the worker's first moment flagged in words","status":"passed"}
+{"file":"features/journal-workers.feature","title":"a ticket that says in words the worker has no key starts a one-off worker","status":"passed"}
+{"file":"features/journal-workers.feature","title":"a ticket that says nothing about the door is read as declaring one","status":"passed"}
+{"file":"features/journal-workers.feature","title":"a ticket whose key is merely blank is damage","status":"passed"}
+{"file":"features/journal-workers.feature","title":"a worker is not started while the store cannot be read, and the spawner is told","status":"passed"}
+{"file":"features/journal-workers.feature","title":"a worker is retired at exit and its last output is the summary row the pointer names","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a worker on another host is left live and the reply says it cannot be checked from here","status":"passed"}
-{"file":"features/journal-workers.feature","title":"a worker that claimed a ticket with no wrapper gets no send-back and ends visibly without a checkpoint","status":"unbound"}
-{"file":"features/journal-workers.feature","title":"a worker that exits on its own error is finished and gets the one send-back","status":"unbound"}
-{"file":"features/journal-workers.feature","title":"a worker whose ticket declares no door gets no send-back","status":"unbound"}
+{"file":"features/journal-workers.feature","title":"a worker that claimed a ticket with no wrapper gets no send-back and ends visibly without a checkpoint","status":"passed"}
+{"file":"features/journal-workers.feature","title":"a worker that exits on its own error is finished and gets the one send-back","status":"passed"}
+{"file":"features/journal-workers.feature","title":"a worker whose ticket declares no door gets no send-back","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a worker whose ticket is hand-edited so that the run is missing is registered with what was read, told its instructions were invalid, and ends visibly through the session-start hook of a `claude -p` child [2]","status":"unbound"}
-{"file":"features/journal-workers.feature","title":"a worker whose ticket is minted in an older shape that still reads as the role \"reviewer\" is registered with what was read, told its instructions were invalid, and ends visibly through the hook-less door of a `codex exec` worker [3]","status":"unbound"}
-{"file":"features/journal-workers.feature","title":"a worker whose ticket is truncated after the role \"builder\" is registered with what was read, told its instructions were invalid, and ends visibly through the hook-less door of a `codex exec` worker [1]","status":"unbound"}
+{"file":"features/journal-workers.feature","title":"a worker whose ticket is minted in an older shape that still reads as the role \"reviewer\" is registered with what was read, told its instructions were invalid, and ends visibly through the hook-less door of a `codex exec` worker [3]","status":"passed"}
+{"file":"features/journal-workers.feature","title":"a worker whose ticket is truncated after the role \"builder\" is registered with what was read, told its instructions were invalid, and ends visibly through the hook-less door of a `codex exec` worker [1]","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a worker whose ticket is truncated after the role \"builder\" is registered with what was read, told its instructions were invalid, and ends visibly through the session-start hook of a `claude -p` child [4]","status":"unbound"}
-{"file":"features/journal-workers.feature","title":"a worker whose ticket names another role as checkpointer is never sent back","status":"unbound"}
-{"file":"features/journal-workers.feature","title":"a worker whose ticket still named its run is listed under that run; one that named neither is reachable only by its exit line and parent","status":"unbound"}
-{"file":"features/journal-workers.feature","title":"a worker's first message carries both checkpoints when two are in effect","status":"unbound"}
-{"file":"features/journal-workers.feature","title":"a worker's re-run for its missing checkpoint is the same leg in the same lane","status":"unbound"}
+{"file":"features/journal-workers.feature","title":"a worker whose ticket names another role as checkpointer is never sent back","status":"passed"}
+{"file":"features/journal-workers.feature","title":"a worker whose ticket still named its run is listed under that run; one that named neither is reachable only by its exit line and parent","status":"passed"}
+{"file":"features/journal-workers.feature","title":"a worker's first message carries both checkpoints when two are in effect","status":"passed"}
+{"file":"features/journal-workers.feature","title":"a worker's re-run for its missing checkpoint is the same leg in the same lane","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a worker's registration carries every field its ticket declared and the facts the door read","status":"passed"}
-{"file":"features/journal-workers.feature","title":"an empty spawner prompt still leaves the first-moment row","status":"unbound"}
-{"file":"features/journal-workers.feature","title":"an exit by signal is a cut, never sent back, and the next leg of the role is a recovery leg","status":"unbound"}
+{"file":"features/journal-workers.feature","title":"an empty spawner prompt still leaves the first-moment row","status":"passed"}
+{"file":"features/journal-workers.feature","title":"an exit by signal is a cut, never sent back, and the next leg of the role is a recovery leg","status":"passed"}
 {"file":"features/journal-workers.feature","title":"an unregistered writer's row through the library call is accepted and traced, never refused [2]","status":"passed"}
-{"file":"features/journal-workers.feature","title":"an unregistered writer's row through the ticket door, with a self-minted ticket is accepted and traced, never refused [1]","status":"unbound"}
+{"file":"features/journal-workers.feature","title":"an unregistered writer's row through the ticket door, with a self-minted ticket is accepted and traced, never refused [1]","status":"passed"}
 {"file":"features/journal-workers.feature","title":"both doors leave the same first-moment row, readable with plain SQL alone","status":"unbound"}
-{"file":"features/journal-workers.feature","title":"the first-moment row is the first row of the worker's lane through the hook-less door of a `codex exec` worker [1]","status":"unbound"}
+{"file":"features/journal-workers.feature","title":"the first-moment row is the first row of the worker's lane through the hook-less door of a `codex exec` worker [1]","status":"passed"}
 {"file":"features/journal-workers.feature","title":"the first-moment row is the first row of the worker's lane through the session-start hook of a `claude -p` child [2]","status":"unbound"}
 {"file":"features/journal-workers.feature","title":"the stop hook's send-back is the leg's one, and the wrapper starts no run after it","status":"unbound"}
-{"file":"features/journal-workers.feature","title":"the ticket door composes a worker's first message from the brief, the checkpoint in effect and the spawner's prompt","status":"unbound"}
-{"file":"features/journal-workers.feature","title":"the ticket door that sees the fault before spawning writes the row itself and spawns nothing","status":"unbound"}
-{"file":"features/journal-workers.feature","title":"the ticket door's first message says in treecontext's own words that a checkpoint is state, not history","status":"unbound"}
-{"file":"features/journal-workers.feature","title":"the wrapper never runs a worker a third time","status":"unbound"}
+{"file":"features/journal-workers.feature","title":"the ticket door composes a worker's first message from the brief, the checkpoint in effect and the spawner's prompt","status":"passed"}
+{"file":"features/journal-workers.feature","title":"the ticket door that sees the fault before spawning writes the row itself and spawns nothing","status":"passed"}
+{"file":"features/journal-workers.feature","title":"the ticket door's first message says in treecontext's own words that a checkpoint is state, not history","status":"passed"}
+{"file":"features/journal-workers.feature","title":"the wrapper never runs a worker a third time","status":"passed"}
 {"file":"features/journal-workers.feature","title":"when the stop hook could not ask, the wrapper's send-back is the leg's one","status":"unbound"}
