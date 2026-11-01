@@ -73,6 +73,49 @@ function checkVersionConsistency(version: string): string[] {
   return problems
 }
 
+
+/** A scenario-scoped wip entry still open: a feature, the scenario titles
+ *  the runner holds unbound (read from the runner's own source, so the gate
+ *  cannot drift from what the runner holds) and how many examples of it the
+ *  last full run left unbound (read from the run manifest, which lists every
+ *  example, an outline's rows each). */
+interface OpenScenarios { feature: string; titles: string[]; examples: number }
+
+/**
+ * The scenario-scoped wip entries the runner still holds open. They are
+ * ordinary debt, not the gate's to refuse on, but a success line that says
+ * only "every charter surface is bound" reads as a clean bill while
+ * examples are still open, so the line counts them.
+ */
+export function openScenarioWip(root: string = ROOT): OpenScenarios[] {
+  const src = readFileSync(join(root, 'tests', 'journal', 'features.test.ts'), 'utf8')
+  const block = src.slice(src.indexOf('wip: ['))
+  const unbound = new Map<string, number>()
+  try {
+    for (const line of readFileSync(join(root, 'run-manifest.ndjson'), 'utf8').split('\n')) {
+      if (line.trim() === '') continue
+      const row = JSON.parse(line) as { file?: string; status?: string }
+      if (row.status === 'unbound' && row.file) unbound.set(row.file, (unbound.get(row.file) ?? 0) + 1)
+    }
+  } catch { /* no manifest yet: the examples are then the titles */ }
+  const out: OpenScenarios[] = []
+  for (const m of block.matchAll(/\{\s*feature:\s*'([a-z0-9-]+)',\s*scenarios:\s*(\[[\s\S]*?\n\s*\])/g)) {
+    const list = m[2]!.split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n')
+    const titles = new Function(`return ${list}`)() as string[]
+    out.push({ feature: m[1]!, titles, examples: unbound.get(`features/${m[1]}.feature`) ?? titles.length })
+  }
+  return out
+}
+
+function openWipSentence(): string {
+  const open = openScenarioWip()
+  const entries = open.reduce((n, o) => n + o.titles.length, 0)
+  const examples = open.reduce((n, o) => n + o.examples, 0)
+  if (entries === 0) return 'every whole-feature ruling is bound and no scenario-scoped entry is open.'
+  return `every whole-feature ruling is bound; ${entries} scenario-scoped ${entries === 1 ? 'entry' : 'entries'} (${examples} ${examples === 1 ? 'example' : 'examples'}) remain open: `
+    + open.map((o) => `${o.feature} (${o.titles.length}${o.examples !== o.titles.length ? `, ${o.examples} examples` : ''})`).join(', ') + '.'
+}
+
 function main(): void {
   const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { version: string }
   const drift = checkVersionConsistency(pkg.version)
@@ -84,7 +127,7 @@ function main(): void {
   }
 
   if (WHOLE_FEATURE_WIP.length === 0) {
-    console.log('release-gate: no whole-feature wip rulings — every charter surface is bound.')
+    console.log(`release-gate: no whole-feature wip rulings — ${openWipSentence()}`)
     return
   }
 

@@ -28,7 +28,7 @@
  * same lines.
  */
 import { CHECKPOINT_CAP_CHARS, charactersOf, briefsInEffect, checkpointsInEffect, checkpointsUnder, inEffectLine, type BriefRecord, type CheckpointRecord, type RunReadHandle } from './runs.js'
-import { namedCheckpointerOf, isNamedCheckpointer, checkpointerFlag, importFlag, checkpointName, checkpointsWrittenBy, type NamedCheckpointer } from './key-lookup.js'
+import { namedCheckpointerOf, isNamedCheckpointer, checkpointerFlag, importFlag, checkpointNameOf, checkpointsWrittenBy, type NamedCheckpointer } from './key-lookup.js'
 import { legsOfRun, isLiveLeg, legOwnsKey, WORKER_AGENT_ID, type LegRegistration } from './persistence/leg-registry.js'
 import type { RegistryHandle } from './persistence/session-registry.js'
 import { FIRST_MOMENT_KIND, SEND_BACK_KIND, RUN_META_KEY, KEY_META_KEY } from './run-kinds.js'
@@ -298,7 +298,7 @@ export function composeFirstMessage(f: FirstMomentFacts, prompt: string | null, 
     for (const cp of f.checkpoints) {
       const flag = f.flags.find((x) => x.nodeId === cp.nodeId)
       const text = opts.contentOf ? opts.contentOf(cp) : cp.content
-      parts.push(`${capital(checkpointName(cp.number))} under "${f.key}" (row ${cp.nodeId}), written by "${cp.writer}" at ${momentText(cp.createdAt)}, `
+      parts.push(`${capital(checkpointNameOf(cp))} under "${f.key}" (row ${cp.nodeId}), written by "${cp.writer}" at ${momentText(cp.createdAt)}, `
         + `${cp.size} characters${cp.overCap ? `, ${overCapWords(cp.overCap)}` : ''}:\n${text}${flag ? `\n${flag.sentence}` : ''}`)
     }
     if (f.predecessor) parts.push(recoveryLine(f.predecessor, f.key))

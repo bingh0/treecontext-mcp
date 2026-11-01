@@ -600,7 +600,7 @@ the visionary ratified on 2026-11-01, D345).
   agent-authored and stay protected. The run's default export, the
   skeleton, carries first moments whole and says in one line that they
   are the spawners' prompts as written; the whole form stays behind the
-  secrets acknowledgement. [ruled: D298, D299, D300, D313, D318, D319]
+  secrets acknowledgement. [ruled: D298, D299, D300, D313, D318, D319, D360]
   At the hooks door the client caps what a hook may inject at 10,000
   characters, so the door injects the brief and as much of the
   checkpoint as fits, ends with the checkpoint row's id and the count

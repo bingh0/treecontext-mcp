@@ -1,8 +1,14 @@
+import { copyFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { expect } from 'vitest'
 import { DatabaseSync } from 'node:sqlite'
 import { type Registry } from 'gherkin-node-test/vitest'
-import { parseTool, rawAll } from '../world.js'
-import { runHook, bashPayload, drainStaging } from '../capture-harness.js'
+import { type Client } from '@modelcontextprotocol/client'
+import { parseTool, rawAll, mcpOver, type World } from '../world.js'
+import { runHook, bashPayload, drainStaging, spawnHooksInBatches } from '../capture-harness.js'
+import { spawnCli } from '../../helpers/cli-spawn.js'
+import { RUN_SECRETS_WARNING } from '../../../src/handoff.js'
+import { WRITER_STAMP_KEYS } from '../../../src/persistence/session-registry.js'
 import { RUN_ROWS_SQL, charactersOf } from '../../../src/runs.js'
 import { KEY_LOOKUP_PARAM, keyLookupReply, type KeyLookup, type KeyLookupReply } from '../../../src/key-lookup.js'
 import { SUBAGENT_SUMMARY_KIND } from '../../../src/handoff.js'
@@ -34,6 +40,109 @@ import { runWorker } from './journal-workers.steps.js'
 // the summary row the real SubagentStop hook staged and the drain wrote.
 
 export type RunsWorld = RunWorld
+
+// ── A run's export, and the way a leg comes back (unit 6) ───────────────
+//
+// D300, D318: a run's export is chosen by the caller, the skeleton by
+// default; the whole form is behind the secrets acknowledgement. D310,
+// D343: a leg that ran on another machine comes back into the run by the
+// handoff. Every export here is the real export door the scenario names
+// (the tool for an agent, the CLI for a harness) writing a real file in a
+// real project directory, every import the real import tool reading that
+// file, every Then a separate handle on the store file or the file itself.
+// "build-02" is a second world: its own home, project, store and hooks.
+
+interface FileNode { nodeId: string; content: string; createdAt: number; metadata: Record<string, unknown> | null }
+interface RunFile { head: Record<string, unknown>; nodes: FileNode[]; abs: string }
+
+function readRunFile(abs: string): RunFile {
+  expect(existsSync(abs), `no file at ${abs}`).toBe(true)
+  const parsed = JSON.parse(readFileSync(abs, 'utf8')) as Record<string, unknown> & { nodes: FileNode[] }
+  const { nodes, ...head } = parsed
+  return { head, nodes, abs }
+}
+
+/** An agent's MCP client for a world's store, started for its project
+ *  directory: the one a handoff file is written inside. */
+async function toolClient(w: RunsWorld): Promise<Client> {
+  const kept = w.facts!['tool-client'] as Client | undefined
+  if (kept) return kept
+  const c = await mcpOver({ defer: w.defer } as unknown as World, { ccSessionId: w.sessionId!, projectDir: w.proj! }, w.store!)
+  w.facts!['tool-client'] = c
+  return c
+}
+
+type ToolReply = { isError: boolean; text: string; json: Record<string, unknown> }
+async function callTool(c: Client, name: string, args: Record<string, unknown>): Promise<ToolReply> {
+  const res = await c.callTool({ name, arguments: args }) as { isError?: boolean; content?: Array<{ text?: string }> }
+  const text = res.content?.[0]?.text ?? ''
+  let json: Record<string, unknown> = {}
+  try { json = JSON.parse(text) as Record<string, unknown> } catch { /* not JSON */ }
+  return { isError: res.isError === true, text, json }
+}
+
+/** The world of another machine: its own home, project directory, store
+ *  and session, its cleanups running with the scenario's. */
+async function otherMachine(w: RunsWorld): Promise<RunsWorld> {
+  const other = { defer: w.defer } as unknown as RunsWorld
+  await openRunWorld(other, { sessionStart: false })
+  return other
+}
+
+/** A handoff file one machine's project holds, carried to another's: the
+ *  repository is the carrier (a commit and a pull). */
+function carry(from: RunsWorld, to: RunsWorld, rel: string): string {
+  const dest = join(to.proj!, rel)
+  mkdirSync(dirname(dest), { recursive: true })
+  copyFileSync(join(from.proj!, rel), dest)
+  return rel
+}
+
+/** Prose a spawner's prompt could hold, of exactly `size` characters, its
+ *  last line a marker: the pasted tail that may be the point. */
+function bigPrompt(size: number, marker: string): string {
+  const tail = `\n${marker}`
+  let body = ''
+  for (let i = 0; body.length < size; i++) body += `line ${i}: the login form pastes this file and wants its tail read, ${i * 7919 % 10007}\n`
+  return body.slice(0, size - tail.length) + tail
+}
+
+/**
+ * A run of two hooks-door legs, as Claude Code runs one: the builder (the
+ * key "login-form") writes two checkpoints under it and two under
+ * "search-box", the reviewer two more under "login-form"; each leg's tool
+ * calls are captured by the real PostToolUse hook with its agent fields,
+ * and each ends through the real SubagentStop hook with its report. The
+ * checkpoints go in through the real insert tool with its echo.
+ */
+async function hooksRun(w: RunsWorld, run: string, calls: number, withSearchBox: boolean): Promise<void> {
+  await openRunWorld(w)
+  const legs: Array<{ role: string; writes: Array<[string, number]> }> = [
+    { role: 'builder', writes: withSearchBox ? [['login-form', 2], ['search-box', 2]] : [['login-form', 2]] },
+    { role: 'reviewer', writes: [['login-form', 2]] },
+  ]
+  for (const leg of legs) {
+    const ref = await hooksLeg(w, leg.role, leg.role, { run, key: 'login-form', checkpointer: leg.role })
+    const agent = { agentId: ref.agentId, agentType: leg.role }
+    const payloads: Array<Record<string, unknown>> = []
+    for (let i = 0; i < calls / legs.length; i++) {
+      payloads.push({ ...bashPayload(w, `npx vitest run ${leg.role} case-${i}`, `${leg.role} case-${i}: 1 passed (zebrafinch-${leg.role}-${i})`), agent_id: ref.agentId, agent_type: leg.role })
+    }
+    await spawnHooksInBatches(w, 'post-tool-use', payloads)
+    for (const [key, n] of leg.writes) {
+      for (let i = 1; i <= n; i++) {
+        const wrote = await insertEchoed(w, agent, `state of ${key} after the ${leg.role}: step ${i} done; next: step ${i + 1}`, { kind: 'checkpoint', run, key })
+        w.cps![cpLabel(run, key, (wrote['checkpoint'] as Record<string, unknown>)['number'] as number)] = wrote['node_id'] as string
+      }
+    }
+    w.stops![leg.role] = subagentStopHook(w, ref.agentId, leg.role, `${leg.role} done: ${leg.writes.map(([k]) => k).join(' and ')} delivered`)
+    await drainStaging(w)
+  }
+}
+
+/** Rows of the file carrying a marker, however it was captured. */
+const holding = (file: RunFile, needle: string): FileNode[] => file.nodes.filter((n) => n.content.includes(needle))
+const kindsIn = (file: RunFile, kind: string): FileNode[] => file.nodes.filter((n) => n.metadata?.['kind'] === kind)
 
 type Hit = { nodeId: string; content: string; metadata: Record<string, unknown> | null }
 
@@ -885,5 +994,363 @@ export const runsDefiner = (reg: Registry<RunsWorld>): void => {
     // Newest last: the sizes grow with the number, so the order shows.
     expect([...l.facts.lastSizes].sort((a, b) => a - b)).toEqual(l.facts.lastSizes)
     expect(keyLookupReply(l).facts.last_sizes).toEqual(l.facts.lastSizes)
+  })
+
+  // ── D300: a run's export, the skeleton by default ──
+
+  define(/^a run "([^"]+)" with a builder leg and a reviewer leg, (\d+) checkpoints under the key "([^"]+)" and (\d+) under the key "([^"]+)", (\d+) summary rows, (\d+) first-moment rows and (\d+) captured tool calls$/, async (w, run, a, keyA, b, keyB, summaries, firsts, calls) => {
+    expect([Number(a), Number(b), Number(summaries), Number(firsts), Number(calls)]).toEqual([4, 2, 2, 2, 120])
+    expect([keyA, keyB]).toEqual(['login-form', 'search-box'])
+    await hooksRun(w, run!, Number(calls), true)
+    // What the Given made, read from the file before any export acts.
+    expect(rawCheckpoints(w, run!, keyA!)).toHaveLength(4)
+    expect(rawCheckpoints(w, run!, keyB!)).toHaveLength(2)
+    expect(rawAll<{ n: number }>(w, "SELECT COUNT(*) AS n FROM nodes WHERE json_extract(metadata_json, '$.kind') = 'subagent-summary' AND json_extract(metadata_json, '$.run') = ?", run)[0]!.n).toBe(2)
+    expect(rawAll<{ n: number }>(w, "SELECT COUNT(*) AS n FROM nodes WHERE json_extract(metadata_json, '$.kind') = 'first-moment' AND json_extract(metadata_json, '$.run') = ?", run)[0]!.n).toBe(2)
+    expect(rawAll<{ n: number }>(w, "SELECT COUNT(*) AS n FROM nodes WHERE content LIKE '%zebrafinch-%'")[0]!.n).toBe(120)
+  })
+
+  define(/^a run "([^"]+)" with (\d+) captured tool calls across its legs$/, async (w, run, calls) => {
+    await hooksRun(w, run!, Number(calls), false)
+    expect(rawAll<{ n: number }>(w, "SELECT COUNT(*) AS n FROM nodes WHERE content LIKE '%zebrafinch-%'")[0]!.n).toBe(Number(calls))
+  })
+
+  define(/^an agent exports the run "([^"]+)" without naming a form$/, async (w, run) => {
+    const agent = await toolClient(w)
+    // No form, no acknowledgement: the call is the run and a path.
+    const reply = await callTool(agent, 'treecontext_export', { run, path: 'handoffs/r1.json' })
+    w.facts!['export-reply'] = reply
+    expect(reply.isError, reply.text).toBe(false)
+    w.facts!['export-file'] = readRunFile(join(w.proj!, 'handoffs', 'r1.json'))
+  })
+
+  define(/^the file holds the (\d+) checkpoints under both keys in order, the (\d+) summary rows with their writers "([^"]+)" and "([^"]+)", the (\d+) first-moment rows and the (\d+) registrations$/, (w, cps, sums, w1, w2, firsts, regs) => {
+    const file = w.facts!['export-file'] as RunFile
+    const stored = rawAll<{ node_id: string; created_at: number }>(w,
+      `SELECT node_id, created_at FROM nodes WHERE json_extract(metadata_json, '$.kind') = 'checkpoint' AND json_extract(metadata_json, '$.run') = 'r1' ORDER BY created_at, rowid`)
+    const checkpoints = kindsIn(file, 'checkpoint')
+    expect(checkpoints).toHaveLength(Number(cps))
+    expect(checkpoints.map((n) => n.nodeId)).toEqual(stored.map((r) => r.node_id))
+    for (const key of ['login-form', 'search-box']) {
+      expect(checkpoints.filter((n) => n.metadata!['key'] === key).map((n) => n.metadata!['_checkpoint_number'])).toEqual(key === 'login-form' ? [1, 2, 3, 4] : [1, 2])
+    }
+    // Content as the store holds it, not a stand-in.
+    for (const n of checkpoints) expect(n.content).toBe(rawContentOf(w, n.nodeId))
+    const summaries = kindsIn(file, 'subagent-summary')
+    expect(summaries).toHaveLength(Number(sums))
+    expect(summaries.map((n) => n.metadata!['_writer'])).toEqual([w1, w2])
+    expect(summaries.map((n) => n.metadata!['run'])).toEqual(['r1', 'r1'])
+    for (const n of summaries) expect(n.content).toBe(rawContentOf(w, n.nodeId))
+    const firstMoments = kindsIn(file, 'first-moment')
+    expect(firstMoments).toHaveLength(Number(firsts))
+    for (const n of firstMoments) expect(n.content).toBe(rawContentOf(w, n.nodeId))
+    // Through the hooks door the row is the door's own line, the prompt
+    // having ridden on the Agent tool: the reply says so, in the row's words.
+    const reply = w.facts!['export-reply'] as ToolReply
+    expect(reply.json['first_moments']).toMatch(/^First moments carry the spawners' prompts as written/)
+    expect(String(reply.json['door_lines'])).toContain('2 of the 2 first moments are the door\'s own line, not a prompt')
+    expect(String(reply.json['door_lines'])).toContain('Its prompt rode on the Agent tool and is not seen by this door.')
+    // The registrations: one per leg, the facts as data, none a row the
+    // exporting store holds (its registry is a table).
+    const regsInFile = kindsIn(file, 'leg-registration')
+    expect(regsInFile).toHaveLength(Number(regs))
+    const facts = regsInFile.map((n) => n.metadata!['_leg_registration'] as Record<string, unknown>)
+    expect(facts.map((f) => [f['role'], f['run'], f['key'], f['door'], f['kind'], f['session_id'], f['ended']])).toEqual([
+      ['builder', 'r1', 'login-form', 'hooks', 'subagent', w.sessionId, 'retired'],
+      ['reviewer', 'r1', 'login-form', 'hooks', 'subagent', w.sessionId, 'retired'],
+    ])
+    expect(rawAll<{ n: number }>(w, "SELECT COUNT(*) AS n FROM nodes WHERE json_extract(metadata_json, '$.kind') = 'leg-registration'")[0]!.n).toBe(0)
+    // Each registration names its leg as the store's table does.
+    for (const f of facts) {
+      const reg = rawOne<Record<string, unknown>>(w, 'SELECT * FROM session_registry WHERE session_id = ? AND agent_id = ?', f['session_id'], f['agent_id'])!
+      expect([reg['agent_type'], reg['run'], reg['run_key'], reg['door'], reg['kind'], reg['ended']]).toEqual([f['role'], f['run'], f['key'], f['door'], f['kind'], f['ended']])
+    }
+  })
+
+  define(/^the file holds none of the (\d+) tool calls$/, (w, calls) => {
+    const file = w.facts!['export-file'] as RunFile
+    // The calls exist in the store, so their absence is not an empty store.
+    expect(rawAll<{ n: number }>(w, "SELECT COUNT(*) AS n FROM nodes WHERE content LIKE '%zebrafinch-%'")[0]!.n).toBe(Number(calls))
+    expect(holding(file, 'zebrafinch-')).toHaveLength(0)
+    // Every row of the file is one of the run's own kinds: the open, the briefs, the checkpoints,
+    // the first moments and summaries and the registrations, never a capture of a tool call.
+    expect([...new Set(file.nodes.map((n) => n.metadata?.['kind']))].sort()).toEqual(['brief', 'checkpoint', 'first-moment', 'leg-registration', 'run-open', 'subagent-summary'].sort())
+    // (The run was opened at its first leg's registration and nobody closed it.)
+    expect(kindsIn(file, 'run-open')).toHaveLength(1)
+  })
+
+  define(/^the file's head names the form as the run's skeleton$/, (w) => {
+    const file = w.facts!['export-file'] as RunFile
+    expect([file.head['form'], file.head['run']]).toEqual(['skeleton', 'r1'])
+    expect(String(file.head['holds'])).toContain('skeleton of the run "r1"')
+    expect(String(file.head['holds'])).toContain('no captured tool output')
+    expect(file.head['node_count']).toBe(file.nodes.length)
+    expect(typeof file.head['exported_by']).toBe('string')
+    expect(String(file.head['to_import'])).toContain('handoffs/r1.json')
+    expect(Object.keys(file.head)).toEqual(expect.arrayContaining(['exported_at', 'project', 'treecontext_version', 'holds', 'to_import']))
+  })
+
+  // ── D300: the whole form, behind the acknowledgement ──
+
+  define(/^a harness exports the run "([^"]+)" naming the whole form$/, (w, run) => {
+    // The harness is a program: its door is the shell's. The first call
+    // names the form and nothing else; the second acknowledges.
+    const args = ['export', 'handoffs/r1-whole.json', '--run', run!, '--whole', '--store', w.dbPath!, '--project-dir', w.proj!, '--no-debug']
+    const asked = spawnCli(args, { home: w.home!, cwd: w.proj! })
+    w.facts!['whole-asked'] = { status: asked.status, stderr: asked.stderr, stdout: asked.stdout, fileAfter: existsSync(join(w.proj!, 'handoffs', 'r1-whole.json')) }
+    const given = spawnCli([...args, '--yes'], { home: w.home!, cwd: w.proj! })
+    w.facts!['whole-given'] = { status: given.status, stderr: given.stderr, stdout: given.stdout }
+  })
+
+  define(/^the reply carries the warning that captured tool output can hold secrets, tokens and keys, and the file is written only after it$/, (w) => {
+    const asked = w.facts!['whole-asked'] as { status: number | null; stderr: string; stdout: string; fileAfter: boolean }
+    expect(asked.stderr).toContain(RUN_SECRETS_WARNING)
+    expect(asked.stderr).toMatch(/can hold secrets, tokens and keys/)
+    expect(asked.status).toBe(1)
+    expect(asked.fileAfter, 'the file was written before the acknowledgement').toBe(false)
+    const given = w.facts!['whole-given'] as { status: number | null; stderr: string; stdout: string }
+    expect(given.status, given.stderr).toBe(0)
+    expect(given.stderr).toContain(RUN_SECRETS_WARNING)
+    expect(existsSync(join(w.proj!, 'handoffs', 'r1-whole.json'))).toBe(true)
+    expect(given.stdout).toMatch(/Wrote \d+ entries of the run "r1" \(whole\) to handoffs\/r1-whole\.json\./)
+  })
+
+  define(/^the file holds the (\d+) tool calls under each leg's lane$/, (w, calls) => {
+    const file = readRunFile(join(w.proj!, 'handoffs', 'r1-whole.json'))
+    expect(file.head['form']).toBe('whole')
+    expect(file.head['run']).toBe('r1')
+    const captured = holding(file, 'zebrafinch-')
+    expect(captured).toHaveLength(Number(calls))
+    // Under each leg's lane: the leg's agent id and writer on every call,
+    // half to each leg, the content as the store holds it.
+    const legs = ['builder', 'reviewer'].map((role) => ({ role, agent: w.legs![role]!.agentId }))
+    for (const leg of legs) {
+      const mine = captured.filter((n) => n.metadata!['_writer_agent_id'] === leg.agent)
+      expect(mine, `the ${leg.role}'s calls`).toHaveLength(Number(calls) / 2)
+      for (const n of mine) {
+        expect(n.metadata!['_writer']).toBe(leg.role)
+        expect(n.content).toContain(`${leg.role} case-`)
+      }
+    }
+    const some = captured[0]!
+    expect(some.content).toBe(rawContentOf(w, some.nodeId))
+    // The skeleton's rows are all there too, the whole form being a superset.
+    expect(kindsIn(file, 'checkpoint')).toHaveLength(4)
+    expect(kindsIn(file, 'leg-registration')).toHaveLength(2)
+  })
+
+  // ── D318: first moments whole, and the reply says what they are ──
+
+  define(/^a run "([^"]+)" whose builder's first-moment row holds a (\d+)-character prompt$/, async (w, run, size) => {
+    await openRunWorld(w, { sessionStart: false })
+    const prompt = bigPrompt(Number(size), 'END-OF-THE-PASTED-FILE-quokka')
+    expect(prompt).toHaveLength(Number(size))
+    w.facts!['big-prompt'] = prompt
+    // The builder is a real worker through the real wrapper: its first
+    // moment is the row the ticket door writes, the prompt as written.
+    await runWorker(w, {
+      spawner: 'wrapper', prompt,
+      ticket: { run: run!, key: 'login-form', role: 'builder', checkpointer: 'builder', parent: { id: w.sessionId! } },
+      plan: { first: { checkpoint: 'state: the login form is built from the pasted file', print: 'builder done' } },
+    }, 'builder')
+    const row = rawOne<{ node_id: string }>(w, "SELECT node_id FROM nodes WHERE json_extract(metadata_json, '$.kind') = 'first-moment' AND json_extract(metadata_json, '$.run') = ?", run)
+    expect(row, 'the door wrote the builder\'s first-moment row').toBeTruthy()
+    w.ids!['first-moment'] = row!.node_id
+    expect(charactersOf(rawContentOf(w, row!.node_id))).toBe(Number(size))
+  })
+
+  define(/^the file holds all (\d+) characters of that first-moment row$/, (w, size) => {
+    const file = w.facts!['export-file'] as RunFile
+    const row = file.nodes.find((n) => n.nodeId === w.ids!['first-moment'])
+    expect(row, 'the first-moment row is in the skeleton').toBeTruthy()
+    expect(charactersOf(row!.content)).toBe(Number(size))
+    expect(row!.content).toBe(w.facts!['big-prompt'])
+    expect(row!.content.endsWith('END-OF-THE-PASTED-FILE-quokka')).toBe(true)
+    expect(row!.content).toBe(rawContentOf(w, row!.nodeId))
+  })
+
+  define(/^the reply says in one line that first moments carry the spawners' prompts as written and may hold what was pasted into them$/, (w) => {
+    const reply = w.facts!['export-reply'] as ToolReply
+    const line = String(reply.json['first_moments'])
+    expect(line).toBe("First moments carry the spawners' prompts as written and may hold what was pasted into them.")
+    expect(line.split('\n')).toHaveLength(1)
+    // A ticket-door first moment is the prompt itself, so there is no
+    // door's-line note to make.
+    expect(reply.json['door_lines']).toBeUndefined()
+  })
+
+  define(/^no acknowledgement is asked for$/, (w) => {
+    const reply = w.facts!['export-reply'] as ToolReply
+    expect(reply.isError).toBe(false)
+    expect(reply.json['warning']).toBeUndefined()
+    // The whole reply: the file, the run, the form, the counts, the message and the one line; no warning to acknowledge.
+    expect(Object.keys(reply.json).sort()).toEqual(['entries', 'file', 'first_moments', 'form', 'message', 'run'])
+    expect(reply.json['file']).toBe('handoffs/r1.json')
+    expect(existsSync(join(w.proj!, 'handoffs', 'r1.json'))).toBe(true)
+  })
+
+  // ── D310, D343: a leg that ran elsewhere comes back by the handoff ──
+
+  define(/^a run "([^"]+)" in the store on "([^"]+)" with (\d+) legs whose key "([^"]+)" holds checkpoint number (\d+), and a third leg of "([^"]+)" that ran on "([^"]+)" and wrote checkpoint number (\d+) under "([^"]+)" there, naming number (\d+) as superseded$/, async (w, run, local, legs, key, lastNum, run2, remoteName, thirdNum, key2, namedNum) => {
+    expect([run2, key2]).toEqual([run, key])
+    expect([Number(legs), Number(lastNum), Number(thirdNum), Number(namedNum)]).toEqual([2, 2, 3, 2])
+    await openRunWorld(w, { sessionStart: false })
+    w.facts!['machines'] = { local, remote: remoteName }
+    // The laptop's two legs: real workers through the real ticket door.
+    for (let i = 1; i <= 2; i++) {
+      await runWorker(w, {
+        spawner: 'library', prompt: `build the login form, part ${i}`,
+        ticket: { run: run!, key: key!, role: 'builder', checkpointer: 'builder', parent: { id: w.sessionId! } },
+        plan: { first: { checkpoint: `state of ${key} on ${local} after leg ${i}: part ${i} done`, print: `part ${i} done` } },
+      }, `${local}-leg${i}`)
+    }
+    const two = w.store!.checkpointsInEffect(run!, key!)
+    expect(two.map((c) => c.number)).toEqual([2])
+    w.cps![cpLabel(run!, key!, 2)] = two[0]!.nodeId
+    // The run is handed to build-02, as a run is handed to a machine that
+    // will run a leg of it: the laptop's agent exports its skeleton, the
+    // repository carries it, build-02's agent imports it.
+    const remote = await otherMachine(w)
+    w.facts!['remote'] = remote
+    const out = await callTool(await toolClient(w), 'treecontext_export', { run, path: 'handoffs/to-build-02.json' })
+    expect(out.isError, out.text).toBe(false)
+    carry(w, remote, 'handoffs/to-build-02.json')
+    const into = await callTool(await toolClient(remote), 'treecontext_import', { path: 'handoffs/to-build-02.json' })
+    expect(into.isError, into.text).toBe(false)
+    // The third leg, there: a real worker through build-02's ticket door,
+    // started from what is in effect there (the laptop's number 2, which
+    // arrived by import and took no number in build-02's sequence). It
+    // checkpoints three times as it works, so build-02's own sequence gives
+    // the last one the number 3, and each supersedes the one before.
+    await runWorker(remote, {
+      spawner: 'library', prompt: 'finish the login form on build-02',
+      ticket: { run: run!, key: key!, role: 'builder', checkpointer: 'builder', parent: { id: remote.sessionId! } },
+      plan: { first: { checkpoints: [1, 2, 3].map((n) => `state of ${key} on ${remoteName}, step ${n}: ${n === 3 ? 'the login form is finished' : 'the login form is half wired'}`), print: 'build-02 done' } },
+    }, `${remoteName}-leg`)
+    const there = rawCheckpoints(remote, run!, key!).filter((c) => !String(rawRowOf(remote, c.node_id)['session_key']).startsWith('handoff:'))
+    expect(there.map((c) => c.n)).toEqual([1, 2, 3])
+    // Number 3 names number 2 as superseded, on build-02's own file; the
+    // first of them started from the laptop's number 2 and named it.
+    expect(there[2]!.m['supersedes']).toEqual([there[1]!.node_id])
+    expect(there[0]!.m['supersedes']).toEqual([w.cps![cpLabel(run!, key!, 2)]])
+    w.ids!['third-cp'] = there[2]!.node_id
+    w.ids!['third-cp-2'] = there[1]!.node_id
+    w.ids!['third-cp-1'] = there[0]!.node_id
+    w.ids!['third-session'] = (remote.legs![`${remoteName}-leg`] as { sessionId: string }).sessionId
+  })
+
+  define(/^the run "([^"]+)" is exported on "([^"]+)" and imported on "([^"]+)"$/, async (w, run, remoteName, localName) => {
+    const m = w.facts!['machines'] as { local: string; remote: string }
+    expect([remoteName, localName]).toEqual([m.remote, m.local])
+    const remote = w.facts!['remote'] as RunsWorld
+    const cp2 = w.cps![cpLabel(run!, 'login-form', 2)]!
+    w.before!['cp2'] = rawRowOf(w, cp2)
+    const out = await callTool(await toolClient(remote), 'treecontext_export', { run, path: 'handoffs/r1-from-build-02.json' })
+    expect(out.isError, out.text).toBe(false)
+    w.facts!['back-file'] = readRunFile(join(remote.proj!, 'handoffs', 'r1-from-build-02.json'))
+    carry(remote, w, 'handoffs/r1-from-build-02.json')
+    const into = await callTool(await toolClient(w), 'treecontext_import', { path: 'handoffs/r1-from-build-02.json' })
+    expect(into.isError, into.text).toBe(false)
+    w.facts!['import-reply'] = into.json
+  })
+
+  define(/^the harness on "([^"]+)" looking up the key "([^"]+)" on the run "([^"]+)" counts (\d+) legs$/, async (w, machine, key, run, legs) => {
+    expect(machine).toBe((w.facts!['machines'] as { local: string }).local)
+    const l = w.store!.lookupKey({ run: run!, key: key! })
+    w.lookups![run!] = l
+    expect(l.facts.legsRun).toBe(Number(legs))
+    expect(l.legs).toHaveLength(Number(legs))
+    // Marked as arrived by import: the third leg, from the file build-02
+    // wrote, and not a registration of this store.
+    const arrived = l.legs.filter((g) => g.imported !== null)
+    expect(arrived.map((g) => [g.sessionId, g.role, g.state, g.imported!.file])).toEqual([[w.ids!['third-session'], 'builder', 'retired', 'handoffs/r1-from-build-02.json']])
+    expect(l.facts.importedLegs).toBe(1)
+    expect(rawAll<{ n: number }>(w, 'SELECT COUNT(*) AS n FROM session_registry WHERE session_id = ?', w.ids!['third-session'])[0]!.n).toBe(0)
+    // The agent's door says the same through the tools.
+    const agent = parseTool(await (await toolClient(w)).callTool({ name: 'treecontext_query', arguments: { [KEY_LOOKUP_PARAM]: { run, key } } })) as unknown as KeyLookupReply
+    expect(agent.facts.legs_run).toBe(Number(legs))
+    expect(agent.facts.imported_legs).toBe(1)
+    expect(agent.legs.filter((g) => g.imported !== undefined).map((g) => g.session_id)).toEqual([w.ids!['third-session']])
+  })
+
+  define(/^the harness receives the imported number (\d+) as the one in effect, flagged as arrived by import, and not number (\d+)$/, (w, num, notNum) => {
+    const l = harnessLookup(w)
+    // The imported checkpoint takes no number in this store's sequence: its
+    // number is the one its own store gave it, the file's claim (D360).
+    expect(l.checkpoints.map((c) => [c.nodeId, c.number, c.claimedNumber, c.imported])).toEqual([[w.ids!['third-cp'], null, Number(num), true]])
+    expect(l.checkpoints.map((c) => c.nodeId)).not.toContain(w.cps![cpLabel('r1', 'login-form', Number(notNum))])
+    const cp = l.checkpoints[0]!
+    expect(cp.flag).toBe(`Checkpoint number ${num} as numbered there arrived by import from "handoffs/r1-from-build-02.json", written there by "builder"; `
+      + `the file claims it supersedes checkpoint number ${notNum} as numbered there, and this lookup believes the claim.`)
+    expect(l.line).toBe(`Checkpoint number ${num} as numbered there is in effect under "login-form" on the run "r1".`)
+    // The laptop's own number 2 is superseded by the chain the file claims
+    // (the first of build-02's checkpoints named it), and still its own.
+    expect(l.checkpoints.map((c) => c.number)).not.toContain(Number(notNum))
+    // The pointer into the handoff lane: the imported leg's return, named as arrived by import.
+    const ret = cp.legReturn
+    expect(ret.summary, ret.line).not.toBeNull()
+    expect(ret.line).toContain(`checkpoint number ${num} as numbered there, which arrived by import`)
+    expect(ret.line).toContain(`handoff:${w.ids!['third-session']}`)
+    expect(rawRowOf(w, ret.summary!.nodeId)['session_key']).toBe(`handoff:${w.ids!['third-session']}`)
+    expect(rawMetaOf(w, ret.summary!.nodeId)['kind']).toBe(SUBAGENT_SUMMARY_KIND)
+    expect(rawContentOf(w, ret.summary!.nodeId)).toBe('build-02 done')
+  })
+
+  define(/^checkpoint number (\d+) is unchanged byte for byte and still readable by its id$/, async (w, num) => {
+    const id = w.cps![cpLabel('r1', 'login-form', Number(num))]!
+    expect(rawRowOf(w, id)).toEqual(w.before!['cp2'])
+    const read = await callTool(await toolClient(w), 'treecontext_export', { node_id: id })
+    expect(read.isError, read.text).toBe(false)
+    const nodes = read.json['nodes'] as Array<{ nodeId: string; content: string }>
+    expect(nodes.map((n) => n.nodeId)).toEqual([id])
+    expect(nodes[0]!.content).toBe(rawContentOf(w, id))
+    // Still the lane's own: the local number 2 is not flagged as superseded in its metadata.
+    const m = rawMetaOf(w, id)
+    expect(m['superseded_by']).toBeUndefined()
+    expect(m['_handoff_file']).toBeUndefined()
+  })
+
+  define(/^the imported row keeps its claim under the file's claims, not as its own identity$/, (w) => {
+    const id = w.ids!['third-cp']!
+    const row = rawRowOf(w, id)
+    expect(row['session_key']).toBe(`handoff:${w.ids!['third-session']}`)
+    const m = rawMetaOf(w, id)
+    // Marked by the importer; the file's claim of authorship, supersession and lane not its own.
+    expect(m['_handoff_file']).toBe('handoffs/r1-from-build-02.json')
+    for (const k of ['supersedes', 'superseded_by', '_writer', '_over_cap']) expect(m[k], k).toBeUndefined()
+    // The lane is the importer's: the sender's session behind the handoff prefix, never the sender's own.
+    expect(m['session_id']).toBe(`handoff:${w.ids!['third-session']}`)
+    const claims = m['_handoff_claims'] as Record<string, unknown>
+    expect(claims['supersedes']).toEqual([w.ids!['third-cp-2']])
+    expect([claims['run'], claims['key'], claims['_checkpoint_number'], claims['_writer'], claims['_cc_session_id']]).toEqual(['r1', 'login-form', 3, 'builder', w.ids!['third-session']])
+    expect(m['_cc_session_id']).toBeUndefined()
+    // Every stamp and trace key the sender's store wrote, and the number it
+    // gave, is under the claims and not at the row's top level (D293, D360):
+    // the receiving store stamps only that the row arrived by import.
+    const senderStamps = ['_writer', '_writer_src', '_writer_agent_id', '_door', '_identity', '_parent', '_parent_src', '_cwd', '_supersedes_src', '_checkpoint_number']
+    for (const k of senderStamps) expect(claims[k], `${k} under the claims`).not.toBeUndefined()
+    expect(claims['_door']).toBe('ticket')
+    for (const k of new Set([...WRITER_STAMP_KEYS, '_cap_refused', '_by_src', '_supersedes_src', '_checkpoint_number'])) {
+      if (k === '_door' || k === '_identity') continue
+      expect(m[k], `${k} at the top level`).toBeUndefined()
+    }
+    expect([m['_door'], m['_identity']]).toEqual(['import', 'imported'])
+    expect(JSON.stringify(m)).toContain(String(claims['_cwd']))
+    expect(JSON.stringify({ ...m, _handoff_claims: undefined })).not.toContain(String(claims['_cwd']))
+    // The remote leg's registration facts arrived as claims too, never as the row's own top level.
+    const reg = rawAll<{ m: string }>(w, "SELECT metadata_json AS m FROM nodes WHERE json_extract(metadata_json, '$.kind') = 'leg-registration' AND session_key = ?", `handoff:${w.ids!['third-session']}`)
+    expect(reg).toHaveLength(1)
+    const rm = JSON.parse(reg[0]!.m) as Record<string, unknown>
+    expect(rm['_leg_registration']).toBeUndefined()
+    const facts = (rm['_handoff_claims'] as Record<string, unknown>)['_leg_registration'] as Record<string, unknown>
+    expect([facts['role'], facts['run'], facts['key'], facts['kind'], facts['door'], facts['ended']]).toEqual(['builder', 'r1', 'login-form', 'worker', 'ticket', 'retired'])
+    // Plain SQL reads the run back whole from this one store: the imported rows in their own moments' order, each naming its writer as imported.
+    const rows = rawAll<{ node_id: string; created_at: number; writer: string | null; kind: string }>(w, RUN_ROWS_SQL, 'r1', 'r1')
+    expect(rows.map((r) => r.created_at)).toEqual(rows.map((r) => r.created_at).sort((a, b) => a - b))
+    const imported = rows.filter((r) => r.writer?.startsWith('imported from '))
+    expect(imported.length).toBeGreaterThanOrEqual(4)
+    for (const r of imported) expect(r.writer).toBe('imported from handoffs/r1-from-build-02.json')
+    expect(imported.find((r) => r.node_id === id)).toBeTruthy()
+    expect(rows.filter((r) => r.writer === 'builder' || r.writer === null || !r.writer.startsWith('imported')).length).toBeGreaterThan(0)
   })
 }

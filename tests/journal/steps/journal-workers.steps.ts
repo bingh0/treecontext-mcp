@@ -440,7 +440,7 @@ const STANDIN = join(TS_ROOT, 'tests', 'helpers', 'standin-worker.ts')
 const STANDIN_CLAUDE = join(TS_ROOT, 'tests', 'helpers', 'standin-claude-p.ts')
 
 interface StandinStep {
-  notes?: number; label?: string; texts?: string[]; checkpoint?: string; invalidRow?: boolean; print?: string
+  notes?: number; label?: string; texts?: string[]; checkpoint?: string; checkpoints?: string[]; invalidRow?: boolean; print?: string
   exit?: number | 'hang'; waitFor?: string; at?: number; viaTools?: boolean
 }
 export interface StandinPlan { first: StandinStep; rerun?: StandinStep }

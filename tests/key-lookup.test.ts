@@ -167,12 +167,12 @@ describe('an imported checkpoint\'s claim (D343)', () => {
     await s.importJson(JSON.stringify(file), { handoff: { file: 'handoffs/r1.json', importer: 'laptop' } })
     const l = s.lookupKey({ run: 'r1', key: 'k' })
     await s.close()
-    expect(l.checkpoints.map((c) => [c.nodeId, c.number, c.imported])).toEqual([['remote-cp-3', 3, true]])
-    expect(l.checkpoints[0]!.flag).toBe('Checkpoint number 3 arrived by import from "handoffs/r1.json", written there by "builder"; '
+    expect(l.checkpoints.map((c) => [c.nodeId, c.number, c.claimedNumber, c.imported])).toEqual([['remote-cp-3', null, 3, true]])
+    expect(l.checkpoints[0]!.flag).toBe('Checkpoint number 3 as numbered there arrived by import from "handoffs/r1.json", written there by "builder"; '
       + 'the file claims it supersedes checkpoint number 2, and this lookup believes the claim.')
     expect(l.checkpoints[0]!.legReturn).toEqual({
       leg: null, summary: null,
-      line: 'Checkpoint number 3 arrived by import, so no leg registered in this store wrote it and there is no leg return to point to here.',
+      line: 'Checkpoint number 3 as numbered there arrived by import, so no leg registered in this store wrote it and there is no leg return to point to here.',
     })
     expect(l.facts.checkpointsUnderKey).toBe(3)
     // The file: number 2 byte for byte as it was; the import keeps the
@@ -180,6 +180,9 @@ describe('an imported checkpoint\'s claim (D343)', () => {
     expect(row(two!)).toEqual(before)
     const m = meta('remote-cp-3')
     expect(m['supersedes']).toBeUndefined()
+    // Its number is the file's claim, in no sequence of this store's (D360).
+    expect(m['_checkpoint_number']).toBeUndefined()
+    expect((m['_handoff_claims'] as Record<string, unknown>)['_checkpoint_number']).toBe(3)
     expect((m['_handoff_claims'] as Record<string, unknown>)['supersedes']).toEqual([two])
     expect(row('remote-cp-3')['session_key']).toBe('handoff:remote-session')
   })
@@ -197,8 +200,8 @@ describe('an imported checkpoint\'s claim (D343)', () => {
     expect(l.checkpoints.map((c) => c.nodeId)).toEqual([one, 'imp-a', 'imp-b'])
     expect(l.checkpoints.map((c) => c.flag)).toEqual([
       null,
-      `Checkpoint number 2 arrived by import from "f.json"; the file claims it supersedes ${elsewhere}, and this lookup believes the claim.`,
-      'Checkpoint number 3 arrived by import from "f.json".',
+      `Checkpoint number 2 as numbered there arrived by import from "f.json"; the file claims it supersedes ${elsewhere}, and this lookup believes the claim.`,
+      'Checkpoint number 3 as numbered there arrived by import from "f.json".',
     ])
   })
 })

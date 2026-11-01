@@ -34,11 +34,13 @@ import { agentWriterOf, type RegistryHandle } from './persistence/session-regist
 import type { ProcessProbe } from './persistence/process-probe.js'
 import { SUBAGENT_SUMMARY_KIND } from './handoff.js'
 import { parseMeta } from './dedup-identity.js'
+import { HANDOFF_LANE_PREFIX } from './handoff.js'
 import { writerOf } from './references.js'
 import { RUN_META_KEY, KEY_META_KEY } from './run-kinds.js'
 import {
-  checkpointsUnder, inEffectAmong, inEffectLine, briefsOfKey, runOpenOf, HANDOFF_CLAIMS_KEY,
-  type CheckpointRecord, type RunReadHandle,
+  checkpointsUnder, inEffectAmong, inEffectLine, briefsOfKey, runOpenOf, importedLegsOf, importedRunRowsOf, importedBriefsCount,
+  numberWords, HANDOFF_CLAIMS_KEY,
+  type CheckpointRecord, type RunReadHandle, type ImportedLeg,
 } from './runs.js'
 
 // ── Names ──────────────────────────────────────────────────────────
@@ -61,6 +63,14 @@ export function checkpointName(number: number | null): string {
   return number === null ? 'an unnumbered checkpoint' : `checkpoint number ${number}`
 }
 const capital = (s: string): string => s.charAt(0).toUpperCase() + s.slice(1)
+
+/** How a reply names a checkpoint it has the record of: a local one by the
+ *  number this store gave it, an imported one by the number its own store
+ *  gave it, said to be numbered there (D360). */
+export function checkpointNameOf(cp: Pick<CheckpointRecord, 'number' | 'claimedNumber' | 'imported'>): string {
+  const words = numberWords(cp)
+  return words === 'unnumbered' ? 'an unnumbered checkpoint' : `checkpoint ${words}`
+}
 
 // ── Legs ───────────────────────────────────────────────────────────
 
@@ -105,15 +115,31 @@ export interface LegState {
   noticedBy: string | null
   openedRuns: string[]
   registration: LegRegistration
+  /** D310, D343: the leg ran in another store and arrived by import: its
+   *  registration is the file's claim, its state the file's as of the
+   *  export (nothing here can check it), and no registration of this
+   *  store's. Null for a leg registered here. */
+  imported: { file: string | null; nodeId: string } | null
 }
 
-export function legStateOf(leg: LegRegistration, lastWriteAt: number | null = null, checkpointsWritten: number | null = null): LegState {
+export function legStateOf(leg: LegRegistration, lastWriteAt: number | null = null, checkpointsWritten: number | null = null, imported: ImportedLeg | null = null): LegState {
   const state: LegState['state'] = isLiveLeg(leg) ? 'live' : (leg.ended ?? 'retired')
   return {
     sessionId: leg.sessionId, agentId: leg.agentId, role: leg.role, kind: leg.kind, key: leg.key, keySrc: leg.keySrc,
     state, keyless: isKeylessLeg(leg), checkpointsWritten, startedAt: leg.startedAt, lastWriteAt, stoppedAt: leg.stoppedAt,
     noticedAt: leg.noticedAt, noticedBy: leg.noticedBy, openedRuns: leg.openedRuns, registration: leg,
+    imported: imported ? { file: imported.file, nodeId: imported.nodeId } : null,
   }
+}
+
+/** The legs of a run that arrived by import and are no registration of
+ *  this store: a leg exported from here and imported back is the
+ *  registration it always was, counted once (D310). */
+export function importedLegsNotRegistered(
+  db: RunReadHandle, treeId: number | null, run: string, registrations: readonly Pick<LegRegistration, 'sessionId' | 'agentId'>[],
+): ImportedLeg[] {
+  const here = new Set(registrations.map((l) => `${l.sessionId}\0${l.agentId}`))
+  return importedLegsOf(db, treeId, run).filter((i) => !here.has(`${i.leg.sessionId}\0${i.leg.agentId}`))
 }
 
 /** The SQL that picks a leg's lane (D289's recipe): a worker's lane is its
@@ -199,15 +225,17 @@ export function checkpointerFlag(cp: Pick<CheckpointRecord, 'number' | 'writer'>
  * by this lookup (runs.ts checkpointsInEffect) and said so, as D296 says a
  * stranger's writer; the local checkpoint it names is untouched.
  */
-export function importFlag(cp: Pick<CheckpointRecord, 'number' | 'importedFrom' | 'claimedSupersedes' | 'metadata'>, under: readonly CheckpointRecord[] = []): string {
+export function importFlag(cp: Pick<CheckpointRecord, 'number' | 'claimedNumber' | 'imported' | 'importedFrom' | 'claimedSupersedes' | 'metadata'>, under: readonly CheckpointRecord[] = []): string {
   const claims = cp.metadata[HANDOFF_CLAIMS_KEY]
   const claimedWriter = claims !== null && typeof claims === 'object' && !Array.isArray(claims)
     && typeof (claims as Record<string, unknown>)['_writer'] === 'string' ? (claims as Record<string, string>)['_writer'] : null
   const named = cp.claimedSupersedes.map((id) => {
-    const local = under.find((c) => c.nodeId === id)
-    return local ? checkpointName(local.number) : id
+    const there = under.find((c) => c.nodeId === id)
+    return there ? checkpointNameOf(there) : id
   })
-  return `${capital(checkpointName(cp.number))} arrived by import${cp.importedFrom ? ` from "${cp.importedFrom}"` : ''}`
+  // The number is the file's word, numbered in the sender's store and in
+  // no sequence of this one (D360).
+  return `${capital(checkpointNameOf({ ...cp, imported: true }))} arrived by import${cp.importedFrom ? ` from "${cp.importedFrom}"` : ''}`
     + (claimedWriter ? `, written there by "${claimedWriter}"` : '')
     + (named.length > 0 ? `; the file claims it supersedes ${named.join(' and ')}, and this lookup believes the claim` : '')
     + '.'
@@ -231,6 +259,54 @@ const endedWords: Record<Exclude<LegState['state'], 'live'>, string> = {
 }
 
 /**
+ * D310, D343: the return of the leg that wrote an imported checkpoint. The
+ * leg is the one the file claims in the checkpoint's own handoff lane (an
+ * imported registration row of the run: no registration of this store),
+ * its return the newest summary row of that lane, which sits in the
+ * handoff lane too and is pointed to there, named as arrived by import.
+ * Without the leg's registration in the file, or without a summary row,
+ * the line says which, never a guess.
+ */
+function importedReturnOf(db: RunReadHandle & RegistryHandle, treeId: number | null, cp: CheckpointRecord): LegReturn {
+  const name = checkpointNameOf(cp)
+  const claims = cp.metadata[HANDOFF_CLAIMS_KEY]
+  const claimedAgent = claims !== null && typeof claims === 'object' && !Array.isArray(claims)
+    && typeof (claims as Record<string, unknown>)['_writer_agent_id'] === 'string' ? (claims as Record<string, string>)['_writer_agent_id'] : null
+  const lane = cp.sessionKey ?? ''
+  // The leg is the one the file registered in the checkpoint's own lane.
+  const claimed = importedLegsOf(db, treeId, cp.run).find((i) =>
+    `${HANDOFF_LANE_PREFIX}${i.leg.sessionId}` === lane
+    && (i.leg.agentId === claimedAgent || ((i.leg.kind === 'worker' || i.leg.agentId === WORKER_AGENT_ID) && claimedAgent === null)))
+  if (!claimed) {
+    return { leg: null, summary: null, line: `${capital(name)} arrived by import, so no leg registered in this store wrote it and there is no leg return to point to here.` }
+  }
+  const leg = claimed.leg
+  const state = legStateOf(leg).state
+  const role = leg.role ?? leg.agentId
+  const worker = leg.kind === 'worker' || leg.agentId === WORKER_AGENT_ID
+  const row = db.prepare(
+    `SELECT node_id, created_at, metadata_json FROM nodes
+      WHERE ${treeClause(treeId)} AND session_key = ?${worker ? '' : " AND json_extract(metadata_json, '$._writer_agent_id') = ?"}
+        AND json_extract(metadata_json, '$.kind') = '${SUBAGENT_SUMMARY_KIND}'
+      ORDER BY created_at DESC, rowid DESC LIMIT 1`,
+  ).get(...treeParams(treeId), lane, ...(worker ? [] : [leg.agentId])) as { node_id: string; created_at: number; metadata_json: string | null } | undefined
+  const ref = { sessionId: leg.sessionId, agentId: leg.agentId, role: leg.role, state }
+  if (!row) {
+    return { leg: ref, summary: null, line: `The ${role} leg that wrote ${name} arrived by import with the file, which carries no summary row for it: it left no return in the file.` }
+  }
+  const meta = parseMeta(row.metadata_json) ?? {}
+  const run = typeof meta[RUN_META_KEY] === 'string' ? meta[RUN_META_KEY] : null
+  const key = typeof meta[KEY_META_KEY] === 'string' ? meta[KEY_META_KEY] : null
+  const writer = writerOf(meta)
+  return {
+    leg: ref,
+    summary: { nodeId: row.node_id, writer, run, key, createdAt: row.created_at },
+    line: `Return of the ${role} leg that wrote ${name}, which arrived by import: the summary row ${row.node_id} in the handoff lane ${lane} `
+      + `(writer "${writer}"${run !== null ? `, run "${run}"` : ''}${key !== null ? `, key "${key}"` : ''}).`,
+  }
+}
+
+/**
  * D336 (ratified D348): the leg that wrote a checkpoint is the
  * registration of the checkpoint's lane, its session and writer agent; its
  * return is the newest summary row in that lane (the SubagentStop summary
@@ -240,9 +316,7 @@ const endedWords: Record<Exclude<LegState['state'], 'live'>, string> = {
  */
 export function legReturnOf(db: RunReadHandle & RegistryHandle, treeId: number | null, cp: CheckpointRecord): LegReturn {
   const name = checkpointName(cp.number)
-  if (cp.imported) {
-    return { leg: null, summary: null, line: `${capital(name)} arrived by import, so no leg registered in this store wrote it and there is no leg return to point to here.` }
-  }
+  if (cp.imported) return importedReturnOf(db, treeId, cp)
   const reg = cp.sessionKey !== null && cp.writerAgentId !== null && cp.writerAgentId !== ''
     ? legOf(db, { sessionId: cp.sessionKey, agentId: cp.writerAgentId }) : null
   if (!reg) {
@@ -282,6 +356,15 @@ export interface RunFacts {
   legsRun: number
   /** D320, D326, D341: how many of them are keyless (isKeylessLeg). */
   keylessLegs: number
+  /** D310, D343: how many of the legs run arrived by import: they ran in
+   *  another store, and their states are the file's claims. */
+  importedLegs: number
+  /** D360: how many briefs of the key arrived by import (in effect for no
+   *  role here), and how many of the run's opens and closes did (a close
+   *  that arrived ends no brief here). */
+  importedBriefs: number
+  importedOpens: number
+  importedCloses: number
   /** D301: how many checkpoints sit under the key, imported ones too. */
   checkpointsUnderKey: number
   /** D301: when the run started: its open row's moment, else its first
@@ -355,9 +438,13 @@ export function lookupKey(db: RunReadHandle & RegistryHandle, treeId: number | n
     }
   }
   const registrations = legsOfRun(db, opts.run)
-  const legs = registrations.map((leg) => legStateOf(leg, isLiveLeg(leg) ? lastWriteOf(db, treeId, leg) : null,
+  const local = registrations.map((leg) => legStateOf(leg, isLiveLeg(leg) ? lastWriteOf(db, treeId, leg) : null,
     leg.run !== null && leg.key !== null && (leg.keySrc === 'own' || leg.keySrc === 'declared')
       ? checkpointsWrittenBy(db, treeId, leg, leg.run, leg.key).length : null))
+  // D310: a leg that ran elsewhere and came back by the handoff is a leg of
+  // the run, counted and marked as arrived by import.
+  const arrived = importedLegsNotRegistered(db, treeId, opts.run, registrations)
+  const legs = [...local, ...arrived.map((i) => legStateOf(i.leg, null, null, i))].sort((a, b) => a.startedAt - b.startedAt)
   const all = checkpointsUnder(db, treeId, opts.run, opts.key)
   const named = namedCheckpointerOf(db, treeId, opts.run, opts.key, registrations)
   const checkpoints: LookupCheckpoint[] = inEffectAmong(all).map((cp) => ({
@@ -366,10 +453,18 @@ export function lookupKey(db: RunReadHandle & RegistryHandle, treeId: number | n
     legReturn: legReturnOf(db, treeId, cp),
   }))
   const open = runOpenOf(db, treeId, opts.run)
+  const importedOpens = importedRunRowsOf(db, treeId, opts.run, 'run-open')
+  const importedCloses = importedRunRowsOf(db, treeId, opts.run, 'run-close')
+  // This store's own open, else the first leg's start here; an open that
+  // arrived by import is the file's account and starts nothing here (D360).
   const runStartedAt = open?.createdAt ?? (registrations.length > 0 ? Math.min(...registrations.map((l) => l.startedAt)) : null)
   const facts: RunFacts = {
     legsRun: legs.length,
     keylessLegs: legs.filter((l) => l.keyless).length,
+    importedLegs: arrived.length,
+    importedBriefs: importedBriefsCount(db, treeId, opts.run, opts.key),
+    importedOpens: importedOpens.length,
+    importedCloses: importedCloses.length,
     checkpointsUnderKey: all.length,
     runStartedAt,
     runAgeSeconds: runStartedAt === null ? null : Math.max(0, at - runStartedAt),
@@ -385,7 +480,19 @@ export function lookupKey(db: RunReadHandle & RegistryHandle, treeId: number | n
     facts,
     namedCheckpointer: named,
     phantoms,
-    notes: [...phantoms.notes],
+    notes: [
+      ...phantoms.notes,
+      ...(importedBriefsCount(db, treeId, opts.run, opts.key) + importedCloses.length > 0
+        ? [`${importedBriefsCount(db, treeId, opts.run, opts.key)} brief(s) of this key and ${importedCloses.length} close(s) of this run arrived by import: `
+          + 'a review of what happened elsewhere, so a brief is in effect for no role here and a close ends no brief here.']
+        : []),
+      ...importedLegsOf(db, treeId, opts.run).filter((i) => i.differs.length > 0 || i.claimedSession !== null).map((i) =>
+        `The file's registration of the ${i.leg.role ?? 'unnamed'} leg (${i.leg.agentId}) differs from what this store holds in: ${[...i.differs, ...(i.claimedSession !== null ? ['session (the claim names ' + i.claimedSession + ', the lane is ' + i.leg.sessionId + ')'] : [])].join(', ')}.`),
+      ...(arrived.length > 0
+        ? [`${arrived.length} of the ${legs.length} ${legs.length === 1 ? 'leg' : 'legs'} of this run arrived by import: they ran in another store, `
+          + 'and their states are the file\'s claims as of its export, which this store cannot check.']
+        : []),
+    ],
   }
 }
 
@@ -403,6 +510,9 @@ export interface KeyLookupReply {
   checkpoints: Array<{
     node_id: string
     number: number | null
+    /** D360: an imported checkpoint's number as its own store gave it,
+     *  the file's claim, in no sequence of this store; null for a local one. */
+    claimed_number: number | null
     writer: string
     writer_src: string | null
     moment: number
@@ -433,6 +543,13 @@ export interface KeyLookupReply {
   facts: {
     legs_run: number
     keyless_legs: number
+    /** D310, D343: how many of legs_run arrived by import. */
+    imported_legs: number
+    /** D360: briefs of the key, and opens and closes of the run, that arrived
+     *  by import: read back as imported, in effect or closing nothing here. */
+    imported_briefs: number
+    imported_opens: number
+    imported_closes: number
     checkpoints_under_key: number
     run_started_at: number | null
     run_age_seconds: number | null
@@ -458,6 +575,10 @@ export interface KeyLookupReply {
     noticed_at: number | null
     noticed_by: string | null
     opened_runs: string[]
+    /** D310: present only for a leg that arrived by import (it ran in
+     *  another store): the file it came from and its registration row. A
+     *  leg registered here carries no such key. */
+    imported?: { file: string | null; node_id: string }
   }>
   /** D296: who the run named as the key's checkpointer, and where. */
   named_checkpointer: { names: string[]; by: NamedCheckpointer['by'] }
@@ -471,7 +592,7 @@ export function keyLookupReply(l: KeyLookup): KeyLookupReply {
     key: l.key,
     line: l.line,
     checkpoints: l.checkpoints.map((c) => ({
-      node_id: c.nodeId, number: c.number, writer: c.writer, writer_src: c.writerSrc, moment: c.createdAt, size: c.size, over_cap: c.overCap, claimed_over_cap: c.claimedOverCap,
+      node_id: c.nodeId, number: c.number, claimed_number: c.claimedNumber, writer: c.writer, writer_src: c.writerSrc, moment: c.createdAt, size: c.size, over_cap: c.overCap, claimed_over_cap: c.claimedOverCap,
       content: c.content, supersedes: c.supersedes, supersedes_src: c.supersedesSrc, rests_on: c.restsOn,
       imported: c.imported, imported_from: c.importedFrom, claimed_supersedes: c.claimedSupersedes,
       flag: c.flag,
@@ -486,6 +607,10 @@ export function keyLookupReply(l: KeyLookup): KeyLookupReply {
     facts: {
       legs_run: l.facts.legsRun,
       keyless_legs: l.facts.keylessLegs,
+      imported_legs: l.facts.importedLegs,
+      imported_briefs: l.facts.importedBriefs,
+      imported_opens: l.facts.importedOpens,
+      imported_closes: l.facts.importedCloses,
       checkpoints_under_key: l.facts.checkpointsUnderKey,
       run_started_at: l.facts.runStartedAt,
       run_age_seconds: l.facts.runAgeSeconds,
@@ -496,6 +621,7 @@ export function keyLookupReply(l: KeyLookup): KeyLookupReply {
       session_id: g.sessionId, agent_id: g.agentId, role: g.role, kind: g.kind, key: g.key, key_src: g.keySrc,
       state: g.state, keyless: g.keyless, checkpoints_written: g.checkpointsWritten, started_at: g.startedAt, last_write_at: g.lastWriteAt,
       stopped_at: g.stoppedAt, noticed_at: g.noticedAt, noticed_by: g.noticedBy, opened_runs: g.openedRuns,
+      ...(g.imported ? { imported: { file: g.imported.file, node_id: g.imported.nodeId } } : {}),
     })),
     named_checkpointer: { names: l.namedCheckpointer.names, by: l.namedCheckpointer.by },
     notes: l.notes,

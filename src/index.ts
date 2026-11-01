@@ -38,14 +38,24 @@ export {
   RESTS_ON_KEY, CHECKPOINTER_KEY, CHECKPOINTED_BY_KEY, BRIEF_FOR_KEY, OPENED_BY_KEY, OPENED_VIA_KEY, PARENT_RUN_KEY,
   PARENT_LEG_KEY, CLOSED_BY_KEY, REASON_KEY, DOOR_KEY, IDENTITY_KEY, CWD_KEY, PARENT_KEY, PARENT_SRC_KEY,
   RUN_ROWS_SQL, checkpointsUnder, checkpointsInEffect, inEffectAmong, nextCheckpointNumber, inEffectLine, briefsInEffect,
-  briefsOfKey, runOpenOf, runClosesOf, HANDOFF_CLAIMS_KEY, CHECKPOINT_CAP_CHARS, OVER_CAP_KEY, checkpointCapRefusal,
+  briefsOfKey, runOpenOf, runClosesOf, HANDOFF_CLAIMS_KEY, CHECKPOINT_CAP_CHARS, OVER_CAP_KEY, checkpointCapRefusal, importedLegsOf, importedRunRowsOf, importedBriefsCount, numberWords,
 } from './runs.js'
-export type { CheckpointRecord, BriefRecord, RunReadHandle } from './runs.js'
+export type { CheckpointRecord, BriefRecord, RunReadHandle, ImportedLeg } from './runs.js'
+// A run's export and the way a leg that ran elsewhere comes back (D300,
+// D310, D318, D343): the one logic under the export tool, the shell and
+// the library, and a leg's registration as a row of the file.
+export { exportRun, buildHandoff, checkRunForm, SECRETS_WARNING, RUN_SECRETS_WARNING, IMPORT_DOOR, IMPORT_IDENTITY } from './handoff.js'
+export type { RunExportRequest, RunExportResult, BuildHandoffOptions, BuiltHandoff, HandoffForm } from './handoff.js'
+export {
+  SKELETON_KINDS, FIRST_MOMENTS_NOTE, PROMPT_UNSEEN_SENTENCE, isDoorLine, doorLineNote, legFactsOf, legFromFacts,
+  registrationNode, registrationRowId, differingFacts,
+} from './run-export.js'
+export type { RunForm } from './run-export.js'
 // The key lookup, the harness's and the agent's one reply (D289, D296,
 // D301, D312, D336, D337, D343, D344).
 export {
   LAST_SIZES_SHOWN, KEY_LOOKUP_PARAM, lookupKey, keyLookupReply, legStateOf, isKeylessLeg, lastWriteOf,
-  namedCheckpointerOf, isNamedCheckpointer, checkpointerFlag, importFlag, legReturnOf, checkpointName, checkpointsWrittenBy,
+  namedCheckpointerOf, isNamedCheckpointer, checkpointerFlag, importFlag, legReturnOf, checkpointName, checkpointNameOf, checkpointsWrittenBy,
 } from './key-lookup.js'
 export type { LegState, KeyLookup, KeyLookupReply, LookupCheckpoint, LegReturn, RunFacts, NamedCheckpointer } from './key-lookup.js'
 export {
@@ -81,5 +91,5 @@ export {
 export type {
   SpawnWorkerOptions, WorkerRunResult, WorkerRunRecord, WorkerEnding, SendBackInput, SendBackVerdict, ClaimedTicket,
 } from './ticket-door.js'
-export { SUBAGENT_SUMMARY_KIND, SEND_BACK_KIND, TICKET_REFUSED_KIND, IDENTITY_ROW_KINDS, isIdentityRow } from './run-kinds.js'
+export { SUBAGENT_SUMMARY_KIND, SEND_BACK_KIND, TICKET_REFUSED_KIND, LEG_REGISTRATION_KIND, LEG_REGISTRATION_KEY, REGISTRATION_DIFFERS_KEY, IDENTITY_ROW_KINDS, isIdentityRow } from './run-kinds.js'
 export type { ProcessProbe } from './persistence/process-probe.js'

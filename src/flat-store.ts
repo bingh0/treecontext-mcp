@@ -61,9 +61,10 @@ import {
   runOpenOf, storeSupersedesFor, CHECKPOINT_NUMBER_KEY, SUPERSEDES_KEY, SUPERSEDES_SRC_KEY, SUPERSEDES_BY_WRITER, SUPERSEDES_BY_STORE,
   SUPERSEDES_PENDING, RESTS_ON_KEY, CHECKPOINTER_KEY, CHECKPOINTED_BY_KEY, BRIEF_FOR_KEY, OPENED_BY_KEY, OPENED_VIA_KEY,
   PARENT_RUN_KEY, PARENT_LEG_KEY, CLOSED_BY_KEY, REASON_KEY, BY_SRC_KEY, BY_PENDING, runOpenLine, runCloseLine, DOOR_KEY, IDENTITY_KEY, CWD_KEY, PARENT_KEY, PARENT_SRC_KEY,
-  CHECKPOINT_CAP_CHARS, OVER_CAP_KEY, charactersOf, checkpointCapRefusal,
+  CHECKPOINT_CAP_CHARS, OVER_CAP_KEY, charactersOf, checkpointCapRefusal, RUN_ROWS_SQL, RUN_ROW_WHERE, HANDOFF_CLAIMS_KEY,
   type CheckpointRecord, type BriefRecord,
 } from './runs.js'
+import { SKELETON_KINDS, registrationNode, legFromFacts, differingFacts, PROMPT_UNSEEN_SENTENCE } from './run-export.js'
 import { lookupKey, keyLookupReply, type KeyLookup, type KeyLookupReply } from './key-lookup.js'
 import {
   firstMomentFactsOf, composeFirstMessage, invalidInstructionsMessage, firstMomentMetadata, sendBackMetadata, laneRowsOf,
@@ -71,7 +72,7 @@ import {
   type FirstMomentFacts, type HookCut,
 } from './first-moment.js'
 import { trustedWorkerLane, type TicketReading } from './ticket.js'
-import { FIRST_MOMENT_KIND, SEND_BACK_KIND, TICKET_REFUSED_KIND, RUN_META_KEY } from './run-kinds.js'
+import { FIRST_MOMENT_KIND, SEND_BACK_KIND, TICKET_REFUSED_KIND, RUN_META_KEY, LEG_REGISTRATION_KIND, LEG_REGISTRATION_KEY, REGISTRATION_DIFFERS_KEY } from './run-kinds.js'
 import { retireMeta } from './persistence/writer-heal.js'
 import {
   DEDUP_WINDOW_SECS,
@@ -88,7 +89,7 @@ export function hooksFirstMomentText(role: string, agentId: string, run: string 
   const where = key !== null ? `under the key "${key}" on the run "${run}"` : `with an ambiguous key${run ? ` on the run "${run}"` : ''}`
   return `treecontext: the first moment of the ${role} leg (agent ${agentId}) ${where}, through the hooks door: `
     + `${briefs} ${briefs === 1 ? 'brief' : 'briefs'} and ${checkpoints} ${checkpoints === 1 ? 'checkpoint' : 'checkpoints'} in effect, referenced by id. `
-    + 'Its prompt rode on the Agent tool and is not seen by this door.'
+    + `${PROMPT_UNSEEN_SENTENCE}`
 }
 
 /** The text of a `claude -p` child's first-moment row when its own
@@ -2547,6 +2548,85 @@ export class FlatStore implements MemoryStore {
   }
 
   /**
+   * The rows of a run's export (D300, D318; run-export.ts), oldest first
+   * by their own moments. `skeleton`, the run's default: the rows of the
+   * run's own kinds that name it (its open and close, each brief, each
+   * checkpoint, each leg's first moment and summary row, imported
+   * registrations), plus each leg's registration as a row of the file,
+   * and no captured row. `whole` adds every row of every leg: what
+   * RUN_ROWS_SQL, the reader's recipe, returns for the run (D289). Both
+   * read this store's lane of the run, a handoff lane's rows included, so
+   * a run that came back from another store exports whole from here.
+   * `limit` is the inline cap: the newest that many, with `total` saying
+   * how many the form holds.
+   */
+  runRows(run: string, form: 'skeleton' | 'whole', limit?: number): { nodes: ExportedNode[]; total: number; innerRuns: string[] } {
+    this.ensureOpen()
+    const anyTree: string[] = form === 'whole'
+      ? (this.db.prepare(RUN_ROWS_SQL).all(run, run) as Array<{ node_id: string }>).map((r) => r.node_id)
+      : (this.db.prepare(
+          `SELECT node_id FROM nodes WHERE tree_id = ? AND ${RUN_ROW_WHERE} AND json_extract(metadata_json, '$.${RUN_META_KEY}') = ?`
+          + ` AND json_extract(metadata_json, '$.kind') IN (${SKELETON_KINDS.map(() => '?').join(', ')})`,
+        ).all(this.treeId, run, ...SKELETON_KINDS) as Array<{ node_id: string }>).map((r) => r.node_id)
+    // The reader's recipe spans the file; an export is of one namespace's
+    // tree (D196), so only this tree's rows are the run's here.
+    const ids: string[] = anyTree.length === 0 ? [] : (this.db.prepare(
+      'SELECT node_id FROM nodes WHERE tree_id = ? AND node_id IN (SELECT value FROM json_each(?))',
+    ).all(this.treeId, JSON.stringify(anyTree)) as Array<{ node_id: string }>).map((r) => r.node_id)
+    // The registry is a table of the whole file, not of one namespace
+    // (D196): a registration is this namespace's only when its lane holds
+    // rows here, so another namespace's leg of a run of the same name is
+    // never exported, counted or written into this namespace's file.
+    const laneHasRows = this.db.prepare(
+      `SELECT 1 AS x FROM nodes WHERE tree_id = ? AND session_key = ? AND (? = 1 OR json_extract(metadata_json, '$._writer_agent_id') = ?) LIMIT 1`,
+    )
+    const legs = legsOfRun(this.db, run).filter((leg) =>
+      laneHasRows.get(this.treeId, leg.sessionId, leg.kind === 'worker' || leg.agentId === WORKER_AGENT_ID ? 1 : 0, leg.agentId) !== undefined)
+    // A count asks for no content: the ids and the registrations the file
+    // would add are all it needs (the gate's `entries`, an empty run).
+    if (limit === 0) {
+      const held = new Set(ids)
+      const extra = legs.filter((leg) => !held.has(registrationNode(leg).nodeId)).length
+      return { nodes: [], total: ids.length + extra, innerRuns: [] }
+    }
+    const rows = ids.length === 0 ? [] : this.db.prepare(
+      `${EXPORT_COLUMNS} FROM nodes WHERE tree_id = ? AND node_id IN (SELECT value FROM json_each(?)) ORDER BY created_at ASC, rowid ASC`,
+    ).all(this.treeId, JSON.stringify(ids)) as Array<Record<string, unknown>>
+    // A registration row an earlier import brought goes on as the clean row
+    // it arrived as (same id, the sender's claim, the session of the lane it
+    // sits in), not nested inside this store's own import marks: the next
+    // store reads one claim, not a chain.
+    const nodes: ExportedNode[] = rows.map((r) => {
+      const node = exportNode(r)
+      const meta = node.metadata
+      if (meta?.['kind'] === LEG_REGISTRATION_KIND) {
+        const claims = meta[HANDOFF_CLAIMS_KEY] as Record<string, unknown> | undefined
+        const claimed = claims ? legFromFacts(claims[LEG_REGISTRATION_KEY]) : null
+        const lane = typeof meta['session_id'] === 'string' && meta['session_id'].startsWith(HANDOFF_LANE_PREFIX) ? meta['session_id'].slice(HANDOFF_LANE_PREFIX.length) : null
+        if (claimed !== null && lane !== null) return registrationNode({ ...claimed, sessionId: lane }) as unknown as ExportedNode
+      }
+      return node
+    })
+    const held = new Set(nodes.map((n) => String(n.nodeId)))
+    // Each leg registered under the run crosses as one row the file
+    // synthesizes (run-export.ts).
+    for (const leg of legs) {
+      const reg = registrationNode(leg) as unknown as ExportedNode
+      if (!held.has(String(reg.nodeId))) nodes.push(reg)
+    }
+    nodes.sort((a, b) => Number(a.createdAt) - Number(b.createdAt) || String(a.nodeId).localeCompare(String(b.nodeId)))
+    // The runs the legs opened are not carried by this skeleton (D311,
+    // D360): their names, so the importer knows what it does not hold.
+    const inner = new Set<string>()
+    for (const n of nodes) {
+      const facts = n.metadata?.[LEG_REGISTRATION_KEY] as { opened_runs?: unknown } | undefined
+      if (Array.isArray(facts?.opened_runs)) for (const r of facts.opened_runs) if (typeof r === 'string' && r !== run) inner.add(r)
+    }
+    const total = nodes.length
+    return { nodes: limit === undefined ? nodes : limit <= 0 ? [] : nodes.slice(-limit), total, innerRuns: [...inner].sort() }
+  }
+
+  /**
    * Import an export file. Everything new lands; anything truly already
    * present ANYWHERE in the store is left alone and counted, never a
    * failure (D164). "Already present", in order:
@@ -2636,9 +2716,31 @@ export class FlatStore implements MemoryStore {
         const fp = contentFingerprint(content)
         const now = Date.now() / 1000
         const claimed = (n['metadata'] as Record<string, unknown> | null) ?? null
+        // D310, D360: the registration of a leg THIS store registered, coming
+        // back in a run's export, is already present, but only when its facts
+        // agree with the registration held; one that differs lands as an
+        // imported registration row saying which facts differ. The leg's
+        // session is the lane's (D165): a claim that names another session
+        // is a claim about another leg, and lands flagged, never as present.
+        let registrationDiffers: string[] | null = null
+        if (handoff && claimed?.['kind'] === LEG_REGISTRATION_KIND) {
+          const claimedLeg = legFromFacts(claimed[LEG_REGISTRATION_KEY])
+          const lane = sessionOf(claimed)
+          if (claimedLeg !== null) {
+            const held = legOf(this.db, { sessionId: lane, agentId: claimedLeg.agentId })
+            const differs = [...(lane !== claimedLeg.sessionId ? ['session_id'] : []), ...(held !== null ? differingFacts(held, claimedLeg) : [])]
+            if (held !== null && differs.length === 0) {
+              alreadyPresent++
+              continue
+            }
+            if (differs.length > 0) registrationDiffers = differs
+          }
+        }
         // D261: an echo the file carries without its index boundary gets
         // it here, exactly as the drain would stamp it.
-        const meta = stampEchoBoundaries(content, handoff ? handoffMetadata(claimed, handoff, importedAt) : claimed)
+        const meta = stampEchoBoundaries(content, handoff
+          ? { ...handoffMetadata(claimed, handoff, importedAt), ...(registrationDiffers ? { [REGISTRATION_DIFFERS_KEY]: registrationDiffers } : {}) }
+          : claimed)
         // On the handoff door the importer, not the file, sets the row's
         // own columns (D165): the source is derived from the entry's
         // descriptive metadata exactly as insert() derives it.

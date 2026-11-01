@@ -26,8 +26,11 @@ import { decodeContent } from './persistence/content-codec.js'
 import { writerOf } from './references.js'
 import { parseMeta } from './dedup-identity.js'
 import { HANDOFF_LANE_PREFIX } from './handoff.js'
+import { legFromFacts } from './run-export.js'
+import type { LegRegistration } from './persistence/leg-registry.js'
 import {
   CHECKPOINT_KIND, BRIEF_KIND, RUN_OPEN_KIND, RUN_CLOSE_KIND, RUN_META_KEY, KEY_META_KEY,
+  LEG_REGISTRATION_KIND, LEG_REGISTRATION_KEY, REGISTRATION_DIFFERS_KEY,
 } from './run-kinds.js'
 
 export {
@@ -215,6 +218,9 @@ export const RUN_ROW_WHERE = `json_valid(metadata_json) AND json_extract(metadat
 export const RUN_ROW_INDEX_DDL =
   `CREATE INDEX IF NOT EXISTS idx_nodes_run ON nodes (json_extract(metadata_json, '$.${RUN_META_KEY}'), created_at) WHERE ${RUN_ROW_WHERE};`
 
+/** Where an imported row keeps its file's claims (handoff.ts, D165). */
+export const HANDOFF_CLAIMS_KEY = '_handoff_claims'
+
 // ── Plain-SQL reconstruction (D289, N31) ───────────────────────────
 
 /**
@@ -228,24 +234,47 @@ export const RUN_ROW_INDEX_DDL =
  * captured row, belongs to a run through its leg's lane:
  * the registration whose session is the row's session and whose agent id
  * is the row's writer agent (a subagent leg), or whose session is the
- * row's session outright (a worker's lane is its whole session). Bind the
- * run's name twice. Nothing here needs treecontext: any program with the
- * file runs it.
+ * row's session outright (a worker's lane is its whole session). A leg
+ * that ran in another store comes back by the handoff into a lane of its
+ * own (`handoff:<session>`, D310): its run rows carry the run themselves,
+ * its captured rows reach the run through the leg's imported registration
+ * row, and every imported row names its writer as imported from its file,
+ * never as the file's claim (D165). Bind the run's name twice. Nothing
+ * here needs treecontext: any program with the file runs it.
  */
 export const RUN_ROWS_SQL = `
 SELECT n.node_id, n.created_at,
-       json_extract(n.metadata_json, '$._writer') AS writer,
+       COALESCE('imported from ' || json_extract(n.metadata_json, '$._handoff_file'),
+                json_extract(n.metadata_json, '$._writer')) AS writer,
        json_extract(n.metadata_json, '$.kind') AS kind,
-       COALESCE(json_extract(n.metadata_json, '$.key'), r.run_key) AS key,
-       r.session_id AS leg_session, r.agent_id AS leg_agent, r.agent_type AS leg_role,
-       r.parent_session AS leg_parent
+       COALESCE(json_extract(n.metadata_json, '$.key'), r.run_key,
+                json_extract(g.metadata_json, '$.key')) AS key,
+       COALESCE(r.session_id, substr(g.session_key, ${HANDOFF_LANE_PREFIX.length + 1})) AS leg_session,
+       COALESCE(r.agent_id, json_extract(g.metadata_json, '$.${HANDOFF_CLAIMS_KEY}.${LEG_REGISTRATION_KEY}.agent_id')) AS leg_agent,
+       COALESCE(r.agent_type, json_extract(g.metadata_json, '$.${HANDOFF_CLAIMS_KEY}.${LEG_REGISTRATION_KEY}.role')) AS leg_role,
+       COALESCE(r.parent_session, json_extract(g.metadata_json, '$.${HANDOFF_CLAIMS_KEY}.${LEG_REGISTRATION_KEY}.parent_session')) AS leg_parent
   FROM nodes n
   LEFT JOIN session_registry r
     ON r.session_id = n.session_key
    AND (r.agent_id = json_extract(n.metadata_json, '$._writer_agent_id')
         OR (r.kind = 'worker' AND json_extract(n.metadata_json, '$._writer_agent_id') IS NULL))
- WHERE json_extract(n.metadata_json, '$.run') = ?
-    OR (json_extract(n.metadata_json, '$.run') IS NULL AND r.run = ?)
+  LEFT JOIN nodes g
+    ON g.rowid = (
+         SELECT g2.rowid FROM nodes g2
+          WHERE substr(n.session_key, 1, ${HANDOFF_LANE_PREFIX.length}) = '${HANDOFF_LANE_PREFIX}'
+            AND g2.session_key = n.session_key
+            AND json_extract(g2.metadata_json, '$.kind') = '${LEG_REGISTRATION_KIND}'
+            AND json_extract(g2.metadata_json, '$.run') = ?2
+            AND (json_extract(g2.metadata_json, '$.${HANDOFF_CLAIMS_KEY}.${LEG_REGISTRATION_KEY}.agent_id')
+                   = COALESCE(json_extract(n.metadata_json, '$._writer_agent_id'),
+                              json_extract(n.metadata_json, '$.${HANDOFF_CLAIMS_KEY}._writer_agent_id'))
+                 OR (json_extract(g2.metadata_json, '$.${HANDOFF_CLAIMS_KEY}.${LEG_REGISTRATION_KEY}.kind') = 'worker'
+                     AND COALESCE(json_extract(n.metadata_json, '$._writer_agent_id'),
+                                  json_extract(n.metadata_json, '$.${HANDOFF_CLAIMS_KEY}._writer_agent_id')) IS NULL))
+          ORDER BY g2.rowid LIMIT 1)
+ WHERE json_extract(n.metadata_json, '$.run') = ?1
+    OR (json_extract(n.metadata_json, '$.run') IS NULL AND r.run = ?2)
+    OR (json_extract(n.metadata_json, '$.run') IS NULL AND r.run IS NULL AND g.rowid IS NOT NULL)
  ORDER BY n.created_at, n.rowid`
 
 // ── Reads ──────────────────────────────────────────────────────────
@@ -264,7 +293,14 @@ const idsOf = (v: unknown): string[] => {
 /** A checkpoint as every reader sees it. */
 export interface CheckpointRecord {
   nodeId: string
+  /** The number THIS store gave it (D329). Null for an imported
+   *  checkpoint, which takes no number in this store's sequence and
+   *  collides with none (D360): see claimedNumber. */
   number: number | null
+  /** An imported checkpoint's number as its own store gave it: the
+   *  file's claim under `_handoff_claims`, never this store's number
+   *  (D343, D360). Null for a local row. */
+  claimedNumber: number | null
   run: string
   key: string
   /** The writer it is shown with (references.ts writerOf: an imported
@@ -300,9 +336,6 @@ export interface CheckpointRecord {
 
 interface RawRow { node_id: string; created_at: number; content: unknown; metadata_json: string | null; session_key: string | null }
 
-/** Where an imported row keeps its file's claims (handoff.ts, D165). */
-export const HANDOFF_CLAIMS_KEY = '_handoff_claims'
-
 function overCapOf(v: unknown): { size: number; cap: number; second: boolean } | null {
   if (v === null || typeof v !== 'object' || Array.isArray(v)) return null
   const o = v as Record<string, unknown>
@@ -312,33 +345,106 @@ function overCapOf(v: unknown): { size: number; cap: number; second: boolean } |
 function toCheckpoint(r: RawRow): CheckpointRecord {
   const meta = parseMeta(r.metadata_json) ?? {}
   const content = decodeContent(r.content as string | Buffer | null)
-  const n = Number(meta[CHECKPOINT_NUMBER_KEY])
   const imported = (r.session_key ?? '').startsWith(HANDOFF_LANE_PREFIX)
-  const claims = meta[HANDOFF_CLAIMS_KEY]
-  const claimed = imported && claims !== null && typeof claims === 'object' && !Array.isArray(claims)
-    ? idsOf((claims as Record<string, unknown>)[SUPERSEDES_KEY]) : []
+  const rawClaims = meta[HANDOFF_CLAIMS_KEY]
+  const claims: Record<string, unknown> | null = imported && rawClaims !== null && typeof rawClaims === 'object' && !Array.isArray(rawClaims)
+    ? rawClaims as Record<string, unknown> : null
+  // An imported row's stamps and trace sit under the file's claims, never
+  // at its top level (D360): the sender's number, writer agent and the
+  // rest are the file's word about the sender's store.
+  const stamp = (k: string): unknown => (imported ? claims?.[k] : meta[k])
+  const numberOf = (v: unknown): number | null => {
+    if (v === undefined || v === null) return null
+    const n = Number(v)
+    return Number.isFinite(n) ? n : null
+  }
+  const claimed = claims ? idsOf(claims[SUPERSEDES_KEY]) : []
+  const agent = stamp('_writer_agent_id')
+  const writerSrc = stamp('_writer_src')
+  const supersedesSrc = stamp(SUPERSEDES_SRC_KEY)
   return {
     nodeId: r.node_id,
-    number: Number.isFinite(n) && meta[CHECKPOINT_NUMBER_KEY] !== undefined && meta[CHECKPOINT_NUMBER_KEY] !== null ? n : null,
+    number: imported ? null : numberOf(meta[CHECKPOINT_NUMBER_KEY]),
+    claimedNumber: imported ? numberOf(claims?.[CHECKPOINT_NUMBER_KEY]) : null,
     run: String(meta[RUN_META_KEY]),
     key: String(meta[KEY_META_KEY]),
     writer: writerOf(meta),
-    writerSrc: typeof meta['_writer_src'] === 'string' ? meta['_writer_src'] : null,
+    writerSrc: typeof writerSrc === 'string' ? writerSrc : null,
     sessionKey: r.session_key,
-    writerAgentId: typeof meta['_writer_agent_id'] === 'string' ? meta['_writer_agent_id'] : null,
+    writerAgentId: typeof agent === 'string' ? agent : null,
     createdAt: r.created_at,
     content,
     size: charactersOf(content),
     overCap: imported ? null : overCapOf(meta[OVER_CAP_KEY]),
-    claimedOverCap: imported && claims !== null && typeof claims === 'object' && !Array.isArray(claims) ? overCapOf((claims as Record<string, unknown>)[OVER_CAP_KEY]) : null,
+    claimedOverCap: claims ? overCapOf(claims[OVER_CAP_KEY]) : null,
     supersedes: idsOf(meta[SUPERSEDES_KEY]),
-    supersedesSrc: typeof meta[SUPERSEDES_SRC_KEY] === 'string' ? meta[SUPERSEDES_SRC_KEY] : null,
+    supersedesSrc: typeof supersedesSrc === 'string' ? supersedesSrc : null,
     restsOn: idsOf(meta[RESTS_ON_KEY]),
     imported,
     importedFrom: imported && typeof meta['_handoff_file'] === 'string' ? meta['_handoff_file'] : null,
     claimedSupersedes: claimed,
     metadata: meta,
   }
+}
+
+/** A leg of a run that ran in another store and came back by the handoff
+ *  (D310): the registration the file claims for it, read from the claims
+ *  of its imported registration row. Never a registration of this store. */
+export interface ImportedLeg {
+  /** The imported registration row. */
+  nodeId: string
+  /** The file it came from (the importer's mark). */
+  file: string | null
+  /** The file's claim of the leg, as a registration. Its session is the
+   *  lane the row sits in, never the session the claim names (D165). */
+  leg: LegRegistration
+  createdAt: number
+  /** The session the claim names when it is not the lane's: a file whose
+   *  registration says one session and sits in another's lane. */
+  claimedSession: string | null
+  /** The registration facts the importer found different from this
+   *  store's own registration of the same leg (D360); empty otherwise. */
+  differs: string[]
+}
+
+/**
+ * The legs of a run that arrived by import (D310, D343), oldest first,
+ * each once however many files or stores brought it. The facts are the
+ * file's claims under `_handoff_claims` (the registration row's top level
+ * holds only the descriptive keys), read here and counted by the run's
+ * facts as arrived by import; none is a registration here, so none is ever
+ * retired as a phantom or trusted as an identity. The leg's session is the
+ * handoff lane's, whatever session the claim names (D165, D360).
+ */
+export function importedLegsOf(db: RunReadHandle, treeId: number | null, run: string): ImportedLeg[] {
+  const rows = db.prepare(
+    `SELECT node_id, created_at, content, metadata_json, session_key FROM nodes
+      WHERE ${treeClause(treeId)} AND ${RUN_ROW_WHERE}
+        AND json_extract(metadata_json, '$.${RUN_META_KEY}') = ? AND json_extract(metadata_json, '$.kind') = '${LEG_REGISTRATION_KIND}'
+        AND substr(session_key, 1, ${HANDOFF_LANE_PREFIX.length}) = '${HANDOFF_LANE_PREFIX}'
+      ORDER BY created_at, rowid`,
+  ).all(...treeParams(treeId), run) as RawRow[]
+  const seen = new Set<string>()
+  const out: ImportedLeg[] = []
+  for (const r of rows) {
+    const meta = parseMeta(r.metadata_json) ?? {}
+    const claims = meta[HANDOFF_CLAIMS_KEY]
+    const facts = claims !== null && typeof claims === 'object' && !Array.isArray(claims) ? (claims as Record<string, unknown>)[LEG_REGISTRATION_KEY] : undefined
+    const claimedLeg = legFromFacts(facts)
+    if (claimedLeg === null) continue
+    const lane = String(r.session_key).slice(HANDOFF_LANE_PREFIX.length)
+    const leg: LegRegistration = { ...claimedLeg, sessionId: lane }
+    const id = `${leg.sessionId}\0${leg.agentId}`
+    if (seen.has(id)) continue
+    seen.add(id)
+    const differs = meta[REGISTRATION_DIFFERS_KEY]
+    out.push({
+      nodeId: r.node_id, file: typeof meta['_handoff_file'] === 'string' ? meta['_handoff_file'] : null, leg, createdAt: r.created_at,
+      claimedSession: claimedLeg.sessionId !== lane ? claimedLeg.sessionId : null,
+      differs: Array.isArray(differs) ? differs.filter((x): x is string => typeof x === 'string') : [],
+    })
+  }
+  return out.sort((a, b) => a.leg.startedAt - b.leg.startedAt)
 }
 
 /** Every checkpoint under a run's key, in number order (an imported one
@@ -416,35 +522,73 @@ export function storeSupersedesFor(
 
 /** One line saying what is in effect under a key (D280, D289, D329):
  *  none, one, or how many, never a pick between them. */
-export function inEffectLine(run: string, key: string, inEffect: readonly Pick<CheckpointRecord, 'number'>[]): string {
+export function inEffectLine(run: string, key: string, inEffect: readonly Pick<CheckpointRecord, 'number' | 'claimedNumber' | 'imported'>[]): string {
   if (inEffect.length === 0) return `No checkpoint is in effect under "${key}" on the run "${run}".`
-  const nums = inEffect.map((c) => (c.number === null ? 'unnumbered' : `number ${c.number}`))
+  const nums = inEffect.map((c) => numberWords(c))
   if (inEffect.length === 1) return `Checkpoint ${nums[0]} is in effect under "${key}" on the run "${run}".`
   return `${inEffect.length} checkpoints are in effect under "${key}" on the run "${run}" (${nums.join(' and ')}); `
     + 'none supersedes the other, and the store picks none of them.'
 }
 
-/** A run's rows of one kind, oldest first. */
-function runRowsOfKind(db: RunReadHandle, treeId: number | null, run: string, kind: string): Array<{ nodeId: string; createdAt: number; content: string; metadata: Record<string, unknown> }> {
+/** How a checkpoint's number is said (D329, D360): a local one by the
+ *  number this store gave it; an imported one by the number its own store
+ *  gave it, said to be numbered there, since it takes none here. */
+export function numberWords(cp: Pick<CheckpointRecord, 'number' | 'claimedNumber' | 'imported'>): string {
+  if (cp.imported) return cp.claimedNumber === null ? 'unnumbered' : `number ${cp.claimedNumber} as numbered there`
+  return cp.number === null ? 'unnumbered' : `number ${cp.number}`
+}
+
+/** The SQL fragment that keeps a lane's rows in or out of the handoff
+ *  lanes: a run's own rows are the receiving store's, an imported run
+ *  row is a review of what happened elsewhere (D360). */
+const lanePredicate = (imported: boolean): string =>
+  `${imported ? '' : 'NOT '}(substr(COALESCE(session_key, ''), 1, ${HANDOFF_LANE_PREFIX.length}) = '${HANDOFF_LANE_PREFIX}')`
+
+/** A run's rows of one kind, oldest first: this store's own, or (imported)
+ *  those that arrived by the handoff. */
+function runRowsOfKind(db: RunReadHandle, treeId: number | null, run: string, kind: string, imported = false): Array<{ nodeId: string; createdAt: number; content: string; metadata: Record<string, unknown> }> {
   return (db.prepare(
     `SELECT node_id, created_at, content, metadata_json FROM nodes
       WHERE ${treeClause(treeId)} AND ${RUN_ROW_WHERE}
         AND json_extract(metadata_json, '$.${RUN_META_KEY}') = ? AND json_extract(metadata_json, '$.kind') = ?
+        AND ${lanePredicate(imported)}
       ORDER BY created_at, rowid`,
   ).all(...treeParams(treeId), run, kind) as RawRow[]).map((r) => ({
     nodeId: r.node_id, createdAt: r.created_at, content: decodeContent(r.content as string | Buffer | null), metadata: parseMeta(r.metadata_json) ?? {},
   }))
 }
 
-/** A run's open row: the first, if it was ever opened. */
+/** A run's open row in this store: the first, if it was ever opened here.
+ *  An open that arrived by import is the file's account of where the run
+ *  began, never this store's own (D360): importedRunOpensOf. */
 export function runOpenOf(db: RunReadHandle, treeId: number | null, run: string): { nodeId: string; createdAt: number; metadata: Record<string, unknown> } | null {
   return runRowsOfKind(db, treeId, run, RUN_OPEN_KIND)[0] ?? null
 }
 
-/** A run's close rows, oldest first; a run nobody closed has none and
- *  stays open (D308). */
+/** A run's close rows in this store, oldest first; a run nobody closed
+ *  here has none and stays open (D308). A close that arrived by import
+ *  ends no brief here (D360): importedClosesOf. */
 export function runClosesOf(db: RunReadHandle, treeId: number | null, run: string): Array<{ nodeId: string; createdAt: number; metadata: Record<string, unknown> }> {
   return runRowsOfKind(db, treeId, run, RUN_CLOSE_KIND)
+}
+
+/** The opens and closes of a run that arrived by import (D360), oldest
+ *  first, each with the file it came from. */
+export function importedRunRowsOf(db: RunReadHandle, treeId: number | null, run: string, kind: typeof RUN_OPEN_KIND | typeof RUN_CLOSE_KIND): Array<{ nodeId: string; createdAt: number; file: string | null }> {
+  return runRowsOfKind(db, treeId, run, kind, true).map((r) => ({
+    nodeId: r.nodeId, createdAt: r.createdAt, file: typeof r.metadata['_handoff_file'] === 'string' ? r.metadata['_handoff_file'] : null,
+  }))
+}
+
+/** How many briefs of a run's key arrived by import (D360): in effect for
+ *  no role here, and read back as imported. */
+export function importedBriefsCount(db: RunReadHandle, treeId: number | null, run: string, key: string): number {
+  const r = db.prepare(
+    `SELECT COUNT(*) AS n FROM nodes
+      WHERE ${treeClause(treeId)} AND ${RUN_ROW_WHERE} AND json_extract(metadata_json, '$.kind') = '${BRIEF_KIND}'
+        AND json_extract(metadata_json, '$.${RUN_META_KEY}') = ? AND json_extract(metadata_json, '$.${KEY_META_KEY}') = ? AND ${lanePredicate(true)}`,
+  ).get(...treeParams(treeId), run, key) as { n: number } | undefined
+  return Number(r?.n ?? 0)
 }
 
 export interface BriefRecord {
@@ -495,7 +639,7 @@ export function briefsInEffect(db: RunReadHandle, treeId: number | null, role: s
   const rows = db.prepare(
     `SELECT node_id, created_at, content, metadata_json, session_key FROM nodes
       WHERE ${treeClause(treeId)} AND ${RUN_ROW_WHERE} AND json_extract(metadata_json, '$.kind') = '${BRIEF_KIND}'
-        AND json_extract(metadata_json, '$.${BRIEF_FOR_KEY}') = ?
+        AND json_extract(metadata_json, '$.${BRIEF_FOR_KEY}') = ? AND ${lanePredicate(false)}
       ORDER BY created_at DESC, rowid DESC`,
   ).all(...treeParams(treeId), role) as RawRow[]
   const closed = new Map<string, boolean>()
@@ -517,7 +661,7 @@ export function briefsOfKey(db: RunReadHandle, treeId: number | null, run: strin
   const rows = db.prepare(
     `SELECT node_id, created_at, content, metadata_json, session_key FROM nodes
       WHERE ${treeClause(treeId)} AND ${RUN_ROW_WHERE} AND json_extract(metadata_json, '$.kind') = '${BRIEF_KIND}'
-        AND json_extract(metadata_json, '$.${RUN_META_KEY}') = ? AND json_extract(metadata_json, '$.${KEY_META_KEY}') = ?
+        AND json_extract(metadata_json, '$.${RUN_META_KEY}') = ? AND json_extract(metadata_json, '$.${KEY_META_KEY}') = ? AND ${lanePredicate(false)}
       ORDER BY created_at DESC, rowid DESC`,
   ).all(...treeParams(treeId), run, key) as RawRow[]
   return unsupersededBriefs(rows.map(toBrief))

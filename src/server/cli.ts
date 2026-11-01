@@ -35,6 +35,9 @@ export interface CliArgs {
   handoffPath: string | null
   /** `export --whole`: the whole journal instead of the summaries. */
   exportWhole: boolean
+  /** `export --run R`: the run R as a unit, its skeleton by default, with
+   *  `--whole` every row of every leg (D300). */
+  exportRun: string | null
   /** `config <key> <value…>`: the one key is checkpoint-interval. */
   configKey: string | null
   /** The value words of `config <key> <value…>`, joined by single spaces. */
@@ -121,6 +124,7 @@ export function parseArgs(argv: string[]): CliArgs {
     command: 'serve',
     handoffPath: null,
     exportWhole: false,
+    exportRun: null,
     configKey: null,
     configValue: null,
     storesAction: 'list',
@@ -175,7 +179,7 @@ export function parseArgs(argv: string[]): CliArgs {
         args.command = arg
         const file = argv[i + 1]
         if (!file || file.startsWith('-')) {
-          error(`${arg} requires a handoff file: treecontext ${arg} <path>${arg === 'export' ? ' [--whole --yes]' : ''}`)
+          error(`${arg} requires a handoff file: treecontext ${arg} <path>${arg === 'export' ? ' [--run R] [--whole --yes]' : ''}`)
         }
         args.handoffPath = file
         i++
@@ -183,6 +187,11 @@ export function parseArgs(argv: string[]): CliArgs {
       }
       case '--whole':
         args.exportWhole = true
+        break
+      case '--run':
+        i++
+        if (argv[i] === undefined || argv[i]!.startsWith('-')) error('--run requires the run\'s name: treecontext export <path> --run <name> [--whole --yes]')
+        args.exportRun = argv[i]!
         break
       case 'viz':
       case 'embed': {
@@ -557,7 +566,7 @@ Usage:
                   [--timeout SECONDS] [--check-ticket] [--spawner SESSION] [--message-arg] [--store X]
                   [--project-dir D] -- <command> [args...]
   treecontext backup <dst> [--store X] [--force]
-  treecontext export <path> [--whole --yes] [--force] [--store X] [--namespace N]
+  treecontext export <path> [--run R] [--whole --yes] [--force] [--store X] [--namespace N]
   treecontext import <path> [--store X] [--namespace N]
   treecontext ccr wire [--pane journal|threads|trail|all] [--dry-run] [--force]
   treecontext stores list|rm <name>|prune|sweep [--store X] [--yes]
@@ -606,7 +615,12 @@ Commands:
                        hold secrets, tokens and keys, so it writes only
                        with --yes after the warning. An existing file
                        that is not a handoff is never overwritten
-                       unless --force is passed.
+                       unless --force is passed. --run R exports that run as
+                       a unit instead: its skeleton (open and close,
+                       briefs, checkpoints, every leg's first moment and
+                       summary, the legs' registrations, no captured
+                       tool output), or with --whole --yes every row of
+                       every leg.
   import <path>        Import a teammate's handoff file into this
                        project's store. Everything new lands, anything
                        already present is left alone; every entry is
@@ -894,9 +908,13 @@ async function runExport(args: CliArgs): Promise<void> {
     error('export found no store bound to this directory. Run it from a project '
       + 'that has used treecontext, or name the store: treecontext export <path> --store <name>')
   }
-  const form = args.exportWhole ? 'whole' as const : 'summaries' as const
+  const form = args.exportWhole ? 'whole' as const : args.exportRun !== null ? 'skeleton' as const : 'summaries' as const
   const store = await openHandoffStore(args, storeName, false)
   try {
+    if (args.exportRun !== null) {
+      await runExportOfRun(args, store, args.exportWhole ? 'whole' : 'skeleton')
+      return
+    }
     if (form === 'whole' && !args.yes) {
       // D177: the warning comes before anything is written.
       const { total } = store.handoffRows('whole', 0)
@@ -934,6 +952,48 @@ async function runExport(args: CliArgs): Promise<void> {
   } finally {
     await store.close()
   }
+}
+
+/** `treecontext export <path> --run R`: the run as a unit (D300), through
+ *  the one door's logic the export tool and the library share (exportRun),
+ *  so the same store and form write the same bytes. */
+async function runExportOfRun(args: CliArgs, store: import('../memory-store.js').MemoryStore, form: 'skeleton' | 'whole'): Promise<void> {
+  const { exportRun, isHandoffFile, RUN_SECRETS_WARNING } = await import('../handoff.js')
+  const run = args.exportRun!
+  const project = resolveProjectDir(args.projectDir)
+  let projectRoot = project
+  try { projectRoot = realpathSync.native(project) } catch { /* as resolved */ }
+  const abs = resolvePath(args.handoffPath!)
+  let shown = projectRelative(projectRoot, abs)
+  if (shown === abs) {
+    try { shown = projectRelative(projectRoot, join(realpathSync.native(dirOfPath(abs)), baseOfPath(abs))) } catch { /* not there yet */ }
+  }
+  if (existsSync(abs) && !args.force && !isHandoffFile(abs)) {
+    error(`${args.handoffPath} already exists and is not a treecontext handoff file; nothing was written (--force overwrites it)`)
+  }
+  const outsideProject = shown === abs
+  // D177: with the acknowledgement given, the warning is still said before
+  // anything is written.
+  if (form === 'whole' && args.yes) console.error(`treecontext: ${RUN_SECRETS_WARNING}`)
+  const out = exportRun(store, {
+    run, form, project: baseOfPath(project) || project, path: outsideProject ? baseOfPath(abs) : shown, outsideProject,
+    acknowledged: args.yes, abs,
+  })
+  if (out.status === 'empty') {
+    console.error(`treecontext: ${out.message}`)
+    process.exitCode = 1
+    return
+  }
+  if (out.status === 'warning') {
+    // D177: the warning comes before anything is written.
+    console.error(`treecontext: ${out.warning}`)
+    console.error(`${out.message.replace('call again with form "whole" and the secrets acknowledged.', 're-run with --whole --yes.')}`)
+    process.exitCode = 1
+    return
+  }
+  console.log(`Wrote ${out.built.entries} ${out.built.entries === 1 ? 'entry' : 'entries'} of the run ${JSON.stringify(run)} (${out.form}) to ${shown}.`)
+  for (const note of out.built.notes) console.log(note)
+  if (out.built.innerRunsLine !== null) console.log(out.built.innerRunsLine)
 }
 
 async function runImport(args: CliArgs): Promise<void> {

@@ -43,7 +43,7 @@ import {
 } from '../runs.js'
 import { KEY_LOOKUP_PARAM } from '../key-lookup.js'
 import {
-  INLINE_EXPORT_CAP, SECRETS_WARNING, buildHandoff, importToldMessage, resolveProjectPath, writeHandoffFile,
+  INLINE_EXPORT_CAP, SECRETS_WARNING, buildHandoff, exportRun, checkRunForm, importToldMessage, resolveProjectPath, writeHandoffFile,
   type HandoffForm,
 } from '../handoff.js'
 import { DEFAULT_RECENCY_WEIGHT, SHADOW_RECENCY_WEIGHT, recordQueryTelemetry, telemetryEnabled } from './query-telemetry.js'
@@ -1285,14 +1285,22 @@ export function createServer(
         + 'the project directory and only the file name and counts come back; without '
         + 'it the export returns inline, capped at the newest 10000 entries. Export never '
         + 'writes the journal, so it stays available under the read_only policy — but with '
-        + 'path it does write that file, read_only or not.',
+        + 'path it does write that file, read_only or not. With run, the handoff is that run: '
+        + 'by default its skeleton (open and close, briefs, checkpoints, every leg\'s first moment and '
+        + 'summary, the legs\' registrations; no captured tool output), or form "whole" for every row of every leg.',
       inputSchema: z.object({
       node_id: z.string().optional().describe(
         'Entry to fetch. Omit to export a handoff.',
       ),
-      form: z.enum(['summaries', 'whole']).optional().describe(
+      form: z.enum(['summaries', 'whole', 'skeleton']).optional().describe(
         'What a handoff carries: "summaries" (the default) — the chapter summaries and '
-        + 'subagent summaries; "whole" — every entry, captured tool output included.',
+        + 'subagent summaries; "whole" — every entry, captured tool output included. '
+        + 'With run: "skeleton" (the default) or "whole".',
+      ),
+      run: z.string().min(1).max(512).optional().describe(
+        'Export this run as a unit (its legs\' rows, whichever lane they sit in) instead of the '
+        + 'journal. The default form is its skeleton; "whole" adds every row of every leg and is '
+        + 'behind secrets_acknowledged. The file\'s reply says what its first moments are.',
       ),
       path: z.string().min(1).max(4096).optional().describe(
         'Write the handoff to this file, relative to the project directory (e.g. '
@@ -1315,12 +1323,12 @@ export function createServer(
       ),
       }),
     },
-    async ({ node_id, form, path, secrets_acknowledged, max_export_nodes, writer }) => {
+    async ({ node_id, form, run, path, secrets_acknowledged, max_export_nodes, writer }) => {
       try {
         await ensureReady()
         if (node_id) {
-          if (path !== undefined || form !== undefined) {
-            throw new Error('node_id fetches one entry; form and path belong to a handoff export — pass one or the other')
+          if (path !== undefined || form !== undefined || run !== undefined) {
+            throw new Error('node_id fetches one entry; form, run and path belong to a handoff export — pass one or the other')
           }
           const exportOpts: { maxExportNodes?: number; nodeId?: string; recordReliance?: boolean } = {
             maxExportNodes: max_export_nodes,
@@ -1345,8 +1353,8 @@ export function createServer(
         if (writer !== undefined) {
           // D148: a writer's trail is a read, not a handoff — it bypasses
           // the summaries default and returns that writer's rows alone.
-          if (path !== undefined || form !== undefined) {
-            throw new Error('writer reads one writer\'s trail; form and path belong to a handoff export — pass one or the other')
+          if (path !== undefined || form !== undefined || run !== undefined) {
+            throw new Error('writer reads one writer\'s trail; form, run and path belong to a handoff export — pass one or the other')
           }
           const trailing = resolve() as MemoryStore & Partial<Pick<FlatStore, 'writerTrail'>>
           if (typeof trailing.writerTrail !== 'function') throw new Error('this store keeps no writer stamps')
@@ -1360,7 +1368,7 @@ export function createServer(
           } : {}), nodes: trail.nodes }
           return maybeShield('treecontext_export', { content: [{ type: 'text' as const, text: JSON.stringify(body) }] })
         }
-        const chosen: HandoffForm = form ?? 'summaries'
+        const chosen: HandoffForm = checkRunForm(run, form)
         // The path rule first (D199): a refused path writes nothing and
         // says where a handoff may go.
         let target: { abs: string; rel: string } | null = null
@@ -1375,6 +1383,27 @@ export function createServer(
           target = where
         }
         const store = resolve()
+        if (run !== undefined) {
+          // D300: a run is exported as a unit, its own default the skeleton;
+          // the whole form is behind the same acknowledgement as the whole
+          // journal, and the reply says what the first moments are (D318).
+          const out = exportRun(store, {
+            run, form: chosen, project: projectName, path: target?.rel ?? null, acknowledged: secrets_acknowledged,
+            ...(target !== null ? { abs: target.abs } : { inlineLimit: max_export_nodes }),
+          })
+          const text = (o: Record<string, unknown>): { content: Array<{ type: 'text'; text: string }> } =>
+            ({ content: [{ type: 'text' as const, text: JSON.stringify(o, null, 2) }] })
+          if (out.status === 'empty') return text({ run, written: false, entries: 0, message: out.message })
+          if (out.status === 'warning') return text({ warning: out.warning, run, written: false, entries: out.entries, message: out.message })
+          stats.recordExport(out.built.entries)
+          if (target === null) return maybeShield('treecontext_export', { content: [{ type: 'text' as const, text: out.built.text }] })
+          return text({
+            file: target.rel, run, form: out.form, entries: out.built.entries,
+            message: `Wrote ${out.built.entries} ${out.built.entries === 1 ? 'entry' : 'entries'} of the run ${JSON.stringify(run)} (${out.form}) to ${target.rel}.`,
+            ...(out.built.notes.length > 0 ? { first_moments: out.built.notes[0], ...(out.built.notes[1] ? { door_lines: out.built.notes[1] } : {}) } : {}),
+            ...(out.built.innerRunsLine !== null ? { inner_runs: out.built.innerRunsLine } : {}),
+          })
+        }
         // D177: the whole journal is a deliberate choice, and the warning
         // comes before anything is written — this reply writes nothing.
         if (chosen === 'whole' && !secrets_acknowledged) {

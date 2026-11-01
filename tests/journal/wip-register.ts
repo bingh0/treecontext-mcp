@@ -52,21 +52,14 @@ export const WHOLE_FEATURE_WIP: WholeFeatureWipRuling[] = [
   // unbound row, the Antigravity parent of the parent outline, is a
   // scenario-scoped wip entry in features.test.ts: no hook adapter exists
   // for Antigravity, a charter question for the owner.
-  {
-    feature: 'journal-runs',
-    reason: 'scoped 2026-10-31 before its build (D289, D296, D300–D302, D309–D312, D318); on 2026-11-01 unit 1 bound the plain-SQL read-back, the open and close, the run found by name, nested runs and the harness\'s lookup by run and key; on 2026-11-01 unit 2 bound the key lookup\'s whole reply (the flag in words against the brief\'s checkpointer, the run\'s facts and the sizes of the last three, a live leg\'s start and last write, the pointer to the writing leg\'s return or the line that it left none) and the agent\'s door to it and to a run\'s close through the tools; on 2026-11-01 unit 3 bound the run found by time through the first-moment, checkpoint and summary rows real workers left through the ticket door; leaves the register when the run export forms and the run come back by the handoff (D343) bind against the store file (unit 6)',
-    ruledOn: '2026-11-01',
-    // The three runs scenarios once bound through run-world.ts hooksLeg's
-    // registry call are re-bound (unit 4, 2026-11-01) through the real
-    // SubagentStart hook's own inference from the role's brief.
-    scenarios: [
-      // unit 6: run export forms and the handoff back (D300, D318, D343)
-      'a leg that ran on another machine comes back into the run by the handoff, and its claim is believed, flagged',
-      "a run's default export is its skeleton, with no captured tool output",
-      'the whole form adds every row of every leg behind the secrets acknowledgement',
-      "the skeleton carries first moments whole and its reply says they are the spawners' prompts as written",
-    ],
-  },
+  // journal-runs left this register on 2026-11-01 (unit 6) by its own
+  // leaving condition: the run export forms (the skeleton by default, the
+  // whole form behind the secrets acknowledgement, first moments whole with
+  // the reply's one line, D300, D318) and the leg that ran on another
+  // machine coming back into the run by the handoff, its claim believed and
+  // flagged (D310, D343), bind against the store file, so every journal-runs
+  // scenario runs through the real doors its text names. (The register's own
+  // guard allows a bound feature's ruling only with scenarios still open.)
   // The hackathon re-cut (interview 2026-10-05 to 2026-10-07, rulings
   // D145–D202): four surfaces scoped before their build, by design — the
   // feature files are the contract the build is measured against. Each

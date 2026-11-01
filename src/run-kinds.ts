@@ -45,6 +45,22 @@ export const SEND_BACK_KIND = 'send-back'
  *  raw ticket text; no worker is started. */
 export const TICKET_REFUSED_KIND = 'ticket-refused'
 
+/** D300, D310: a leg's registration as a row of a run's export, so the
+ *  registration facts (role, run, key, parent, door, how it ended) cross
+ *  stores as data. It exists only in an export file and, once imported,
+ *  in a handoff lane; the exporting store's registry is a table and never
+ *  grows one. See run-export.ts. */
+export const LEG_REGISTRATION_KIND = 'leg-registration'
+
+/** The metadata key a registration row carries its facts under. A claim
+ *  on import like any other (D165): it lands under `_handoff_claims`. */
+export const LEG_REGISTRATION_KEY = '_leg_registration'
+
+/** The key the importer stamps on an imported registration row whose facts
+ *  differ from this store's registration of the same leg: the list of the
+ *  facts that differ (D360). The importer's word, not the file's. */
+export const REGISTRATION_DIFFERS_KEY = 'registration_differs'
+
 /** The metadata keys a run's rows carry (D284, D289). */
 export const RUN_META_KEY = 'run'
 export const KEY_META_KEY = 'key'

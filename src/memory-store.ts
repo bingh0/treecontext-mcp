@@ -44,6 +44,9 @@ export interface MemoryStore {
   /** The rows of a handoff, oldest first: the default `summaries` or the
    *  `whole` lane; `limit` keeps the newest that many (the inline cap). */
   handoffRows(form: 'summaries' | 'whole', limit?: number): { nodes: unknown[]; total: number }
+  /** A run's rows, oldest first (D300): its `skeleton` or `whole`. A store
+   *  that keeps no runs leaves it out. */
+  runRows?(run: string, form: 'skeleton' | 'whole', limit?: number): { nodes: unknown[]; total: number }
   importJson(
     json: string,
     opts?: { label?: string; readOnly?: boolean; handoff?: { file: string; importer: string | null }; fromFile?: boolean },

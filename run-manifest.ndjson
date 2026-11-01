@@ -275,9 +275,9 @@
 {"file":"features/journal-runs.feature","title":"a key with 40 checkpoints returns the sizes of the last 3 [4]","status":"passed"}
 {"file":"features/journal-runs.feature","title":"a leg opens a run of its own and both runs reach each other","status":"passed"}
 {"file":"features/journal-runs.feature","title":"a leg that left no return is said so, never guessed","status":"passed"}
-{"file":"features/journal-runs.feature","title":"a leg that ran on another machine comes back into the run by the handoff, and its claim is believed, flagged","status":"unbound"}
+{"file":"features/journal-runs.feature","title":"a leg that ran on another machine comes back into the run by the handoff, and its claim is believed, flagged","status":"passed"}
 {"file":"features/journal-runs.feature","title":"a run opens on its first leg's registration","status":"passed"}
-{"file":"features/journal-runs.feature","title":"a run's default export is its skeleton, with no captured tool output","status":"unbound"}
+{"file":"features/journal-runs.feature","title":"a run's default export is its skeleton, with no captured tool output","status":"passed"}
 {"file":"features/journal-runs.feature","title":"a run's open and close are journal rows the query reaches","status":"passed"}
 {"file":"features/journal-runs.feature","title":"a run's rows read back by plain SQL in the order of their own moments, each naming its writer and moment, each leg naming its run and key","status":"passed"}
 {"file":"features/journal-runs.feature","title":"a stranger's checkpoint comes back as the one in effect, flagged against the named checkpointer","status":"passed"}
@@ -291,8 +291,8 @@
 {"file":"features/journal-runs.feature","title":"the harness closes a run with a reason and plain SQL shows who ended it and why","status":"passed"}
 {"file":"features/journal-runs.feature","title":"the lookup reply carries the pointer to the return of the leg that wrote the checkpoint","status":"passed"}
 {"file":"features/journal-runs.feature","title":"the run's facts show each live leg's start and last write","status":"passed"}
-{"file":"features/journal-runs.feature","title":"the skeleton carries first moments whole and its reply says they are the spawners' prompts as written","status":"unbound"}
-{"file":"features/journal-runs.feature","title":"the whole form adds every row of every leg behind the secrets acknowledgement","status":"unbound"}
+{"file":"features/journal-runs.feature","title":"the skeleton carries first moments whole and its reply says they are the spawners' prompts as written","status":"passed"}
+{"file":"features/journal-runs.feature","title":"the whole form adds every row of every leg behind the secrets acknowledgement","status":"passed"}
 {"file":"features/journal-search-modes.feature","title":"a chronological listing never receives the served default","status":"passed"}
 {"file":"features/journal-search-modes.feature","title":"a present embedding model changes nothing until asked","status":"unbound"}
 {"file":"features/journal-search-modes.feature","title":"a query of only near-universal tokens still matches","status":"passed"}

@@ -41,7 +41,7 @@ import { Client } from '@modelcontextprotocol/client'
 import { CLI_TS, nodeTsArgs } from './cli-spawn.js'
 
 interface Step {
-  notes?: number; label?: string; texts?: string[]; checkpoint?: string; invalidRow?: boolean; print?: string
+  notes?: number; label?: string; texts?: string[]; checkpoint?: string; checkpoints?: string[]; invalidRow?: boolean; print?: string
   exit?: number | 'hang'; at?: number; waitFor?: string; viaTools?: boolean
 }
 interface Plan { first: Step; rerun?: Step; claim?: { prompt?: string } }
@@ -105,6 +105,11 @@ if (leg) {
   }
   if (step.checkpoint !== undefined && reg && reg.run !== null && reg.key !== null) {
     await store.writeCheckpoint(step.checkpoint, { run: reg.run, key: reg.key, leg, ...(step.at !== undefined ? { at: step.at } : {}) })
+  }
+  // A leg that checkpoints more than once: each is numbered and supersedes
+  // the one before by the store's own rule (D329, D331).
+  for (const text of step.checkpoints ?? []) {
+    if (reg && reg.run !== null && reg.key !== null) await store.writeCheckpoint(text, { run: reg.run, key: reg.key, leg })
   }
 }
 await store.close()

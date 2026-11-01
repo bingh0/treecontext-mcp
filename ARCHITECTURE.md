@@ -242,7 +242,18 @@ Charter promises: `journal-capture.feature`; mechanics:
   it lands in a `handoff:<claimed session>` lane, keeping the sender's
   `created_at`. `treecontext export <path> [--whole --yes]` and
   `treecontext import <path>` are the same doors from a shell.
-  `journal-handoff.feature`.
+  `journal-handoff.feature`. With `run`, the export is that run as a
+  unit (`run-export.ts`, `exportRun`): `form: "skeleton"` by default
+  (the run's open and close, briefs, checkpoints, every leg's first
+  moment whole and summary row, and each leg's registration as a
+  `leg-registration` row; no captured tool output) or `"whole"` behind
+  the same acknowledgement, with `--run R` from a shell. The importing
+  store keeps the ids, lands the rows in `handoff:` lanes with the
+  sender's stamps, trace and checkpoint numbers under `_handoff_claims`,
+  reads a leg's registration claim as an imported leg the run's facts
+  count, and believes an imported checkpoint's claim to supersede a
+  local one at the key lookup; an imported brief is in effect for no
+  role and an imported close ends no brief (D360). `journal-runs.feature`.
 - **Checkpoints and the /clear packet** (`checkpoints.ts`): a chapter
   summary is a `next_session` pointer, a bookmark the same with
   `kind: "bookmark"` (ranked at 0.25). The Stop hook asks once for a

@@ -23,7 +23,9 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import { randomBytes } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { sessionOf, NO_SESSION } from './dedup-identity.js'
-import { SUBAGENT_SUMMARY_KIND } from './run-kinds.js'
+import { WRITER_STAMP_KEYS } from './persistence/session-registry.js'
+import { SUBAGENT_SUMMARY_KIND, LEG_REGISTRATION_KEY, FIRST_MOMENT_KIND } from './run-kinds.js'
+import { FIRST_MOMENTS_NOTE, doorLineNote, firstMomentLegName, type RunForm } from './run-export.js'
 
 /** Where an import came from and who ran it — the importer's own marks. */
 export interface HandoffSource {
@@ -65,7 +67,27 @@ export const HANDOFF_CLAIM_KEYS: readonly string[] = [
   // The over-cap mark is the store's own (D321, D359): a file's copy is a
   // claim about the sender's store, shown as one.
   '_over_cap',
+  // A leg's registration crosses stores as one row of a run's export
+  // (run-export.ts): its facts are the sender's claim about a leg that ran
+  // there (D310, D343), counted by the run's facts, never a registration here.
+  LEG_REGISTRATION_KEY,
+  // The sender's stamps and trace (D293, D343, D360): which writer the
+  // sender's store stamped and how sure it was, the door and identity it
+  // recorded, its directory, parent, worktree and branch, the number it gave
+  // a checkpoint, what it said superseded one and who named it, whether a
+  // run row's `by` waited for an echo, and a cap refusal kept on its
+  // registration. Evidence about the sender's store, kept as the file's
+  // claim and never read here as a stamp this store made.
+  ...WRITER_STAMP_KEYS,
+  '_cap_refused',
 ]
+
+/** What the receiving store stamps on a row that arrived by import, and
+ *  only that: that it arrived by import (D360). The importer's marks
+ *  (`_handoff_file`, `_handoff_importer`, `_handoff_imported_at`) say from
+ *  where, by whom and when. */
+export const IMPORT_DOOR = 'import'
+export const IMPORT_IDENTITY = 'imported'
 
 /** Key prefixes whose every key is a claim (see HANDOFF_CLAIM_KEYS). */
 export const HANDOFF_CLAIM_PREFIXES: readonly string[] = ['_cc_session', '_relied', '_handoff_']
@@ -100,6 +122,11 @@ export function handoffMetadata(
   if (supersedes.length > 0) out['refs'] = [...new Set([...idList(claims['refs']), ...supersedes])]
   const claimedSession = sessionOf(claims)
   out['session_id'] = `${HANDOFF_LANE_PREFIX}${claimedSession !== NO_SESSION ? claimedSession : source.file}`
+  // The door and the identity are the receiving store's own word about
+  // this row: it arrived by import, and no hook or declaration of this
+  // store's registered anyone (D360).
+  out['_door'] = IMPORT_DOOR
+  out['_identity'] = IMPORT_IDENTITY
   out['_handoff_file'] = source.file
   if (source.sender !== null) out['_handoff_sender'] = source.sender
   if (source.importer !== null) out['_handoff_importer'] = source.importer
@@ -143,8 +170,9 @@ export { INTERNAL_SUMMARY_KIND, CLIENT_WRITER } from './persistence/session-regi
 
 /** What a handoff carries: the default `summaries` (the chapter summaries
  *  and the subagent summaries, D177), or the `whole` journal, a deliberate
- *  choice behind the secrets warning. */
-export type HandoffForm = 'summaries' | 'whole'
+ *  choice behind the secrets warning. A run's export (D300) names the run
+ *  and takes the run's own default, `skeleton`, or `whole` (run-export.ts). */
+export type HandoffForm = 'summaries' | 'whole' | 'skeleton'
 
 /** The cap on an export returned inline into the conversation (D170):
  *  today's cap, kept. A file carries none. */
@@ -156,10 +184,19 @@ export const SECRETS_WARNING =
   + 'command output and file read this journal captured, to everyone who can read the file. '
   + 'Read it before you commit it.'
 
+/** D177 for a run's whole export (D300): the same risk, said of what this
+ *  file carries. */
+export const RUN_SECRETS_WARNING =
+  'Captured tool output can hold secrets, tokens and keys: a whole run export carries every command output and file read '
+  + "the run's legs captured, to everyone who can read the file. Read it before you commit it."
+
 /** The rows a handoff reads — FlatStore.handoffRows, structurally. */
 export interface HandoffExporter {
   readonly namespace: string
-  handoffRows(form: HandoffForm, limit?: number): { nodes: unknown[]; total: number }
+  handoffRows(form: 'summaries' | 'whole', limit?: number): { nodes: unknown[]; total: number }
+  /** A run's rows (D300), oldest first: FlatStore.runRows. A store that
+   *  keeps no runs leaves it out. */
+  runRows?(run: string, form: RunForm, limit?: number): { nodes: unknown[]; total: number; innerRuns?: string[] }
 }
 
 /** The version of treecontext that wrote a file: this package's own. Both
@@ -191,8 +228,17 @@ export function importStep(path: string | null, outsideProject = false): string 
     + `or run in this project's directory: treecontext import ${shellWord(path)}`
 }
 
-function holdsSentence(form: HandoffForm, n: number): string {
+function holdsSentence(form: HandoffForm, n: number, run?: string, nodes: readonly unknown[] = []): string {
   const entries = `${n} ${n === 1 ? 'entry' : 'entries'}`
+  if (run !== undefined) {
+    const kinds = new Set((nodes as Array<{ metadata?: Record<string, unknown> | null }>).map((x) => x.metadata?.['kind']))
+    // Only what the file holds is claimed for it: a run nobody closed has no close.
+    const opened = kinds.has('run-open') ? (kinds.has('run-close') ? 'its open and close, ' : 'its open, ') : kinds.has('run-close') ? 'its close, ' : ''
+    return form === 'skeleton'
+      ? `${entries}: the skeleton of the run ${JSON.stringify(run)}: ${opened}every brief, every checkpoint, every leg's first-moment `
+        + "row whole and summary row, and each leg's registration as data; no captured tool output"
+      : `${entries}: the run ${JSON.stringify(run)} whole, every row of every leg, captured tool output included, which can hold secrets, tokens and keys`
+  }
   return form === 'summaries'
     ? `${entries}: the chapter summaries and subagent summaries of one journal, the default handoff (no bookmarks, no captured tool output)`
     : `${entries}: the whole journal, captured tool output included, which can hold secrets, tokens and keys`
@@ -212,6 +258,9 @@ export interface BuildHandoffOptions {
   inlineLimit?: number
   /** The export's moment; defaults to now. */
   now?: Date
+  /** A run's export (D300): the run named. The form is then `skeleton`
+   *  or `whole`; any other is refused. */
+  run?: string
 }
 
 export interface BuiltHandoff {
@@ -223,6 +272,29 @@ export interface BuiltHandoff {
   total: number
   /** Entries left out by the inline cap (always 0 for a file). */
   omitted: number
+  /** A run's export: the lines its reply carries beyond the counts (D318):
+   *  what the first moments are, and which of them are a door's line and
+   *  not a prompt. Empty for every other export. */
+  notes: string[]
+  /** A run's export: the runs its legs opened, which the skeleton does not
+   *  carry (D311, D360), and the one line that says so; empty and null
+   *  when it opened none. */
+  innerRuns: string[]
+  innerRunsLine: string | null
+}
+
+/** The forms a run's export takes (D300). */
+export function checkRunForm(run: string | undefined, form: HandoffForm | undefined): HandoffForm {
+  if (run === undefined) {
+    if (form === 'skeleton') throw new Error('the skeleton form is a run\'s: name the run it is the skeleton of')
+    return form ?? 'summaries'
+  }
+  if (run.trim() === '') throw new Error('a run export needs the run\'s name')
+  const chosen = form ?? 'skeleton'
+  if (chosen === 'summaries') {
+    throw new Error('a run exports as its skeleton (the default) or whole; summaries carries no checkpoint and no first moment, so it could not resume a run')
+  }
+  return chosen
 }
 
 /**
@@ -236,17 +308,31 @@ export interface BuiltHandoff {
  */
 export function buildHandoff(store: HandoffExporter, opts: BuildHandoffOptions): BuiltHandoff {
   const inline = opts.inlineLimit !== undefined
-  const { nodes, total } = store.handoffRows(opts.form, inline ? opts.inlineLimit : undefined)
+  const form = checkRunForm(opts.run, opts.form)
+  let rows: { nodes: unknown[]; total: number; innerRuns?: string[] }
+  if (opts.run !== undefined) {
+    if (typeof store.runRows !== 'function') throw new Error('this store keeps no runs to export')
+    rows = store.runRows(opts.run, form as RunForm, inline ? opts.inlineLimit : undefined)
+  } else {
+    rows = store.handoffRows(form as 'summaries' | 'whole', inline ? opts.inlineLimit : undefined)
+  }
+  const { nodes, total } = rows
+  const innerRuns = rows.innerRuns ?? []
   const omitted = total - nodes.length
+  const notes = opts.run !== undefined ? runNotes(nodes) : []
+  const innerRunsLine = innerRuns.length > 0
+    ? `This run opened the ${innerRuns.length === 1 ? 'run' : 'runs'} ${innerRuns.join(', ')}, which this file does not carry: export ${innerRuns.length === 1 ? 'it' : 'each'} by name.`
+    : null
   const at = (opts.now ?? new Date()).toISOString().replace(/\.\d{3}Z$/, 'Z')
   const head: Record<string, unknown> = {
     exported_by: exporterName(),
     exported_at: at,
     project: opts.project,
     treecontext_version: treecontextVersion(),
-    holds: holdsSentence(opts.form, nodes.length),
+    holds: holdsSentence(form, nodes.length, opts.run, nodes),
     to_import: importStep(opts.path, opts.outsideProject === true),
-    form: opts.form,
+    form,
+    ...(opts.run !== undefined ? { run: opts.run, first_moments: notes.join(' '), ...(innerRuns.length > 0 ? { inner_runs: innerRuns } : {}) } : {}),
     node_count: nodes.length,
     version: 1,
     namespace: store.namespace,
@@ -259,7 +345,19 @@ export function buildHandoff(store: HandoffExporter, opts: BuildHandoffOptions):
   }
   const file = { ...head, nodes }
   const text = inline ? JSON.stringify(file) : `${JSON.stringify(file, null, 2)}\n`
-  return { text, entries: nodes.length, total, omitted }
+  return { text, entries: nodes.length, total, omitted, notes, innerRuns, innerRunsLine }
+}
+
+/** The lines a run export's reply carries (D318): one that says what the
+ *  first moments are, and one for each kind of first moment that is a
+ *  door's line and not a prompt. Only when the file holds first moments. */
+function runNotes(nodes: unknown[]): string[] {
+  const firsts = (nodes as Array<{ content?: unknown; metadata?: Record<string, unknown> | null }>)
+    .filter((n) => n.metadata?.['kind'] === FIRST_MOMENT_KIND && typeof n.content === 'string')
+    .map((n) => ({ content: n.content as string, leg: firstMomentLegName(n.metadata ?? null) }))
+  if (firsts.length === 0) return []
+  const door = doorLineNote(firsts)
+  return [FIRST_MOMENTS_NOTE, ...(door !== null ? [door] : [])]
 }
 
 /** A path resolved against the project directory, or the refusal. */
@@ -369,6 +467,63 @@ export function writeHandoffFile(abs: string, text: string): void {
     rmSync(tmp, { force: true })
     throw err
   }
+}
+
+// ── A run's export, the one door's logic (D300, D318) ───────────────────
+
+/** What a run export is asked for, whichever door asks: the export tool,
+ *  the `treecontext export --run` command, or a library caller. */
+export interface RunExportRequest {
+  run: string
+  /** `skeleton` (the default) or `whole`; anything else is refused. */
+  form?: HandoffForm
+  project: string
+  /** Where the file sits, relative to the project; null when none. */
+  path: string | null
+  outsideProject?: boolean
+  /** The secrets acknowledgement `whole` is behind (D177). */
+  acknowledged?: boolean
+  /** The absolute path to write. Without it nothing is written and the
+   *  built text is returned (an inline export, with `inlineLimit`). */
+  abs?: string
+  inlineLimit?: number
+}
+
+export type RunExportResult =
+  /** The store holds no row of the run: nothing was written. */
+  | { status: 'empty'; run: string; message: string }
+  /** `whole` without the acknowledgement: the warning, and nothing written. */
+  | { status: 'warning'; run: string; warning: string; entries: number; message: string }
+  | { status: 'built'; form: HandoffForm; built: BuiltHandoff; written: boolean }
+
+/**
+ * Export a run: the gate, the file, the lines the reply carries. The
+ * whole form writes nothing until the acknowledgement is given, and says
+ * the warning first (D177, D300); the skeleton asks for none (D318). A
+ * run the store holds no row of writes nothing and says so: a file with
+ * no entries would pass for the run's export.
+ */
+export function exportRun(store: HandoffExporter, req: RunExportRequest): RunExportResult {
+  const form = checkRunForm(req.run, req.form)
+  if (typeof store.runRows !== 'function') throw new Error('this store keeps no runs to export')
+  const { total } = store.runRows(req.run, form as RunForm, 0)
+  if (total === 0) {
+    return { status: 'empty', run: req.run, message: `The store holds no row of the run ${JSON.stringify(req.run)}, so nothing was written.` }
+  }
+  if (form === 'whole' && req.acknowledged !== true) {
+    return {
+      status: 'warning', run: req.run, warning: RUN_SECRETS_WARNING, entries: total,
+      message: `Nothing was written. To export the run ${JSON.stringify(req.run)} whole (${total} ${total === 1 ? 'entry' : 'entries'}) anyway, `
+        + 'call again with form "whole" and the secrets acknowledged.',
+    }
+  }
+  const built = buildHandoff(store, {
+    form, run: req.run, project: req.project, path: req.path,
+    ...(req.outsideProject !== undefined ? { outsideProject: req.outsideProject } : {}),
+    ...(req.inlineLimit !== undefined && req.abs === undefined ? { inlineLimit: req.inlineLimit } : {}),
+  })
+  if (req.abs !== undefined) writeHandoffFile(req.abs, built.text)
+  return { status: 'built', form, built, written: req.abs !== undefined }
 }
 
 /** The import's counts as the developer is told them. */

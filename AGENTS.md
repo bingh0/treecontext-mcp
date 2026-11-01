@@ -77,8 +77,13 @@ in the charter or out of the build.
   (Gemini) copies behind `--experimental-capture`
 - `src/handoff.ts` — the handoff door: the import rule (importer's marks,
   `_handoff_claims`, `handoff:` lanes), the export forms (`summaries`,
-  `whole`), the file's self-describing head, the project-directory path
-  rule, the atomic file write
+  `whole`, and a run's `skeleton`), the file's self-describing head, the
+  project-directory path rule, the atomic file write; `exportRun`, the one
+  door's logic (gate, build, write) under the tool, the shell and the library
+- `src/run-export.ts` — a run's export: the skeleton's kinds, the reply's
+  first-moments line and the door-line note, and a leg's registration as a
+  `leg-registration` row (the facts a claim under `_leg_registration`, read
+  back as an imported leg)
 - `src/references.ts` — `metadata.refs` references and lanes: the lane key
   supersession respects, the writer an entry is shown with, and
   "referenced by" one hop deep
