@@ -355,3 +355,21 @@ Feature: Journal storage — the store is durable, bounded, and honest about los
     Then the file on disk shrinks once free space crosses the vacuum threshold
     # Unbounded freelist growth is invisible loss of the budget promise:
     # the store reports small while the file stays huge.
+
+  # The beta.3 subagent interview (D319, 2026-10-31): the door writes a
+  # worker's first moment as that worker's capture, so the valve reaches
+  # it; the checkpoints and the summary row are agent-authored and stay.
+
+  @D339 @D319
+  Scenario: a worker's first-moment row evicts with its session under the session cap, and its checkpoints and summary row stay
+    Given a store over its session cap whose oldest session is a ticketed worker's, holding a first-moment row of 300000 characters, 2 checkpoints and a summary row
+    When the retention sweep runs
+    Then the worker's capture rows, the first-moment row among them, are archived whole and fsynced before any row moves
+    And the 2 checkpoints and the summary row remain in the store, protected as agent-authored
+
+  @D339 @D319
+  Scenario: over the byte budget a worker's first-moment row is demoted like captured tool output, archived first
+    Given a store over its byte budget holding a ticketed worker's first-moment row of 300000 characters, 2 checkpoints and a summary row
+    When the retention sweep runs
+    Then the first-moment row is demoted to its bounded preview, with its full length and its archive path on the row, after the archive is written
+    And the 2 checkpoints and the summary row are untouched

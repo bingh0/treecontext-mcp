@@ -114,7 +114,11 @@ re-decided, and the previous text is in git history.
   journal-recall. Only the compaction interaction itself, when and why a
   compaction happens, stays with ccr. A fence may decline a promise,
   never a writer: anything that writes to the store is in the charter or
-  out of the build.
+  out of the build. Amended 2026-10-31 (D290, D304): install writes
+  Claude Code's idle-compaction key off when absent and the client is
+  known to honor it, says so, never touches a user-set key; doctor
+  reports it; the compaction interaction itself stays with ccr, the one
+  declined promise this entry still fences.
 - **`treecontext_feedback`** — dropped from the tool surface: on the
   lexical backend it was an honest no-op that still promised an effect,
   wiring it into ranking is the loop the reference-frequency entry
@@ -177,6 +181,12 @@ re-decided, and the previous text is in git history.
 - **The compliance category** — no regulation, standard, hackathon rule
   or house rule binds treecontext in the hackathon scope. (D182,
   2026-10-07)
+
+- **The performance category, for the subagent work** — declined with
+  provenance at the beta.3 checklist sweep: no ruling of this program
+  names a slowest acceptable lookup, first moment or export at the
+  largest realistic run; security was confirmed as already answered by
+  the traceability principle and not re-probed. (D306, 2026-10-31)
 
 ## Deferred
 
@@ -261,6 +271,18 @@ re-decided, and the previous text is in git history.
   pinned separately. Reopens if a row could ever be both. (D89,
   2026-08-15)
 
+- **Treecontext stays a faithful journal of the session** — with
+  sufficient metadata to understand who contributed and to recreate the
+  timeline; the ground every beta.3 ruling rests on, restating the
+  charter's own stance: capture judged by whether a future agent would
+  find the moment, honest timestamps, attribution earned. Reopens if a
+  ruling of this program would have the store synthesize, rewrite or
+  drop a row's writer or moment, would let a checkpoint lookup return
+  something the journal does not hold, or would let a leg's rows enter
+  the store without the writer and moment the rest of the journal
+  carries.
+  (D283, 2026-10-29)
+
 ## Out of reach by construction
 
 - **A pid-keyed namespace rung on Windows** — the `.cmd` hook wrapper
@@ -285,6 +307,19 @@ re-decided, and the previous text is in git history.
   repositories; the hackathon vision names them as the environment this
   contract works inside, and nothing here binds them. (N23, D155,
   2026-10-05)
+
+- **Not-started at the hooks door** — a Claude Code subagent cannot be
+  declined at its start: the subagent-start hook is context-only by the
+  platform's rules, so a hooks-door leg at an unreachable store starts
+  cold and the dropped start is marked as a capture gap; not-started
+  holds at the ticket door, where the door is the spawner. (D314,
+  2026-10-31)
+- **How the hooks door reads a brief it is not handed** — the
+  subagent-start payload carries the subagent's id and role, not its
+  prompt; the key is inferred from the role's newest brief, ambiguous
+  when more than one is in effect, settled by the leg's first write. A
+  hook on the Agent tool call that pairs the prompt with the spawn is
+  left to the build, bound by that behavior. (D320, 2026-10-31)
 
 ## Roads not taken
 
@@ -418,6 +453,176 @@ re-decided, and the previous text is in git history.
 - The design document's home: the root as seed with a pointer beside the
   features; a full copy at both paths. (D200, 2026-10-07)
 
+- Declined alternative, Dropping recovery snapshot rows from search —
+  they are the only record of what a compaction found, and D3 keeps every
+  capture; Storing the recovery row as an auto-capture tool event —
+  changes its dedup class and session lane, more than a hotfix carries;
+  and, Shrinking the existing rows' content — retention never destroys,
+  and export still returns their words. (D286, 2026-10-30)
+- Declined alternative, Shielding an oversized reply — off by default,
+  and a 30 MB file pointer is still a 30 MB read; Failing the query
+  outright — the agent loses the page for one oversized entry; and,
+  Cutting exports — an export that lies about being whole is worse than
+  one refused. (D287, 2026-10-30)
+- Declined alternative, The main agent writes a cut leg's checkpoint from
+  the trail — costs the orchestrator the context the legs exist to keep
+  out of it; and, Nobody writes it, the trail is the checkpoint — every
+  resumed leg pays the orientation cost on every resume. (D279,
+  2026-10-29)
+- Declined alternative, Newest checkpoint by time wins silently — a late
+  original or an early review hands the next leg the wrong one with no
+  sign; and, Only the work's own role may checkpoint — rules out the
+  technical-writer, project-manager and reviewer roles the visionary
+  named. (D280, 2026-10-29)
+- Declined alternative, A per-role checkpointer setting in the project's
+  configuration — goes stale when a pipeline changes shape between runs;
+  and, The ask always fires and the worker answers with a pointer — a
+  turn on every such leg, the ceremony ruled out. (D281, 2026-10-29)
+- Declined alternative, One journal-subagents file holding everything —
+  largest in the corpus, three actors' outcomes mixed; and, Extending
+  journal-orchestration with no new file — triples in size. (D282,
+  2026-10-29)
+- Declined alternative, The brief names who consumes the summary; a
+  harness-owned run the main agent hears only the end of; a leg started
+  with no return at all — the one-line pointer comes back every time and
+  costs one line. (D285, 2026-10-29)
+- Declined alternative, Install recommends the idle-compaction setting
+  and asks once interactively — every forced reinstall asks again; and,
+  Doctor row and README only, install writes nothing — a user who skips
+  the note meets compaction they did not ask for. (D290, 2026-10-30)
+- Declined alternative, Write the idle-compaction key anyway and say the
+  client is older — install cannot always read the client's version and
+  would then write and say nothing. (D304, 2026-10-31)
+- Declined alternative, No send-back off the hooks door, the worker
+  visibly ended and the next leg a recovery leg — a pipeline with no
+  second leg of that role never gets its checkpoint; and, The harness
+  passes the checkpoint text at retire under its own stamp — a harness
+  has no model, so its checkpoint is the work's own words relabelled.
+  (D291, 2026-10-30)
+- Declined alternative, Every exit without a checkpoint sent back once,
+  signal or not — the timeout is paid twice; and, The spawner says cut or
+  finished at retire — a harness that never says cut lands on the double
+  timeout. (D292, 2026-10-30)
+- Declined alternative, Refusing a ticket whose parent no hook registered
+  — the abandoned axis of the unknown-parent question: a one-line harness
+  grows a registration step, and the store would be checking an identity
+  it has no way to vouch for. (D293, 2026-10-30)
+- Declined alternative, A declared-parent registry row written by the
+  ticket door and reused by later tickets — the store would write a
+  session it never saw, and two mains declaring one id share a row; and,
+  Both the row and the per-worker copy — the invented row remains.
+  (D294, 2026-10-31)
+- Declined alternative, A `claude -p` child carrying both identities with
+  the ticket's on top — the first moment spent twice; and, The hook wins
+  and the ticket serves hook-less CLIs only — a Codex main's `claude -p`
+  workers land unparented in the main lane as "main". (D295, 2026-10-31)
+- Declined alternative, Only a named checkpointer's rows count as in
+  effect, the stranger's listed apart — a legitimate unnamed
+  technical-writer leg waits in the apart list too; and, The writer on the
+  row and nothing more — a model-less harness resumes from the poison with
+  nothing in the reply saying so. (D296, 2026-10-31)
+- Declined alternative, Phantom retirement at the parent's next start or
+  next ticket — a parent that never returns leaves the phantom live
+  forever; and, Never retired on its own, ages shown and a command to
+  retire by hand — every model-less harness picks its own silence
+  threshold. (D297, 2026-10-31)
+- Declined alternative, A first-moment file named in the ticket's
+  environment, read by the CLI's managed instructions file — a user who
+  did not let install manage that file gets a worker that starts cold,
+  N29 unmet silently; and, Ids in the ticket and one fetch — no record
+  that the worker read them. (D298, 2026-10-31)
+- Declined alternative, Never cut and no cap, the checkpointer owns the
+  size — the chain grows every leg; and, Cut at a cap named in the ticket
+  — drops the review the leg was spawned to act on. (D299, 2026-10-31)
+- Declined alternative, A run export of every row of every leg always — a
+  30-leg run with shell trails is tens of megabytes and every importer
+  takes the secrets risk; and, No run form, a run filter on the existing
+  forms — the summaries form could not resume a run. (D300, 2026-10-31)
+- Declined alternative, Bounds on the run's registration reported when
+  crossed — a run opened with no bounds gets the facts anyway, so the
+  facts are the floor; and, Convergence as the harness's business alone
+  with no facts — the field report's case. (D301, 2026-10-31)
+- Declined alternative, A declared checkpoint shape the store checks —
+  every brief author writes a schema; and, No grammar anywhere, the
+  harness never parses the checkpoint — the checkpoint is where the
+  honest "not done" lived. (D302, 2026-10-31)
+- Declined alternative, Running on an unreadable ticket as if none were
+  present — the rows land in the main lane; Registering with what was
+  read and letting the worker work — work done on a guessed brief; The
+  spawner refusing to spawn on a ticket it cannot read — damage happens
+  between mint and read. (D303, 2026-10-31)
+- Declined alternative, Every subagent a leg with a key minted from its
+  role — the ceremony spent on every grep; and, Every subagent a leg with
+  the send-back only under a key — the main session's leg count mixes
+  lookups and work. (D305, 2026-10-31)
+- Declined alternative, The cold start for a worker at an unreachable
+  store — rows with a writer and a parent but no first moment; and, A
+  checkpoint queued by the door until the store returns — a second writer
+  path with its own failure modes, and the spawner already holds the
+  text. (D307, 2026-10-31)
+- Declined alternative, A run listing in the status tool, or a run-lookup
+  tool of its own — a ninth tool for what the query reaches once the rows
+  carry the run. (D309, 2026-10-31)
+- Declined alternative, One store always by rule, or a store per worker
+  with the run's store the index — the topology was deferred to the
+  design pass and then ruled: a worker writes into the project's store, as
+  a worktree session does; a worker elsewhere comes back by the handoff;
+  and, Leaving the topology to the build bound by D310 alone — the
+  builder would choose and the gate would check the bound. (D310, D323,
+  2026-10-31)
+- Declined alternative, The inner run's workers joining the outer run as
+  its legs — the outer run's facts mix two harnesses' work; and, Nesting
+  refused — forecloses the case the visionary named. (D311, 2026-10-31)
+- Declined alternative, Nothing beyond the harness's timeout for a stuck
+  leg — the agent's lookup could not answer "why is the run slow" without
+  the id and the registry table. (D312, 2026-10-31)
+- Declined alternative, Cutting the first-moment row at the insert tool's
+  cap — the reconstruction loses the pasted tail; and, An uncapped plain
+  row — no preview for search to see. (D313, 2026-10-31)
+- Declined alternative, A hook on the Agent tool call that denies the
+  spawn while the store is unreachable — documented for tool calls
+  generally, not for the Agent tool, an inference until tried; and,
+  Spending the stop hook's one send-back on delivering the brief — the
+  work done twice. (D314, 2026-10-31)
+- Declined alternative, The door starting no worker on a stranger's
+  checkpoint and returning the flag to the spawner — a harness gate on
+  every poisoned key; and, The writer name alone in the first moment — the
+  worker trusted to notice what the store already knows. (D315,
+  2026-10-31)
+- Declined alternative, Sending a door-less worker back once regardless —
+  one wasted run per such leg; and, The spawner writing the checkpoint
+  from the worker's output — closed by the rule that the main agent never
+  writes a leg's checkpoint. (D316, 2026-10-31)
+- Declined alternative, The process number alone for liveness, the reuse
+  recorded as a known limit — a stranger that inherits the number keeps a
+  phantom live until the host reboots. (D317, 2026-10-31)
+- Declined alternative, The skeleton carrying each first moment's preview
+  only — a reviewer loses the pasted tail; and, Whole with no warning —
+  the exporter is not always the spawner. (D318, 2026-10-31)
+- Declined alternative, Everything the door writes protected from the
+  valve — the growth per worker then bounded by nothing. (D319,
+  2026-10-31)
+- Declined alternative, A hooks-door key bound only by the leg's own first
+  write — a leg that forgot everything leaves no record of having had a
+  key; and, The harness's to keep unambiguous — the store records the
+  wrong key on both when the practice slips. (D320, 2026-10-31)
+- Declined alternative, A binding checkpoint cap, every over-cap write
+  refused with the shape asked — a leg that cannot write under it ends
+  without a checkpoint, and a legitimate long state has no way in.
+  (D321, 2026-10-31)
+- Declined alternative, Access control on the store — the store has
+  none and gains none here: an agent, harness or process it never
+  registered writes through any door and is refused nothing; the control
+  is the trace every such row carries (when, where, how, who, what), and
+  readers judge validity or filter, never treecontext; "too much" in the
+  visionary's words. (D293, 2026-10-30)
+- Declined alternative, Treecontext owning the harness's parts — its
+  timeout, its brake, its human gate, its convergence rule, its
+  checkpoint grammar and its reason for closing a run are the harness's
+  to build; treecontext shows the facts (leg count, checkpoints, run age,
+  sizes, each live leg's start and last write) and judges none of them.
+  (D292, D301, D302, D312, 2026-10-31)
+
 ## Sanctioned changes
 
 - **The docket backport** — adds a ruling-id tag to every scenario in
@@ -494,6 +699,12 @@ re-decided, and the previous text is in git history.
   unchanged. Bound scenarios touched: that one, title unchanged. (D258,
   2026-10-08)
 
+- **The beta.3 subagent corpus** — adds three feature files
+  (journal-legs, journal-workers, journal-runs) and scenarios to
+  journal-install, journal-reorientation and journal-storage; changes no
+  existing scenario text and no verdict. Bound scenarios touched: none.
+  (D282, 2026-10-29)
+
 ---
 
 ## History of this file
@@ -512,3 +723,10 @@ entry (D60 to D89) with the scenarios that bind it in
 `features/design/`; only the declined, deferred, and assumed items stay
 on the fence. The release-engineering deferral of 2026-07-27 was
 discharged on 2026-08-24, overtaken by events (D46, D100).
+The beta.3 subagent interview (2026-10-29 to 2026-10-31, D279 to D323)
+added one Declined entry, one Named assumption, two Out-of-reach
+entries, thirty-nine Roads not taken (two of them the beta.2.1
+hotfix's, D286 and D287; two moved from Out of reach at the post-draft
+pass, D293 and the harness's parts), one Sanctioned change, and amended
+the compaction entry in place for the idle-compaction key (D290, D304),
+written 2026-10-31.

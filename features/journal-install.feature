@@ -326,3 +326,67 @@ Feature: Journal install — setup is auditable, reversible, and honest
     When init runs in that project
     Then the block is replaced by the current one without duplication
     And the rest of the file survives untouched
+
+  # The beta.3 subagent interview (D290, D304, 2026-10-30 to 2026-10-31):
+  # idle compaction destroys the prompt-cache economics the journal exists
+  # to keep, so install turns it off where the client is known to read
+  # the key, says so, and never touches a key the user set.
+
+  @D290
+  Scenario: install turns Claude Code's idle compaction off when the setting is absent, and says so
+    Given a Claude Code whose version reads 2.1.302 and whose settings carry no idle-compaction key
+    When the developer runs install
+    Then the settings file carries the idle-compaction key set to off
+    And the developer sees install say in one line that idle compaction was turned off, the reason, and that the client's /config row turns it back on
+
+  @D290
+  Scenario Outline: install never writes the idle-compaction key the user set to <value>
+    Given a Claude Code whose version reads 2.1.302 and whose settings carry the idle-compaction key set to <value>
+    When the developer runs install
+    Then the settings file still carries the idle-compaction key set to <value>
+    And the developer sees install say nothing about having written it
+
+    Examples:
+      | value |
+      | on    |
+      | off   |
+
+  @D290
+  Scenario: doctor warns while idle compaction is on, naming the /config row first
+    Given a Claude Code whose version reads 2.1.302 and whose settings carry the idle-compaction key set to on
+    When doctor runs
+    Then the developer sees doctor's row for idle compaction warn that treecontext recommends off, with the client's /config row first and the settings line second
+
+  @D290
+  Scenario: the README's install section says idle compaction is turned off and why
+    When the developer reads the README's install section
+    Then the developer reads that install turns Claude Code's idle compaction off, the reason, and where to turn it back on
+
+  @D304 @D338 @D290
+  Scenario Outline: a Claude Code whose version <version> gets the idle-compaction key <written> and doctor says <row>
+    Given a Claude Code whose version <version> and whose settings carry no idle-compaction key
+    When the developer runs install and then doctor
+    Then the settings file has the idle-compaction key <written>
+    And the developer sees install say the setting is <said>
+    And the developer sees doctor's row for idle compaction say <row>
+
+    Examples:
+      | version        | written     | said                           | row                                                        |
+      | reads 2.1.289  | not written | not applicable to this client  | the setting is not read by this client, version 2.1.289    |
+      | reads 2.1.290  | written off | turned off                     | off                                                        |
+      | reads 2.1.302  | written off | turned off                     | off                                                        |
+      | cannot be read | not written | not applicable to this client  | the setting is not read by this client, version unknown    |
+
+  @D338 @D290
+  Scenario: a client that honors the key but has no /config row is pointed at the settings line alone
+    Given a Claude Code whose version reads 2.1.295 and whose settings carry the idle-compaction key set to on
+    When the developer runs install and then doctor
+    Then the developer sees install name the settings line as where to turn it back on, and no /config row
+    And the developer sees doctor's row for idle compaction warn with the settings line only
+
+  @D304
+  Scenario: install writes the key on a later run once the client is upgraded
+    Given a Claude Code whose version reads 2.1.289, on which install wrote no idle-compaction key
+    When the client is upgraded to 2.1.302 and the developer runs install again
+    Then the settings file carries the idle-compaction key set to off
+    And the developer sees install say in one line that idle compaction was turned off

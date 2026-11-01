@@ -132,6 +132,34 @@ runFeatures(join(HERE, '../../features'), {
     // would be an entire unbound surface with nobody having decided that is
     // acceptable — which is how 0.0.9-beta shipped.
     ...wholeFeatureWip(),
+    // The beta.3 subagent cut (2026-10-31): scenarios added to three bound
+    // files by the scope run, unbound until their build (D290, D304, D295,
+    // D319). Scenario-scoped so the rest of each file keeps gating.
+    {
+      feature: 'journal-install',
+      scenarios: [
+        "install turns Claude Code's idle compaction off when the setting is absent, and says so",
+        'install never writes the idle-compaction key the user set to <value>',
+        'doctor warns while idle compaction is on, naming the /config row first',
+        "the README's install section says idle compaction is turned off and why",
+        'a Claude Code whose version <version> gets the idle-compaction key <written> and doctor says <row>',
+        'install writes the key on a later run once the client is upgraded',
+        'a client that honors the key but has no /config row is pointed at the settings line alone',
+      ],
+    },
+    {
+      feature: 'journal-reorientation',
+      scenarios: [
+        "a `claude -p` child with a ticket opens on its brief and checkpoint, never on a self's packet",
+      ],
+    },
+    {
+      feature: 'journal-storage',
+      scenarios: [
+        "a worker's first-moment row evicts with its session under the session cap, and its checkpoints and summary row stay",
+        "over the byte budget a worker's first-moment row is demoted like captured tool output, archived first",
+      ],
+    },
     // The driver switch, D278 (2026-10-11): three @D51 install scenarios
     // reworded from "loads the native database binding" to "meets the Node
     // floor and runs this package" (fence: Sanctioned changes, 2026-10-11)

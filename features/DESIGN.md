@@ -453,6 +453,204 @@ ratification. [ruled: D253] The constraints the build must not cross:
   a tombstone records, is scoped after `beta.1`. [ruled: D222]
 
 
+## The beta.3 subagent cut (interview of 2026-10-29 to 2026-10-31)
+
+The second interview on the same corpus, rulings D279 to D323: the
+journal serves agent orchestration as it is actually done, whether a
+Claude Code session runs a long task as bounded subagent legs or a
+main CLI of any of the three, Claude Code, Codex or Antigravity,
+spawns headless workers of any of the three, with or without a harness
+holding the run's loop. Three feature files carry it, `journal-legs`,
+`journal-workers` and `journal-runs`, with scenarios in install,
+reorientation and storage; the fence beside this file carries what it
+declined. The ground every ruling rests on is the named assumption, not
+a fact the build has proven: that treecontext stays as close as
+possible a faithful journal of the session, with sufficient metadata
+to say who contributed and to recreate the timeline; it reopens if a
+ruling would have the store synthesize, rewrite or drop a row's
+writer or moment (D283, a fence assumption whose reopening condition
+the visionary ratified on 2026-11-01, D345).
+
+- **Two doors, one contract.** A subagent spawned through Claude
+  Code's hooks whose brief names a run and a key is a *leg*; a
+  subagent with no brief or no key is a subagent exactly as today,
+  registered at its start and summarised at its stop with no ask. A
+  headless process, `claude -p`, `codex exec` or `agy -p`, spawned by a
+  main CLI of any of the three or by a harness, is a *worker* through
+  the *ticket door*: a ticket in its environment names its run, key,
+  role, checkpointer and parent, declared by whatever spawned it and
+  never discovered. Whatever spawns a worker through the ticket door
+  is the library call or the `treecontext run` wrapper, and either one
+  sees a missing checkpoint at exit and runs the worker once more,
+  never twice, never when the store cannot be written; a worker that
+  claimed a ticket with no wrapper gets no send-back and ends visibly
+  without a checkpoint; a ticket a process minted for itself is read
+  like any other, the store refusing nothing. A `claude -p` child
+  with a ticket is a worker, never a self, the hook reads the ticket
+  and writes no beacon. A worker is registered under the parent the
+  ticket names, whatever CLI the parent runs; its rows sit in its own
+  lane, stamped with its role as writer and its parent as declared,
+  none of them in the parent's lane; it is retired at exit and its last
+  output is the summary row the pointer names. [ruled: D288, D291,
+  D293, D295, D305]
+- **The leg contract.** At its first moment a leg sees its brief and
+  the checkpoint in effect under its key, and makes no query. The brief
+  names who checkpointed the work it resumes and who will checkpoint
+  at the end; a leg whose brief names another role as the checkpointer
+  is never sent back. At its end the leg, or its designated
+  checkpointer, writes the next numbered checkpoint under the key,
+  superseding the one it started from. A leg that finishes with none is
+  sent back once with the missing checkpoint named, never a second
+  time, and never when the store cannot be written; a cut leg leaves
+  its trail and the next leg of its role starts as a recovery leg. The
+  main agent never writes a leg's checkpoint and the store never
+  synthesizes one. The checkpoint to start from is the newest in
+  effect under the key; two in effect come back as two, never a silent
+  pick; every checkpoint names what it supersedes and what it rests on.
+  A checkpoint is state, not history: one past 16000 characters is
+  refused once with the shape asked for, and a second over-cap write
+  by the same leg is accepted and marked, the cap a nudge the record
+  keeps rather than a bound. The pointer to the summary row comes back
+  every time, one line; there is nothing to opt out of. [ruled: D279,
+  D280, D281, D284, D285, D299, D321] The gate's rulings sharpen it: a
+  key the hooks door inferred from the role's newest brief never
+  triggers the send-back, only a key the leg wrote under does [ruled:
+  D326]; a brief is in effect until a newer one for the same role and
+  key supersedes it or its run closes [ruled: D327]; a hooks-door leg
+  that is cut is known cut at its session's next start, resume or
+  clear, as the hook already retires subagents left live [ruled:
+  D328]; the store numbers a checkpoint when it lands, so two legs from
+  one checkpoint never collide, a first moment carries both when two
+  are in effect, and a checkpoint that names nothing as superseded is
+  stamped from the leg's start, marked as the store's [ruled: D329,
+  D331]; the pointer rides on the Agent tool's result, the subagent's
+  own final message staying the platform's [ruled: D330]; a worker's
+  re-run for a missing checkpoint is the same leg in the same lane,
+  the second process recorded beside the first [ruled: D335]; the
+  lookup reply carries the pointer to the return of the leg that wrote
+  the checkpoint, or says it left none [ruled: D336]; and any end
+  without a checkpoint, cut or not, is followed by a recovery leg,
+  while a leg the store never saw start stops unasked [ruled: D334].
+- **The store judges nothing; the trace is the control.** The store
+  has no access control and gains none here: a writer it never
+  registered, a self-minted ticket included, is refused nothing and
+  checked for no identity. Every row such a writer leaves says when it
+  was written, where (directory, worktree, branch as the door could
+  read them), how (which door, and whether its identity was registered
+  by a hook or declared by the writer), who (the writer stamp the store
+  wrote and the parent as declared) and what; readers judge validity or
+  filter, and treecontext never judges for them. [ruled: D293] A key
+  whose newest checkpoint was written by someone other than the
+  checkpointer the brief names comes back as the one in effect, its
+  writer visible, with the reply, and the worker's first moment, saying
+  in words that the writer is not the named checkpointer; nothing is
+  withheld or re-ranked. [ruled: D296, D315] Nothing the subagent work
+  adds needs a hand: a run nobody closed stays open and readable, a
+  registration a dead host left live is retired when next noticed, and
+  per-leg growth is the retention valve's; after installation the only
+  hands a person puts on treecontext are an upgrade and a doctor run,
+  for the installed life and not only the sprint's day. [ruled: D308]
+- **Runs.** A run opens on its first leg's registration or by an
+  explicit open, and closes when the harness or main agent declares it
+  with a reason, recorded with who and why. With no model in the loop
+  the harness asks by run and key together and receives the one
+  checkpoint in effect with its writer, each leg as retired or live,
+  and beside the checkpoint the run's facts: legs run, checkpoints
+  under the key, the run's age, the sizes of the last checkpoints, and
+  for each live leg its start and its last write. Separately, anyone
+  with the store file reads the run's rows back in the order of each
+  row's own moment, never the drain's, every row naming its writer and
+  its moment and every leg its run, key and parent session, a captured
+  row reaching the run and key through its leg's lane rather than
+  carrying them itself. The grammar a checkpoint must satisfy, the
+  timeout, the brake on spawning again and any human gate are the
+  harness's; the store parses nothing. The rows a run is made of, the
+  first-moment row, each checkpoint, each summary row and the run's
+  open and close, are journal rows carrying the run and key, so an
+  agent finds a run by time with no id in hand through the query it
+  already has; a leg may open
+  a run of its own, whose open names the outer run and the opening leg
+  and whose opening leg's facts name it back, at any depth; a run is
+  reconstructable whole however many stores its legs wrote into, a leg
+  from elsewhere returning by the handoff into a handoff lane the run's
+  facts then count. [ruled: D289, D301, D302, D309, D310, D311, D312]
+- **The agent's door to a run.** An agent asks for the checkpoint in
+  effect, the run's facts and the leg's return through the eight tools
+  and gets the harness's reply; it declares a run's open and close
+  through them too. [ruled: D337] The carrier is a run-and-key lookup
+  mode on the query tool and recognised open and close kinds on insert;
+  no ninth tool. [chosen]
+- **Phantoms.** Every worker registration records its process id, its
+  host and the process's start moment as the operating system reports
+  it. Whoever next reads the registry on that host retires a gone
+  worker as a phantom with the moment it was noticed and by whom, never
+  a guessed exit time, no checkpoint and no summary row; a process with
+  that id and a different start is a different process. A worker
+  registered on another host is left live and the reply says it cannot
+  be checked from here. [ruled: D297, D317]
+- **The first-moment row.** The ticket door composes a worker's first
+  message from the brief, the checkpoint in effect with its number,
+  writer and moment, and the spawner's prompt, and writes that first
+  moment as the first row of the worker's lane: the prompt text with
+  references to the brief row and the checkpoint row, never copies, so
+  what the worker saw is reconstructable from the store alone. The row
+  keeps a prompt of any size whole behind a bounded preview, carries
+  the checkpoint's size, and evicts with its worker's lane as capture
+  does, while checkpoints, summary rows and a run's open and close are
+  agent-authored and stay protected. The run's default export, the
+  skeleton, carries first moments whole and says in one line that they
+  are the spawners' prompts as written; the whole form stays behind the
+  secrets acknowledgement. [ruled: D298, D299, D300, D313, D318, D319]
+  At the hooks door the client caps what a hook may inject at 10,000
+  characters, so the door injects the brief and as much of the
+  checkpoint as fits, ends with the checkpoint row's id and the count
+  left out, and the leg fetches the rest by export; treecontext's own
+  line that a checkpoint is state, not history, is in every first
+  moment at both doors. [ruled: D325, D332] The valve treats the row
+  as capture: the session cap archives it with its worker's session,
+  and over the byte budget it is demoted to its bounded preview,
+  archived first. [ruled: D339] Open item: which demotion class a
+  first-moment row falls in (user text demotes last, tool bulk first)
+  [chosen at build].
+- **The faults, each visible.** A ticket the door cannot read whole
+  registers the worker with what was read and the raw ticket text,
+  never as a self; its first moment says its instructions were invalid
+  and asks for one row and a stop, and a spawner that sees the fault
+  first writes that row and spawns nothing. A worker whose ticket
+  declares no way to write gets no send-back; its last output lands as
+  its summary row and the leg ends visibly without a checkpoint. At the
+  ticket door a store that cannot be read after the busy wait starts no
+  worker and the spawner is told; through the hooks door, where the
+  platform cannot decline a spawn, the leg starts cold and the gap is
+  marked when the store is next written. An exit by signal, the
+  harness's timeout among them, is a cut, never sent back; only a
+  worker that exited on its own gets the one send-back, and that once
+  per leg across both doors. [ruled: D292, D295, D303, D307, D314, D316]
+- **Install and the client's idle compaction.** Install writes the
+  client's idle-compaction key off when it is absent and the client is
+  known to read it (Claude Code 2.1.290 and later), says so with the
+  reason and where to turn it back on, never touches a key the user
+  set, and below the floor or at an unreadable version writes nothing
+  and says the setting is not applicable; doctor carries the setting
+  on its own row. The compaction interaction itself, when and why the
+  client compacts, stays with ccr. [ruled: D290, D304] Where the client honors the key but has no /config row, between `2.1.290` and `2.1.301`, install and doctor name the settings line alone. [ruled: D338]
+- **Electives (Phase 5½, 2026-10-31).** Every development and release
+  dependency stays at its latest stable version at each release; a
+  release with one behind is not ready. [ruled: D322] One store: a
+  worker spawned for a project writes into that project's store, as a
+  worktree session does today, and a worker elsewhere writes into that
+  place's store and comes back by the handoff; no store per worker.
+  [ruled: D323]
+- **Open design item, under D320.** The subagent-start hook is handed
+  the subagent's id and role, not its prompt, so the hooks door takes a
+  leg's run and key from its role's newest brief, marked inferred,
+  says the key is ambiguous and names the candidates when more than
+  one brief is in effect, and lets the leg's first write under a key
+  settle it. Whether a hook on the Agent tool call, the documented
+  place the prompt is visible before the subagent exists, sharpens the
+  inference is the build's to try; the behaviour above binds either
+  way. [open; the ruling is D320]
+
 ## The ruled structure, indexed
 
 Every structural ruling in the docket that the prose above does not
@@ -618,3 +816,6 @@ newest lines had been prepended out of order.*
   put in date order.
 - **2026-10-10** — the beta.2 recall cut ruled (D260 to D277) after the first beta tester's feedback: tool text and echoes down the ranking, bookmarks findable in a mature store, the client's internal agents marked, the stale server stepping aside; four ruled-structure bullets added here and the checkpoint and subagent bullets amended.
 - **2026-10-11** — the database driver switch ruled (D278, amending D51): `node:sqlite` in place of better-sqlite3, a Node floor of `>=24.16`, one library opener, the dual driver and the Node 22 floor fenced; one ruled-structure bullet added here, the first chunk of `0.1.0-beta.3`.
+- **2026-10-31** — the beta.3 subagent cut ruled (D279 to D323, interview 2026-10-29 to 2026-10-31): legs, workers and runs; three feature files and scenarios in install, reorientation and storage; electives D322 (dependencies at latest stable) and D323 (one store); this section added; the structural index gains no line, since the section cites D293, D308 and D321 itself.
+- **2026-10-31** — post-draft pass (D324, interactive gate): the beta.3 section's citations corrected (D289 split by trigger, D291 and D293 on the producers, D295 and D299 added, D283 stated as the assumption it is).
+- **2026-10-31** — the interactive gate's rulings (D325 to D339) folded in: the hooks-door cap, inferred keys, brief lifetime, cuts at the hooks door, numbering and supersession, the pointer channel, the re-run, the lookup's return, the settings line, the valve's treatment of first moments; one chosen carrier for the agent's lookup.

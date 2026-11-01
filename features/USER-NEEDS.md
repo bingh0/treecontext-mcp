@@ -12,7 +12,7 @@ features corroborate; implementation code is used only for discrepancy
 detection, never as a source of need (a behavior the code exhibits but
 nothing ratified is a decision point, not a need).*
 
-**Status: provisionally ratified 2026-08-25; rulings cited per row and rows N18–N22 added at the docket backport of 2026-09-28; rows N23–N26 and the hackathon interview's ruling citations added 2026-10-07 (see `features/DOCKET.md`)** ("ok on weights for now,
+**Status: provisionally ratified 2026-08-25; rulings cited per row and rows N18–N22 added at the docket backport of 2026-09-28; rows N23–N26 and the hackathon interview's ruling citations added 2026-10-07; rows N27–N32 and N26's widening added 2026-10-31 at the beta.3 subagent interview (see `features/DOCKET.md`)** ("ok on weights for now,
 proceed") — the H/M/L weights below stand as drafted, revisitable at
 review rather than final; corrections remain Phase-2-style readback
 material. Per the standing contract, at build time only the feature
@@ -33,7 +33,7 @@ Part 2 = migration-backup corpus); scenario coverage names files under
   my prompt cache stays warm because orientation is one query."
   Beneficiary: the working agent (and the operator, through token economics).
   Weight: **H** — the product's reason to exist.
-  Evidence: charter pitch (2026-07-16); DESIGN.md §What-it-is.
+  Evidence: charter pitch (2026-07-16); DESIGN.md §What-it-is., D338
   Rulings: D2, D113, D145, D146, D156, D158, D159, D162, D166, D173, D183, D185, D187, D188, D198.
   Coverage: `scenario` — journal-recall, journal-search-modes, flat-store-conversation-window.
 
@@ -303,7 +303,7 @@ Part 2 = migration-backup corpus); scenario coverage names files under
   wording of N23; this quote first read "24-hour sprint".)
   Beneficiary: hackathon-developer.
   Weight: **H** (5).
-  Evidence: D145, D146, D147, D148, D149, D150, D151, D152, D153, D154, D155, D156, D157, D158, D159, D160, D161, D162, D163, D164, D165, D166, D167, D168, D169, D170, D171, D172, D173, D175, D176, D177, D178, D180, D183, D184, D185, D186, D187, D188, D189, D190, D191, D192, D193, D194, D197, D198, D199, D201, D202 — the root of the interview; three corrections before the yes (handoff and orchestration as one set of mechanisms, hooks and tools alike; the stack named as the environment).
+  Evidence: D145, D146, D147, D148, D149, D150, D151, D152, D153, D154, D155, D156, D157, D158, D159, D160, D161, D162, D163, D164, D165, D166, D167, D168, D169, D170, D171, D172, D173, D175, D176, D177, D178, D180, D183, D184, D185, D186, D187, D188, D189, D190, D191, D192, D193, D194, D197, D198, D199, D201, D202, D338 — the root of the interview; three corrections before the yes (handoff and orchestration as one set of mechanisms, hooks and tools alike; the stack named as the environment).
   Rulings: D155.
   Coverage: `scenario` — journal-reorientation, journal-orchestration, journal-handoff, journal-clients; the other four stack tools are out of reach by construction and sit on the fence.
 
@@ -329,19 +329,80 @@ Part 2 = migration-backup corpus); scenario coverage names files under
   "none yet — ratification at review").
   Coverage: `scenario` — journal-reorientation, journal-handoff, journal-agent-surface.
 
-- **N26 — Zero maintenance for the sprint.** *(recorded 2026-10-07, checklist sweep)*
+- **N26 — Zero maintenance for the sprint, and for the installed life.** *(recorded 2026-10-07, checklist sweep; widened 2026-10-31)*
   "I need treecontext to run the whole day-long sprint with zero
   maintenance, no backups to run, no store to prune, no server to
   restart by hand, and a single doctor run as the only operation I ever
   need."
   (Revised 2026-10-08: "day-long sprint" is the docket's wording of N26;
   this quote first read "24-hour sprint".)
+  (Revised 2026-10-31, D308: the horizon widens from the sprint's day to
+  the installed life — "from user perspective after installation,
+  essentially zero maintenance other than to upgrade and fix issues that
+  rise with doctor"; the subagent work adds no operation a person runs by
+  hand or on a schedule.)
   Beneficiary: hackathon-developer.
   Weight: **H** (4).
-  Evidence: D178, D179 — the ops-burden row; retention already never asks and the server's lifecycle runs itself.
+  Evidence: D178, D179, D181, D212, D265, D266, D276, D277, D308, D322 — the ops-burden row; retention already never asks and the server's lifecycle runs itself; D308 widens the horizon and D322 keeps every dependency at its latest stable at each release.
+  Means, ruled: every development and release dependency at its latest stable version at each release (D322).
   Rulings: D212, ratified 2026-10-08 (revised 2026-10-08: this line read
-  "none yet — ratification at review").
-  Coverage: `structural` — D178; doctor's scenarios in journal-install and journal-clients beside it.
+  "none yet — ratification at review"); D308 and D322 ruled 2026-10-31.
+  Coverage: `structural` — D178, D308; doctor's scenarios in journal-install and journal-clients beside it.
+
+- **N27 — Orchestration as it is actually done.** *(recorded 2026-10-29, the beta.3 interview's root)*
+  "I need treecontext to serve agent orchestration as it is actually done, whether a Claude Code session runs a long task as bounded workflow legs or a main CLI that may be Claude Code, Codex or Antigravity spawns headless workers of any of the three, `claude -p`, `codex exec` or `agy -p`, each able to call any of the others, with or without an orchestration harness, a programming loop or an agent, that holds the run's loop and interacts with the treecontext library; every subagent, fresh or picking up a predecessor's work, starts from the same deterministic brief and checkpoint with no difference between the two cases, checkpoints on exit without ceremony, lands its trail and checkpoint in the shared store under the right parent and writer, loses no more than its last step when cut, and its work reaches whoever reviews it next, the main agent, the next subagent in a pipeline of roles, or the user through the main agent's summary, plainly marked as which subagent it came from; no leg pays for context it does not need; and the interfaces that make this work are generic enough that an orchestration method nobody has built yet can be adapted to them without reopening the design"
+  Beneficiary: orchestrating-developer.
+  Weight: **H** (5).
+  Evidence: D279, D280, D281, D282, D283, D285, D288, D291, D292, D295, D297, D299, D301, D302, D303, D305, D306, D307, D308, D309, D310, D311, D312, D314, D316, D317, D321, D323, D324, D325, D327, D328, D330, D332, D334, D335, D337 — the whole leg, worker and run contract serves this root; drafted from the proposal, corrected by the visionary four times in Phase 1.
+  Means, ruled: the doors are whatever a client offers today, hooks where it has them, tools only where it does not, a ticket where it has neither (N27's means line, D288, D295).
+  Rulings: ratification at review.
+  Coverage: `scenario` — journal-legs, journal-workers, journal-runs.
+
+- **N28 — The harness finds deterministically.** *(recorded 2026-10-29; revised 2026-10-31)*
+  "With no model in the loop, I need the harness to find, deterministically, the newest checkpoint of any leg of its run and that leg's return, to tell a live leg from a retired one, and to get an honest nothing rather than a guess when a leg wrote none."
+  Beneficiary: harness.
+  Weight: **H** (4).
+  Evidence: D289, D291, D292, D294, D296, D297, D300, D301, D302, D303, D307, D308, D309, D310, D311, D312, D314, D315, D316, D317, D318, D320, D323, D326, D327, D328, D329, D331, D334, D336, D337 — the key lookup with the run's facts, the flagged stranger, the retired, cut and phantom legs; the visionary's words "the deterministic start/stops should be identifiable without a big llm looking for them".
+  Means, ruled: run and key together, a key alone may recur across runs (D289, D336).
+  Revised 2026-10-31 at the post-draft pass: "by key alone" was the mechanism, laddered under rule 5; the visionary's words "identifiable without a big llm looking for them" are the need.
+  Rulings: ratification at review.
+  Coverage: `scenario` — journal-runs; the leg states it reads are journal-legs and journal-workers.
+
+- **N29 — The subagent's first moment.** *(recorded 2026-10-29)*
+  "At my first moment, fresh or picking up a predecessor's work, I see my brief and the last checkpoint, no query needed."
+  Beneficiary: subagent.
+  Weight: **H** (5).
+  Evidence: D280, D281, D284, D295, D298, D299, D305, D313, D315, D318, D319, D321, D325, D327, D329, D331, D332, D334, D339 — the brief and the checkpoint in effect composed at the start through both doors, the first-moment row that records what was seen; the visionary's own words.
+  Rulings: ratification at review.
+  Coverage: `scenario` — journal-legs, journal-workers, journal-reorientation.
+
+- **N30 — A leg's result reaches the main agent from the store.** *(recorded 2026-10-29)*
+  "A leg's result reaches me from the store, marked as which subagent wrote it, and I never carry the leg's working state in my own context."
+  Beneficiary: main-agent.
+  Weight: **H** (4).
+  Evidence: D284, D285, D288, D329, D330, D336 — the one-line pointer to the summary row, every time; laddered at Phase 1½: the pointer is the means and the need survives its swap.
+  Means, ruled: I am handed a pointer to the summary row and go to the store for it (D284, D285).
+  Rulings: ratification at review.
+  Coverage: `scenario` — journal-legs.
+
+- **N31 — Reconstruction from the store file.** *(recorded 2026-10-29; revised 2026-10-31)*
+  "During a run I hear from the main agent as usual and errors reach the main agent or the harness as facts they act on; after a run, anyone with access to the store file, a human, a program or an agent, can reconstruct the sequence of a run's events from that file alone, with no door of treecontext's, though I would typically ask the agent to do it."
+  Beneficiary: user.
+  Weight: **L** (2).
+  Evidence: D293, D294, D300, D301, D302, D312, D316, D318, D323, D325, D332, D335, D336, D337 — a run's rows read back in the order of their own moments, the first-moment row, the run's open and close, the traceability principle; the visionary narrowed the interviewer's draft from a product door to "if a human or program or agent wanted to write sql queries they could".
+  Means, ruled: a worker writes into the project's store, as a worktree session does (D323).
+  Means, ruled: plain SQL over the SQLite store (D289, D336, D302; the library-first stance).
+  Revised 2026-10-31 at the post-draft pass: plain SQL laddered to the means it is; the owner's narrowing ("if a human or program or agent wanted to write sql queries they could") stands as the means.
+  Rulings: ratification at review.
+  Coverage: `scenario` — journal-runs; `structural` beside it — D293, the store refuses nothing and traces everything.
+
+- **N32 — Another writer's rows never pass as a leg's checkpoint.** *(recorded 2026-10-29)*
+  "Another reader or writer's rows never appear as a leg's checkpoint and lanes stay separate; since there is no way to enforce that, sufficient metadata is recorded on every row that a writer who accidentally or deliberately poisoned a checkpoint can be determined."
+  Beneficiary: orchestrating-developer.
+  Weight: **H** (4).
+  Evidence: D283, D288, D289, D293, D294, D295, D296, D297, D303, D307, D314, D315, D317, D320, D326, D328, D329, D331, D335, D336 — the worker's own lane and writer, the declared parent, the flagged stranger, the unreadable ticket; the visionary's own words, resting on the lane principle (any writer may append so long as the row names its writer) and on attribution earned, never guessed.
+  Rulings: ratification at review.
+  Coverage: `scenario` — journal-workers, journal-runs.
 
 ## Tension links (ratified resolutions)
 
@@ -361,7 +422,9 @@ fusion across journals · server-side LLM/summarization · the tree-sitter
 code tool · designing around unbuilt addons · feedback tool · compaction
 Layer-3 interaction (ccr owns it) · product renaming · performance
 release-gate numbers (shapes pinned, numbers bench-tunable) · media byte
-storage/versioning/thumbnailing · multi-reference entries.
+storage/versioning/thumbnailing · multi-reference entries · a
+performance bound for the subagent work (D306) · access control on the
+store, traced not refused (D293).
 
 ## Open items for the visionary
 
