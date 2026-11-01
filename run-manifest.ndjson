@@ -103,10 +103,10 @@
 {"file":"features/journal-install.feature","title":"the registration lands where the agent itself reads it","status":"passed"}
 {"file":"features/journal-install.feature","title":"the upgrading instructions say to quit every running session first","status":"passed"}
 {"file":"features/journal-install.feature","title":"uninstall removes everything install wrote and nothing else","status":"passed"}
-{"file":"features/journal-legs.feature","title":"a checkpoint of 1 characters is accepted on its first write and accepted on the second [1]","status":"unbound"}
-{"file":"features/journal-legs.feature","title":"a checkpoint of 16000 characters is accepted on its first write and accepted on the second [2]","status":"unbound"}
-{"file":"features/journal-legs.feature","title":"a checkpoint of 16001 characters is refused with the reason and the shape asked for on its first write and accepted and marked over the cap on the second [3]","status":"unbound"}
-{"file":"features/journal-legs.feature","title":"a checkpoint of 300000 characters is refused with the reason and the shape asked for on its first write and accepted and marked over the cap on the second [4]","status":"unbound"}
+{"file":"features/journal-legs.feature","title":"a checkpoint of 1 characters is accepted on its first write and accepted on the second [1]","status":"passed"}
+{"file":"features/journal-legs.feature","title":"a checkpoint of 16000 characters is accepted on its first write and accepted on the second [2]","status":"passed"}
+{"file":"features/journal-legs.feature","title":"a checkpoint of 16001 characters is refused with the reason and the shape asked for on its first write and accepted and marked over the cap on the second [3]","status":"passed"}
+{"file":"features/journal-legs.feature","title":"a checkpoint of 300000 characters is refused with the reason and the shape asked for on its first write and accepted and marked over the cap on the second [4]","status":"passed"}
 {"file":"features/journal-legs.feature","title":"a checkpoint that names another checkpoint is taken at its word","status":"passed"}
 {"file":"features/journal-legs.feature","title":"a checkpoint that names nothing as superseded is stamped from the leg's start, marked as the store's","status":"passed"}
 {"file":"features/journal-legs.feature","title":"a checkpoint the main agent writes under a leg's key comes back flagged, never withheld","status":"passed"}
@@ -120,7 +120,7 @@
 {"file":"features/journal-legs.feature","title":"a key the leg wrote under, marked as its own, makes the stop ask for the missing checkpoint","status":"passed"}
 {"file":"features/journal-legs.feature","title":"a leg fetches the rest of a cut checkpoint by export and gets it whole","status":"passed"}
 {"file":"features/journal-legs.feature","title":"a leg left live is retired as cut when its session next starts, and the next leg of its role recovers","status":"passed"}
-{"file":"features/journal-legs.feature","title":"a leg refused once that stops without writing a shorter checkpoint is sent back for it","status":"unbound"}
+{"file":"features/journal-legs.feature","title":"a leg refused once that stops without writing a shorter checkpoint is sent back for it","status":"passed"}
 {"file":"features/journal-legs.feature","title":"a leg sent back once is never sent back a second time","status":"passed"}
 {"file":"features/journal-legs.feature","title":"a leg sent back once that then writes its checkpoint stops unblocked","status":"passed"}
 {"file":"features/journal-legs.feature","title":"a leg starting while two checkpoints are in effect is handed both, flagged","status":"passed"}
@@ -135,12 +135,12 @@
 {"file":"features/journal-legs.feature","title":"a recovery leg writes the checkpoint its predecessor did not","status":"passed"}
 {"file":"features/journal-legs.feature","title":"a reviewer's original-plus-review supersedes the original and the lookup returns it","status":"passed"}
 {"file":"features/journal-legs.feature","title":"a run's close ends its briefs","status":"passed"}
-{"file":"features/journal-legs.feature","title":"a second over-cap write by another leg or under another key is refused again","status":"unbound"}
+{"file":"features/journal-legs.feature","title":"a second over-cap write by another leg or under another key is refused again","status":"passed"}
 {"file":"features/journal-legs.feature","title":"a subagent whose brief names a run and a key gets the leg contract","status":"passed"}
 {"file":"features/journal-legs.feature","title":"a subagent with no brief or no key is registered and summarised exactly as today","status":"passed"}
 {"file":"features/journal-legs.feature","title":"an inferred key gives way to the key the leg first writes under","status":"passed"}
 {"file":"features/journal-legs.feature","title":"an inferred key never makes the stop ask for a checkpoint","status":"passed"}
-{"file":"features/journal-legs.feature","title":"an over-cap checkpoint accepted on its second write is the one in effect, and the next leg's first-moment row shows what it cost","status":"unbound"}
+{"file":"features/journal-legs.feature","title":"an over-cap checkpoint accepted on its second write is the one in effect, and the next leg's first-moment row shows what it cost","status":"passed"}
 {"file":"features/journal-legs.feature","title":"every checkpoint names what it supersedes and what it rests on, so a reader can walk back to the trail","status":"passed"}
 {"file":"features/journal-legs.feature","title":"every first moment says in treecontext's own words that a checkpoint is state, not history","status":"passed"}
 {"file":"features/journal-legs.feature","title":"no send-back when the store cannot be written","status":"passed"}

@@ -41,6 +41,56 @@ export {
  *  only, dropped from any caller's metadata. */
 export const CHECKPOINT_NUMBER_KEY = '_checkpoint_number'
 
+/**
+ * The checkpoint cap, in characters (D299, D321, D332): a checkpoint is
+ * the state of the work as it now stands, not its history. One written
+ * under a run's key past this many characters is refused once, by that
+ * leg under that key, with the reason and the shape asked for; a second
+ * write past it by the same leg under the same key is accepted and marked
+ * (OVER_CAP_KEY). A nudge the record keeps, not a bound (D321).
+ *
+ * The interviewer's number, about four thousand tokens, twice the
+ * 8000-character index boundary of captured tool output; the visionary
+ * stood it ("16,000 stands") and left its value open to measurement at
+ * build without a reopening (D299). Counted in code points, by
+ * charactersOf, the counter every size a run reports uses (D344).
+ */
+export const CHECKPOINT_CAP_CHARS = 16_000
+
+/** The mark on a checkpoint accepted past the cap (D321, D359): `{ size,
+ *  cap, second }`, in characters; `second` is true when it was its
+ *  writer's second write (the writer had been refused once under the key),
+ *  false when the writer is one the store keeps no refusal for (no
+ *  registration behind it, D359). Store-only, dropped from any caller's
+ *  metadata; the key lookup and the next leg's first moment show it. An
+ *  imported checkpoint's copy is the file's claim (handoff.ts). */
+export const OVER_CAP_KEY = '_over_cap'
+
+/**
+ * What a refused over-cap checkpoint is told (D299, D321, D332): the
+ * reason, and the shape asked for. The same words at every door: the
+ * library's refusal and the insert tool's reply carry these two strings.
+ */
+export function checkpointCapRefusal(o: {
+  run: string; key: string; size: number
+  /** D359: the writer could not be told when the refusal was made; the
+   *  candidates it might be. */
+  pending?: ReadonlyArray<{ agent_id: string; agent_type: string | null }>
+}): { reason: string; shape: string } {
+  const who = (c: { agent_id: string; agent_type: string | null }): string => (c.agent_id === '' ? 'the session\'s own agent' : (c.agent_type ?? c.agent_id))
+  const again = o.pending
+    ? `The store could not tell which writer you are (it might be ${o.pending.map(who).join(', ')}), so this refusal is recorded as pending: once your call's echo names you it is yours, `
+      + `and a second write past the cap under the key "${o.key}" on the run "${o.run}" is then accepted and marked as over the cap; until it is, a write past the cap is refused again, never accepted on a guess. `
+    : `If you write a checkpoint past the cap again, as this writer under the key "${o.key}" on the run "${o.run}", it is accepted and marked as over the cap, `
+  return {
+    reason: `This checkpoint is ${o.size} characters, past the ${CHECKPOINT_CAP_CHARS}-character cap on a checkpoint, so nothing was written.`,
+    shape: 'A checkpoint is the state of the work as it now stands, not its history. Write a shorter one: say what it supersedes and what it rests on '
+      + '(by row id or key), and leave the history out; the rows it rests on stay in the store for whoever needs them. '
+      + again
+      + (o.pending ? 'The next leg\'s first moment shows what it cost.' : 'and the next leg\'s first moment shows what it cost.'),
+  }
+}
+
 /** What a checkpoint or a brief supersedes (D280, D327): the ids of rows
  *  of the same key it replaces. Named by its writer, or stamped by the
  *  store from the leg's registration (D331). The superseded rows are
@@ -119,7 +169,7 @@ export function runCloseLine(run: string, by: string | null, reason: string): st
  * code points, so ten emoji are ten characters, never the twenty UTF-16
  * units a JavaScript string's length reports. One counter for every size
  * a run reports or caps: the lookup's sizes here, and the checkpoint cap
- * (unit 5 of the build) counts with this same function.
+ * (CHECKPOINT_CAP_CHARS) counts with this same function.
  */
 export function charactersOf(text: string): number {
   let n = 0
@@ -228,6 +278,12 @@ export interface CheckpointRecord {
   content: string
   /** In characters, code points (charactersOf; D299, D344). */
   size: number
+  /** D321: accepted past the cap on its second write, as the store marked
+   *  it; null for a checkpoint within the cap. */
+  overCap: { size: number; cap: number; second: boolean } | null
+  /** D359: what an imported checkpoint's file claims of the mark, kept as
+   *  a claim and never as the mark itself. */
+  claimedOverCap: { size: number; cap: number; second: boolean } | null
   supersedes: string[]
   supersedesSrc: string | null
   restsOn: string[]
@@ -246,6 +302,12 @@ interface RawRow { node_id: string; created_at: number; content: unknown; metada
 
 /** Where an imported row keeps its file's claims (handoff.ts, D165). */
 export const HANDOFF_CLAIMS_KEY = '_handoff_claims'
+
+function overCapOf(v: unknown): { size: number; cap: number; second: boolean } | null {
+  if (v === null || typeof v !== 'object' || Array.isArray(v)) return null
+  const o = v as Record<string, unknown>
+  return typeof o['size'] === 'number' && typeof o['cap'] === 'number' ? { size: o['size'], cap: o['cap'], second: o['second'] === true } : null
+}
 
 function toCheckpoint(r: RawRow): CheckpointRecord {
   const meta = parseMeta(r.metadata_json) ?? {}
@@ -267,6 +329,8 @@ function toCheckpoint(r: RawRow): CheckpointRecord {
     createdAt: r.created_at,
     content,
     size: charactersOf(content),
+    overCap: imported ? null : overCapOf(meta[OVER_CAP_KEY]),
+    claimedOverCap: imported && claims !== null && typeof claims === 'object' && !Array.isArray(claims) ? overCapOf((claims as Record<string, unknown>)[OVER_CAP_KEY]) : null,
     supersedes: idsOf(meta[SUPERSEDES_KEY]),
     supersedesSrc: typeof meta[SUPERSEDES_SRC_KEY] === 'string' ? meta[SUPERSEDES_SRC_KEY] : null,
     restsOn: idsOf(meta[RESTS_ON_KEY]),

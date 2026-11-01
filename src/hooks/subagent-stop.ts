@@ -41,8 +41,9 @@ import { parseHookInput, resolveDbPath, writeStaging, openHookDb, isDirectInvoca
 import { extractLastAssistantText } from './stop.js'
 import { hookStoreOn, hookTreeOf } from './hook-store.js'
 import { recordHookGap } from './gap-ledger.js'
-import { legOf, hasLegColumns, isLiveLeg, retireLeg, settleLegKey, type LegRegistration, type LegRef } from '../persistence/leg-registry.js'
+import { legOf, hasLegColumns, isLiveLeg, legOwnsKey, capRefusalOf, retireLeg, settleLegKey, type LegRegistration, type LegRef } from '../persistence/leg-registry.js'
 import { extractInsertEcho, isInsertEchoTool } from '../server/echo-correlation.js'
+import { resolveStagedCapRefusals } from '../persistence/cap-refusals.js'
 import { checkpointsUnder } from '../runs.js'
 import {
   owesCheckpoint, composeSendBackMessage, composeFirstMessage, fitHookCap, laneRowsOf, firstMomentFactsOf, type FirstMomentFacts,
@@ -133,7 +134,7 @@ export function settleFromStagedEchoes(db: DatabaseType, ref: LegRef): number {
  *  under the key newer than its start by anyone, and no send-back before
  *  by either door. The store's writability is asked separately. */
 export function owesSendBack(leg: LegRegistration, checkpointSinceStart: boolean): boolean {
-  return leg.run !== null && leg.key !== null && (leg.keySrc === 'own' || leg.keySrc === 'declared')
+  return leg.run !== null && leg.key !== null && legOwnsKey(leg)
     && owesCheckpoint(leg) && leg.sendBacks < 1 && !checkpointSinceStart
 }
 
@@ -141,9 +142,9 @@ export function owesSendBack(leg: LegRegistration, checkpointSinceStart: boolean
  *  the reason, its first moment composed again from the store as it now
  *  stands, the pointer to its trail; under the client's cap, the
  *  checkpoint cut with its row id as at the start (D325). */
-export function hooksSendBackMessage(o: { facts: FirstMomentFacts; ref: LegRef; firstMomentId: string | null; rows: number }): string {
+export function hooksSendBackMessage(o: { facts: FirstMomentFacts; ref: LegRef; firstMomentId: string | null; rows: number; capRefused?: { size: number } | null }): string {
   const compose = (opts: Parameters<typeof composeFirstMessage>[2]): string => composeSendBackMessage({
-    facts: o.facts, prompt: null, sessionId: o.ref.sessionId, agentId: o.ref.agentId, firstMomentId: o.firstMomentId, rows: o.rows,
+    facts: o.facts, prompt: null, sessionId: o.ref.sessionId, agentId: o.ref.agentId, firstMomentId: o.firstMomentId, rows: o.rows, capRefused: o.capRefused ?? null,
     firstMessage: composeFirstMessage(o.facts, null, { door: 'hooks', keyOwn: true, ...opts }),
   })
   return fitHookCap(o.facts, { compose }).message
@@ -161,7 +162,7 @@ async function sendBack(store: FlatStore, db: DatabaseType, ref: LegRef, leg: Le
     `SELECT node_id FROM nodes WHERE session_key = ? AND json_extract(metadata_json, '$._writer_agent_id') = ?
         AND json_extract(metadata_json, '$.kind') = ? ORDER BY created_at, rowid LIMIT 1`,
   ).get(ref.sessionId, ref.agentId, FIRST_MOMENT_KIND) as { node_id: string } | undefined
-  const message = hooksSendBackMessage({ facts, ref, firstMomentId: first?.node_id ?? null, rows: laneRowsOf(db, leg) })
+  const message = hooksSendBackMessage({ facts, ref, firstMomentId: first?.node_id ?? null, rows: laneRowsOf(db, leg), capRefused: capRefusalOf(leg) })
   const sent = store.recordWorkerSendBack(ref, {
     message, refs: [...(first ? [first.node_id] : []), ...facts.checkpoints.map((c) => c.nodeId)], at, door: 'hooks',
   })
@@ -310,7 +311,12 @@ async function legStop(
     }
     store = opened.store
     const scope = hookTreeOf(db, opened.namespace)
-    if (settleFromStagedEchoes(db, ref) > 0) {
+    // D359: a refusal made while the writer stamp was not exact sits pending
+    // until a call's echo names the writer; the leg's own staged echoes
+    // (and the session's) are read here as the drain would, so a leg refused
+    // at the cap is known to be, and its key is its own, before the ask.
+    const capMoved = resolveStagedCapRefusals(db, ref.sessionId)
+    if (settleFromStagedEchoes(db, ref) > 0 || capMoved > 0) {
       leg = legOf(db, ref) ?? leg
       // D302: a settle that named the run opens it, as a registration does.
       store.openRunOfLeg(ref)

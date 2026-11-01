@@ -91,6 +91,20 @@ export function extractInsertEcho(content: string, previewLen?: number | null): 
   return { nodeId: idMatch[1]!, deduplicated: dedupMatch ? dedupMatch[1] === 'true' : true }
 }
 
+const REFUSAL_ID_RE = /refusal_id\\{0,3}"\s*:\s*\\{0,3}"([0-9a-f]{32})/
+
+/**
+ * The id of a refused-checkpoint reply an insert call's echo carries
+ * (D359): the checkpoint cap's refusal says it in the reply, and the call's
+ * own staged echo, which names the caller exactly, says it back. Null for
+ * any other output.
+ */
+export function extractRefusalId(content: string, previewLen?: number | null): string | null {
+  const section = outputSection(content, previewLen)
+  if (!section) return null
+  return REFUSAL_ID_RE.exec(section)?.[1] ?? null
+}
+
 /** True for the staged echo of a treecontext_status call — the §7.8
  *  namespace channel: the status response names its serving namespace
  *  inside the output cap (live sweep 2026-08-15: 6/6 echoes, offset

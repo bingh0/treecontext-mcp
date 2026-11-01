@@ -518,6 +518,8 @@ describe('the key lookup under the reply ceiling (D287)', () => {
   it('two 3 MB checkpoints in effect come back cut to fit, the note naming what was cut', async () => {
     const s = await open()
     const big = (c: string): string => `state: ${c}; ` + c.repeat(3 * 1024 * 1024)
+    // Past the checkpoint cap (D299) a writer no hook registered is never
+    // refused (D359): both checkpoints land at once, marked.
     const one = await s.writeCheckpoint(big('a'), { run: 'r1', key: 'k', declared: { role: 'builder' } })
     const two = await s.writeCheckpoint(big('b'), { run: 'r1', key: 'k', declared: { role: 'reviewer' } })
     const { c, done } = await serve(s)

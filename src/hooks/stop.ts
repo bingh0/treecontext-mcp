@@ -30,7 +30,7 @@ import { resolveDbPath, writeStaging, parseHookInput, isDirectInvocation, openHo
 import { STORE_SAFETY_CAP, activeIndexCap } from '../persistence/capture-constants.js'
 import { dbg } from '../debug.js'
 import { checkpointDue, bookmarkRequest, markBookmarkAsked, hookNowSec, type CheckpointDue } from '../checkpoints.js'
-import { workerLaneOf, type LegRegistration, type LegRef } from '../persistence/leg-registry.js'
+import { workerLaneOf, capRefusalOf, type LegRegistration, type LegRef } from '../persistence/leg-registry.js'
 import { checkpointsUnder } from '../runs.js'
 import { sendBackDecision } from '../ticket-door.js'
 import { composeSendBackMessage, composeFirstMessage, fitHookCap, laneRowsOf, firstMomentFactsOf } from '../first-moment.js'
@@ -278,6 +278,7 @@ async function workerStop(input: Record<string, unknown>, dbPath: string, sessio
     exit: { code: 0, signal: null }, ticketValid: w.leg.ticketAbsent.length === 0 && w.leg.ticketRaw === null,
     noKey: w.leg.key === null, role: w.leg.role, checkpointer: w.leg.checkpointer, canWrite: w.leg.canWrite,
     sendBacks: w.leg.sendBacks, checkpointSinceStart: w.checkpointSinceStart, storeWritable: refusal === null,
+    capRefused: capRefusalOf(w.leg),
   })
   dbg('hook:stop', 'a worker\'s stop', { lane: ref.sessionId, sendBack: verdict.sendBack, why: verdict.why })
   if (!verdict.sendBack) return
@@ -297,7 +298,7 @@ async function workerStop(input: Record<string, unknown>, dbPath: string, sessio
       })
       const rows = laneRowsOf(db, leg)
       const compose = (o: Parameters<typeof composeFirstMessage>[2]): string => composeSendBackMessage({
-        facts, prompt: w.prompt ?? '', sessionId: ref.sessionId, firstMomentId: w.firstMomentId, rows,
+        facts, prompt: w.prompt ?? '', sessionId: ref.sessionId, firstMomentId: w.firstMomentId, rows, capRefused: capRefusalOf(w.leg),
         firstMessage: composeFirstMessage(facts, w.prompt ?? '', o),
       })
       const message = fitHookCap(facts, { compose }).message

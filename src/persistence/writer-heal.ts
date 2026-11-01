@@ -35,7 +35,7 @@ import type { Database } from './database.js'
 import { laneWriterOf } from '../references.js'
 import { sessionOf, NO_SESSION } from '../dedup-identity.js'
 import { agentWriterOf, selfOf, selfWriterOf } from './session-registry.js'
-import { legOf, legWriterOf, workerOfSession, settleLegKey, unsettleLegKey, recordOpenedRun, WORKER_AGENT_ID } from './leg-registry.js'
+import { capRefusalsOf, confirmedCapRefusal, legOf, legWriterOf, workerOfSession, settleLegKey, unsettleLegKey, recordOpenedRun, WORKER_AGENT_ID } from './leg-registry.js'
 import {
   storeSupersedesFor, runOpenLine, runCloseLine, BY_SRC_KEY, BY_PENDING, BY_ECHO, RUN_OPEN_KIND, RUN_CLOSE_KIND,
   OPENED_BY_KEY, CLOSED_BY_KEY, REASON_KEY, PARENT_RUN_KEY, PARENT_LEG_KEY,
@@ -313,6 +313,16 @@ export function healWriterFromEcho(db: Database, opts: {
       next[BY_SRC_KEY] = BY_ECHO
       opts.rewriteContent?.(opts.nodeId, from, to)
       result.runBy = writer
+    }
+    // D321, D359: an over-cap checkpoint's mark says whether it was its
+    // writer's second write. Accepted under a stamp that was not exact, it
+    // was accepted because every writer it might be had been refused; the
+    // writer the echo names is the truth, so the mark follows it: its own
+    // refusal on record, else not.
+    const mark = next['_over_cap']
+    if ((before.src === 'provisional' || before.src === 'concurrent' || before.src === 'ambiguous') && mark !== null && typeof mark === 'object' && !Array.isArray(mark) && typeof next['run'] === 'string' && typeof next['key'] === 'string') {
+      const have = capRefusalsOf(db, { sessionId: opts.echoSessionId, agentId: agentOf ?? '' })
+      next['_over_cap'] = { ...(mark as Record<string, unknown>), second: have !== null && confirmedCapRefusal(have, next['run'], next['key']) !== null }
     }
     // A replayed echo that changes nothing writes nothing.
     if (JSON.stringify(next) !== JSON.stringify(meta)) {

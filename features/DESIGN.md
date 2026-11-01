@@ -512,7 +512,7 @@ the visionary ratified on 2026-11-01, D345).
   by the same leg is accepted and marked, the cap a nudge the record
   keeps rather than a bound. The pointer to the summary row comes back
   every time, one line; there is nothing to opt out of. [ruled: D279,
-  D280, D281, D284, D285, D299, D321] The gate's rulings sharpen it: a
+  D280, D281, D284, D285, D299, D321, D359] The gate's rulings sharpen it: a
   key the hooks door inferred from the role's newest brief never
   triggers the send-back, only a key the leg wrote under does [ruled:
   D326]; a brief is in effect until a newer one for the same role and

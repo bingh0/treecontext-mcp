@@ -46,9 +46,10 @@ import { dirname } from 'node:path'
 import { FlatStore } from './flat-store.js'
 import { openNodeSqlite, DEFAULT_RAW_TIMEOUT_MS } from './persistence/node-sqlite.js'
 import { hostProbe, type ProcessProbe } from './persistence/process-probe.js'
-import { WORKER_AGENT_ID, legWriterOf, type LegRef, type LegRegistration, type WorkerProcess } from './persistence/leg-registry.js'
+import { WORKER_AGENT_ID, legWriterOf, legOwnsKey, capRefusalOf, type LegRef, type LegRegistration, type WorkerProcess } from './persistence/leg-registry.js'
 import { gitSelfOf } from './hooks/git-self.js'
 import { composeSendBackMessage, owesCheckpoint } from './first-moment.js'
+import { CHECKPOINT_CAP_CHARS } from './runs.js'
 import {
   TICKET_ENV, WORKER_SESSION_ENV, mintTicket, readTicket, declaresDoor, ticketTextIn,
   type TicketFields, type TicketReading,
@@ -98,6 +99,10 @@ export interface SendBackInput {
   checkpointSinceStart: boolean
   /** The store could be read and written at the exit (D279, D307). */
   storeWritable: boolean
+  /** D299: the leg's checkpoint under its key was refused at the cap once;
+   *  a refusal is no checkpoint, so it changes nothing of the decision but
+   *  the words that give it. */
+  capRefused?: { size: number } | null
 }
 
 export interface SendBackVerdict {
@@ -128,7 +133,11 @@ export function sendBackDecision(i: SendBackInput): SendBackVerdict {
   if (!declaresDoor({ canWrite: i.canWrite })) return { sendBack: false, ending: 'retired', why: 'its ticket declares it has no way to write to the store' }
   if (i.sendBacks >= 1) return { sendBack: false, ending: 'retired', why: 'it was already sent back once, and never is twice' }
   if (!i.storeWritable) return { sendBack: false, ending: 'retired', why: 'the store could not be written' }
-  return { sendBack: true, ending: 'retired', why: 'it exited with no checkpoint under its key newer than its start' }
+  return {
+    sendBack: true, ending: 'retired',
+    why: 'it exited with no checkpoint under its key newer than its start'
+      + (i.capRefused ? `, its one of ${i.capRefused.size} characters having been refused at the ${CHECKPOINT_CAP_CHARS}-character cap` : ''),
+  }
 }
 
 // ── Spawning ───────────────────────────────────────────────────────
@@ -449,6 +458,7 @@ export async function spawnWorker(o: SpawnWorkerOptions): Promise<WorkerRunResul
         // ticket's, else the brief's), never the ticket's alone.
         exit: rec.exit, ticketValid: reading.valid, noKey: t.noKey === true, role: leg?.role ?? t.role, checkpointer: leg?.checkpointer ?? null,
         canWrite: t.canWrite ?? null, sendBacks: leg?.sendBacks ?? 0, checkpointSinceStart, storeWritable: readable,
+        ...(leg ? { capRefused: capRefusalOf(leg) } : {}),
       })
       if (verdict.sendBack && leg !== null) {
         let sent: ReturnType<FlatStore['recordWorkerSendBack']> = null
@@ -459,7 +469,9 @@ export async function spawnWorker(o: SpawnWorkerOptions): Promise<WorkerRunResul
           const facts = store.firstMomentFacts({
             run: leg.run!, key: leg.key, role: leg.role ?? t.role!, checkpointer: leg.checkpointer, checkpointedBy: leg.checkpointedBy, self: ref,
           })
-          next = composeSendBackMessage({ facts, prompt, sessionId: ref.sessionId, firstMomentId: started.firstMomentId, rows: store.laneRowsOf(leg) })
+          next = composeSendBackMessage({
+            facts, prompt, sessionId: ref.sessionId, firstMomentId: started.firstMomentId, rows: store.laneRowsOf(leg), capRefused: capRefusalOf(leg),
+          })
           const inEffect = facts.checkpoints
           sent = store.recordWorkerSendBack(ref, {
             message: next,
@@ -535,7 +547,7 @@ function exitLine(
   const now = store.legOf({ sessionId: leg.sessionId, agentId: WORKER_AGENT_ID })
   const pointer = result.summaryId
     ? `its return is the summary row ${result.summaryId} (writer "${writer}"${now?.run ? `, run "${now.run}"` : ''}`
-      + `${now?.key && (now.keySrc === 'own' || now.keySrc === 'declared') ? `, key "${now.key}"` : ''})`
+      + `${now?.key && legOwnsKey(now) ? `, key "${now.key}"` : ''})`
     : 'it left no summary row'
   if (how === 'invalid') {
     return `${DOOR_LINE_PREFIX} ${name} ${exitWords(exit)} and ended with invalid instructions: its ticket could not be read whole `

@@ -4,15 +4,17 @@ import { claudeHooksBlock } from '../../../src/server/installer.js'
 import { expect } from 'vitest'
 import { type ChildProcess } from 'node:child_process'
 import { parseTool, rawAll } from '../world.js'
-import { drainStaging, bashPayload, spawnHooksInBatches, adoptCaptureStore, hookJson } from '../capture-harness.js'
+import type { FlatStore } from '../../../src/flat-store.js'
+import { runHook, drainStaging, bashPayload, spawnHooksInBatches, adoptCaptureStore, hookJson } from '../capture-harness.js'
 import { SUBAGENT_SUMMARY_KIND } from '../../../src/handoff.js'
 import { FIRST_MOMENT_KIND, SEND_BACK_KIND } from '../../../src/run-kinds.js'
-import { inEffectLine, type CheckpointRecord } from '../../../src/runs.js'
+import { inEffectLine, CHECKPOINT_CAP_CHARS, OVER_CAP_KEY, type CheckpointRecord } from '../../../src/runs.js'
 import {
-  STATE_NOT_HISTORY_LINE, sendBackReason, recoveryLine, composeFirstMessage, hookCutMarker, momentText, HOOK_CONTEXT_CAP,
+  STATE_NOT_HISTORY_LINE, sendBackReason, recoveryLine, composeFirstMessage, hookCutMarker, momentText, overCapWords, HOOK_CONTEXT_CAP,
 } from '../../../src/first-moment.js'
 import { charactersOf } from '../../../src/runs.js'
-import { NOTICED_BY_SESSION_START } from '../../../src/persistence/leg-registry.js'
+import { NOTICED_BY_SESSION_START, type LegRef } from '../../../src/persistence/leg-registry.js'
+import { keyLookupReply } from '../../../src/key-lookup.js'
 import {
   type RunWorld, openRunWorld, hooksLeg, hooksSubagent, briefFor, seedCheckpoints, sessionClient, insertEchoed, subagentStopHook, blocks,
   rawOne, rawMetaOf, rawContentOf, rawRegistration, rawCheckpoints, cpLabel, startContext, sessionStartHook, agentToolReturns, agentToolLaunchesInBackground, lockStore, killAndReap,
@@ -144,13 +146,127 @@ function textOf(n: number): string {
 function sizeFor(w: HooksWorld, key: string, chars: number): number {
   const facts = w.store!.firstMomentFacts({ run: RUN, key, role: 'builder', checkpointer: null, checkpointedBy: null })
   const probe = (size: number): number => {
-    const cp = { nodeId: 'f'.repeat(32), number: 1, writer: 'builder', createdAt: Date.now() / 1000, content: textOf(size), size } as CheckpointRecord
+    // A checkpoint past the cap is in effect only by its second write, and
+    // the first message says so in words beside its size (D321).
+    // (written by a declared role the registry never saw: no refusal, D359)
+    const overCap = size > CHECKPOINT_CAP_CHARS ? { size, cap: CHECKPOINT_CAP_CHARS, second: false } : null
+    const cp = { nodeId: 'f'.repeat(32), number: 1, writer: 'builder', createdAt: Date.now() / 1000, content: textOf(size), size, overCap } as CheckpointRecord
     return composeFirstMessage({ ...facts, checkpoints: [cp], inEffect: inEffectLine(RUN, key, [cp]) }, null, { door: 'hooks' }).length
   }
   let size = chars - 1500
   for (let i = 0; i < 4; i++) size += chars - probe(size)
   expect(probe(size)).toBe(chars)
   return size
+}
+
+
+// ── The checkpoint cap (unit 5): what a leg sees of its write ───────────
+
+/** What a leg sees of one checkpoint write, the same whichever door it
+ *  went through: the tool's reply, or the library's result. */
+interface Seen {
+  via: 'tool'
+  refused: boolean
+  nodeId: string | null
+  number: number | null
+  overCap: { size: number; cap: number; second: boolean } | null
+  size: number | null
+  cap: number | null
+  reason: string | null
+  shape: string | null
+  isError: boolean
+  raw: Record<string, unknown>
+}
+
+/** A checkpoint of exactly `n` characters, distinct per write (`i`). */
+function variant(n: number, i: number): string {
+  return `${i === 0 ? 'A' : 'B'}${textOf(n).slice(1)}`
+}
+
+/** A checkpoint write through the real insert tool on the session's one
+ *  connection, and its PostToolUse echo with the caller's agent fields (the
+ *  hooks door's leg, D359: a checkpoint under a run's key meets the cap at
+ *  any size, the tool's content bound not applying to it). */
+async function writeSeen(w: HooksWorld, name: string, role: string, key: string, text: string): Promise<Seen> {
+  const leg = w.legs![name]!
+  await sessionClient(w)
+  const input = { content: text, metadata: { kind: 'checkpoint', run: RUN, key } }
+  const res = await w.client!.callTool({ name: 'treecontext_insert', arguments: input })
+  runHookEcho(w, leg, role, input, res)
+  const r = parseTool(res)
+  const cp = (r['checkpoint'] ?? null) as Record<string, unknown> | null
+  return {
+    via: 'tool', refused: r['refused'] === true, nodeId: typeof r['node_id'] === 'string' ? r['node_id'] : null,
+    number: cp ? Number(cp['number']) : null, overCap: (cp?.['over_cap'] ?? null) as Seen['overCap'],
+    size: typeof r['size'] === 'number' ? r['size'] : null, cap: typeof r['cap'] === 'number' ? r['cap'] : null,
+    reason: typeof r['reason'] === 'string' ? r['reason'] : null, shape: typeof r['shape'] === 'string' ? r['shape'] : null,
+    isError: (res as { isError?: boolean }).isError === true, raw: r,
+  }
+}
+
+/** The insert's PostToolUse echo, as Claude Code fires it for a
+ *  subagent's call. */
+function runHookEcho(w: HooksWorld, leg: LegRef, role: string, input: Record<string, unknown>, res: unknown): void {
+  runHook(w, 'post-tool-use', {
+    transcript_path: join(w.proj!, 'transcript.jsonl'), hook_event_name: 'PostToolUse', permission_mode: 'default',
+    tool_name: 'mcp__treecontext__treecontext_insert', tool_input: input,
+    tool_response: (res as { content: unknown }).content, agent_id: leg.agentId, agent_type: role,
+  })
+}
+
+/** A checkpoint in effect under a key, written by a declared role through
+ *  the library. A role no hook registered is never refused (D359), so a
+ *  checkpoint past the cap lands at once, marked; a refusal, were there
+ *  one, would be answered by the second write. */
+async function inEffectCheckpoint(w: HooksWorld, content: string, opts: Parameters<FlatStore['writeCheckpoint']>[1]): ReturnType<FlatStore['writeCheckpoint']> {
+  const first = await w.store!.writeCheckpoint(content, opts)
+  if (first.refused === undefined) return first
+  const second = await w.store!.writeCheckpoint(content, opts)
+  expect(second.refused, 'the second write past the cap is accepted').toBeUndefined()
+  return second
+}
+
+/** A builder leg under the run and key, named its own checkpointer, with
+ *  no checkpoint yet, started through the real SubagentStart hook. */
+async function cappedBuilder(w: HooksWorld, key: string): Promise<void> {
+  await openRunWorld(w)
+  await hooksLeg(w, 'builder', 'builder', { run: RUN, key, checkpointer: 'builder' })
+  await sessionClient(w)
+}
+
+function seenOf(w: HooksWorld, name: string, i: number): Seen {
+  const seen = (w.facts![`writes:${name}`] as Seen[] | undefined)?.[i]
+  expect(seen, `write ${i + 1} of the ${name}`).toBeTruthy()
+  return seen!
+}
+
+function noteWrite(w: HooksWorld, name: string, seen: Seen, key: string): void {
+  const list = ((w.facts![`writes:${name}`] ??= []) as Seen[])
+  list.push(seen)
+  ;(w.facts![`rows-after:${name}:${list.length - 1}`]) = rawCheckpoints(w, RUN, key).length
+}
+
+/** The registration's record of the cap, straight from the file. */
+function capRefusedOf(w: HooksWorld, ref: LegRef): Array<{ run: string; key: string; size: number; at: number; src?: string; id?: string }> {
+  const t = rawRegistration(w, ref)['cap_refused']
+  return typeof t === 'string' ? JSON.parse(t) as Array<{ run: string; key: string; size: number; at: number; src?: string; id?: string }> : []
+}
+
+/** What the refusal told the writer: the reason with the size and the cap,
+ *  and the shape asked for (D299, D332). */
+function expectReasonAndShape(seen: Seen, size: number, key: string): void {
+  expect(seen.refused).toBe(true)
+  expect(seen.isError, 'a refusal is a reply, not a thrown error').toBe(false)
+  expect([seen.size, seen.cap]).toEqual([size, CHECKPOINT_CAP_CHARS])
+  expect(seen.reason).toContain(`${size} characters`)
+  expect(seen.reason).toContain(`${CHECKPOINT_CAP_CHARS}-character cap`)
+  expect(seen.reason).toContain('nothing was written')
+  expect(seen.shape).toContain('the state of the work as it now stands, not its history')
+  expect(seen.shape).toContain('what it supersedes and what it rests on')
+  expect(seen.shape).toContain('leave the history out')
+  expect(seen.shape).toContain(`under the key "${key}" on the run "${RUN}"`)
+  expect(seen.shape).toContain('accepted and marked as over the cap')
+  expect(seen.nodeId).toBeNull()
 }
 
 export function hooksDoorSteps(define: Define): void {
@@ -257,8 +373,16 @@ export function hooksDoorSteps(define: Define): void {
     const out = hookJson(w.stops!['builder']!)
     expect(out?.['decision']).toBe('block')
     const reason = String(out!['reason'])
-    expect(reason.startsWith(sendBackReason('builder', RUN, key!))).toBe(true)
+    // A leg whose checkpoint the cap refused is sent back for the same
+    // missing checkpoint, the reason naming the cap and the size refused
+    // (D299); the key it was refused under is its own though nothing landed.
+    const refused = w.facts!['refused-size'] as number | undefined
+    expect(reason.startsWith(sendBackReason('builder', RUN, key!, refused !== undefined ? { size: refused } : null))).toBe(true)
     expect(reason).toContain(`no checkpoint under the key "${key}" on the run "${RUN}" newer than your start`)
+    if (refused !== undefined) {
+      expect(reason).toContain(`${refused} characters, was refused for being past the ${CHECKPOINT_CAP_CHARS}-character cap`)
+      expect(reason).toContain('Write a shorter one')
+    }
     // The first moment again, from the store, and the trail pointer.
     expect(reason).toContain(STATE_NOT_HISTORY_LINE)
     expect(reason).toContain(`Write the next checkpoint under "${key}" on the run "${RUN}", then stop.`)
@@ -709,7 +833,7 @@ export function hooksDoorSteps(define: Define): void {
 
   define(/^a checkpoint in effect under the key "([^"]+)" whose size makes the first moment (\d+) characters$/, async (w, key, chars) => {
     const size = sizeFor(w, key!, Number(chars))
-    const r = await w.store!.writeCheckpoint(textOf(size), { run: RUN, key: key!, declared: { role: 'builder' } })
+    const r = await inEffectCheckpoint(w, textOf(size), { run: RUN, key: key!, declared: { role: 'builder' } })
     w.ids!['cp'] = r.nodeId
     w.facts!['chars'] = Number(chars)
     w.facts!['size'] = size
@@ -735,7 +859,8 @@ export function hooksDoorSteps(define: Define): void {
       const m = /…\[cut at the client's 10000-character hook cap: checkpoint row ([0-9a-f]{32}), (\d+) characters left out; fetch it whole with treecontext_export\]/.exec(c)
       expect(m, 'the cut marker').toBeTruthy()
       expect(m![1]).toBe(w.ids!['cp'])
-      const kept = c.slice(c.indexOf(`${w.facts!['size'] as number} characters:\n`) + `${w.facts!['size'] as number} characters:\n`.length, c.indexOf(hookCutMarker(m![1]!, Number(m![2]))))
+      const head = `${w.facts!['size'] as number} characters${(w.facts!['size'] as number) > CHECKPOINT_CAP_CHARS ? `, ${overCapWords({ size: w.facts!['size'] as number, cap: CHECKPOINT_CAP_CHARS, second: false })}` : ''}:\n`
+      const kept = c.slice(c.indexOf(head) + head.length, c.indexOf(hookCutMarker(m![1]!, Number(m![2]))))
       expect(cp.startsWith(kept)).toBe(true)
       expect(Number(m![2])).toBe(cp.length - kept.length)
       expect(kept.length).toBeGreaterThan(0)
@@ -761,7 +886,7 @@ export function hooksDoorSteps(define: Define): void {
   define(/^a builder leg whose first moment carried checkpoint number (\d+) cut at the client's cap, with its row id$/, async (w, num) => {
     await openRunWorld(w)
     const ids = await seedCheckpoints(w, RUN, 'login-form', Number(num) - 1)
-    const r = await w.store!.writeCheckpoint(textOf(17000), { run: RUN, key: 'login-form', declared: { role: 'builder' }, supersedes: [ids.at(-1)!] })
+    const r = await inEffectCheckpoint(w, textOf(17000), { run: RUN, key: 'login-form', declared: { role: 'builder' }, supersedes: [ids.at(-1)!] })
     expect(r.checkpoint!.number).toBe(Number(num))
     w.ids!['cp'] = r.nodeId
     await hooksLeg(w, 'builder', 'builder', { run: RUN, key: 'login-form', checkpointer: 'builder' })
@@ -895,5 +1020,180 @@ export function hooksDoorSteps(define: Define): void {
     const rows = laneOf(w, 'builder').filter((x) => x.kind !== FIRST_MOMENT_KIND && x.kind !== SEND_BACK_KIND).length
     expect(c).toContain(recoveryLine({ sessionId: prev.sessionId, agentId: prev.agentId, role: 'builder', ended: 'retired', rows }, 'login-form'))
     expect(c).toContain(`Checkpoint number ${num} is in effect under "login-form" on the run "${RUN}".`)
+  })
+
+  // ── D299, D321, D332: the checkpoint cap ──
+
+  define(/^a builder leg under the key "([^"]+)"$/, async (w, key) => {
+    await cappedBuilder(w, key!)
+    const r = rawRegistration(w, w.legs!['builder']!)
+    expect([r['run'], r['run_key'], r['key_src'], r['checkpointer']]).toEqual([RUN, key, 'inferred', 'builder'])
+    expect(rawCheckpoints(w, RUN, key!)).toHaveLength(0)
+  })
+
+  define(/^the builder writes a checkpoint of (\d+) characters twice in a row$/, async (w, chars) => {
+    const n = Number(chars)
+    for (const i of [0, 1]) {
+      const text = variant(n, i)
+      expect(charactersOf(text)).toBe(n)
+      const seen = await writeSeen(w, 'builder', 'builder', 'login-form', text)
+      noteWrite(w, 'builder', seen, 'login-form')
+      // The first write's echo is drained before the second goes in, as
+      // the drain runs between a leg's calls.
+      await drainStaging(w)
+    }
+    w.facts!['chars'] = n
+  })
+
+  define(/^the builder sees the (first|second) write (accepted|accepted and marked over the cap|refused with the reason and the shape asked for)$/, (w, which, verdict) => {
+    const i = which === 'first' ? 0 : 1
+    const seen = seenOf(w, 'builder', i)
+    const n = w.facts!['chars'] as number
+    const key = 'login-form'
+    const landedBefore = i === 0 ? 0 : (w.facts!['rows-after:builder:0'] as number)
+    const rowsAfter = w.facts![`rows-after:builder:${i}`] as number
+    if (verdict === 'refused with the reason and the shape asked for') {
+      expectReasonAndShape(seen, n, key)
+      // Nothing landed: the file holds no checkpoint row for this write.
+      expect(rowsAfter).toBe(landedBefore)
+      // The registration records the refusal, by run and key, with the size.
+      expect(capRefusedOf(w, w.legs!['builder']!)).toEqual([expect.objectContaining({ run: RUN, key, size: n })])
+      return
+    }
+    expect(seen.refused).toBe(false)
+    expect(seen.isError).toBe(false)
+    expect(rowsAfter).toBe(landedBefore + 1)
+    expect(seen.nodeId, 'a checkpoint row').toMatch(/^[0-9a-f]{32}$/)
+    // Numbered as any checkpoint: one past what had landed under the key.
+    expect(seen.number).toBe(landedBefore + 1)
+    const row = rawMetaOf(w, seen.nodeId!)
+    expect([row['kind'], row['run'], row['key']]).toEqual(['checkpoint', RUN, key])
+    expect(row['_checkpoint_number']).toBe(seen.number)
+    const size = charactersOf(rawContentOf(w, seen.nodeId!))
+    if (verdict === 'accepted') {
+      // Within the cap: never refused, never marked.
+      expect(size).toBeLessThanOrEqual(CHECKPOINT_CAP_CHARS)
+      expect(seen.overCap).toBeNull()
+      expect(row[OVER_CAP_KEY]).toBeUndefined()
+      expect(capRefusedOf(w, w.legs!['builder']!)).toEqual([])
+    } else {
+      // Over the cap on the second write: accepted, numbered as any
+      // checkpoint, and marked by the store with its size and the cap.
+      expect(size).toBeGreaterThan(CHECKPOINT_CAP_CHARS)
+      expect(row[OVER_CAP_KEY]).toEqual({ size, cap: CHECKPOINT_CAP_CHARS, second: true })
+      expect(seen.overCap).toEqual({ size, cap: CHECKPOINT_CAP_CHARS, second: true })
+      expect(capRefusedOf(w, w.legs!['builder']!)).toEqual([expect.objectContaining({ run: RUN, key, size })])
+    }
+  })
+
+  define(/^a builder leg whose (\d+)-character checkpoint under the key "([^"]+)" was refused once$/, async (w, chars, key) => {
+    await cappedBuilder(w, key!)
+    const seen = await writeSeen(w, 'builder', 'builder', key!, variant(Number(chars), 0))
+    noteWrite(w, 'builder', seen, key!)
+    await drainStaging(w)
+    expectReasonAndShape(seen, Number(chars), key!)
+    expect(capRefusedOf(w, w.legs!['builder']!)).toEqual([expect.objectContaining({ run: RUN, key, size: Number(chars) })])
+    w.facts!['refused-size'] = Number(chars)
+  })
+
+  define(/^the reviewer leg writes a (\d+)-character checkpoint under the key "([^"]+)", and the builder writes one under the key "([^"]+)"$/, async (w, chars, key, other) => {
+    const n = Number(chars)
+    // The reviewer starts beside the builder, both live: the insert cannot
+    // say which of them called (an ambiguous stamp), so each refusal is
+    // pending until its call's own echo, read at the drain, names the caller.
+    await hooksLeg(w, 'reviewer', 'reviewer', { run: RUN, key: key!, checkpointer: 'reviewer' })
+    w.facts!['seen:reviewer'] = await writeSeen(w, 'reviewer', 'reviewer', key!, variant(n, 0))
+    await drainStaging(w)
+    w.facts!['seen:builder-other'] = await writeSeen(w, 'builder', 'builder', other!, variant(n, 1))
+    await drainStaging(w)
+  })
+
+  define(/^the reviewer sees its write refused with the reason and the shape asked for$/, (w) => {
+    const seen = w.facts!['seen:reviewer'] as Seen
+    expectReasonAndShape(seen, 20000, 'login-form')
+    // After the drain the refusal sits on the reviewer's registration, not on the session's self.
+    expect(capRefusedOf(w, w.legs!['reviewer']!)).toEqual([expect.objectContaining({ run: RUN, key: 'login-form', size: 20000, src: 'echo' })])
+    expect(capRefusedOf(w, { sessionId: w.sessionId!, agentId: '' })).toEqual([])
+  })
+
+  define(/^the builder sees its write under "([^"]+)" refused with the reason and the shape asked for$/, (w, key) => {
+    const seen = w.facts!['seen:builder-other'] as Seen
+    expectReasonAndShape(seen, 20000, key!)
+    // The builder's earlier refusal under "login-form" stands beside the new one.
+    expect(capRefusedOf(w, w.legs!['builder']!).map((e) => [e.key, e.size, e.src])).toEqual([['login-form', 20000, 'echo'], [key, 20000, 'echo']])
+    expect(capRefusedOf(w, { sessionId: w.sessionId!, agentId: '' })).toEqual([])
+    // No checkpoint row anywhere: all three writes were refused.
+    expect(rawAll(w, "SELECT 1 FROM nodes WHERE json_extract(metadata_json, '$.kind') = 'checkpoint'")).toHaveLength(0)
+  })
+
+  define(/^a builder leg named as checkpointer whose (\d+)-character checkpoint under the key "([^"]+)" was refused once$/, async (w, chars, key) => {
+    await cappedBuilder(w, key!)
+    const seen = await writeSeen(w, 'builder', 'builder', key!, variant(Number(chars), 0))
+    expectReasonAndShape(seen, Number(chars), key!)
+    const r = rawRegistration(w, w.legs!['builder']!)
+    // Not drained: the refusal is pending on the registration the stamp named,
+    // its call's echo staged, and the stop hook reads that echo itself.
+    expect([r['key_src'], r['checkpointer'], r['send_backs']]).toEqual(['inferred', 'builder', 0])
+    expect(capRefusedOf(w, w.legs!['builder']!)).toEqual([expect.objectContaining({ src: 'pending', size: Number(chars) })])
+    expect(rawCheckpoints(w, RUN, key!)).toHaveLength(0)
+    w.facts!['refused-size'] = Number(chars)
+  })
+
+  define(/^the builder stops without writing again$/, (w) => {
+    stopLeg(w, 'builder', 'builder', 'stopping; the checkpoint was refused')
+  })
+
+  define(/^a builder leg whose second write of a (\d+)-character checkpoint under the key "([^"]+)" was accepted$/, async (w, chars, key) => {
+    await cappedBuilder(w, key!)
+    const n = Number(chars)
+    const first = await writeSeen(w, 'builder', 'builder', key!, variant(n, 0))
+    await drainStaging(w)
+    const second = await writeSeen(w, 'builder', 'builder', key!, variant(n, 1))
+    await drainStaging(w)
+    expect([first.refused, second.refused]).toEqual([true, false])
+    expect(second.overCap).toEqual({ size: n, cap: CHECKPOINT_CAP_CHARS, second: true })
+    w.ids!['over-cap-checkpoint'] = second.nodeId!
+    w.facts!['over-cap-size'] = n
+    w.facts!['over-cap-text'] = variant(n, 1)
+    // The leg finishes: a checkpoint exists, so it is not sent back.
+    stopLeg(w, 'builder', 'builder', 'submit wired; the long state is written')
+    expect(blocks(w.stops!['builder']!)).toBe(false)
+  })
+
+  define(/^the harness looks up the key "([^"]+)" and the next builder leg starts under it$/, (w, key) => {
+    legLookup(w, key!)
+    hooksSubagent(w, 'next', 'builder')
+  })
+
+  define(/^the harness receives that checkpoint whole, marked as over the cap, with its size (\d+)$/, (w, size) => {
+    const l = w.lookups![RUN]!
+    expect(l.checkpoints).toHaveLength(1)
+    const cp = l.checkpoints[0]!
+    expect(cp.nodeId).toBe(w.ids!['over-cap-checkpoint'])
+    expect(cp.content).toBe(w.facts!['over-cap-text'])
+    expect([cp.size, cp.overCap]).toEqual([Number(size), { size: Number(size), cap: CHECKPOINT_CAP_CHARS, second: true }])
+    // The agent's door and the harness's are one reply (D337).
+    const reply = keyLookupReply(l).checkpoints[0]!
+    expect([reply.size, reply.over_cap, reply.content]).toEqual([Number(size), { size: Number(size), cap: CHECKPOINT_CAP_CHARS, second: true }, w.facts!['over-cap-text']])
+    expect(rawMetaOf(w, cp.nodeId)[OVER_CAP_KEY]).toEqual({ size: Number(size), cap: CHECKPOINT_CAP_CHARS, second: true })
+  })
+
+  define(/^the store holds the next builder's first-moment row carrying the checkpoint size (\d+)$/, (w, size) => {
+    const first = laneOf(w, 'next').find((x) => x.kind === FIRST_MOMENT_KIND)
+    expect(first, 'the next builder\'s first-moment row').toBeTruthy()
+    expect(first!.m['checkpoint_size']).toBe(Number(size))
+    // What it cost: the mark rides on the row and on the checkpoint it names.
+    expect(first!.m['checkpoint_over_cap']).toBe(true)
+    const fm = first!.m['first_moment'] as { checkpoints: Array<Record<string, unknown>> }
+    expect(fm.checkpoints.map((c) => [c['node_id'], c['size'], c['over_cap']])).toEqual([
+      [w.ids!['over-cap-checkpoint'], Number(size), { size: Number(size), cap: CHECKPOINT_CAP_CHARS, second: true }],
+    ])
+    expect(first!.m['refs']).toContain(w.ids!['over-cap-checkpoint'])
+    // And the first message the leg was handed says so in words, cut at the
+    // client's cap with the row id, as it is for any checkpoint that long.
+    const c = contextOf(w, 'next')
+    expect(c).toContain(`${Number(size)} characters, ${overCapWords({ size: Number(size), cap: CHECKPOINT_CAP_CHARS, second: true })}:`)
+    expect(c).toContain(`checkpoint row ${w.ids!['over-cap-checkpoint']}`)
+    expect(c.length).toBeLessThanOrEqual(HOOK_CONTEXT_CAP)
   })
 }

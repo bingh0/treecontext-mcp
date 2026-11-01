@@ -40,28 +40,11 @@ export const WHOLE_FEATURE_WIP: WholeFeatureWipRuling[] = [
   // feature files are the contract the build is measured against. Each
   // leaves the register when its scenarios bind. The release gate must
   // name any still here as acceptable for `0.1.0-beta.3`.
-  {
-    feature: 'journal-legs',
-    reason: 'scoped 2026-10-31 before its build (D279–D285, D299, D305, D314, D320, D321); on 2026-11-01 unit 1 bound the store half of the leg contract (numbering, supersession named or stamped from the leg, two in effect, the walk back, the key settled by the leg\'s own write, the keyless subagent unchanged); on 2026-11-01 unit 2 bound the key lookup\'s reply for legs (the main agent\'s checkpoint flagged against the brief\'s checkpointer beside the one before it, a keyless leg counted in the run\'s facts, a silent leg live with its start and last write); leaves the register when the send-back, the recovery leg and the key lookup bind against real hook subprocesses; on 2026-11-01 unit 4 bound them (the hooks door: the first moment, the inference from the role\'s brief, the cap\'s cut, the send-back once, the cut at the next start, the recovery leg, the pointer on the Agent tool\'s result, the dropped start), so that condition holds, and the ruling stays only for the checkpoint cap\'s four scenarios (unit 5)',
-    ruledOn: '2026-11-01',
-    // The hooks door bound on 2026-11-01 (unit 4): every legs scenario
-    // but unit 5's four runs through the real SubagentStart hook, which
-    // infers the leg from its role's brief in effect, the real SubagentStop
-    // hook (the send-back once), the real SessionStart hook (the cut known
-    // at the next start) and the real PostToolUse hook on the Agent tool's
-    // result (the pointer). The seven unit 1 and 2 scenarios once bound
-    // through run-world.ts hooksLeg's registry call, and "until its session
-    // restarts, a silent leg reads as live with its ages shown", are
-    // re-bound through the hook's own inference (the last at the hook's own
-    // clock, set to two hours back). What stays is unit 5's.
-    scenarios: [
-      // unit 5, the checkpoint cap (D299, D321, D332)
-      'a checkpoint of <chars> characters is <verdict> on its first write and <verdict2> on the second',
-      'a second over-cap write by another leg or under another key is refused again',
-      'a leg refused once that stops without writing a shorter checkpoint is sent back for it',
-      "an over-cap checkpoint accepted on its second write is the one in effect, and the next leg's first-moment row shows what it cost",
-    ],
-  },
+  // journal-legs left this register on 2026-11-01 (unit 5) by its own
+  // leaving condition: the send-back, the recovery leg and the key lookup
+  // bind against real hook subprocesses (unit 4), and the checkpoint cap's
+  // four scenarios bind too (unit 5), so every legs scenario runs through
+  // the real SubagentStart, SubagentStop, SessionStart and PostToolUse hooks.
   // journal-workers left this register on 2026-11-01 (unit 4) by its own
   // leaving condition: the `claude -p` child binds through its hooks (its
   // registration as a worker, the first-moment row through its

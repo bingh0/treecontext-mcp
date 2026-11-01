@@ -15,7 +15,7 @@ import {
 } from '../persistence/capture-constants.js'
 import { CORRELATED_ECHO_OUTCOMES } from '../persistence/store.js'
 import { StoreLockedError } from '../errors/index.js'
-import { extractInsertEcho, isInsertEchoTool, extractStatusNamespace, isStatusEchoTool } from './echo-correlation.js'
+import { extractInsertEcho, extractRefusalId, isInsertEchoTool, extractStatusNamespace, isStatusEchoTool } from './echo-correlation.js'
 import {
   writeSessionNamespaceAnnotation,
   sweepSessionNamespaceAnnotations,
@@ -744,6 +744,20 @@ export class IngestionLoop {
           // read a session's registry, which a worker's lane is not.
           if (row.role === 'assistant' && isInsertEchoTool(row.toolName) && row.sessionId && workerLane === null) {
             try {
+              // D359: a refused checkpoint's echo names its caller exactly and
+              // carries the refusal's id: the pending refusal moves to that
+              // writer, and its key is settled as its own.
+              const refusalId = extractRefusalId(row.content, row.previewLen)
+              if (refusalId) {
+                try {
+                  const moved = this.ctx.store.healCapRefusalFromEcho({ echoSessionId: row.sessionId, refusalId, agentId: row.agentId ?? null })
+                  dbg('ingest', 'cap refusal heal', { refusalId, ...moved })
+                  const opener = (this.ctx as { openRunOfLeg?: (ref: { sessionId: string; agentId: string }) => void }).openRunOfLeg
+                  if (moved.settled && row.agentId != null && typeof opener === 'function') opener.call(this.ctx, { sessionId: row.sessionId, agentId: row.agentId })
+                } catch (capErr) {
+                  dbg('ingest', 'cap refusal heal failed (the refusal stays pending)', { error: capErr instanceof Error ? capErr.message : String(capErr) })
+                }
+              }
               const echo = extractInsertEcho(row.content, row.previewLen)
               if (echo) {
                 // D190 (F1): the echo carries the CALLER's agent fields, so

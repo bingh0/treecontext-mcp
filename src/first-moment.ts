@@ -27,9 +27,9 @@
  * same functions, so the two doors leave the same row (D298) and say the
  * same lines.
  */
-import { charactersOf, briefsInEffect, checkpointsInEffect, checkpointsUnder, inEffectLine, type BriefRecord, type CheckpointRecord, type RunReadHandle } from './runs.js'
+import { CHECKPOINT_CAP_CHARS, charactersOf, briefsInEffect, checkpointsInEffect, checkpointsUnder, inEffectLine, type BriefRecord, type CheckpointRecord, type RunReadHandle } from './runs.js'
 import { namedCheckpointerOf, isNamedCheckpointer, checkpointerFlag, importFlag, checkpointName, checkpointsWrittenBy, type NamedCheckpointer } from './key-lookup.js'
-import { legsOfRun, isLiveLeg, WORKER_AGENT_ID, type LegRegistration } from './persistence/leg-registry.js'
+import { legsOfRun, isLiveLeg, legOwnsKey, WORKER_AGENT_ID, type LegRegistration } from './persistence/leg-registry.js'
 import type { RegistryHandle } from './persistence/session-registry.js'
 import { FIRST_MOMENT_KIND, SEND_BACK_KIND, RUN_META_KEY, KEY_META_KEY } from './run-kinds.js'
 import { activeIndexCap, TOOL_OUTPUT_PREVIEW_CAP } from './persistence/capture-constants.js'
@@ -58,9 +58,28 @@ export function invalidInstructionsMessage(absent: readonly string[], read: { ro
 
 /** D279, D291, D335: the reason a worker is run once more, naming the
  *  missing checkpoint: the first line of the second run's first message. */
-export function sendBackReason(role: string, run: string, key: string): string {
+export function sendBackReason(role: string, run: string, key: string, refused?: { size: number } | null): string {
   return `treecontext: you are run once more because you exited with no checkpoint under the key "${key}" on the run "${run}" newer than your start, `
-    + `and your instructions name the ${role} as the one who will checkpoint it. This is your one send-back; there is no other.`
+    + `and your instructions name the ${role} as the one who will checkpoint it.${capClause(refused ?? null)} `
+    + 'This is your one send-back; there is no other.'
+}
+
+/** D299: what a send-back says when the leg's checkpoint under the key was
+ *  refused at the cap and it wrote no other: the size refused, the cap, and
+ *  the shape asked for. Empty when no refusal is on record. */
+export function capClause(refused: { size: number } | null): string {
+  if (refused === null) return ''
+  return ` The checkpoint you wrote under it, ${refused.size} characters, was refused for being past the ${CHECKPOINT_CAP_CHARS}-character cap, and nothing of it was written. `
+    + 'Write a shorter one: the state of the work as it now stands, naming what it supersedes and what it rests on, with the history left out '
+    + `(a second write past the cap by you under this key would be accepted and marked as over it).`
+}
+
+/** D321: what a first moment and the lookup say beside a checkpoint the
+ *  store marked as over the cap: it was accepted on its second write. */
+export function overCapWords(m: { size: number; cap: number; second?: boolean }): string {
+  return m.second === false
+    ? `written over the ${m.cap}-character cap by a writer the store keeps no refusal for`
+    : `accepted over the ${m.cap}-character cap on its second write`
 }
 
 // ── Moments ────────────────────────────────────────────────────────
@@ -156,7 +175,7 @@ export function predecessorOf(
   // nothing under it and is keyless (D326), never recovered from.
   const ended = legsOfRun(db, opts.run).filter((l) =>
     l.role === opts.role && l.key === opts.key
-    && (l.keySrc === 'own' || l.keySrc === 'declared' || (l.keySrc === 'inferred' && (l.ended === 'cut' || l.ended === 'phantom')))
+    && (legOwnsKey(l) || (l.keySrc === 'inferred' && (l.ended === 'cut' || l.ended === 'phantom')))
     && !isLiveLeg(l) && l.ended !== 'invalid'
     && !(opts.except && l.sessionId === opts.except.sessionId && l.agentId === opts.except.agentId))
   if (ended.length === 0) return null
@@ -280,7 +299,7 @@ export function composeFirstMessage(f: FirstMomentFacts, prompt: string | null, 
       const flag = f.flags.find((x) => x.nodeId === cp.nodeId)
       const text = opts.contentOf ? opts.contentOf(cp) : cp.content
       parts.push(`${capital(checkpointName(cp.number))} under "${f.key}" (row ${cp.nodeId}), written by "${cp.writer}" at ${momentText(cp.createdAt)}, `
-        + `${cp.size} characters:\n${text}${flag ? `\n${flag.sentence}` : ''}`)
+        + `${cp.size} characters${cp.overCap ? `, ${overCapWords(cp.overCap)}` : ''}:\n${text}${flag ? `\n${flag.sentence}` : ''}`)
     }
     if (f.predecessor) parts.push(recoveryLine(f.predecessor, f.key))
   }
@@ -431,11 +450,14 @@ export function composeSendBackMessage(o: {
   /** The first moment as composed again (the hooks door's, fitted to the
    *  client's cap); composed here when not given. */
   firstMessage?: string
+  /** D299: the refusal of the cap on the leg's registration under its key,
+   *  named in the reason when the leg wrote no other. */
+  capRefused?: { size: number } | null
 }): string {
   const f = o.facts
   const lane = o.agentId ? `the lane of session ${o.sessionId}, agent ${o.agentId}` : `the lane of session ${o.sessionId}`
   return [
-    sendBackReason(f.role, f.run, f.key ?? ''),
+    sendBackReason(f.role, f.run, f.key ?? '', o.capRefused ?? null),
     o.firstMessage ?? composeFirstMessage(f, o.prompt, o.door ? { door: o.door } : {}),
     `treecontext: your trail is in the store: ${lane}, ${o.rows} ${o.rows === 1 ? 'row' : 'rows'} of your first run`
       + `${o.firstMomentId ? `, after your first moment, the row ${o.firstMomentId}` : ''}; fetch any of them whole by export. `
@@ -501,9 +523,12 @@ export function firstMomentMetadata(o: {
     ...(o.key ? { [KEY_META_KEY]: o.key } : {}),
     ...(refs.length > 0 ? { refs } : {}),
     checkpoint_size: size,
+    // D321: the first-moment row shows the next leg what an over-cap
+    // checkpoint cost; each checkpoint's own mark is in `first_moment`.
+    ...(f && f.checkpoints.some((c) => c.overCap) ? { checkpoint_over_cap: true } : {}),
     [FIRST_MOMENT_META_KEY]: {
       brief_ids: f ? f.briefs.map((b) => b.nodeId) : (o.ambiguousBriefs ?? []),
-      checkpoints: f ? f.checkpoints.map((c) => ({ node_id: c.nodeId, number: c.number, writer: c.writer, moment: c.createdAt, size: c.size })) : [],
+      checkpoints: f ? f.checkpoints.map((c) => ({ node_id: c.nodeId, number: c.number, writer: c.writer, moment: c.createdAt, size: c.size, ...(c.overCap ? { over_cap: c.overCap } : {}) })) : [],
       in_effect: f?.inEffect ?? null,
       flags: f ? f.flags.map((x) => x.sentence) : [],
       recovers: f?.predecessor

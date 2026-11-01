@@ -9,6 +9,7 @@ export type { FlatStoreOptions } from './flat-store.js'
 // Core
 export type {
   InsertResult,
+  CheckpointRefusal,
   QueryResult,
   TreeStatus,
   QueryOptions,
@@ -37,7 +38,7 @@ export {
   RESTS_ON_KEY, CHECKPOINTER_KEY, CHECKPOINTED_BY_KEY, BRIEF_FOR_KEY, OPENED_BY_KEY, OPENED_VIA_KEY, PARENT_RUN_KEY,
   PARENT_LEG_KEY, CLOSED_BY_KEY, REASON_KEY, DOOR_KEY, IDENTITY_KEY, CWD_KEY, PARENT_KEY, PARENT_SRC_KEY,
   RUN_ROWS_SQL, checkpointsUnder, checkpointsInEffect, inEffectAmong, nextCheckpointNumber, inEffectLine, briefsInEffect,
-  briefsOfKey, runOpenOf, runClosesOf, HANDOFF_CLAIMS_KEY,
+  briefsOfKey, runOpenOf, runClosesOf, HANDOFF_CLAIMS_KEY, CHECKPOINT_CAP_CHARS, OVER_CAP_KEY, checkpointCapRefusal,
 } from './runs.js'
 export type { CheckpointRecord, BriefRecord, RunReadHandle } from './runs.js'
 // The key lookup, the harness's and the agent's one reply (D289, D296,
@@ -51,11 +52,11 @@ export {
   WORKER_AGENT_ID, NOTICED_BY_LOOKUP, NOTICED_BY_STATUS, NOTICED_BY_SESSION_START, NOTICED_BY_TICKET_DOOR,
   hasLegColumns, isLiveLeg, legWriterOf, legOf, legsOfRun, workersOfParent, workerOfSession,
   registerSubagentLeg, registerWorkerLeg, recordWorkerProcess, retireLeg, recordSendBack, settleLegKey,
-  recordOpenedRun, mintWorkerSessionId, retirePhantoms, legReturnStamp,
+  recordOpenedRun, mintWorkerSessionId, retirePhantoms, legReturnStamp, capRefusalsOf, recordCapRefusal, legOwnsKey, capRefusalOf,
 } from './persistence/leg-registry.js'
 export type {
   LegKind, LegDoor, LegIdentity, KeySource, LegEnding, LegRef, DeclaredParent, WorkerProcess, KeyCandidate,
-  LegRegistration, LegFacts, WorkerTicket, WorkerStart, PhantomCheck, PhantomPass,
+  LegRegistration, LegFacts, WorkerTicket, WorkerStart, PhantomCheck, PhantomPass, CapRefusal,
 } from './persistence/leg-registry.js'
 export { hostProbe, START_TOLERANCE_SECS } from './persistence/process-probe.js'
 // The ticket door (D288, D291, D298, D303, D307, D335, D340, D341): the

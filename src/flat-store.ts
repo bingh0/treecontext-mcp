@@ -16,6 +16,7 @@ import type {
   ConversationWindow,
   InsertOptions,
   InsertResult,
+  CheckpointRefusal,
   JournalVitals,
   MediaFilter,
   MediaRef,
@@ -49,16 +50,18 @@ import { resolveWriter, selfOf, selfWriterOf, agentWriterOf, stampMetadata, legT
 import {
   legOf, legsOfRun, workersOfParent, registerSubagentLeg, registerWorkerLeg, recordWorkerProcess, recordOpenedRun, recordSendBack,
   retireLeg, retirePhantoms, settleLegKey, legWriterOf, hasLegColumns, mintWorkerSessionId, legReturnStamp, isLiveLeg, WORKER_AGENT_ID,
-  NOTICED_BY_TICKET_DOOR,
-  type LegRef, type LegFacts, type LegDoor, type LegIdentity, type LegRegistration, type LegEnding, type WorkerStart,
+  NOTICED_BY_TICKET_DOOR, capRefusalsOf, recordCapRefusal, setCapRefusals, confirmedCapRefusal, isConfirmedRefusal,
+  type LegRef, type CapCandidate, type LegFacts, type LegDoor, type LegIdentity, type LegRegistration, type LegEnding, type WorkerStart,
   type WorkerProcess, type PhantomPass,
 } from './persistence/leg-registry.js'
+import { resolveStagedCapRefusals } from './persistence/cap-refusals.js'
 import type { ProcessProbe } from './persistence/process-probe.js'
 import {
   CHECKPOINT_KIND, BRIEF_KIND, RUN_OPEN_KIND, RUN_CLOSE_KIND, runRowKindOf, nextCheckpointNumber, checkpointsInEffect, checkpointsUnder, briefsInEffect,
   runOpenOf, storeSupersedesFor, CHECKPOINT_NUMBER_KEY, SUPERSEDES_KEY, SUPERSEDES_SRC_KEY, SUPERSEDES_BY_WRITER, SUPERSEDES_BY_STORE,
   SUPERSEDES_PENDING, RESTS_ON_KEY, CHECKPOINTER_KEY, CHECKPOINTED_BY_KEY, BRIEF_FOR_KEY, OPENED_BY_KEY, OPENED_VIA_KEY,
   PARENT_RUN_KEY, PARENT_LEG_KEY, CLOSED_BY_KEY, REASON_KEY, BY_SRC_KEY, BY_PENDING, runOpenLine, runCloseLine, DOOR_KEY, IDENTITY_KEY, CWD_KEY, PARENT_KEY, PARENT_SRC_KEY,
+  CHECKPOINT_CAP_CHARS, OVER_CAP_KEY, charactersOf, checkpointCapRefusal,
   type CheckpointRecord, type BriefRecord,
 } from './runs.js'
 import { lookupKey, keyLookupReply, type KeyLookup, type KeyLookupReply } from './key-lookup.js'
@@ -615,6 +618,75 @@ export class FlatStore implements MemoryStore {
       ...(where.worktree ? { _worktree: where.worktree } : {}),
       ...(where.branch ? { _branch: where.branch } : {}),
     }
+  }
+
+  /**
+   * The checkpoint cap's verdict for a write past it (D299, D321, D359).
+   * The cap refuses a writer the store identifies exactly (a leg, a worker,
+   * the session's self when no subagent is live) the first time it writes
+   * past the cap under a run's key, recording the refusal on that writer's
+   * registration, and accepts and marks its second. A writer with no
+   * registration is never refused. Under a stamp that is not exact
+   * (provisional, concurrent, ambiguous: the insert cannot say which of the
+   * session's agents called) the session's staged echoes are read first,
+   * which settle earlier pending refusals; the write is then accepted only
+   * when every writer it might be has been refused once, else it is refused
+   * and recorded pending on the registration the stamp names, with the
+   * candidates, for the call's echo to move to its writer.
+   */
+  private capVerdict(meta: Record<string, unknown>, run: string, key: string, size: number, at: number):
+    { refusal: CheckpointRefusal } | { overCap: { size: number; cap: number; second: boolean }; exact: boolean } {
+    const session = sessionOf(meta)
+    const stamp = meta['_writer_src']
+    const accept = (second: boolean, exact: boolean) => ({ overCap: { size, cap: CHECKPOINT_CAP_CHARS, second }, exact })
+    if (session === NO_SESSION || typeof stamp !== 'string' || stamp === 'unregistered' || !hasLegColumns(this.db)) return accept(false, true)
+    resolveStagedCapRefusals(this.db, session)
+    const id = randomUUID().replace(/-/g, '')
+    const refuse = (pending?: CapCandidate[]): { refusal: CheckpointRefusal } => ({
+      refusal: {
+        run, key, size, cap: CHECKPOINT_CAP_CHARS, id,
+        ...checkpointCapRefusal({ run, key, size, ...(pending ? { pending } : {}) }),
+        ...(pending ? { pending: { candidates: pending } } : {}),
+      },
+    })
+    const agentOf = (m: Record<string, unknown>): string => (typeof m['_writer_agent_id'] === 'string' ? m['_writer_agent_id'] : '')
+    if (stamp !== 'provisional' && stamp !== 'concurrent' && stamp !== 'ambiguous') {
+      const ref = { sessionId: session, agentId: agentOf(meta) }
+      const have = capRefusalsOf(this.db, ref)
+      if (have === null) return accept(false, true)
+      if (confirmedCapRefusal(have, run, key)) return accept(true, true)
+      recordCapRefusal(this.db, ref, { run, key, size, at, id, src: 'exact' })
+      return refuse()
+    }
+    // The writers the stamp leaves open, and the registration it names.
+    const listed = Array.isArray(meta['_writer_candidates'])
+      ? (meta['_writer_candidates'] as Array<Record<string, unknown>>).map((c) => ({ agent_id: String(c['agent_id']), agent_type: typeof c['agent_type'] === 'string' ? c['agent_type'] : null }))
+      : []
+    let candidates: CapCandidate[] = listed
+    if (stamp === 'provisional') {
+      const agent = agentOf(meta)
+      const row = this.db.prepare('SELECT agent_type FROM session_registry WHERE session_id = ? AND agent_id = ?').get(session, agent) as { agent_type: string | null } | undefined
+      candidates = [{ agent_id: agent, agent_type: row?.agent_type ?? null }]
+    } else if (stamp === 'concurrent') {
+      candidates = [...listed, { agent_id: '', agent_type: null }]
+    }
+    const settled = candidates.every((c) => {
+      const have = capRefusalsOf(this.db, { sessionId: session, agentId: c.agent_id })
+      return have === null || confirmedCapRefusal(have, run, key) !== null
+    })
+    if (settled && candidates.length > 0) return accept(true, false)
+    const holder = stamp === 'provisional' ? { sessionId: session, agentId: candidates[0]!.agent_id }
+      : { sessionId: session, agentId: capRefusalsOf(this.db, { sessionId: session, agentId: '' }) !== null ? '' : (candidates[0]?.agent_id ?? '') }
+    const held = capRefusalsOf(this.db, holder)?.find((e) => e.run === run && e.key === key && !isConfirmedRefusal(e))
+    const pendingId = held?.id ?? id
+    if (held) {
+      setCapRefusals(this.db, holder, (capRefusalsOf(this.db, holder) ?? []).map((e) => (e === held || (e.id === held.id) ? { ...e, size, at, candidates } : e)))
+    } else {
+      recordCapRefusal(this.db, holder, { run, key, size, at, id: pendingId, src: 'pending', candidates })
+    }
+    const out = refuse(candidates)
+    out.refusal.id = pendingId
+    return out
   }
 
   /** The leg a row is written by, from its stamp: the registration of the
@@ -1300,6 +1372,8 @@ export class FlatStore implements MemoryStore {
       const m: Record<string, unknown> = { ...meta }
       delete m[CHECKPOINT_NUMBER_KEY]
       delete m[SUPERSEDES_SRC_KEY]
+      // D321: the over-cap mark is the store's, set below at the write.
+      delete m[OVER_CAP_KEY]
       if (runKind === CHECKPOINT_KIND || runKind === BRIEF_KIND) {
         const named = [...new Set([...(opts?.supersedes ?? []), ...idsIn(m[SUPERSEDES_KEY])])]
         delete m[SUPERSEDES_KEY]
@@ -1387,6 +1461,21 @@ export class FlatStore implements MemoryStore {
       if (runKind === CHECKPOINT_KIND && meta) {
         const run = String(meta['run'])
         const key = String(meta['key'])
+        // D299, D321: a checkpoint past the cap is refused on its writer's
+        // first write under the key, nothing landing, the refusal recorded
+        // on the writer's registration; the second is accepted and marked.
+        // Inside this transaction, so the record and the verdict are one.
+        const size = charactersOf(content)
+        let overCap: { size: number; cap: number; second: boolean } | null = null
+        let writerExact = true
+        if (size > CHECKPOINT_CAP_CHARS) {
+          const verdict = this.capVerdict(meta, run, key, size, createdAt)
+          if ('refusal' in verdict) {
+            return { nodeId: '', path: [], depth: 0, deduplicated: false, driftDetected: false, staleNodes: [], refused: verdict.refusal }
+          }
+          overCap = verdict.overCap
+          writerExact = verdict.exact
+        }
         if (meta[SUPERSEDES_SRC_KEY] === undefined) {
           // D331, read with its sib clause: a checkpoint that names
           // nothing supersedes the leg's own newest checkpoint under the
@@ -1405,8 +1494,11 @@ export class FlatStore implements MemoryStore {
           }
         }
         const number = nextCheckpointNumber(this.db, this.treeId, run, key)
-        meta = { ...meta, [CHECKPOINT_NUMBER_KEY]: number }
-        checkpoint = { run, key, number, supersedes: runSupersedes ?? [], supersedesSrc: (meta[SUPERSEDES_SRC_KEY] as string | undefined) ?? null }
+        meta = { ...meta, [CHECKPOINT_NUMBER_KEY]: number, ...(overCap ? { [OVER_CAP_KEY]: overCap } : {}) }
+        checkpoint = {
+          run, key, number, supersedes: runSupersedes ?? [], supersedesSrc: (meta[SUPERSEDES_SRC_KEY] as string | undefined) ?? null,
+          ...(overCap ? { overCap, writerExact } : {}),
+        }
       }
       const runOut: Partial<InsertResult> = {
         ...(checkpoint ? { checkpoint } : {}),
@@ -1505,7 +1597,7 @@ export class FlatStore implements MemoryStore {
     // The amortized sweep stays OUTSIDE the insert transaction: it runs
     // its own transactions, writes archive files, and may VACUUM — none
     // of which can nest. Dedup hits don't advance the counter (unchanged).
-    if (!result.deduplicated) {
+    if (!result.deduplicated && !result.refused) {
       this.insertsSinceSweep++
       if (this.insertsSinceSweep >= this.retentionInterval) this.retentionSweep()
     }

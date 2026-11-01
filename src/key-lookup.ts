@@ -407,6 +407,11 @@ export interface KeyLookupReply {
     writer_src: string | null
     moment: number
     size: number
+    /** D321: accepted past the cap on its writer's second write, marked by
+     *  the store; null for a checkpoint within the cap. */
+    over_cap: { size: number; cap: number; second: boolean } | null
+    /** D359: what an imported checkpoint's file claims of the mark; a claim, never the mark. */
+    claimed_over_cap: { size: number; cap: number; second: boolean } | null
     content: string
     supersedes: string[]
     supersedes_src: string | null
@@ -466,7 +471,7 @@ export function keyLookupReply(l: KeyLookup): KeyLookupReply {
     key: l.key,
     line: l.line,
     checkpoints: l.checkpoints.map((c) => ({
-      node_id: c.nodeId, number: c.number, writer: c.writer, writer_src: c.writerSrc, moment: c.createdAt, size: c.size,
+      node_id: c.nodeId, number: c.number, writer: c.writer, writer_src: c.writerSrc, moment: c.createdAt, size: c.size, over_cap: c.overCap, claimed_over_cap: c.claimedOverCap,
       content: c.content, supersedes: c.supersedes, supersedes_src: c.supersedesSrc, rests_on: c.restsOn,
       imported: c.imported, imported_from: c.importedFrom, claimed_supersedes: c.claimedSupersedes,
       flag: c.flag,

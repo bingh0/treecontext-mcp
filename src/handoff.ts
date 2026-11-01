@@ -62,6 +62,9 @@ export const HANDOFF_CLAIM_KEYS: readonly string[] = [
   '_merge_label', '_merged_from_node_id', '_merge_source_store',
   'supersedes', 'superseded_by', 'superseded_at',
   'next_session', 'status',
+  // The over-cap mark is the store's own (D321, D359): a file's copy is a
+  // claim about the sender's store, shown as one.
+  '_over_cap',
 ]
 
 /** Key prefixes whose every key is a claim (see HANDOFF_CLAIM_KEYS). */

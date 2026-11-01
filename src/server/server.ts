@@ -39,7 +39,7 @@ import { selfWriterOf, stampMetadata, WRITER_STAMP_KEYS, type WriterStamp } from
 import { NOTICED_BY_STATUS } from '../persistence/leg-registry.js'
 import {
   DOOR_KEY, IDENTITY_KEY, RUN_OPEN_KIND, RUN_CLOSE_KIND, OPENED_BY_KEY, OPENED_VIA_KEY, CLOSED_BY_KEY, REASON_KEY,
-  PARENT_RUN_KEY, PARENT_LEG_KEY, BY_SRC_KEY, BY_PENDING, BY_CALLER, runRowKindOf,
+  PARENT_RUN_KEY, PARENT_LEG_KEY, BY_SRC_KEY, BY_PENDING, BY_CALLER, runRowKindOf, CHECKPOINT_KIND,
 } from '../runs.js'
 import { KEY_LOOKUP_PARAM } from '../key-lookup.js'
 import {
@@ -52,6 +52,10 @@ import { newerSchemaLine } from '../persistence/migrations.js'
 
 /** The insert-time writer stamps the registry could only read, not know
  *  (session-registry.ts resolveWriter); the call's echo makes them exact. */
+/** The insert tool's content bound, for every row but a checkpoint under a
+ *  run's key (D359). */
+const INSERT_CONTENT_MAX = 50_000
+
 const NON_EXACT_STAMPS: ReadonlySet<string> = new Set(['provisional', 'concurrent', 'ambiguous'])
 
 /** D265: how long a tool call trusts the last read of the store's schema
@@ -369,8 +373,10 @@ export function createServer(
     {
       description: 'Store an observation, decision, finding, or passage into working memory.',
       inputSchema: z.object({
-      content: z.string().min(1).max(50000).describe(
-        'The text to store. Be specific — vague entries produce poor summaries.',
+      content: z.string().min(1).describe(
+        'The text to store. Be specific — vague entries produce poor summaries. '
+        + 'Up to 50000 characters, except a checkpoint under a run\'s key, which '
+        + 'the checkpoint cap governs instead.',
       ),
       decay_exempt: z.boolean().default(false).describe(
         'When true, this node is protected from retention eviction and ' +
@@ -414,6 +420,15 @@ export function createServer(
     },
     async ({ content, decay_exempt, metadata, supersedes, media_ref }) => {
       const t0 = Date.now()
+      // D359: the content bound is every row's but a checkpoint under a run's
+      // key, which the checkpoint cap governs (a long state is refused once
+      // with the shape asked for, not turned away at the door).
+      if (content.length > INSERT_CONTENT_MAX && runRowKindOf(metadata ?? null) !== CHECKPOINT_KIND) {
+        return {
+          isError: true,
+          content: [{ type: 'text' as const, text: `Input validation error: Invalid arguments for tool treecontext_insert: content: Too big: expected string to have <=${INSERT_CONTENT_MAX} characters` }],
+        }
+      }
       try {
         await ensureReady()
         const opts: InsertOptions = {}
@@ -554,6 +569,37 @@ export function createServer(
         } else {
           result = await live.insert(content, opts)
         }
+        // D299, D321: a checkpoint past the cap on its writer's first write
+        // under the key is refused, nothing written: the tool's reply says
+        // so with the reason and the shape asked for, not an error.
+        if (result.refused) {
+          const r = result.refused
+          const reply: Record<string, unknown> = {
+            refused: true,
+            kind: 'checkpoint-over-cap',
+            run: r.run,
+            key: r.key,
+            size: r.size,
+            cap: r.cap,
+            reason: r.reason,
+            shape: r.shape,
+            refusal_id: r.id,
+          }
+          // D359: a refusal made while the writer could not be told exactly
+          // says so, and names the writers it might be; the call's echo
+          // moves it to the one that called.
+          if (r.pending) {
+            reply.writer_pending = true
+            reply.candidates = r.pending.candidates
+            reply.writer_note = `The store could not tell which writer made this call (${r.pending.candidates.map((c) => (c.agent_id === '' ? 'the session\'s own agent' : (c.agent_type ?? c.agent_id))).join(', ')}), `
+              + 'so the refusal is pending: the call\'s own echo names the writer when it is captured, and it is moved to that writer then.'
+          }
+          if (stamp.src !== 'unregistered' && !r.pending) {
+            reply.writer = stamp.writer ?? null
+            reply.writer_src = stamp.src
+          }
+          return { content: [{ type: 'text' as const, text: JSON.stringify(reply, null, 2) }] }
+        }
         const source = metadata?.source === 'auto-capture' ? 'auto-capture' : 'manual'
         stats.recordInsert(source, Date.now() - t0)
 
@@ -600,6 +646,18 @@ export function createServer(
             number: result.checkpoint.number,
             supersedes: result.checkpoint.supersedes,
             supersedes_src: result.checkpoint.supersedesSrc,
+            ...(result.checkpoint.overCap
+              ? {
+                  over_cap: result.checkpoint.overCap,
+                  over_cap_note: `This checkpoint is ${result.checkpoint.overCap.size} characters, past the ${result.checkpoint.overCap.cap}-character cap. `
+                    + (result.checkpoint.overCap.second
+                      ? (result.checkpoint.writerExact === false
+                        ? 'The store could not tell your writer exactly, and every writer it might be had been refused once under this key, so it was accepted '
+                        : 'It was accepted on this writer\'s second write ')
+                      : 'It was accepted without a refusal, because nothing registered this writer and the cap keeps no refusal for a writer it cannot name, ')
+                    + 'and marked as over the cap; it is the checkpoint in effect, and the next leg\'s first moment shows what it cost.',
+                }
+              : {}),
           }
         }
         // A dedup hit lands no row: the references it carried went nowhere,

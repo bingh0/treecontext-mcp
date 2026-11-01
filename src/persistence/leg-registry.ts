@@ -108,10 +108,12 @@ export const LEG_REGISTRY_COLUMNS: Array<[name: string, decl: string]> = [
   ['noticed_at', 'REAL'],
   ['noticed_by', 'TEXT'],
   ['opened_runs', 'TEXT'],
-  // D299, D321: the keys under which this leg's over-cap checkpoint was
-  // refused once (a JSON list), so its second over-cap write under the
-  // same key is accepted and marked. Written by the cap (unit 5 of the
-  // build); carried here so the cap needs no migration of its own.
+  // D299, D321: the run and key under which this writer's over-cap
+  // checkpoint was refused once, with the size refused and the moment (a
+  // JSON list of CapRefusal), so its second over-cap write under the same
+  // key is accepted and marked, and a send-back names the cap. Written by
+  // the checkpoint cap (FlatStore.insert) on the registration of the
+  // session and agent that wrote, the self's included.
   ['cap_refused', 'TEXT'],
   // D320, D326: what a write that settled the leg's key changed, so an
   // echo that names another writer can put it back (JSON {node_id, key,
@@ -208,8 +210,8 @@ export interface LegRegistration {
   /** What the write that settled the key changed (D320). */
   keySettledFrom: { node_id: string; key: string | null; key_src: KeySource | null; run?: string | null } | null
   /** The keys under which an over-cap checkpoint of this leg was refused
-   *  once (D299). */
-  capRefused: string[]
+   *  once (D299, D321), each with the run, the size refused and the moment. */
+  capRefused: CapRefusal[]
   /** D295: the client sessions linked to this worker (a `claude -p`
    *  child's own Claude Code session ids), each with what linked it and
    *  when: the mark that the ticket door was read by the hook. */
@@ -239,6 +241,35 @@ function json<T>(text: string | null, fallback: T): T {
   try { return JSON.parse(text) as T } catch { return fallback }
 }
 
+/** One refusal of the checkpoint cap on record (D299, D321): the run and
+ *  key it was refused under, the size refused in characters, and when. */
+export interface CapRefusal {
+  run: string; key: string; size: number; at: number
+  /** D359: the refusal's id, said in the reply and found again in the
+   *  call's own staged echo, which names the writer exactly. */
+  id?: string
+  /** `exact` (the store told the writer), `echo` (the call's echo named it
+   *  after), `pending` (the stamp was not exact: the registration it sits
+   *  on is a guess, `candidates` the writers it might be). Absent: exact. */
+  src?: 'exact' | 'echo' | 'pending'
+  candidates?: CapCandidate[]
+}
+
+/** A writer a non-exact stamp might name (the stamp's own candidate list;
+ *  agent id '' is the session's own agent). */
+export interface CapCandidate { agent_id: string; agent_type: string | null }
+
+/** Whether a refusal on record is the writer's own and certain. */
+export const isConfirmedRefusal = (e: CapRefusal): boolean => e.src !== 'pending'
+
+function capRefusalsIn(text: string | null): CapRefusal[] {
+  return json<unknown[]>(text, []).filter((e): e is CapRefusal => {
+    if (e === null || typeof e !== 'object') return false
+    const o = e as Record<string, unknown>
+    return typeof o['run'] === 'string' && typeof o['key'] === 'string' && typeof o['size'] === 'number' && typeof o['at'] === 'number'
+  })
+}
+
 function toLeg(r: RawLeg): LegRegistration {
   return {
     sessionId: r.session_id, agentId: r.agent_id, role: r.agent_type,
@@ -254,7 +285,7 @@ function toLeg(r: RawLeg): LegRegistration {
     host: r.host, pid: r.pid, procStart: r.proc_start, procStartToken: r.proc_start_token, processes: json<WorkerProcess[]>(r.processes, []),
     sendBacks: r.send_backs ?? 0, ended: r.ended as LegEnding | null, noticedAt: r.noticed_at, noticedBy: r.noticed_by,
     openedRuns: json<string[]>(r.opened_runs, []),
-    capRefused: json<string[]>(r.cap_refused, []),
+    capRefused: capRefusalsIn(r.cap_refused),
     keySettledFrom: json<LegRegistration['keySettledFrom']>(r.key_settled_from, null),
     clientSessions: json<Array<{ id: string; linked_by: string; at: number }>>(r.client_sessions ?? null, [])
       .map((c) => ({ id: c.id, linkedBy: c.linked_by, at: c.at })),
@@ -582,6 +613,57 @@ export function unsettleLegKey(db: RegistryHandle, ref: LegRef, byNodeId: string
   return true
 }
 
+/** The refusals of the checkpoint cap on record for a registration, the
+ *  session's self (agent id '') or a subagent or worker: null when nothing
+ *  is registered there (or the store has no leg columns), so the caller
+ *  keeps the record elsewhere. */
+export function capRefusalsOf(db: RegistryHandle, ref: LegRef): CapRefusal[] | null {
+  if (!hasLegColumns(db)) return null
+  const r = db.prepare('SELECT cap_refused FROM session_registry WHERE session_id = ? AND agent_id = ?').get(ref.sessionId, ref.agentId) as { cap_refused: string | null } | undefined
+  return r ? capRefusalsIn(r.cap_refused) : null
+}
+
+/** The refusal a registration holds for a run's key that is the writer's
+ *  own and certain (D299, D359), if any. A pending one is a guess. */
+export function confirmedCapRefusal(entries: readonly CapRefusal[], run: string, key: string): CapRefusal | null {
+  return entries.find((e) => e.run === run && e.key === key && isConfirmedRefusal(e)) ?? null
+}
+
+/** Replace a registration's refusals. False when nothing is registered. */
+export function setCapRefusals(db: RegistryHandle, ref: LegRef, entries: readonly CapRefusal[]): boolean {
+  if (capRefusalsOf(db, ref) === null) return false
+  db.prepare('UPDATE session_registry SET cap_refused = ? WHERE session_id = ? AND agent_id = ?')
+    .run(entries.length === 0 ? null : JSON.stringify(entries), ref.sessionId, ref.agentId)
+  return true
+}
+
+/** Record a refusal on a registration (D299, D359). A confirmed refusal of
+ *  the same run and key is kept once; a pending one is kept once per id.
+ *  False when nothing is registered there. */
+export function recordCapRefusal(db: RegistryHandle, ref: LegRef, refusal: CapRefusal): boolean {
+  const have = capRefusalsOf(db, ref)
+  if (have === null) return false
+  const same = (e: CapRefusal): boolean => (isConfirmedRefusal(refusal)
+    ? e.run === refusal.run && e.key === refusal.key && isConfirmedRefusal(e)
+    : refusal.id !== undefined && e.id === refusal.id)
+  if (have.some(same)) return true
+  return setCapRefusals(db, ref, [...have, refusal])
+}
+
+/** D326, D359: whether a leg's key is its own: it wrote under it, or the
+ *  call that the cap refused was named its own by the call's echo (which
+ *  settles the key through settleLegKey, as a written row does). The
+ *  registration's key source alone. */
+export function legOwnsKey(leg: Pick<LegRegistration, 'run' | 'key' | 'keySrc'>): boolean {
+  return leg.run !== null && leg.key !== null && (leg.keySrc === 'own' || leg.keySrc === 'declared')
+}
+
+/** The certain refusal of the cap on record under a leg's own run and key,
+ *  if any (a pending one names no one yet). */
+export function capRefusalOf(leg: Pick<LegRegistration, 'run' | 'key' | 'capRefused'>): CapRefusal | null {
+  return leg.run === null || leg.key === null ? null : confirmedCapRefusal(leg.capRefused, leg.run, leg.key)
+}
+
 /** D311: the leg opened a run of its own; its facts name it. */
 export function recordOpenedRun(db: RegistryHandle, ref: LegRef, run: string): boolean {
   const leg = legOf(db, ref)
@@ -607,7 +689,7 @@ export function recordOpenedRun(db: RegistryHandle, ref: LegRef, run: string): b
 export function legReturnStamp(db: RegistryHandle, ref: LegRef): Record<string, string> {
   const leg = legOf(db, ref)
   if (!leg || leg.kind === null || leg.run === null) return {}
-  const keyed = leg.key !== null && (leg.keySrc === 'own' || leg.keySrc === 'declared')
+  const keyed = legOwnsKey(leg)
   return { [RUN_META_KEY]: leg.run, ...(keyed ? { [KEY_META_KEY]: leg.key! } : {}) }
 }
 

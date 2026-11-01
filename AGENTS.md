@@ -219,6 +219,14 @@ node dist/server/cli.js doctor      # after a build
 - `_writer` and `_writer_src` (and the rest of `WRITER_STAMP_KEYS`) are
   stamped by the store, never trusted from a caller: the insert tool drops
   a caller's copy, as it drops caller `_handoff_*` keys
+- `_over_cap` (in `WRITER_STAMP_KEYS`, and a handoff claim on import) is the
+  store's mark `{size, cap, second}` on a checkpoint accepted past the
+  16000-character cap (D321); the cap counts code points with `charactersOf`.
+  A refusal lives in `session_registry.cap_refused`, on an exactly named
+  writer's registration; made under a non-exact writer stamp it is `pending`
+  with its candidates until the call's echo (carrying `refusal_id`) moves it
+  to its writer, in `cap-refusals.ts`. A writer with no registration is never
+  refused, and the store keeps no refusal ledger outside the registry (D359)
 - Imported rows live in `handoff:` lanes (`session_id` =
   `handoff:<claimed session>`); the file's identity claims sit under
   `_handoff_claims`, never at the top level

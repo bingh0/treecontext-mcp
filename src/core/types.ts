@@ -38,7 +38,28 @@ export interface InsertResult {
    *  gave it when it landed, what it supersedes, and who named that
    *  (`writer`, or `store` from the leg's registration, or `pending`
    *  until the call's echo names the leg). */
-  checkpoint?: { run: string; key: string; number: number; supersedes: string[]; supersedesSrc: string | null }
+  checkpoint?: { run: string; key: string; number: number; supersedes: string[]; supersedesSrc: string | null; overCap?: { size: number; cap: number; second: boolean }
+    /** D359: whether the writer was told exactly when an over-cap checkpoint was accepted. */
+    writerExact?: boolean }
+  /** A checkpoint refused at the cap (D299, D321): nothing was written, the
+   *  `nodeId` is empty, and the reason and the shape asked for are said. */
+  refused?: CheckpointRefusal
+}
+
+/** A checkpoint past the cap on its writer's first write under the key. */
+export interface CheckpointRefusal {
+  run: string
+  key: string
+  /** In characters, code points. */
+  size: number
+  cap: number
+  reason: string
+  shape: string
+  /** The refusal's id, which the call's echo carries back (D359). */
+  id: string
+  /** D359: the writer could not be told when this was refused, so the
+   *  refusal is pending, with the writers it might be. */
+  pending?: { candidates: Array<{ agent_id: string; agent_type: string | null }> }
 }
 
 export interface AncestorEntry {

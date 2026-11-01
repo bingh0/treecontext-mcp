@@ -103,6 +103,9 @@ export const WRITER_STAMP_KEYS = ['_writer', '_writer_src', '_writer_agent_id', 
   // declared or linked. And a run's numbering and supersession marks
   // (D329, D331): the store's, never a caller's.
   '_cwd', '_door', '_identity', '_parent', '_parent_src', '_checkpoint_number', '_supersedes_src',
+  // The mark on a checkpoint accepted past the cap on its second write
+  // (D321, runs.ts OVER_CAP_KEY): the store's, never a caller's.
+  '_over_cap',
   // Whether a run open's or close's `by` waits for the echo (runs.ts
   // BY_SRC_KEY): the store's, never a caller's.
   '_by_src'] as const

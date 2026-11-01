@@ -17,6 +17,7 @@ import { attributeColumn, columnForIndex, columnIndex, ftsColumnValues, FTS_COLU
 import { runMigrations, currentSchemaVersion, ensureBaseSchema, type MigrationOptions } from './migrations.js'
 import { ECHO_HEAL_WINDOW_SECS } from './capture-constants.js'
 import { healWriterFromEcho as healWriter, type WriterHealResult } from './writer-heal.js'
+import { resolveCapRefusal, type CapMove } from './cap-refusals.js'
 import { legReturnStamp, type LegRef } from './leg-registry.js'
 import { dbg } from '../debug.js'
 import { CURATED_INDEX_WHERE } from './curated-index.js'
@@ -450,6 +451,13 @@ export class Persistence {
    * echo-attributed keeps its primary id forever; further in-window
    * echoes from other sessions only accrue disclosed candidates.
    */
+  /** The echo heal of a checkpoint-cap refusal (cap-refusals.ts, D359): the
+   *  refused call's own echo names its caller, and the pending refusal
+   *  moves to that writer. */
+  healCapRefusalFromEcho(opts: { echoSessionId: string; refusalId: string; agentId: string | null }): CapMove {
+    return this.db.transaction(() => resolveCapRefusal(this.db, { sessionId: opts.echoSessionId, refusalId: opts.refusalId, agentId: opts.agentId }))
+  }
+
   /** The echo heal of a writer (writer-heal.ts): the insert's own
    *  PostToolUse echo names the caller, and the row's writer follows it. */
   healWriterFromEcho(opts: {

@@ -323,7 +323,10 @@ describe("a `claude -p` child's link to its worker lane (D295)", () => {
   it("at the child's own session-start hook: the door's line as the row's text, the first message fitted to the cap and the cut on the row", async () => {
     const s = await open()
     await s.writeBrief('b'.repeat(500), { run: 'r1', key: 'k', role: 'builder', by: 'harness' })
-    await s.writeCheckpoint('x'.repeat(30000), { run: 'r1', key: 'k', declared: { role: 'builder' } })
+    // Past the checkpoint cap (D299) a writer no hook registered is never
+    // refused (D359): the checkpoint lands at once, marked.
+    const written = await s.writeCheckpoint('x'.repeat(30000), { run: 'r1', key: 'k', declared: { role: 'builder' } })
+    expect(written.refused).toBeUndefined()
     const reading = readTicket(mintTicket({ run: 'r1', key: 'k', role: 'builder', parent: { id: 'p1' } }))
     const started = s.startWorker({ reading, prompt: null, sessionId: 'cc-10', host: hostname(), hookDoor: { allNamespaces: false } })
     expect(started.firstMessage.length).toBeLessThanOrEqual(HOOK_CONTEXT_CAP)
