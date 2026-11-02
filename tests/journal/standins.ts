@@ -35,6 +35,9 @@
  *  |                                        | the scenario says the harness does it                       |
  *  | `writeFakeClaude`                      | the `claude` on PATH whose `--version` install and doctor   |
  *  |                                        | read (journal-install, D290, D304, D338)                    |
+ *  | `preCompact`                           | Claude Code compacting a session's context: it fires the    |
+ *  |                                        | real PreCompact hook, then SessionStart with source         |
+ *  |                                        | `compact` under the same session, in that order (D375)      |
  *
  * ── What a stand-in may do ────────────────────────────────────────────
  *
@@ -45,8 +48,9 @@
  * call echoed by PostToolUse, as Claude Code runs them); fire the hooks
  * with the payloads Claude Code sends, in the order it sends them
  * (SessionStart, UserPromptSubmit, PostToolUse per tool call, Stop, and
- * Stop again with `stop_hook_active` after a block); print its last output
- * and exit as told (a code, or hanging until a signal).
+ * Stop again with `stop_hook_active` after a block; at a compaction,
+ * PreCompact and then SessionStart with source `compact`); print its last
+ * output and exit as told (a code, or hanging until a signal).
  *
  * ── What a stand-in must never do ─────────────────────────────────────
  *
@@ -58,7 +62,9 @@
  * already ended uses the named library-door helpers above, so the stand-in
  * is visible at the call. The helpers carry names and confinement, not
  * rules: each is a thin call of the library door it names, and nothing
- * here checks that a Given's history is one a door could have made.
+ * here checks that a Given's history is one a door could have made. A
+ * compaction's stand-in writes no snapshot and claims none: the PreCompact
+ * hook writes it, a fresh start's SessionStart claims it.
  *
  * The guard in tests/feature-guards.test.ts ("no binding stands in for a
  * door outside the stand-in harness") fails on any mention, outside
@@ -105,6 +111,7 @@ import type { FlatStore } from '../../src/flat-store.js'
 import { sandboxedSpawnEnv, nodeTsArgs, CLI_TS } from '../helpers/cli-spawn.js'
 import { TS_ROOT } from './proc.js'
 import { type RunWorld, briefFor, subagentStartHook, liveProcess } from './run-world.js'
+import { type CaptureWorld, runHook, hookJson } from './capture-harness.js'
 
 /** The registry and door acts a binding may make only through this
  *  module: each is a door's own act (a registration, a retirement, a
@@ -161,6 +168,25 @@ export function hooksSubagent(w: RunWorld, name: string, role: string, env: Reco
   const ref = { sessionId: w.sessionId!, agentId }
   w.legs![name] = ref
   return ref
+}
+
+// ── Claude Code compacting a session (the snapshot's lane, D375) ───────
+
+/**
+ * Claude Code compacting the context of the world's session, running in
+ * `cwd`: the real PreCompact hook with the platform's payload (the hook
+ * writes the session's recovery snapshot), then the real SessionStart hook
+ * with source `compact` under the same session id, as Claude Code resumes
+ * the session on the compacted context. Returns what that SessionStart
+ * handed the agent. Nothing here writes a snapshot or claims one: the
+ * hooks do, and a later fresh start's own SessionStart claims.
+ */
+export function preCompact(w: CaptureWorld, cwd: string, trigger: 'auto' | 'manual' = 'auto'): string {
+  const transcript = join(cwd, 'transcript.jsonl')
+  runHook(w, 'pre-compact', { hook_event_name: 'PreCompact', transcript_path: transcript, cwd, trigger, custom_instructions: '' })
+  const run = runHook(w, 'session-start', { hook_event_name: 'SessionStart', transcript_path: transcript, cwd, source: 'compact' })
+  const out = hookJson(run.stdout)
+  return String((out?.['hookSpecificOutput'] as Record<string, unknown> | undefined)?.['additionalContext'] ?? '')
 }
 
 // ── A spawner's library door (no worker process) ───────────────────────

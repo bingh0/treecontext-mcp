@@ -7,6 +7,7 @@ import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
 import { Persistence } from '../../src/persistence/store.js'
 import { runMigrations } from '../../src/persistence/migrations.js'
 import { claimSnapshot, writeSnapshot } from '../../src/hooks/shared.js'
+import { registerSelf } from '../../src/persistence/session-registry.js'
 
 // G3 (store-as-arbiter §2 + amendment 7): the drain claims its batch in
 // one atomic UPDATE … RETURNING — two drains get disjoint batches by
@@ -152,6 +153,13 @@ describe('snapshot claims (G3)', () => {
 
   it('two sessions racing for one snapshot: exactly one wins, the other gets null', () => {
     const path = join(dir, 'store.db')
+    // Three sessions of the main checkout (D375: a claim is from its own lane).
+    const reg = new DatabaseSync(path)
+    try {
+      for (const s of ['writer', 'reader-a', 'reader-b']) {
+        registerSelf(reg, s, { worktree: null, branch: 'main', cwd: dir, toplevel: null, commonDir: null }, Date.now() / 1000)
+      }
+    } finally { reg.close() }
     writeSnapshot(path, 'writer', ['what was I doing'])
 
     const a = new DatabaseSync(path)

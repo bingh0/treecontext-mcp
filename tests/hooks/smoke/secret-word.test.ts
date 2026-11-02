@@ -6,6 +6,8 @@ import os from 'os'
 import * as shared from '../../../src/hooks/shared.js'
 import { main as preCompactMain } from '../../../src/hooks/pre-compact.js'
 import { main as sessionStartMain } from '../../../src/hooks/session-start.js'
+import { openNodeSqlite } from '../../../src/persistence/node-sqlite.js'
+import { runMigrations } from '../../../src/persistence/migrations.js'
 
 describe('Secret word smoke test (round-trip)', () => {
   let tempDbPath: string
@@ -16,29 +18,10 @@ describe('Secret word smoke test (round-trip)', () => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'smoke-test-'))
     tempDbPath = path.join(tempDir, 'treecontext.db')
 
-    const db = new DatabaseSync(tempDbPath)
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS staging (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        session_id TEXT,
-        role TEXT,
-        content TEXT,
-        tool_name TEXT,
-        timestamp REAL,
-        priority INTEGER DEFAULT 3,
-        processed INTEGER DEFAULT 0,
-        created_at REAL
-      );
-      CREATE TABLE IF NOT EXISTS snapshots (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        session_id TEXT NOT NULL,
-        queries TEXT NOT NULL,
-        claimed_by TEXT,
-        claimed_at REAL,
-        created_at REAL NOT NULL DEFAULT (unixepoch('subsec'))
-      );
-      CREATE INDEX IF NOT EXISTS idx_snapshots_unclaimed ON snapshots(claimed_by) WHERE claimed_by IS NULL;
-    `)
+    // The store's schema as the server creates it (the session registry
+    // included: the snapshot claim reads each session's lane from it, D375).
+    const db = openNodeSqlite(new DatabaseSync(tempDbPath))
+    runMigrations(db, { migrate: true })
     db.close()
 
     vi.spyOn(shared, 'resolveDbPath').mockReturnValue(tempDbPath)
@@ -65,6 +48,15 @@ describe('Secret word smoke test (round-trip)', () => {
        VALUES (?, 'user', ?, ?, 1, 0, ?)`
     ).run('sess-origin', 'The secret word is bamboozle', Date.now() / 1000, Date.now() / 1000)
     db.close()
+
+    // Step 0: the original session started in this checkout, which
+    // registers its self (D375: a snapshot is claimed only from the
+    // claimant's own lane, read from the registry).
+    vi.spyOn(shared, 'parseHookInput').mockReturnValue({
+      session_id: 'sess-origin', cwd: '/tmp', source: 'startup',
+    })
+    sessionStartMain()
+    stdoutSpy.mockClear()
 
     // Step 1: PreCompact fires in the original session (silent — no stdout)
     vi.spyOn(shared, 'parseHookInput').mockReturnValue({
@@ -127,6 +119,12 @@ describe('Secret word smoke test (round-trip)', () => {
   }
 
   it('20 sequential pre-compact → session-start cycles do not leak snapshots', () => {
+    // The first session started in this checkout before it compacted
+    // (D375: the claim reads each session's lane from the registry).
+    vi.spyOn(shared, 'parseHookInput').mockReturnValue({
+      session_id: 'sess-0', cwd: '/tmp', source: 'startup',
+    })
+    sessionStartMain()
     for (let i = 0; i < 20; i++) {
       stdoutSpy.mockClear()
 

@@ -12,6 +12,7 @@ import { openNodeSqlite, setPragma } from '../../../src/persistence/node-sqlite.
 import { writeSessionBeacon } from '../../../src/session-beacon.js'
 import { SUBAGENT_SUMMARY_KIND, INTERNAL_SUMMARY_KIND, CLIENT_WRITER } from '../../../src/handoff.js'
 import { decodeContent } from '../../../src/persistence/content-codec.js'
+import { RECOVERY_SNAPSHOT_SOURCE, RECOVERY_QUERIES_KEY, recoverySnapshotBoundaries } from '../../../src/persistence/recovery-snapshot.js'
 import { mcpOver, parseTool, rawAll } from '../world.js'
 import { writeAgentTranscript } from '../capture-harness.js'
 import { TS_ROOT, tsxArgv } from '../proc.js'
@@ -25,7 +26,7 @@ import {
   openWorld, now, toolEntry, mcpNote, clear, statusPanel,
 } from './journal-reorientation.steps.js'
 import { type RunWorld } from '../run-world.js'
-import { runWorker } from '../standins.js'
+import { runWorker, preCompact } from '../standins.js'
 
 // ── journal-orchestration ───────────────────────────────────────────────
 //
@@ -340,6 +341,8 @@ async function newSession(w: OrchestrationWorld): Promise<void> {
 }
 
 export const orchestrationDefiner = (reg: Registry<OrchestrationWorld>): void => {
+  // D375: the recovery snapshot's lane (its own section, below).
+  snapshotLaneSteps(reg)
   // ── D186: one hop deep, the rest on request ──
   reg.define(/^an entry A, an entry B that names A, and an entry C that names B$/, async (w) => {
     await openWorld(w)
@@ -1876,4 +1879,197 @@ function expectNoneOf(text: string, entries: Array<{ id: string; text: string }>
     expect(text).not.toContain(e.text)
     expect(text).not.toContain(e.text.slice(0, 20))
   }
+}
+
+// ── D375: the recovery snapshot's lane ──────────────────────────────────
+//
+// Each compaction is Claude Code's, through the `preCompact` stand-in (the
+// real PreCompact hook, then SessionStart `compact`); each fresh start is
+// the real SessionStart hook, which claims; the recovery row is the
+// production drain's. Every Then reads the packet the hook emitted, the
+// snapshots table, and the drain's row, directly in SQLite.
+
+interface SnapshotLane {
+  /** The snapshot id each compacting session left, by its lane. */
+  snapshot: Record<string, number>
+  /** The session that compacted, by its lane. */
+  compacted: Record<string, string>
+  /** The developer turns each lane holds, by its lane. */
+  turns: Record<string, string[]>
+  /** The recovery rows the drain wrote, by the lane that claimed. */
+  recovery: Record<string, string>
+}
+const snapshotLanes = new WeakMap<OrchestrationWorld, SnapshotLane>()
+
+/** The recovery queries the PreCompact hook records (src/hooks/pre-compact.ts). */
+const RECOVERY_QUERY_WORDS = ['current active plan and next steps', 'recent decisions and their rationale', 'what was I working on in the current task']
+
+/** A lane's own work: developer turns through the real UserPromptSubmit
+ *  hook, in the lane's directory under its session, each matching the
+ *  recovery queries and carrying the lane's own word; drained. */
+async function laneTurns(w: OrchestrationWorld, lane: string, cwd: string, word: string): Promise<string[]> {
+  const prompts = [
+    `what I was working on in the current task: the ${word} work, the current active plan and its next steps`,
+    `recent decisions and their rationale for the ${word} work, kept for after the compaction`,
+  ]
+  for (const prompt of prompts) {
+    runHook(w, 'user-prompt-submit', { hook_event_name: 'UserPromptSubmit', transcript_path: join(cwd, 'transcript.jsonl'), prompt, cwd })
+  }
+  await drainStaging(w)
+  const ids = rawAll<{ node_id: string }>(w,
+    "SELECT node_id FROM nodes WHERE session_key = ? AND json_extract(metadata_json, '$.role') = 'user' ORDER BY created_at, node_id", w.sessionId!)
+    .map((r) => r.node_id)
+  expect(ids, `${lane}'s turns`).toHaveLength(prompts.length)
+  return ids
+}
+
+/** The one unclaimed snapshot a session's compaction left. */
+function snapshotOf(w: OrchestrationWorld, session: string): number {
+  const rows = rawAll<{ id: number; claimed_by: string | null }>(w, 'SELECT id, claimed_by FROM snapshots WHERE session_id = ?', session)
+  expect(rows, `the snapshot of ${session}`).toHaveLength(1)
+  expect(rows[0]!.claimed_by).toBeNull()
+  return rows[0]!.id
+}
+
+/** The sessions the registry places in a lane's checkout (their self). */
+function sessionsPlacedIn(w: OrchestrationWorld, lane: string): string[] {
+  const worktree = lane === 'main' ? null : lane.slice('worktree:'.length)
+  return rawAll<{ session_id: string }>(w, "SELECT session_id FROM session_registry WHERE agent_id = '' AND worktree IS ?", worktree).map((r) => r.session_id)
+}
+
+/** The packet's claim line for a snapshot, exactly as the hook writes it. */
+const claimLine = (id: number, session: string): string => `[Prior session snapshot #${id} from session ${session}]`
+/** Every claim line a packet carries, whatever snapshot it names. */
+const claimLinesOf = (packet: string): string[] => packet.split('\n').filter((l) => /^\[Prior session snapshot #\d+ from session \S+\]$/.test(l))
+
+/**
+ * The recovery row the production drain wrote for the session that claimed
+ * `lane`'s snapshot, read directly in SQLite and checked as the drain must
+ * write it: in the claiming session (its `session_id`, so its
+ * `session_key`), placed by the registry in `lane`, bounded (D286), quoting
+ * at least one entry and only entries of `lane`'s sessions, never a
+ * recovery row, never a turn of `other`.
+ */
+function recoveryRowFor(w: OrchestrationWorld, lane: string, claimant: string, other: string): string {
+  const s = snapshotLanes.get(w)!
+  const rows = rawAll<{ node_id: string; session_key: string | null; content: Buffer | string; metadata_json: string; preview_len: number | null; index_len: number | null }>(w,
+    `SELECT node_id, session_key, content, metadata_json, preview_len, index_len FROM nodes
+      WHERE json_extract(metadata_json, '$.source') = ? AND json_extract(metadata_json, '$.original_session_id') = ?`,
+    RECOVERY_SNAPSHOT_SOURCE, s.compacted[lane]!)
+  expect(rows, `the recovery row for ${lane}'s snapshot`).toHaveLength(1)
+  const row = rows[0]!
+  const meta = JSON.parse(row.metadata_json) as Record<string, unknown>
+  // In the claiming session: its own row, as every lane read places it.
+  expect(meta['session_id']).toBe(claimant)
+  expect(row.session_key).toBe(claimant)
+  expect(sessionsPlacedIn(w, lane)).toContain(claimant)
+  expect(w.store!.placedLaneOf(claimant)).toBe(lane)
+  // Bounded as D286 writes it: both boundaries, on the row and its metadata.
+  const content = decodeContent(row.content)
+  const bounds = recoverySnapshotBoundaries(content.length)
+  expect(meta).toMatchObject(bounds)
+  // The columns hold a boundary that cuts the content, none that covers it.
+  const cut = (n: number | undefined): number | null => (n !== undefined && n < content.length ? n : null)
+  expect([row.preview_len, row.index_len]).toEqual([cut(bounds['_preview_len']), cut(bounds['_index_len'])])
+  expect(meta[RECOVERY_QUERIES_KEY]).toEqual(RECOVERY_QUERY_WORDS)
+  // What it quotes: entries of the lane's own sessions only, at least one
+  // of the lane's turns, none of the other lane's, no recovery row.
+  const quoted = [...content.matchAll(/^## entry (\S+)$/gm)].map((m) => m[1]!)
+  expect(quoted.length, content).toBeGreaterThan(0)
+  expect(quoted.some((id) => s.turns[lane]!.includes(id)), content).toBe(true)
+  const placed = new Set(sessionsPlacedIn(w, lane))
+  for (const id of new Set(quoted)) {
+    const q = rawAll<{ session_key: string | null; m: string }>(w, 'SELECT session_key, metadata_json AS m FROM nodes WHERE node_id = ?', id)[0]
+    expect(q, `quoted ${id}`).toBeTruthy()
+    expect(placed.has(q!.session_key ?? ''), `quoted ${id} sits in ${q!.session_key}, not a session of ${lane}`).toBe(true)
+    expect((JSON.parse(q!.m) as Record<string, unknown>)['source']).not.toBe(RECOVERY_SNAPSHOT_SOURCE)
+  }
+  for (const id of s.turns[other]!) expect(content).not.toContain(id)
+  for (const id of Object.values(s.recovery)) expect(content).not.toContain(id)
+  s.recovery[lane] = row.node_id
+  return row.node_id
+}
+
+function snapshotLaneSteps(reg: Registry<OrchestrationWorld>): void {
+  reg.define(/^a session in the worktree "([^"]+)" that compacted, leaving a recovery snapshot unclaimed$/, async (w, name$) => {
+    const name = String(name$)
+    const lane = `worktree:${name}`
+    // The main checkout's session the world opens with: the one that
+    // compacts in the next Given.
+    await openGitWorld(w)
+    w.laneSessions = { main: w.sessionId! }
+    const path = addWorktree(w, name, `${name}-branch`)
+    w.sessionId = `cc-${randomBytes(6).toString('hex')}`
+    sessionStart(w, path)
+    w.laneSessions[lane] = w.sessionId
+    const turns = await laneTurns(w, lane, path, 'quillfeather')
+    preCompact(w, path)
+    snapshotLanes.set(w, {
+      snapshot: { [lane]: snapshotOf(w, w.sessionId) }, compacted: { [lane]: w.sessionId }, turns: { [lane]: turns }, recovery: {},
+    })
+  })
+  reg.define(/^a session in the main checkout that compacted earlier, leaving its own unclaimed$/, async (w) => {
+    const s = snapshotLanes.get(w)!
+    const worktreeLane = Object.keys(s.snapshot)[0]!
+    w.sessionId = w.laneSessions!['main']!
+    s.turns['main'] = await laneTurns(w, 'main', w.repo!, 'marmotdoc')
+    preCompact(w, w.repo!)
+    s.snapshot['main'] = snapshotOf(w, w.sessionId)
+    s.compacted['main'] = w.sessionId
+    // "Earlier": the compaction's moment set before the worktree's, so the
+    // worktree's is the store's newest unclaimed snapshot, the one a claim
+    // by any other session would take. Only the moment is set; the row is
+    // the PreCompact hook's.
+    const wt = rawAll<{ t: number }>(w, 'SELECT created_at AS t FROM snapshots WHERE id = ?', s.snapshot[worktreeLane])[0]!.t
+    const raw = new DatabaseSync(w.dbPath!)
+    try { raw.prepare('UPDATE snapshots SET created_at = ? WHERE id = ?').run(wt - 60, s.snapshot['main']!) } finally { raw.close() }
+    const newest = rawAll<{ id: number }>(w, 'SELECT id FROM snapshots WHERE claimed_by IS NULL ORDER BY created_at DESC, id DESC LIMIT 1')[0]!
+    expect(newest.id).toBe(s.snapshot[worktreeLane])
+    // The negatives below can fail: the recovery queries, asked of the
+    // whole store, find the worktree's turns as well as the main lane's.
+    for (const q of RECOVERY_QUERY_WORDS) {
+      const ids = (await w.store!.query(q, { topK: 6 })).map((r) => r.nodeId)
+      expect(ids.some((id) => s.turns[worktreeLane]!.includes(id)), `${q}: ${ids.join(', ')}`).toBe(true)
+    }
+  })
+  reg.define(/^a new session starts in the main checkout$/, (w) => {
+    w.startPackets = { main: startIn(w, 'main') }
+    w.laneSessions!['main:new'] = w.sessionId!
+  })
+  reg.define(/^its packet carries the main checkout's recovery snapshot and not the worktree's$/, (w) => {
+    const s = snapshotLanes.get(w)!
+    const worktreeLane = Object.keys(s.snapshot).find((k) => k !== 'main')!
+    const packet = w.startPackets!['main']!
+    // Every snapshot the packet names, by the hook's own line: main's alone.
+    expect(claimLinesOf(packet), packet).toEqual([claimLine(s.snapshot['main']!, s.compacted['main']!)])
+    expect(packet).not.toContain(s.compacted[worktreeLane]!)
+    // The claim is the store's: main's snapshot taken by the new session,
+    // the worktree's left as it was.
+    expect(rawAll(w, 'SELECT claimed_by FROM snapshots WHERE id = ?', s.snapshot['main'])).toEqual([{ claimed_by: w.laneSessions!['main:new'] }])
+    expect(rawAll(w, 'SELECT claimed_by FROM snapshots WHERE id = ?', s.snapshot[worktreeLane])).toEqual([{ claimed_by: null }])
+  })
+  reg.define(/^the recovery row the drain writes for it is the main lane's own and quotes the main lane only$/, async (w) => {
+    const s = snapshotLanes.get(w)!
+    const worktreeLane = Object.keys(s.snapshot).find((k) => k !== 'main')!
+    await drainStaging(w)
+    const id = recoveryRowFor(w, 'main', w.laneSessions!['main:new']!, worktreeLane)
+    // The lane read places it in main's search, and in no worktree's.
+    expect((await w.store!.query('marmotdoc', { topK: 20, lane: 'main' })).map((r) => r.nodeId)).toContain(id)
+    expect((await w.store!.query('marmotdoc', { topK: 20, lane: worktreeLane })).map((r) => r.nodeId)).not.toContain(id)
+  })
+  reg.define(/^a session then starting in the worktree "([^"]+)" is handed the worktree's snapshot, and the recovery row written for it is the worktree's own, never the main lane's$/, async (w, name$) => {
+    const s = snapshotLanes.get(w)!
+    const lane = `worktree:${String(name$)}`
+    const packet = startIn(w, lane)
+    const claimant = w.sessionId!
+    expect(claimLinesOf(packet), packet).toEqual([claimLine(s.snapshot[lane]!, s.compacted[lane]!)])
+    expect(packet).not.toContain(s.compacted['main']!)
+    expect(rawAll(w, 'SELECT claimed_by FROM snapshots WHERE id = ?', s.snapshot[lane])).toEqual([{ claimed_by: claimant }])
+    await drainStaging(w)
+    const id = recoveryRowFor(w, lane, claimant, 'main')
+    // Never the main lane's: the lane read places it in the worktree's
+    // search and not in main's.
+    expect((await w.store!.query('quillfeather', { topK: 20, lane })).map((r) => r.nodeId)).toContain(id)
+    expect((await w.store!.query('quillfeather', { topK: 20, lane: 'main' })).map((r) => r.nodeId)).not.toContain(id)
+  })
 }

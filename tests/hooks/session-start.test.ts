@@ -6,32 +6,22 @@ import os from 'os'
 import * as shared from '../../src/hooks/shared.js'
 import { main } from '../../src/hooks/session-start.js'
 import { readSessionBeacon } from '../../src/session-beacon.js'
+import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
+import { runMigrations } from '../../src/persistence/migrations.js'
 
+/** The store's schema as the server creates it (the session registry
+ *  included: the snapshot claim reads each session's lane from it, D375). */
 function setupDb(dbPath: string) {
-  const db = new DatabaseSync(dbPath)
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS staging (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      session_id TEXT,
-      role TEXT,
-      content TEXT,
-      tool_name TEXT,
-      timestamp REAL,
-      priority INTEGER DEFAULT 3,
-      processed INTEGER DEFAULT 0,
-      created_at REAL
-    );
-    CREATE TABLE IF NOT EXISTS snapshots (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      session_id TEXT NOT NULL,
-      queries TEXT NOT NULL,
-      claimed_by TEXT,
-      claimed_at REAL,
-      created_at REAL NOT NULL DEFAULT (unixepoch('subsec'))
-    );
-    CREATE INDEX IF NOT EXISTS idx_snapshots_unclaimed ON snapshots(claimed_by) WHERE claimed_by IS NULL;
-  `)
+  const db = openNodeSqlite(new DatabaseSync(dbPath))
+  runMigrations(db, { migrate: true })
   return db
+}
+
+/** A session that ran in the same checkout before (its own SessionStart
+ *  registered its self), so its snapshot is of the claimant's lane (D375). */
+function startedEarlier(sessionId: string): void {
+  vi.spyOn(shared, 'parseHookInput').mockReturnValue({ session_id: sessionId, cwd: '/tmp', source: 'startup' })
+  main()
 }
 
 describe('SessionStart hook (Layer 3)', () => {
@@ -110,6 +100,7 @@ describe('SessionStart hook (Layer 3)', () => {
   })
 
   it('snapshot-claim only fires on startup', () => {
+    startedEarlier('old-session')
     const db = new DatabaseSync(tempDbPath)
     db.prepare('INSERT INTO snapshots (session_id, queries) VALUES (?, ?)')
       .run('old-session', JSON.stringify(['what was I doing']))
@@ -172,6 +163,7 @@ describe('SessionStart hook (Layer 3)', () => {
   })
 
   it('writes snapshot claim to staging for journaling tree', () => {
+    startedEarlier('old-session')
     const db = new DatabaseSync(tempDbPath)
     db.prepare('INSERT INTO snapshots (session_id, queries) VALUES (?, ?)')
       .run('old-session', JSON.stringify(['what was I doing']))

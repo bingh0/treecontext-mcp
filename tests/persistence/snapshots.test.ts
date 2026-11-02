@@ -12,6 +12,13 @@ import { DatabaseSync, type DatabaseSync as DatabaseType } from 'node:sqlite'
 import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
 import { Persistence } from '../../src/persistence/store.js'
 import { writeSnapshot, claimSnapshot } from '../../src/hooks/shared.js'
+import { hasRegistry, registerSelf } from '../../src/persistence/session-registry.js'
+
+/** A session's self as the session-start hook registers it: in the main
+ *  checkout (`worktree` null) or a linked worktree of that name. */
+function place(db: DatabaseType, sessionId: string, worktree: string | null = null): void {
+  registerSelf(db, sessionId, { worktree, branch: worktree ? `${worktree}-branch` : 'main', cwd: '/repo', toplevel: null, commonDir: null }, Date.now() / 1000)
+}
 
 describe('Snapshots', () => {
   let tmpDir: string
@@ -51,7 +58,12 @@ describe('Snapshots', () => {
     expect(JSON.parse(row.queries)).toEqual(['query 1'])
   })
 
+  it('the schema the server creates holds the session registry the claim reads', () => {
+    expect(hasRegistry(db)).toBe(true)
+  })
+
   it('claimSnapshot returns most recent unclaimed, excludes own session, sets claimed_by', () => {
+    for (const s of ['session-1', 'session-2', 'session-3']) place(db, s)
     writeSnapshot(dbPath, 'session-1', ['1'])
     writeSnapshot(dbPath, 'session-2', ['2'])
 
@@ -73,16 +85,49 @@ describe('Snapshots', () => {
   })
 
   it('self-injection guard prevents a session from claiming its own snapshot', () => {
+    place(db, 'session-1')
     writeSnapshot(dbPath, 'session-1', ['1'])
     expect(claimSnapshot(db, 'session-1')).toBeNull()
     expect(unclaimedCount()).toBe(1)
   })
 
   it('race safety: a snapshot is claimed once only', () => {
+    for (const s of ['session-1', 'session-2', 'session-3']) place(db, s)
     writeSnapshot(dbPath, 'session-1', ['1'])
     const snap1 = claimSnapshot(db, 'session-2')
     const snap2 = claimSnapshot(db, 'session-3')
     expect(snap1).not.toBeNull()
     expect(snap2).toBeNull()
+  })
+
+  // D375: a fresh start adopts a snapshot only from its own lane.
+  it('claims only a snapshot its own checkout left, the newest of its lane, never a newer one of another lane', () => {
+    place(db, 'main-1'); place(db, 'wt-1', 'subproject'); place(db, 'other-1', 'other')
+    place(db, 'main-2'); place(db, 'wt-2', 'subproject')
+    const mainId = writeSnapshot(dbPath, 'main-1', ['main'])
+    const wtId = writeSnapshot(dbPath, 'wt-1', ['subproject'])
+    writeSnapshot(dbPath, 'other-1', ['other'])
+    const fromMain = claimSnapshot(db, 'main-2')
+    expect(fromMain).toMatchObject({ id: mainId, originalSessionId: 'main-1' })
+    // Nothing else of main's lane is left: the worktrees' stay unclaimed.
+    expect(claimSnapshot(db, 'main-2')).toBeNull()
+    expect(unclaimedCount()).toBe(2)
+    expect(claimSnapshot(db, 'wt-2')).toMatchObject({ id: wtId, originalSessionId: 'wt-1' })
+    expect(unclaimedCount()).toBe(1)
+  })
+
+  it('a session the registry does not place claims nothing', () => {
+    place(db, 'main-1')
+    writeSnapshot(dbPath, 'main-1', ['main'])
+    expect(claimSnapshot(db, 'unplaced')).toBeNull()
+    expect(unclaimedCount()).toBe(1)
+  })
+
+  it('a snapshot whose session the registry never placed is claimed by no lane', () => {
+    place(db, 'main-2'); place(db, 'wt-2', 'subproject')
+    writeSnapshot(dbPath, 'before-the-registry', ['old'])
+    expect(claimSnapshot(db, 'main-2')).toBeNull()
+    expect(claimSnapshot(db, 'wt-2')).toBeNull()
+    expect(unclaimedCount()).toBe(1)
   })
 })

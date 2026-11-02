@@ -172,7 +172,6 @@ runFeatures(join(HERE, '../../features'), {
     {
       feature: 'journal-orchestration',
       scenarios: [
-        'a fresh start adopts a recovery snapshot only from its own lane',
         // D378 (2026-11-02): the pre-stamp door, unbound until its unit.
         // The @D376 scenario gained one Then (D378); its new step is unbound.
         'an unplaced writer\'s chapters still supersede one another',

@@ -9,6 +9,7 @@ import { nsLeaseLiveFor } from '../persistence/leases.js'
 import { dirname } from 'node:path'
 import { HOOK_CONTEXT_CAP } from '../first-moment.js'
 import { recordHookGap } from './gap-ledger.js'
+import { hasRegistry, selfOf } from '../persistence/session-registry.js'
 import { openNodeSqlite, openRaw, ensureDbFileMode, pragmaValue, setPragma } from '../persistence/node-sqlite.js'
 import { ensureBaseSchema, runMigrations } from '../persistence/migrations.js'
 import { maxSupportedVersion } from '../persistence/migrations/index.js'
@@ -461,31 +462,52 @@ export function writeSnapshot(dbPath: string, sessionId: string, queries: string
   }
 }
 
+/**
+ * A fresh start's claim of a recovery snapshot (D286, D375): the newest
+ * unclaimed snapshot another session of the claimant's own lane left. The
+ * lane is the checkout the session registry places a session's self in,
+ * the main checkout or a linked worktree under its registered name, read
+ * for the claimant and for each snapshot's session alike, so a main
+ * checkout never adopts a worktree's recovery note, nor a worktree the main
+ * checkout's or another worktree's.
+ *
+ * Nothing is claimed by a session the registry does not place (an
+ * unregistered session, a store without the registry, a ticket-door worker,
+ * which has no self): it has no lane to claim from. A snapshot whose
+ * session the registry never placed (left before the store recorded
+ * sessions, or by a worker) stays in its table unclaimed, disclosed there
+ * rather than claimed for anyone.
+ */
 export function claimSnapshot(
   db: DatabaseType,
   sessionId: string,
 ): { id: number; originalSessionId: string; queries: string[] } | null {
+  if (!hasRegistry(db)) return null
+  const self = selfOf(db, sessionId)
+  if (!self) return null
+  // The snapshots of the claimant's lane: their session's self registered
+  // in the same checkout (`worktree IS ?` matches NULL, the main checkout,
+  // to NULL), never the claimant's own.
+  const ofLane = `FROM snapshots s JOIN session_registry r ON r.session_id = s.session_id AND r.agent_id = ''
+     WHERE s.claimed_by IS NULL AND s.session_id != ? AND r.worktree IS ?`
   // Lock-free probe first: the common case is nothing to claim, and even
   // a zero-row UPDATE takes the write lock — a SessionStart with nothing
   // to rehydrate must not queue behind a busy writer just to learn that.
   // A lost race here only means returning null a moment early.
-  const candidate = db.prepare(
-    'SELECT 1 FROM snapshots WHERE claimed_by IS NULL AND session_id != ? LIMIT 1'
-  ).get(sessionId)
+  const candidate = db.prepare(`SELECT 1 ${ofLane} LIMIT 1`).get(sessionId, self.worktree)
   if (!candidate) return null
 
   // One atomic UPDATE … RETURNING (G3): SessionStart hooks race each
   // other cross-process with no lock covering them, and a single
   // statement cannot lose the read-then-write race the old transaction
   // shape carried. Whoever's UPDATE runs first claims the row; the
-  // loser's WHERE finds the next unclaimed snapshot or nothing.
+  // loser's WHERE finds the next unclaimed snapshot of its lane or nothing.
   const row = db.prepare(
     `UPDATE snapshots SET claimed_by = ?, claimed_at = ?
-      WHERE id = (SELECT id FROM snapshots
-                   WHERE claimed_by IS NULL AND session_id != ?
-                   ORDER BY created_at DESC, id DESC LIMIT 1)
+      WHERE id = (SELECT s.id ${ofLane}
+                   ORDER BY s.created_at DESC, s.id DESC LIMIT 1)
       RETURNING id, session_id, queries`
-  ).get(sessionId, Date.now() / 1000, sessionId) as
+  ).get(sessionId, Date.now() / 1000, sessionId, self.worktree) as
     | { id: number; session_id: string; queries: string }
     | undefined
   if (!row) return null

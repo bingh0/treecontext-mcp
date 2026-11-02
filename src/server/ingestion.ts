@@ -35,6 +35,7 @@ import {
 import { agentWriterOf, INTERNAL_SUMMARY_KIND, CLIENT_WRITER } from '../persistence/session-registry.js'
 import { SUBAGENT_SUMMARY_KIND } from '../handoff.js'
 import { workerLaneOf, legWriterOf } from '../persistence/leg-registry.js'
+import { placedLaneOf } from '../persistence/lane-scope.js'
 import { legTraceOf } from '../persistence/session-registry.js'
 import { DOOR_KEY, IDENTITY_KEY } from '../runs.js'
 import { claimHookGaps, hookGapText } from '../hooks/gap-ledger.js'
@@ -576,20 +577,35 @@ export class IngestionLoop {
           // not the indexed content, so the row is not the best match for
           // its own queries next time. Asked for twice the hits so that
           // dropping recovery rows still leaves the quota.
+          //
+          // D375: the staged row's session is the session that claimed the
+          // snapshot, whose own lane the claim was made from. Its queries
+          // run under that lane as the registry reads it now (the lane read,
+          // persistence/lane-scope.ts), so a main checkout's recovery quotes
+          // the main lane only and a worktree's its own; a session the
+          // registry does not place searches the whole store, D240's rule
+          // for a caller that cannot be told apart (no Claude Code start
+          // claims for one, so this is a row staged by another client or
+          // before this build).
+          const lane = placedLaneOf(target.store.database, row.sessionId || null)
           const hitsByQuery: RecoveryHit[][] = []
           for (const q of queries) {
             // Recovery queries run against the row's own namespace — a
             // subagent's snapshot must not be rehydrated from the trunk.
-            const results = await target.query(q, { topK: RECOVERY_HITS_PER_QUERY * 2 })
+            const results = await target.query(q, { topK: RECOVERY_HITS_PER_QUERY * 2, ...(lane ? { lane } : {}) })
             hitsByQuery.push(results.map((r) => ({ nodeId: r.nodeId, content: r.content, metadata: r.metadata })))
           }
           const recoveredText = buildRecoveryContent(queries, hitsByQuery)
 
+          // D375: the row is the claiming session's own, in its session,
+          // so every lane read places it where the claim was made; a row
+          // with no session read as the main lane's whoever claimed it.
           await target.insert(recoveredText, {
             decayRate: this.options.decayRate,
             createdAt: row.timestamp,
             metadata: {
               source: RECOVERY_SNAPSHOT_SOURCE,
+              session_id: row.sessionId || undefined,
               original_session_id: origSession,
               recovered_at: Date.now() / 1000,
               [RECOVERY_QUERIES_KEY]: queries,
