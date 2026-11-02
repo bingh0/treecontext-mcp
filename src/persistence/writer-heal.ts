@@ -32,7 +32,7 @@
  * finds the lane unchanged and changes nothing.
  */
 import type { Database } from './database.js'
-import { laneWriterOf } from '../references.js'
+import { laneWriterOf, RETIRED_ACROSS_KEY, SUPERSEDES_ACROSS_KEY } from '../references.js'
 import { sessionOf, NO_SESSION } from '../dedup-identity.js'
 import { agentWriterOf, selfOf, selfWriterOf } from './session-registry.js'
 import { capRefusalsOf, confirmedCapRefusal, legOf, legWriterOf, workerOfSession, settleLegKey, unsettleLegKey, recordOpenedRun, WORKER_AGENT_ID } from './leg-registry.js'
@@ -117,6 +117,10 @@ function newerLiveBookmark(db: Database, treeId: number, meta: Record<string, un
  */
 function unretire(db: Database, treeId: number, id: string, createdAt: number, meta: Record<string, unknown>, now: number): void {
   const prior = (meta['_superseded_prior'] ?? { next_session: true }) as Record<string, unknown>
+  // D378: a retirement across the pre-stamp boundary undone takes its
+  // record with it, so a live chapter never carries one.
+  const across = meta[RETIRED_ACROSS_KEY] as Record<string, unknown> | undefined
+  if (across && typeof across === 'object' && across['by'] === meta['superseded_by']) delete meta[RETIRED_ACROSS_KEY]
   delete meta['superseded_by']
   delete meta['superseded_at']
   delete meta['_superseded_prior']
@@ -215,6 +219,16 @@ export function healWriterFromEcho(db: Database, opts: {
         next['_writer_heal_reverted'] = reverted
         result.reverted = reverted
         notes.push(`the ${reverted.length === 1 ? 'pointer' : 'pointers'} it retired under the first stamp ${reverted.length === 1 ? 'was' : 'were'} restored and recorded as references`)
+        // D378: what it retired across the pre-stamp boundary, undone, is
+        // no longer listed as retired that way, and the heal says so.
+        const listed = Array.isArray(next[SUPERSEDES_ACROSS_KEY]) ? (next[SUPERSEDES_ACROSS_KEY] as unknown[]).filter((x): x is string => typeof x === 'string') : []
+        const undone = listed.filter((x) => reverted.includes(x))
+        if (undone.length > 0) {
+          const kept = listed.filter((x) => !reverted.includes(x))
+          if (kept.length > 0) next[SUPERSEDES_ACROSS_KEY] = kept
+          else delete next[SUPERSEDES_ACROSS_KEY]
+          notes.push(`its retirement across the pre-stamp boundary of ${undone.join(', ')} was undone with its record`)
+        }
       }
 
       // 2. A retirement the row suffered from another lane than its own.

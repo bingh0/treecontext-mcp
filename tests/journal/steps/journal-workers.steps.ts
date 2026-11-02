@@ -1942,6 +1942,6 @@ export function workerLaneSteps(define: (re: RegExp, fn: (w: WorkersWorld, ...ca
     expect(scope, JSON.stringify(reply).slice(0, 1500)).toBeTruthy()
     expect(scope!['listed']).toBe("every lane's resume pointers, flat, each naming its lane")
     expect(scope!['worker']).toContain('this session is a worker of the ticket door (builder)')
-    for (const k of ['unplaced', 'lane', 'left_out', 'other_lanes']) expect(scope![k], k).toBeUndefined()
+    for (const k of ['unplaced', 'lane', 'left_out', 'other_lanes', 'other_lane_count']) expect(scope![k], k).toBeUndefined()
   })
 }

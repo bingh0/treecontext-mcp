@@ -74,6 +74,15 @@ async function livePointers(w: W): Promise<string[]> {
   return ((st['resume_pointers'] as Array<{ node_id: string }> | undefined) ?? []).map((p) => p.node_id)
 }
 
+/** Status as the session asks for it, no scope given. */
+async function defaultStatus(w: W): Promise<{ scope: Record<string, unknown> | undefined; ids: string[] }> {
+  const st = parseTool(await w.client!.callTool({ name: 'treecontext_status', arguments: {} }))
+  return {
+    scope: st['scope'] as Record<string, unknown> | undefined,
+    ids: ((st['resume_pointers'] as Array<{ node_id: string }> | undefined) ?? []).map((p) => p.node_id),
+  }
+}
+
 describe('a background subagent beside its orchestrator (F1, D240)', () => {
   it('keeps the orchestrator\'s chapter, bookmark and search its own, and the echo puts the subagent\'s note in its lane', async () => {
     const w = mkWorld()
@@ -102,6 +111,12 @@ describe('a background subagent beside its orchestrator (F1, D240)', () => {
       expect(b1r).toMatchObject({ writer: 'main', writer_src: 'concurrent' })
       const b1 = b1r['node_id'] as string
       expect(meta(w, b0)['next_session']).toBeUndefined()
+      // D372: a session whose caller cannot be told apart from the live
+      // subagent is scoped to its self as before: the main lane's own.
+      const during = await defaultStatus(w)
+      expect(during.scope).toMatchObject({ lane: 'main' })
+      expect(during.ids).toEqual(expect.arrayContaining([c1, b1]))
+      expect(during.ids).not.toContain(c0)
       // …and its search is the whole store, saying why.
       const q = parseTool(await w.client!.callTool({ name: 'treecontext_query', arguments: { query: 'widget', top_k: 10 } }))
       expect(q['scope']).toMatchObject({ searched: 'the whole store' })
@@ -135,6 +150,13 @@ describe('a background subagent beside its orchestrator (F1, D240)', () => {
       expect(live).not.toContain(c0)
       expect(live).toContain(b1)
       expect(live).not.toContain(b0)
+      // The default status, scoped to the session's self: its chapter and
+      // bookmark, never the explorer's chapter the heal moved to its lane.
+      const after = await defaultStatus(w)
+      expect(after.scope).toMatchObject({ lane: 'main' })
+      expect(after.ids).toEqual(expect.arrayContaining([c1, b1]))
+      expect(after.ids).not.toContain(e)
+      expect(live).toContain(e)
       // The reverse index follows the restored reference.
       expect(rawAll(w, 'SELECT node_id FROM node_refs WHERE ref_id = ?', c1)).toEqual([{ node_id: e }])
 

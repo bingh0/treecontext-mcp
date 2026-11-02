@@ -64,8 +64,9 @@ export function writerOf(meta: Record<string, unknown> | null | undefined): stri
   const imported = meta?.['_handoff_file']
   if (imported !== undefined && imported !== null) return `imported from ${String(imported)}`
   // D376: an undetermined writer is shown as such, never by the session
-  // id that would read like a writer; a role it claims is its own word.
-  if (isUnknownWriter(meta)) return named(meta?.['agent_type']) ?? UNKNOWN_WRITER_LABEL
+  // id that would read like a writer, nor by a role it claims: the claim
+  // stays in its metadata, for the reader.
+  if (isUnknownWriter(meta)) return UNKNOWN_WRITER_LABEL
   return named(meta?.['_writer']) ?? named(meta?.['agent_type']) ?? named(meta?.['_cc_session_id'])
     ?? named(meta?.['session_id']) ?? 'unknown writer'
 }
@@ -98,6 +99,17 @@ export const UNREGISTERED_SRC = 'unregistered'
 export function isUnknownWriter(meta: Record<string, unknown> | null | undefined): boolean {
   return meta?.['_writer_src'] === UNREGISTERED_SRC
 }
+
+/** The record a retirement across the pre-stamp boundary leaves on the
+ *  retired entry (D378): who (the writer as stamped, its stamp source and
+ *  the retiring row's session), what (`by`, the retiring entry), when
+ *  (`at`) and how (`pre-stamp`). The store's key, never a caller's. */
+export const RETIRED_ACROSS_KEY = '_retired_across'
+/** What the retiring entry retired across the boundary (D378), beside
+ *  `_supersedes_referenced`. The store's key, never a caller's. */
+export const SUPERSEDES_ACROSS_KEY = '_supersedes_across'
+/** How a retirement across the pre-stamp boundary was made (D378). */
+export const PRE_STAMP_HOW = 'pre-stamp'
 
 /** A lane key as a reader is told it: the main lane `main`, the
  *  undetermined writers "writer unknown", any other lane by its key. */

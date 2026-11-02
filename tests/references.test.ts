@@ -269,7 +269,12 @@ describe('the insert tool (D165, D169)', () => {
   it('says what a cross-writer supersedes did, and what a dedup hit could not record', async () => {
     const t = await tool()
     // The plan names no writer (a library write, the main lane); the tool
-    // caller here is unplaced, the undetermined writers' lane (D376).
+    // caller here is unplaced, the undetermined writers' lane (D376). A
+    // session has run in the main checkout, so the pre-stamp door (D378)
+    // is shut and the plan is main's alone to retire.
+    const raw = new DatabaseSync(path())
+    registerSelf(raw, 'm0', { worktree: null, branch: 'main', cwd: '/repo', toplevel: '/repo', commonDir: '/repo/.git' }, Date.now() / 1000 - 60)
+    raw.close()
     const plan = (await t.ctx.insert('plan: wire the form', { metadata: { next_session: true } })).nodeId
     const r = await t.call({ content: 'tester: CSRF first', metadata: { agent_type: 'tester' }, supersedes: [plan] })
     expect(r['superseded']).toEqual([])

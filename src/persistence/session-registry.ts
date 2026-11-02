@@ -108,7 +108,11 @@ export const WRITER_STAMP_KEYS = ['_writer', '_writer_src', '_writer_agent_id', 
   '_over_cap',
   // Whether a run open's or close's `by` waits for the echo (runs.ts
   // BY_SRC_KEY): the store's, never a caller's.
-  '_by_src'] as const
+  '_by_src',
+  // A retirement across the pre-stamp boundary (D378, references.ts
+  // RETIRED_ACROSS_KEY): its record on the retired entry and the list on
+  // the retiring one, the store's, never a caller's.
+  '_retired_across', '_supersedes_across'] as const
 
 interface Prepared { get(...p: unknown[]): unknown; all(...p: unknown[]): unknown[]; run(...p: unknown[]): unknown }
 /** The one capability the registry needs from a database handle. */
@@ -177,6 +181,30 @@ export function worktreeLaneName(db: RegistryHandle, self: GitSelf): string | nu
   ).get(self.worktree, self.toplevel)
   if (!taken) return self.worktree
   return `${self.worktree}@${createHash('sha1').update(self.toplevel).digest('hex').slice(0, 6)}`
+}
+
+/** Whether the registry holds a session placed in the main checkout (D378):
+ *  a self row (empty agent id) with no worktree, D235's spelling, never a
+ *  ticket door worker's registration (a worker is no session's self,
+ *  D288). A registry that cannot be read is read as holding one, so a
+ *  door that opens only where none exists stays shut. */
+export function hasMainCheckoutSession(db: RegistryHandle): boolean {
+  try {
+    return db.prepare(`SELECT 1 FROM session_registry WHERE agent_id = '' AND worktree IS NULL${notWorker(db)} LIMIT 1`).get() !== undefined
+  } catch {
+    return true
+  }
+}
+
+/** Whether the registry ever held `sessionId`, by any row of it (D378:
+ *  the pre-stamp chapter's session the registry never held). A registry
+ *  that cannot be read is read as holding it. */
+export function registryHeldSession(db: RegistryHandle, sessionId: string): boolean {
+  try {
+    return db.prepare('SELECT 1 FROM session_registry WHERE session_id = ? LIMIT 1').get(sessionId) !== undefined
+  } catch {
+    return true
+  }
 }
 
 /** Register (or re-register, on resume and clear) a session's self.

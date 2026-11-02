@@ -1161,7 +1161,14 @@ export const reorientationDefiner = (reg: Registry<ReorientationWorld>): void =>
   reg.define(/^a note from the tester subagent, (\d+) minutes old, that names that chapter and opens "([^"]+)"$/, async (w, min$, head$) => {
     const head = String(head$)
     const text = `${head}\nThe refresh endpoint rejects the token the fixture mints; the tests after step 3 cannot run until it does.`
-    const res = await mcpNote(w, text, { agent_type: 'tester', refs: [w.chapterId!] }, { at: now() - Number(min$) * 60 - 5 })
+    // The session's tester subagent, registered by the real SubagentStart
+    // hook, so its call is stamped from the registry: a role claimed from
+    // a session no hook placed is "writer unknown" (D376), never the role.
+    const agent = `agent-${randomBytes(4).toString('hex')}`
+    runHook(w, 'subagent-start', { hook_event_name: 'SubagentStart', agent_id: agent, agent_type: 'tester' })
+    const res = await mcpNote(w, text, { refs: [w.chapterId!] }, { at: now() - Number(min$) * 60 - 5 })
+    expect(res).toMatchObject({ writer: 'tester', writer_src: 'provisional' })
+    runHook(w, 'subagent-stop', { hook_event_name: 'SubagentStop', agent_id: agent, agent_type: 'tester', stop_hook_active: false, last_assistant_message: 'the CSRF finding is written' })
     w.nodeId = res['node_id'] as string
     w.bookmarkText = text // the note's full text, carried to the Thens
     // The reverse index holds the pair, read straight from SQLite.

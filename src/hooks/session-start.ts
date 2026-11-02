@@ -241,11 +241,16 @@ export async function main(preParsed?: Record<string, unknown>): Promise<void> {
     // store the ladder has not reached (no registry) or a busy one leaves
     // the session unregistered, which the server stamps as such.
     let self: GitSelf | null = null
+    // D372, D373: the packet's self lines claim a checkout only once the
+    // registry holds it, so the packet and status agree; a session whose
+    // registration did not land is one status says could not be placed.
+    let placed = false
     try {
       self = gitSelfOf(cwd ?? process.cwd())
       if (hasRegistry(db)) {
         const at = Date.now() / 1000
         self = { ...self, worktree: registerSelf(db, sessionId, self, at) }
+        placed = true
         // F3: no subagent survives its session's (re)start. A startup,
         // resume or clear retires every subagent still registered live
         // under this id (and, on a clear, under the id it continues), so
@@ -312,7 +317,7 @@ export async function main(preParsed?: Record<string, unknown>): Promise<void> {
         // addressed to it), told what other lanes exist. The self lines
         // sit outside the start's budget: a resume's budget would cut the
         // lane's own anchor.
-        if (self) {
+        if (self && placed) {
           try {
             const own = selfLines(db, self, Date.now() / 1000)
             if (own.length > 0) payload = `${own.join('\n')}\n${payload}`

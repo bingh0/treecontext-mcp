@@ -45,9 +45,9 @@ import { stampEchoBoundaries } from './persistence/echo-index.js'
 import { roleWeightVector } from './persistence/fts.js'
 import { BOOKMARK_KIND, checkpointKindOf, placeChaptersAboveBookmarks, searchCheckpointKindOf, sessionChainWith } from './checkpoints.js'
 import { metadataFilterSql } from './persistence/metadata-filter.js'
-import { AMBIGUOUS_LANE, laneLabelOf, laneWriterOf, referencedBy, refIdsOf, summarizeLanes, type LaneSummary } from './references.js'
+import { AMBIGUOUS_LANE, UNKNOWN_LANE, UNKNOWN_WRITER_LABEL, UNREGISTERED_SRC, RETIRED_ACROSS_KEY, SUPERSEDES_ACROSS_KEY, PRE_STAMP_HOW, laneLabelOf, laneWriterOf, referencedBy, refIdsOf, summarizeLanes, type LaneSummary } from './references.js'
 import { checkoutOfLane, isPlacedLane, laneRowsSql, placedLaneOf, type PlacedLane } from './persistence/lane-scope.js'
-import { resolveWriter, selfOf, selfWriterOf, agentWriterOf, stampMetadata, legTraceOf, MAIN_WRITER, STORE_WRITER, type WriterStamp, type GitSelf } from './persistence/session-registry.js'
+import { resolveWriter, selfOf, selfWriterOf, agentWriterOf, stampMetadata, legTraceOf, hasMainCheckoutSession, registryHeldSession, MAIN_WRITER, STORE_WRITER, type WriterStamp, type GitSelf } from './persistence/session-registry.js'
 import {
   legOf, legsOfRun, workersOfParent, registerSubagentLeg, registerWorkerLeg, recordWorkerProcess, recordOpenedRun, recordSendBack,
   retireLeg, retirePhantoms, settleLegKey, legWriterOf, hasLegColumns, mintWorkerSessionId, legReturnStamp, isLiveLeg, WORKER_AGENT_ID,
@@ -1553,6 +1553,10 @@ export class FlatStore implements MemoryStore {
       // which the owning lane sees as "referenced by" at its next read.
       const split = this.splitSupersedes(pointerSupersedes, writer)
       ownSupersedes = split.own
+      // D378: what an unplaced writer retires across the pre-stamp boundary
+      // is listed on the new entry; a dedup hit lands no entry to list it,
+      // so it retires nothing across and says so as for another writer's.
+      const missed = [...split.foreign, ...split.across]
       // D329: the store numbers a checkpoint when it lands, inside this
       // immediate transaction, so two legs that started from one
       // checkpoint take the next two numbers and never the same one.
@@ -1609,13 +1613,14 @@ export class FlatStore implements MemoryStore {
         // the row into the targets' lane can perform them (D240).
         meta = { ...meta, refs: [...new Set([...refIdsOf(meta), ...split.foreign])], _supersedes_referenced: split.foreign }
       }
+      if (split.across.length > 0) meta = { ...meta, [SUPERSEDES_ACROSS_KEY]: split.across }
       if (isAuto) {
         const sessionKey = sessionOf(meta)
         const anchor = this.persistence.liveAnchor(this.treeId, sessionKey, fp, createdAt, DEDUP_WINDOW_SECS)
         if (anchor) {
           this.persistence.slideAnchor(this.treeId, sessionKey, fp, createdAt)
           const sup = this.applySupersedes(ownSupersedes, anchor.nodeId)
-          return { nodeId: anchor.nodeId, path: [anchor.nodeId], depth: 0, deduplicated: true, driftDetected: false, staleNodes: [], ...withForeign(sup, split.foreign, false), ...this.unrecordedRefs(meta, anchor.nodeId) }
+          return { nodeId: anchor.nodeId, path: [anchor.nodeId], depth: 0, deduplicated: true, driftDetected: false, staleNodes: [], ...withForeign(sup, missed, false), ...this.unrecordedRefs(meta, anchor.nodeId) }
         }
       }
 
@@ -1662,7 +1667,7 @@ export class FlatStore implements MemoryStore {
         }
         this.mergePointerFlags(survivor, meta)
         const sup = this.applySupersedes(withPriorBookmarks(survivor), survivor)
-        return { nodeId: survivor, path: [survivor], depth: 0, deduplicated: true, driftDetected: false, staleNodes: [], ...withForeign(sup, split.foreign, false), ...this.unrecordedRefs(meta, survivor) }
+        return { nodeId: survivor, path: [survivor], depth: 0, deduplicated: true, driftDetected: false, staleNodes: [], ...withForeign(sup, missed, false), ...this.unrecordedRefs(meta, survivor) }
       }
       if (isAuto) this.persistence.upsertAnchor(this.treeId, sessionOf(meta), fp, nodeId, createdAt)
 
@@ -1690,7 +1695,11 @@ export class FlatStore implements MemoryStore {
         if (leg && leg.kind === 'worker' && leg.ticketAbsent.length > 0 && isLiveLeg(leg)) retireLeg(this.db, leg, 'invalid', createdAt)
       }
       const sup = this.applySupersedes(withPriorBookmarks(nodeId), nodeId)
-      return { nodeId, path: [nodeId], depth: 0, deduplicated: false, driftDetected: false, staleNodes: [], ...withForeign(sup, split.foreign, true), ...runOut }
+      const across = split.across.length > 0 ? this.retireAcross(split.across, nodeId, meta) : []
+      return {
+        nodeId, path: [nodeId], depth: 0, deduplicated: false, driftDetected: false, staleNodes: [], ...withForeign(sup, split.foreign, true), ...runOut,
+        ...(across.length > 0 ? { retiredAcross: across } : {}),
+      }
     })
 
     // The amortized sweep stays OUTSIDE the insert transaction: it runs
@@ -1740,21 +1749,69 @@ export class FlatStore implements MemoryStore {
 
   /** Partition supersedes targets by lane (D169): `own` are this writer's
    *  (or unknown here — applySupersedes reports those as misses), `foreign`
-   *  are rows of this tree another writer owns. */
-  private splitSupersedes(ids: string[] | undefined, writer: string): { own: string[] | undefined; foreign: string[] } {
-    if (!ids || ids.length === 0) return { own: ids, foreign: [] }
-    const sel = this.db.prepare('SELECT metadata_json FROM nodes WHERE node_id = ? AND tree_id = ?')
+   *  are rows of this tree another writer owns, and `across` the pre-stamp
+   *  chapters an unplaced writer retires (D378, isPreStampChapter). */
+  private splitSupersedes(ids: string[] | undefined, writer: string): { own: string[] | undefined; foreign: string[]; across: string[] } {
+    if (!ids || ids.length === 0) return { own: ids, foreign: [], across: [] }
+    const sel = this.db.prepare('SELECT metadata_json, session_key FROM nodes WHERE node_id = ? AND tree_id = ?')
     const own: string[] = []
     const foreign: string[] = []
+    const across: string[] = []
+    // D378: the door is the undetermined writers' alone, and open only
+    // while the registry holds no session placed in the main checkout.
+    // Read once per insert, at the write.
+    const doorOpen = writer === UNKNOWN_LANE && !hasMainCheckoutSession(this.db)
     for (const id of new Set(ids)) {
-      const row = sel.get(id, this.treeId) as { metadata_json: string | null } | undefined
+      const row = sel.get(id, this.treeId) as { metadata_json: string | null; session_key: string | null } | undefined
       // A writer the store could not tell apart (AMBIGUOUS_LANE) owns no
       // lane, its own earlier rows included: every target it names is
       // another's, recorded as a reference.
-      if (row && (writer === AMBIGUOUS_LANE || laneWriterOf(parseMeta(row.metadata_json)) !== writer)) foreign.push(id)
+      const meta = row ? parseMeta(row.metadata_json) : null
+      if (row && doorOpen && this.isPreStampChapter(meta, row.session_key)) across.push(id)
+      else if (row && (writer === AMBIGUOUS_LANE || laneWriterOf(meta) !== writer)) foreign.push(id)
       else own.push(id)
     }
-    return { own, foreign }
+    return { own, foreign, across }
+  }
+
+  /** A pre-stamp chapter (D378): a live chapter summary, never a bookmark,
+   *  of the main lane naming no writer, carrying none of `_writer`,
+   *  `_writer_src` or `agent_type`, never an imported entry, whose session
+   *  the registry never held. The row's own facts and the registry's, read
+   *  at the write. */
+  private isPreStampChapter(meta: Record<string, unknown> | null, sessionKey: string | null): boolean {
+    if (!meta) return false
+    if (meta['next_session'] !== true && meta['status'] !== 'active') return false
+    if (meta['kind'] === BOOKMARK_KIND) return false
+    if (meta['_writer'] !== undefined || meta['_writer_src'] !== undefined || meta['agent_type'] !== undefined) return false
+    const session = sessionKey ?? sessionOf(meta)
+    if (meta['_handoff_file'] !== undefined || session.startsWith(HANDOFF_LANE_PREFIX)) return false
+    return !registryHeldSession(this.db, session)
+  }
+
+  /** Retire the pre-stamp chapters an unplaced writer named (D378), each
+   *  through the ordinary retirement and recorded on it under
+   *  `_retired_across`: who as the store stamped the retiring row ("writer
+   *  unknown", `unregistered`, its session when it carries one, never a
+   *  role it claims), what, when and how. */
+  private retireAcross(ids: string[], supersededBy: string, retiring: Record<string, unknown> | null): string[] {
+    const session = sessionOf(retiring)
+    const sel = this.db.prepare('SELECT metadata_json FROM nodes WHERE node_id = ? AND tree_id = ?')
+    const upd = this.db.prepare('UPDATE nodes SET metadata_json = ?, updated_at = ? WHERE node_id = ? AND tree_id = ?')
+    const now = Date.now() / 1000
+    const done: string[] = []
+    for (const id of ids) {
+      const row = sel.get(id, this.treeId) as { metadata_json: string | null } | undefined
+      if (!row) continue
+      const meta = retireMeta(parseMeta(row.metadata_json) ?? {}, supersededBy, now)
+      meta[RETIRED_ACROSS_KEY] = {
+        by: supersededBy, writer: UNKNOWN_WRITER_LABEL, writer_src: UNREGISTERED_SRC,
+        ...(session !== NO_SESSION ? { session } : {}), at: now, how: PRE_STAMP_HOW,
+      }
+      upd.run(JSON.stringify(meta), now, id, this.treeId)
+      done.push(id)
+    }
+    return done
   }
 
   /** Clear resume-pointer flags on superseded nodes (metadata-only update). */

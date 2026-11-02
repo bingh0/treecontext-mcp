@@ -418,7 +418,10 @@ export function createServer(
         + 'demotes status "active" to "superseded", and writes a superseded_by '
         + 'trace on each target. Targets stay fully queryable. A target '
         + 'another writer wrote is never changed: it is recorded in this '
-        + "entry's refs instead and listed as referenced.",
+        + "entry's refs instead and listed as referenced. A client the server "
+        + 'cannot place may retire a chapter written before the store recorded '
+        + 'writers, where no session has run in the main checkout; the '
+        + 'retirement is recorded on both entries and listed as retired_across.',
       ),
       media_ref: z.object({
         uri: z.string().describe('URI to the content (file://, https://, etc.)'),
@@ -655,6 +658,14 @@ export function createServer(
               + `active since it started, so this entry is stamped "${stamp.writer}", the session's own; the call's own echo `
               + 'corrects the writer when it is captured.'
           }
+        } else if (recordsWriters) {
+          // D235, D376: a caller the store could not place is stamped
+          // `unregistered`, naming no writer; the reply says so.
+          response.writer = null
+          response.writer_src = stamp.src
+          response.writer_note = 'No session-start hook placed this session in a checkout, so the store cannot tell who wrote '
+            + 'this entry: it is stamped "writer unknown" (unregistered), in the lane of undetermined writers, never the main '
+            + 'checkout\'s or any other lane\'s own, and a role named in its metadata is kept as a claim, not as its writer.'
         }
         if (runReply) response.run = runReply
         // D329, D331: a checkpoint under a run's key is numbered by the
@@ -698,6 +709,15 @@ export function createServer(
             response.referenced = result.referenced
             response.referenced_note = 'Written by another writer, so left live and unchanged; '
               + "recorded in this entry's refs, where that writer sees it as referenced-by."
+          }
+          // D378: a pre-stamp chapter this unplaced writer retired, apart
+          // from the lane's own supersessions, with who, what and how.
+          if (result.retiredAcross && result.retiredAcross.length > 0) {
+            response.retired_across = result.retiredAcross
+            response.retired_across_note = 'Written before the store recorded writers and naming no writer, in a store where no '
+              + 'session has run in the main checkout, so retired across the pre-stamp boundary by this entry\'s writer '
+              + '("writer unknown", stamp source unregistered); each carries the record of who, what, when and how '
+              + '(pre-stamp) under _retired_across, and this entry lists them under _supersedes_across.'
           }
         }
 
@@ -1186,8 +1206,11 @@ export function createServer(
           listed: lane === MAIN_WRITER
             ? "the resume pointers of the main checkout's own lane (main)"
             : `the resume pointers of this worktree's own lane (${lane})`,
-          left_out: status.resumePointerOtherLanes ?? 0,
-          other_lanes: others.length,
+          // D242's field as shipped: the count of other lanes' live
+          // pointers left out. D372's count of the lanes holding them is
+          // its own key beside it.
+          other_lanes: status.resumePointerOtherLanes ?? 0,
+          other_lane_count: others.length,
           ...(others.length > 0 ? {
             lanes: others.slice(0, OTHER_LANES_NAMED).map((l) => ({
               lane: l.lane, kind: pointerKindWords(l.newestKind), age: `${ageText(l.newestAt, nowSec)} old`, pointers: l.pointers,

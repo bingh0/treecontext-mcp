@@ -14,7 +14,7 @@ import { Client, InMemoryTransport } from '@modelcontextprotocol/client'
 import { openNodeSqlite } from '../src/persistence/node-sqlite.js'
 import { FlatStore } from '../src/flat-store.js'
 import { createServer } from '../src/server/server.js'
-import { laneWriterOf, laneLabelOf, MAIN_LANE, AMBIGUOUS_LANE, UNKNOWN_LANE } from '../src/references.js'
+import { laneWriterOf, laneLabelOf, writerOf, summarizeLanes, MAIN_LANE, AMBIGUOUS_LANE, UNKNOWN_LANE } from '../src/references.js'
 import {
   registerSelf, registerSubagent, retireSubagent, resolveWriter, liveSubagents, type GitSelf,
 } from '../src/persistence/session-registry.js'
@@ -77,7 +77,7 @@ describe('resolveWriter (D190)', () => {
 })
 
 describe('the stamp on a tool-written row (D190)', () => {
-  it('stamps the self, drops a caller-claimed stamp, and stays silent for an unregistered session', async () => {
+  it('stamps the self, drops a caller-claimed stamp, and says an unregistered session\'s writer is undetermined (D235)', async () => {
     const s = await open()
     withRaw((db) => registerSelf(db, 's1', MAIN, 100))
     const { c, close } = await client(s, 's1')
@@ -87,9 +87,17 @@ describe('the stamp on a tool-written row (D190)', () => {
     expect(meta(r['node_id'] as string)['_worktree']).toBeUndefined()
     await close()
     const other = await client(s, 's-unknown')
-    const u = await insert(other.c, 'a note from a session no hook registered', { _writer: 'tester' })
-    expect(u['writer']).toBeUndefined()
+    const u = await insert(other.c, 'a note from a session no hook registered', { _writer: 'tester', agent_type: 'tester' })
+    // D235: the reply says the writer stamped: none named, `unregistered`,
+    // and why, never the role the caller claims.
+    expect(u).toMatchObject({ writer: null, writer_src: 'unregistered' })
+    expect(String(u['writer_note'])).toMatch(/writer unknown/)
+    expect(String(u['writer_note'])).toMatch(/claim, not as its writer/)
     expect(meta(u['node_id'] as string)['_writer']).toBeUndefined()
+    expect(meta(u['node_id'] as string)).toMatchObject({ _writer_src: 'unregistered', agent_type: 'tester' })
+    // D376: shown as writer unknown wherever a writer is shown, the claim
+    // left in its metadata (U1 review F5).
+    expect(writerOf(meta(u['node_id'] as string))).toBe('writer unknown')
     await other.close()
     await s.close()
   })
@@ -311,7 +319,9 @@ describe('status lists the session\'s own lane (F5, D242, D372)', () => {
     expect((st['resume_pointers'] as Array<{ lane: string }>)[0]!.lane).toBe('worktree:feature-login')
     expect(st['scope']).toEqual({
       lane: 'worktree:feature-login', listed: "the resume pointers of this worktree's own lane (worktree:feature-login)",
-      left_out: 2, other_lanes: 1, lanes: [{ lane: 'main', kind: 'chapter summary', age: '0 minutes old', pointers: 2 }],
+      // D242's other_lanes as shipped is the pointers left out (two of
+      // main's); D372's count of the lanes holding them (one) is apart.
+      other_lanes: 2, other_lane_count: 1, lanes: [{ lane: 'main', kind: 'chapter summary', age: '0 minutes old', pointers: 2 }],
       widen: 'pass scope "all" to list every lane\'s pointers; treecontext_export with writer reads one lane\'s trail',
     })
     const every = parseToolResult(await wt.c.callTool({ name: 'treecontext_status', arguments: { scope: 'all' } }))
@@ -321,13 +331,67 @@ describe('status lists the session\'s own lane (F5, D242, D372)', () => {
     expect((ms['resume_pointers'] as Array<{ node_id: string }>).map((p) => p.node_id).sort()).toEqual([older, mainPtr].sort())
     expect(ms['scope']).toEqual({
       lane: 'main', listed: "the resume pointers of the main checkout's own lane (main)",
-      left_out: 1, other_lanes: 1, lanes: [{ lane: 'worktree:feature-login', kind: 'chapter summary', age: '0 minutes old', pointers: 1 }],
+      other_lanes: 1, other_lane_count: 1, lanes: [{ lane: 'worktree:feature-login', kind: 'chapter summary', age: '0 minutes old', pointers: 1 }],
       widen: 'pass scope "all" to list every lane\'s pointers; treecontext_export with writer reads one lane\'s trail',
     })
     expect(JSON.stringify(ms)).not.toContain(own)
     expect(JSON.stringify(ms)).not.toContain('login form')
     await wt.close(); await m.close()
     await s.close()
+  })
+
+  it('names each other lane by the kind and age of its newest pointer, in status and in the packet (D372, D373)', async () => {
+    const s = await open()
+    withRaw((db) => registerSelf(db, 'm', MAIN, 100))
+    const t = Math.floor(Date.now() / 1000)
+    // The worktree's lane: an older chapter, then a newer bookmark.
+    await s.insert('plan: the login form', { metadata: { next_session: true, _writer: 'worktree:feature-login', _writer_src: 'self' }, createdAt: t - 7200 })
+    await s.insert('at: the form posts, the CSRF test is next', { metadata: { next_session: true, kind: 'bookmark', _writer: 'worktree:feature-login', _writer_src: 'self' }, createdAt: t - 300 })
+    const m = await client(s, 'm')
+    const st = parseToolResult(await m.c.callTool({ name: 'treecontext_status', arguments: {} }))
+    expect(st['scope']).toMatchObject({
+      lane: 'main', other_lanes: 2, other_lane_count: 1,
+      lanes: [{ lane: 'worktree:feature-login', kind: 'bookmark', age: '5 minutes old', pointers: 2 }],
+    })
+    await m.close()
+    await s.close()
+    withRaw((db) => {
+      const main = selfLines(db, { worktree: null, branch: 'main', toplevel: '/repo' }, t)
+      expect(main.at(-1)).toBe('1 other lane holds a live pointer, not shown here; the most recent: worktree:feature-login (bookmark, 5 minutes old, 2 live pointers). '
+        + 'To look: treecontext_status with scope "all", or treecontext_export with writer naming the lane.')
+    })
+    // Whatever order the pointers come in, the newest names the kind and age.
+    const lanes = summarizeLanes([
+      { laneKey: 'worktree:x', kind: 'chapter', createdAt: t - 7200 },
+      { laneKey: 'worktree:x', kind: 'bookmark', createdAt: t - 300 },
+    ])
+    expect(lanes).toEqual([{ laneKey: 'worktree:x', lane: 'worktree:x', pointers: 2, newestKind: 'bookmark', newestAt: t - 300 }])
+  })
+
+  it('never hands a lane another lane\'s bookmark as its own anchor (D373)', async () => {
+    const s = await open()
+    const t = Math.floor(Date.now() / 1000)
+    // A worktree that left only a bookmark, newer than anything of main's,
+    // and a main checkout that holds neither a chapter nor a bookmark.
+    const wtBm = (await s.insert('at: the worktree form half wired', { metadata: { next_session: true, kind: 'bookmark', _writer: 'worktree:feature-login', _writer_src: 'self' }, createdAt: t - 60 })).nodeId
+    await s.close()
+    withRaw((db) => {
+      const main = selfLines(db, { worktree: null, branch: 'main', toplevel: '/repo' }, t)
+      expect(main[1]).toBe('No chapter summary, bookmark or brief exists for the main lane yet; it starts fresh.')
+      expect(main.join('\n')).not.toContain(wtBm)
+      expect(main.join('\n')).not.toContain('half wired')
+    })
+    // The mirror: main's bookmark is never a worktree's anchor.
+    const s2 = await open()
+    await s2.delete(wtBm)
+    const mainBm = (await s2.insert('at: the README half rewritten', { metadata: { next_session: true, kind: 'bookmark', _writer: 'main', _writer_src: 'self' }, createdAt: t - 60 })).nodeId
+    await s2.close()
+    withRaw((db) => {
+      const wt = selfLines(db, { worktree: 'feature-login', branch: 'login-form' }, t)
+      expect(wt[1]).toBe('No chapter summary or brief exists for the worktree "feature-login" yet; it starts fresh.')
+      expect(wt.join('\n')).not.toContain(mainBm)
+      expect(wt.join('\n')).not.toContain('half rewritten')
+    })
   })
 
   it('lists every lane flat for a worker of the ticket door, naming it a worker, never unplaced', async () => {

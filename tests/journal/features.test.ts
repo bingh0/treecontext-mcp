@@ -165,22 +165,9 @@ runFeatures(join(HERE, '../../features'), {
         'a <worker> worker under a <parent> parent writes into its own lane with its role as writer',
       ],
     },
-    // The main checkout's own lane (D372-D376, 2026-11-02): scenarios added by
-    // the charter commit, unbound until the main-lane build binds them
-    // (bound in the main-lane build). Scenario-scoped, so the rest of each
-    // file keeps gating; the @D167 Then keeps its words and its binding.
-    {
-      feature: 'journal-orchestration',
-      scenarios: [
-        // D378 (2026-11-02): the pre-stamp door, unbound until its unit.
-        // The @D376 scenario gained one Then (D378); its new step is unbound.
-        'an unplaced writer\'s chapters still supersede one another',
-        'a client without hooks retires its chapter from before the upgrade, and the retirement says who, what, when and how',
-        'the boundary opens to no pointer that names a writer, whose session the registry holds, or that was imported',
-        'the boundary opens for the writer-unknown lane alone',
-        'once a session has run in the main checkout, a client without hooks cannot retire the main checkout\'s chapter from before the upgrade',
-      ],
-    },
+    // The main checkout's own lane (D372-D376, D378, 2026-11-02) left this
+    // list with the main-lane build: the pre-stamp door's four scenarios
+    // and the @D376 scenario's added Then bound with unit U3b.
     // The driver switch, D278 (2026-10-11): three @D51 install scenarios
     // reworded from "loads the native database binding" to "meets the Node
     // floor and runs this package" (fence: Sanctioned changes, 2026-10-11)

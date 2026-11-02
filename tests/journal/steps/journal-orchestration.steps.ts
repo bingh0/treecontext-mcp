@@ -1,7 +1,7 @@
 import { copyFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
 import { maxSupportedVersion } from '../../../src/persistence/migrations/index.js'
 import { tmpdir } from 'node:os'
-import { join, basename } from 'node:path'
+import { join, basename, dirname } from 'node:path'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { expect } from 'vitest'
@@ -56,9 +56,10 @@ import { runWorker, preCompact } from '../standins.js'
 //
 // Every Then reads a production surface — search, fetch by id, a writer's
 // trail, status, the packet a session-start hook emits — or the SQLite
-// file directly. D186's writer B is still a metadata claim (`agent_type`)
-// written from an unregistered session: D186's claim is about the block,
-// which names whatever writer the row holds.
+// file directly. D186's writer B is a tester subagent of a session the
+// real SessionStart hook registered, stamped from the registry: a role
+// claimed from an unregistered session is shown as "writer unknown"
+// (D376), never as the role it claims.
 
 /** The orchestration wave's world: the reorientation world (a capture
  *  sandbox, a real store, an MCP client, the /clear hook driver — the
@@ -112,6 +113,11 @@ export interface OrchestrationWorld extends RunWorld {
   /** The helpers' rows a Given stored: each helper's report (or return)
    *  and its trail, by the helper's name in the scenario. */
   helpers?: Record<string, { report: string; trail: string[] }>
+  /** D378: the metadata the unplaced client sends beside its own (a role
+   *  it claims, a retirement record of its own making), and each target's
+   *  stored metadata and update moment before the When. */
+  unplacedExtra?: Record<string, unknown>
+  asWas?: Record<string, { m: string; u: number }>
 }
 
 type Hit = { nodeId: string; content: string; metadata: Record<string, unknown> | null; referencedBy?: RefBy }
@@ -300,7 +306,7 @@ function git(cwd: string, ...args: string[]): string {
  *  — asked of the real resolver in a subprocess under the sandbox's
  *  home, so a worktree and its main checkout are seen to share it the
  *  way the hooks see it. */
-async function openGitWorld(w: OrchestrationWorld): Promise<void> {
+async function openGitWorld(w: OrchestrationWorld, opts: { mainStart?: boolean } = {}): Promise<void> {
   w.home = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-orch-home-')))
   w.defer(() => rmSync(w.home!, { recursive: true, force: true }))
   const root = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-orch-repo-')))
@@ -320,7 +326,10 @@ async function openGitWorld(w: OrchestrationWorld): Promise<void> {
   w.sessionId = `cc-${randomBytes(6).toString('hex')}`
   // The store as the first hook mints it: the session-start hook of the
   // orchestrator's main checkout, then the library open a server makes.
-  sessionStart(w, w.repo)
+  // D378's store where no session has run in the main checkout since the
+  // upgrade is minted by the library open alone, and asserted so.
+  if (opts.mainStart === false) mkdirSync(dirname(w.dbPath), { recursive: true })
+  else sessionStart(w, w.repo)
   const store = await FlatStore.open({ database: openNodeSqlite(new DatabaseSync(w.dbPath)), ownsDatabase: true })
   w.defer(() => store.close())
   w.store = store
@@ -343,9 +352,12 @@ async function newSession(w: OrchestrationWorld): Promise<void> {
 export const orchestrationDefiner = (reg: Registry<OrchestrationWorld>): void => {
   // D375: the recovery snapshot's lane (its own section, below).
   snapshotLaneSteps(reg)
+  // D378: the pre-stamp door (its own section, below).
+  preStampSteps(reg)
   // ── D186: one hop deep, the rest on request ──
   reg.define(/^an entry A, an entry B that names A, and an entry C that names B$/, async (w) => {
     await openWorld(w)
+    sessionStart(w)
     const t = now()
     const a = { text: 'decision: the session cookie is SameSite=Lax for the login form', at: t - 3600 }
     const b = { text: 'tester: SameSite=Lax breaks the OAuth callback\nThe callback arrives cross-site and drops the cookie; see the failing e2e run.', at: t - 1800 }
@@ -353,7 +365,13 @@ export const orchestrationDefiner = (reg: Registry<OrchestrationWorld>): void =>
     const ids: Record<string, string> = {}
     ids['A'] = (await mcpNote(w, a.text, {}, { at: a.at }))['node_id'] as string
     await work(w, a.at + 1)
-    ids['B'] = (await mcpNote(w, b.text, { agent_type: 'tester', refs: [ids['A']] }, { at: b.at }))['node_id'] as string
+    // B: the session's tester subagent, its call read from the registry.
+    const tester = `agent-${randomBytes(4).toString('hex')}`
+    subagentStart(w, tester, 'tester')
+    const bReply = await mcpNote(w, b.text, { refs: [ids['A']] }, { at: b.at })
+    expect(bReply).toMatchObject({ writer: 'tester', writer_src: 'provisional' })
+    ids['B'] = bReply['node_id'] as string
+    subagentStop(w, tester, 'tester', 'the OAuth callback finding is written')
     await work(w, b.at + 1)
     ids['C'] = (await mcpNote(w, c.text, { refs: ids['B'] }, { at: c.at }))['node_id'] as string
     await work(w, c.at + 1)
@@ -1055,8 +1073,11 @@ export const orchestrationDefiner = (reg: Registry<OrchestrationWorld>): void =>
     const block = blockOf(w.statusReply!)
     expect(block.lane).toBe(own)
     expect(block.listed).toContain(`(${own})`)
-    expect(block.left_out).toBe(Number(n$))
-    expect(block.other_lanes).toBe(1)
+    // D242's other_lanes: the other lanes' live pointers left out, as
+    // SQLite holds them; D372's count of the lanes holding them, apart.
+    expect(block.other_lanes).toBe(Number(n$))
+    expect(block.other_lanes).toBe(leftOutOf(w, w.statusReply!))
+    expect(block.other_lane_count).toBe(1)
     expect(block.lanes).toEqual([lanePanelEntry(w, other)])
     expect(block.widen).toContain('scope "all"')
   })
@@ -1080,7 +1101,7 @@ export const orchestrationDefiner = (reg: Registry<OrchestrationWorld>): void =>
   reg.define(/^no lane is set apart and no count of lanes left out is given$/, (w) => {
     expect(w.statusReply!['scope']).toBeUndefined()
     const text = JSON.stringify(w.statusReply)
-    for (const k of ['"other_lanes"', '"left_out"', '"lanes"', '"listed"']) expect(text).not.toContain(k)
+    for (const k of ['"other_lanes"', '"other_lane_count"', '"left_out"', '"lanes"', '"listed"']) expect(text).not.toContain(k)
   })
 
   reg.define(/^the status and the packet each count (\d+) other lanes and name the (\d+) whose newest pointer is most recent, newest first$/, (w, n$, named$) => {
@@ -1092,8 +1113,8 @@ export const orchestrationDefiner = (reg: Registry<OrchestrationWorld>): void =>
     expect(others).toHaveLength(n)
     const block = blockOf(w.statusReply!)
     expect(block.lane).toBe('main')
-    expect(block.other_lanes).toBe(n)
-    expect(block.left_out).toBe(n)
+    expect(block.other_lane_count).toBe(n)
+    expect(block.other_lanes).toBe(leftOutOf(w, w.statusReply!))
     expect((block.lanes ?? []).map((l) => l.lane)).toEqual(others.slice(0, named))
     for (const l of block.lanes ?? []) expect(l).toEqual(lanePanelEntry(w, l.lane))
     const packet = w.startPackets!['main']!
@@ -1257,7 +1278,8 @@ export const orchestrationDefiner = (reg: Registry<OrchestrationWorld>): void =>
   })
   reg.define(/^both count the unplaced chapter under a lane named "writer unknown"$/, (w) => {
     const block = blockOf(w.statusReply!)
-    expect(block.other_lanes).toBe(2)
+    expect(block.other_lane_count).toBe(2)
+    expect(block.other_lanes).toBe(leftOutOf(w, w.statusReply!))
     expect(block.lanes).toContainEqual(lanePanelEntry(w, UNKNOWN_WRITER_LABEL))
     expect(namedInLine(otherLanesLineOf(w.startPackets!['main']!) ?? '')).toContainEqual(packetEntry(w, UNKNOWN_WRITER_LABEL))
   })
@@ -1305,7 +1327,8 @@ export const orchestrationDefiner = (reg: Registry<OrchestrationWorld>): void =>
     expect(pointersOf(reply)).toEqual([])
     const block = blockOf(reply)
     expect(block.lane).toBe(lane)
-    expect(block).toMatchObject({ left_out: 1, other_lanes: 1 })
+    expect(block).toMatchObject({ other_lanes: 1, other_lane_count: 1 })
+    expect(block.left_out).toBeUndefined()
     expect(block.lanes).toEqual([lanePanelEntry(w, 'main')])
     expectNoneOf(JSON.stringify(reply), [older!])
     expect(namedInLine(otherLanesLineOf(packet) ?? '')).toEqual([packetEntry(w, 'main')])
@@ -1567,7 +1590,7 @@ export const orchestrationDefiner = (reg: Registry<OrchestrationWorld>): void =>
     const reply = await statusOf(w, w.laneSessions!['main:restart']!)
     expect(pointersOf(reply).map((p) => [p.node_id, p.lane])).toEqual([[w.entries!['main']!.id, 'main']])
     const block = blockOf(reply)
-    expect(block).toMatchObject({ lane: 'main', left_out: 0, other_lanes: 0 })
+    expect(block).toMatchObject({ lane: 'main', other_lanes: 0, other_lane_count: 0 })
     expect(block.lanes).toBeUndefined()
   })
   reg.define(/^the packet carries the chapter as the main checkout's own and no report$/, (w) => {
@@ -1801,7 +1824,15 @@ const MAIN_SELF_LINE = 'This session runs in the main checkout on the branch "ma
 
 type PanelPointer = { node_id: string; kind: string; lane?: string; supersedes?: string[]; metadata?: Record<string, unknown> }
 type LaneEntry = { lane: string; kind: string; age: string; pointers: number }
-type ScopeBlock = { lane?: string; listed?: string; left_out?: number; other_lanes?: number; lanes?: LaneEntry[]; widen?: string; worker?: string; unplaced?: string }
+type ScopeBlock = { lane?: string; listed?: string; left_out?: number; other_lanes?: number; other_lane_count?: number; lanes?: LaneEntry[]; widen?: string; worker?: string; unplaced?: string }
+
+/** The other lanes' live pointers a scoped status left out, from SQLite:
+ *  every live pointer of the store but the ones it listed (under the cap). */
+function leftOutOf(w: OrchestrationWorld, reply: Record<string, unknown>): number {
+  const live = rawAll<{ n: number }>(w,
+    "SELECT count(*) AS n FROM nodes WHERE json_extract(metadata_json, '$.next_session') = 1 OR json_extract(metadata_json, '$.status') = 'active'")[0]!.n
+  return live - pointersOf(reply).length
+}
 
 /** Status as the session `session` reads it: a client opened under that
  *  session id, never one a Given left behind. */
@@ -2071,5 +2102,278 @@ function snapshotLaneSteps(reg: Registry<OrchestrationWorld>): void {
     // search and not in main's.
     expect((await w.store!.query('quillfeather', { topK: 20, lane })).map((r) => r.nodeId)).toContain(id)
     expect((await w.store!.query('quillfeather', { topK: 20, lane: 'main' })).map((r) => r.nodeId)).not.toContain(id)
+  })
+}
+
+// ── D378: the pre-stamp door ────────────────────────────────────────────
+//
+// A client the server cannot place (a Claude Code session no hook
+// registered) writes through the real insert tool over its own server
+// connection; the pre-stamp chapters are library writes with no stamp, the
+// metadata an earlier release's insert tool stamped, in a session the
+// registry never held; the main checkout's and the worktree's sessions are
+// registered by the real SessionStart hook; the imported chapter comes in
+// through the real treecontext_import. Every Then reads the stored row in
+// SQLite and the reply, the status and the export as the client gets them.
+
+/** The store-wide count of rows carrying either half of an across record. */
+function acrossRows(w: OrchestrationWorld): number {
+  return rawAll<{ n: number }>(w,
+    `SELECT count(*) AS n FROM nodes WHERE json_extract(metadata_json, '$._retired_across') IS NOT NULL
+        OR json_extract(metadata_json, '$._supersedes_across') IS NOT NULL`)[0]!.n
+}
+
+/** No session registered in the main checkout: no self row with no
+ *  worktree that is not a ticket door worker's (D235's spelling). */
+function expectNoMainRegistration(w: OrchestrationWorld): void {
+  expect(rawAll(w, "SELECT 1 FROM session_registry WHERE agent_id = '' AND worktree IS NULL AND COALESCE(kind, '') != 'worker'")).toEqual([])
+}
+
+/** The named entry whose text is `text`. */
+function entryByText(w: OrchestrationWorld, text: string): { id: string; text: string } {
+  const e = Object.values(w.entries ?? {}).find((x) => x.text === text)
+  expect(e, `no entry reading "${text}"`).toBeTruthy()
+  return e!
+}
+
+/** The unplaced client's chapter, through the insert tool under its own
+ *  session id, with whatever extra metadata the Given gave it. */
+async function unplacedSupersedes(w: OrchestrationWorld, text: string, targets: string[]): Promise<void> {
+  const session = w.laneSessions!['unplaced']!
+  expect(rawAll(w, 'SELECT 1 FROM session_registry WHERE session_id = ?', session)).toEqual([])
+  await mcpOver(w, { ccSessionId: session })
+  w.asWas = Object.fromEntries(targets.map((id) => [id, rawAll<{ m: string; u: number }>(w, 'SELECT metadata_json AS m, updated_at AS u FROM nodes WHERE node_id = ?', id)[0]!]))
+  w.noteReply = await insert(w, text, { next_session: true, ...w.unplacedExtra }, targets)
+  w.noteId = w.noteReply['node_id'] as string
+  expect(rawMeta(w, w.noteId)).toMatchObject({ _writer_src: 'unregistered', _cc_session_id: session })
+  w.entries!['second'] = { id: w.noteId, text }
+}
+
+/** A target exactly as it was before the When, byte for byte. */
+function expectAsWas(w: OrchestrationWorld, id: string): void {
+  const now = rawAll<{ m: string; u: number }>(w, 'SELECT metadata_json AS m, updated_at AS u FROM nodes WHERE node_id = ?', id)[0]!
+  expect(now, id).toEqual(w.asWas![id])
+}
+
+function preStampSteps(reg: Registry<OrchestrationWorld>): void {
+  reg.define(/^a store whose chapter summary "([^"]+)" was written before the store recorded writers, where no session has registered in the main checkout since$/, async (w, text$) => {
+    const text = String(text$)
+    await openGitWorld(w, { mainStart: false })
+    w.laneSessions = {}
+    w.entries = { older: { id: await olderChapter(w, text), text } }
+    expectNoMainRegistration(w)
+  })
+  reg.define(/^a client the server cannot place, after the store recorded writers(?:, that claims the role "([^"]+)")?$/, (w, role$) => {
+    w.laneSessions!['unplaced'] = `cc-${randomBytes(6).toString('hex')}`
+    w.unplacedExtra = role$ ? { agent_type: String(role$) } : {}
+  })
+  reg.define(/^a client the server cannot place, after the store recorded writers, whose metadata carries a retirement record of its own making$/, (w) => {
+    w.laneSessions!['unplaced'] = `cc-${randomBytes(6).toString('hex')}`
+    const victim = w.entries!['worktree:subproject']!.id
+    w.unplacedExtra = {
+      _retired_across: { by: victim, writer: 'main', writer_src: 'self', at: now(), how: 'pre-stamp' },
+      _supersedes_across: [victim],
+    }
+  })
+  reg.define(/^that client writes the chapter summary "([^"]+)" superseding "([^"]+)"$/, async (w, text$, target$) => {
+    await unplacedSupersedes(w, String(text$), [entryByText(w, String(target$)).id])
+  })
+  reg.define(/^that client writes a chapter summary superseding "([^"]+)"$/, async (w, target$) => {
+    await unplacedSupersedes(w, 'plan: the next release, from a client without hooks', [entryByText(w, String(target$)).id])
+  })
+  reg.define(/^that client writes a chapter summary superseding all four$/, async (w) => {
+    const four = ['worktree:subproject', 'library', 'tester', 'import'].map((k) => w.entries![k]!.id)
+    await unplacedSupersedes(w, 'plan: the next release, from a client without hooks', four)
+  })
+
+  reg.define(/^the reply lists "([^"]+)" as retired across the pre-stamp boundary, apart from the lane's own supersessions$/, (w, text$) => {
+    const first = entryByText(w, String(text$))
+    const r = w.noteReply!
+    expect(r['retired_across'], JSON.stringify(r)).toEqual([first.id])
+    expect(r['superseded']).toEqual([])
+    expect((r['referenced'] as string[] | undefined) ?? []).toEqual([])
+    expect(String(r['retired_across_note'])).toContain('writer unknown')
+    expect(String(r['retired_across_note'])).toContain('pre-stamp')
+    expect(r).toMatchObject({ writer: null, writer_src: 'unregistered' })
+  })
+  reg.define(/^"([^"]+)" is retired, its record naming who as "writer unknown" with the stamp source and the retiring session and never the role it claims, what as the retiring entry, when as the moment, and how as "pre-stamp"$/, (w, text$) => {
+    const first = entryByText(w, String(text$))
+    const m = rawMeta(w, first.id)
+    expect(m['next_session']).toBeUndefined()
+    expect(m['superseded_by']).toBe(w.noteId)
+    expect(m['_superseded_prior']).toEqual({ next_session: true })
+    expect(m['_retired_across']).toEqual({
+      by: w.noteId, writer: UNKNOWN_WRITER_LABEL, writer_src: 'unregistered', session: w.laneSessions!['unplaced'],
+      at: m['superseded_at'], how: 'pre-stamp',
+    })
+    // The retiring row claims a role; the record, deep-equal above, names
+    // "writer unknown" as who, never that role.
+    expect(rawMeta(w, w.noteId!)['agent_type']).toBe('tester')
+  })
+  reg.define(/^"([^"]+)" lists "([^"]+)" as retired across the boundary$/, (w, by$, text$) => {
+    const second = entryByText(w, String(by$))
+    const m = rawMeta(w, second.id)
+    expect(m['_supersedes_across']).toEqual([entryByText(w, String(text$)).id])
+    expect(m['_supersedes_referenced']).toBeUndefined()
+  })
+  reg.define(/^that client calling status sees "([^"]+)" as a live pointer labeled "writer unknown" and no pointer of "([^"]+)" in any lane$/, async (w, live$, gone$) => {
+    const reply = await statusOf(w, w.laneSessions!['unplaced']!)
+    // An unplaced caller sees every lane flat (D372).
+    expect(blockOf(reply).unplaced).toMatch(/could not be placed/)
+    const live = entryByText(w, String(live$))
+    expect(pointersOf(reply).filter((p) => p.node_id === live.id).map((p) => p.lane)).toEqual([UNKNOWN_WRITER_LABEL])
+    // No pointer of it in any lane: the flat list holds every lane's, and
+    // it is named only as what the newer chapter superseded (D185).
+    const gone = entryByText(w, String(gone$)).id
+    expect(pointersOf(reply).map((p) => p.node_id)).not.toContain(gone)
+    expect(pointersOf(reply).find((p) => p.node_id === live.id)!.supersedes).toEqual([gone])
+    expect(new Set(pointersOf(reply).map((p) => p.lane))).toEqual(new Set([UNKNOWN_WRITER_LABEL]))
+  })
+  reg.define(/^exporting "([^"]+)" by id and reading the main lane's writer trail both show the record$/, async (w, text$) => {
+    const first = entryByText(w, String(text$))
+    const record = rawMeta(w, first.id)['_retired_across']
+    expect(record).toBeTruthy()
+    const byId = await fetchById(w, first.id)
+    expect((byId['metadata'] as Record<string, unknown>)['_retired_across']).toEqual(record)
+    const trail = parseTool(await w.client!.callTool({ name: 'treecontext_export', arguments: { writer: 'main' } }))
+    const row = (trail['nodes'] as Array<{ nodeId: string; metadata?: Record<string, unknown> }>).find((n) => n.nodeId === first.id)
+    expect(row, JSON.stringify(trail).slice(0, 2000)).toBeTruthy()
+    expect(row!.metadata!['_retired_across']).toEqual(record)
+  })
+
+  // ── The side door: each victim fails exactly one guard ──
+  reg.define(/^the worktree "([^"]+)"'s own live chapter summary, where no session has registered in the main checkout$/, async (w, name$) => {
+    await openGitWorld(w, { mainStart: false })
+    w.laneSessions = {}
+    const lane = `worktree:${String(name$)}`
+    w.entries = { [lane]: await laneChapter(w, lane, 'plan: scaffold the subproject') }
+    expectNoMainRegistration(w)
+  })
+  reg.define(/^a chapter summary written through the library with no writer stamp in the worktree "([^"]+)"'s session$/, async (w, name$) => {
+    const session = w.laneSessions![`worktree:${String(name$)}`]!
+    const r = await w.store!.insert('plan: the subproject\'s test layout, from a script', { metadata: { next_session: true, _cc_session_id: session } })
+    const m = rawMeta(w, r.nodeId)
+    for (const k of ['_writer', '_writer_src', 'agent_type']) expect(m[k], k).toBeUndefined()
+    expect(sessionKeyOf(w, r.nodeId)).toBe(session)
+    expect(rawAll(w, 'SELECT 1 FROM session_registry WHERE session_id = ?', session).length).toBeGreaterThan(0)
+    w.entries!['library'] = { id: r.nodeId, text: 'plan: the subproject\'s test layout, from a script' }
+  })
+  reg.define(/^a chapter summary from before the store recorded writers that claims the role "([^"]+)"$/, async (w, role$) => {
+    const role = String(role$)
+    const session = `cc-${randomBytes(6).toString('hex')}`
+    const text = `plan: the ${role}'s matrix, from an earlier release`
+    const r = await w.store!.insert(text, {
+      metadata: { next_session: true, agent_type: role, _cc_session_id: session, _cc_session_src: 'env', _session_id: 'conn-old', _conn_id: 'conn-old' },
+      createdAt: now() - 86_400 * 20,
+    })
+    const m = rawMeta(w, r.nodeId)
+    for (const k of ['_writer', '_writer_src', '_door', '_identity']) expect(m[k], k).toBeUndefined()
+    expect(m['agent_type']).toBe(role)
+    expect(rawAll(w, 'SELECT 1 FROM session_registry WHERE session_id = ?', session)).toEqual([])
+    w.entries!['tester'] = { id: r.nodeId, text }
+  })
+  reg.define(/^a chapter summary imported from a teammate's handoff file$/, async (w) => {
+    const text = 'plan: the teammate\'s login form'
+    const aDir = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-orch-devA-')))
+    w.defer(() => rmSync(aDir, { recursive: true, force: true }))
+    const aStore = await FlatStore.open({ database: openNodeSqlite(new DatabaseSync(join(aDir, 'a.db'))), ownsDatabase: true })
+    w.defer(() => aStore.close())
+    await aStore.insert(text, { metadata: { next_session: true } })
+    const aClient = await mcpOver(w, { projectDir: aDir }, aStore)
+    const exported = await aClient.callTool({ name: 'treecontext_export', arguments: { path: 'handoffs/login-plan.json' } }) as { isError?: boolean; content?: Array<{ text?: string }> }
+    expect(exported.isError, exported.content?.[0]?.text).toBeFalsy()
+    mkdirSync(join(w.repo!, 'handoffs'), { recursive: true })
+    copyFileSync(join(aDir, 'handoffs', 'login-plan.json'), join(w.repo!, 'handoffs', 'login-plan.json'))
+    await mcpOver(w, { ccSessionId: w.laneSessions!['worktree:subproject']!, projectDir: w.repo! })
+    const imported = await w.client!.callTool({ name: 'treecontext_import', arguments: { path: 'handoffs/login-plan.json' } }) as { isError?: boolean; content?: Array<{ text?: string }> }
+    expect(imported.isError, imported.content?.[0]?.text).toBeFalsy()
+    const rows = storedRows(w, "session_key LIKE 'handoff:%'").filter((r) => decodeContent(r.content) === text)
+    expect(rows).toHaveLength(1)
+    const m = JSON.parse(rows[0]!.metadata_json) as Record<string, unknown>
+    // Its pointer state and every writer key sit among the file's claims (D223).
+    for (const k of ['_writer', '_writer_src', 'agent_type', 'next_session']) expect(m[k], k).toBeUndefined()
+    expect(m['_handoff_claims']).toMatchObject({ next_session: true })
+    w.entries!['import'] = { id: rows[0]!.node_id, text }
+  })
+  reg.define(/^each of the four is as it was, the reply listing each as referenced, written by another writer, and none as retired across the boundary$/, (w) => {
+    const four = ['worktree:subproject', 'library', 'tester', 'import'].map((k) => w.entries![k]!.id)
+    for (const id of four) expectAsWas(w, id)
+    const r = w.noteReply!
+    expect([...(r['referenced'] as string[])].sort()).toEqual([...four].sort())
+    expect(String(r['referenced_note'])).toMatch(/^Written by another writer/)
+    expect((r['retired_across'] as string[] | undefined) ?? []).toEqual([])
+    expect(r['superseded']).toEqual([])
+  })
+  reg.define(/^no entry in the store carries a retirement across the pre-stamp boundary$/, (w) => {
+    expect(acrossRows(w)).toBe(0)
+  })
+
+  // ── Who may: the writer-unknown lane alone ──
+  reg.define(/^a session in the worktree "([^"]+)" writes a chapter summary superseding it$/, async (w, name$) => {
+    const older = w.entries!['older']!
+    const lane = `worktree:${String(name$)}`
+    await mcpOver(w, { ccSessionId: laneSession(w, lane) })
+    w.asWas = { [older.id]: rawAll<{ m: string; u: number }>(w, 'SELECT metadata_json AS m, updated_at AS u FROM nodes WHERE node_id = ?', older.id)[0]! }
+    w.noteReply = await insert(w, 'plan: the subproject supersedes the first release', { next_session: true }, [older.id])
+    expect(w.noteReply).toMatchObject({ writer: lane, writer_src: 'self' })
+    expectNoMainRegistration(w)
+  })
+  reg.define(/^"([^"]+)" stays live, the reply listing it as referenced, written by another writer$/, (w, text$) => {
+    const older = entryByText(w, String(text$))
+    expectAsWas(w, older.id)
+    expect(rawMeta(w, older.id)['next_session']).toBe(true)
+    expect(w.noteReply).toMatchObject({ superseded: [], referenced: [older.id] })
+    expect(w.noteReply!['retired_across']).toBeUndefined()
+    expect(acrossRows(w)).toBe(0)
+  })
+  reg.define(/^the main checkout's session writes a chapter summary superseding it$/, async (w) => {
+    const older = w.entries!['older']!
+    w.sessionId = `cc-${randomBytes(6).toString('hex')}`
+    sessionStart(w, w.repo!)
+    w.laneSessions!['main'] = w.sessionId
+    await mcpOver(w, { ccSessionId: w.sessionId })
+    w.noteReply = await insert(w, 'plan: the second release, the main checkout\'s own', { next_session: true }, [older.id])
+    expect(w.noteReply).toMatchObject({ writer: 'main', writer_src: 'self' })
+    w.noteId = w.noteReply['node_id'] as string
+  })
+  reg.define(/^"([^"]+)" is retired as the main lane's own, carrying the ordinary trace and no record of a retirement across the boundary$/, (w, text$) => {
+    const older = entryByText(w, String(text$))
+    const m = rawMeta(w, older.id)
+    expect(m['next_session']).toBeUndefined()
+    expect(m).toMatchObject({ superseded_by: w.noteId, _superseded_prior: { next_session: true } })
+    expect(typeof m['superseded_at']).toBe('number')
+    expect(m['_retired_across']).toBeUndefined()
+    expect(rawMeta(w, w.noteId!)['_supersedes_across']).toBeUndefined()
+    expect(w.noteReply).toMatchObject({ superseded: [older.id] })
+    expect(w.noteReply!['retired_across']).toBeUndefined()
+    expect(acrossRows(w)).toBe(0)
+  })
+
+  // ── Once main has run: the incident guard ──
+  reg.define(/^"([^"]+)" stays live and unchanged, the reply listing it as referenced, written by another writer, and no entry carries a retirement across the boundary$/, (w, text$) => {
+    const older = entryByText(w, String(text$))
+    expectAsWas(w, older.id)
+    expect(rawMeta(w, older.id)['next_session']).toBe(true)
+    expect(w.noteReply).toMatchObject({ superseded: [], referenced: [older.id] })
+    expect(String(w.noteReply!['referenced_note'])).toMatch(/^Written by another writer/)
+    expect(w.noteReply!['retired_across']).toBeUndefined()
+    expect(acrossRows(w)).toBe(0)
+  })
+  reg.define(/^the main checkout's next fresh start opens on "([^"]+)" as its own chapter$/, (w, text$) => {
+    const older = entryByText(w, String(text$))
+    const packet = startIn(w, 'main')
+    const lines = packet.split('\n')
+    expect(lines[0]).toBe(MAIN_SELF_LINE)
+    expect(lines[1]).toBe(`The main lane's own chapter summary, ${ageText(createdAtOf(w, older.id), now())} old (id ${older.id}): ${older.text}`)
+  })
+
+  // ── D376's own-lane supersession carries no across record ──
+  reg.define(/^neither chapter carries a retirement across the pre-stamp boundary$/, (w) => {
+    for (const k of ['first', 'second']) {
+      const m = rawMeta(w, w.entries![k]!.id)
+      expect(m['_retired_across'], k).toBeUndefined()
+      expect(m['_supersedes_across'], k).toBeUndefined()
+    }
+    expect(acrossRows(w)).toBe(0)
   })
 }

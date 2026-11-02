@@ -34,6 +34,10 @@ export interface InsertResult {
    *  were not recorded anywhere — the survivor is never modified to hold
    *  them. Present only when there were any. */
   refsNotRecorded?: string[]
+  /** D378: pre-stamp chapters an unplaced writer retired across the
+   *  boundary, apart from `superseded` (the lane's own), each recorded
+   *  under `_retired_across`. Present only when there were any. */
+  retiredAcross?: string[]
   /** A checkpoint under a run's key (D329, D331): the number the store
    *  gave it when it landed, what it supersedes, and who named that
    *  (`writer`, or `store` from the leg's registration, or `pending`
