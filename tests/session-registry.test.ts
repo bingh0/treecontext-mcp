@@ -170,7 +170,7 @@ describe('the hook-staged writer at the drain (D190, D147)', () => {
 // ── F4–F7 of the chunk-5b review: the surfaces, pinned ─────────────────
 
 import { execFileSync } from 'node:child_process'
-import { worktreeSelfLines } from '../src/checkpoints.js'
+import { selfLines } from '../src/checkpoints.js'
 import { agentWriterOf, worktreeLaneName } from '../src/persistence/session-registry.js'
 import { gitSelfOf } from '../src/hooks/git-self.js'
 
@@ -225,55 +225,149 @@ describe('the reply fields of a stamp (F4)', () => {
   })
 })
 
-describe('the worktree packet lines (F4, F7)', () => {
-  it('pins the lines, and an ambiguous row is never the worktree\'s own chapter', async () => {
+describe('the self lines of a fresh start (F4, F7, D373)', () => {
+  it('pins the worktree lines, and an ambiguous row is never the worktree\'s own chapter', async () => {
     const s = await open()
     const own = (await s.insert('plan: wire the login form', { metadata: { next_session: true, _writer: 'worktree:feature-login', _writer_src: 'self' } })).nodeId
-    await s.insert('plan: a guess', { metadata: { next_session: true, _writer: 'worktree:feature-x', _writer_src: 'ambiguous' } })
+    const guess = (await s.insert('plan: a guess', { metadata: { next_session: true, _writer: 'worktree:feature-x', _writer_src: 'ambiguous' } })).nodeId
     await s.insert('build the search box', { metadata: { brief_for: 'feature-search', _writer: 'main', _writer_src: 'self' } })
     await s.close()
     const db = new DatabaseSync(path())
     try {
       const at = Date.now() / 1000
-      const login = worktreeSelfLines(db, { worktree: 'feature-login', branch: 'login-form' }, at)
+      const login = selfLines(db, { worktree: 'feature-login', branch: 'login-form' }, at)
       expect(login[0]).toBe('This session runs in the worktree "feature-login" on the branch "login-form"; it re-orients on that worktree\'s own thread.')
       expect(login[1]).toMatch(new RegExp(`^The worktree's own chapter summary, 0 minutes old \\(id ${own}\\): plan: wire the login form$`))
       expect(login[2]).toBe('  referenced by: none')
-      expect(login).toHaveLength(3)
-      const search = worktreeSelfLines(db, { worktree: 'feature-search', branch: null }, at)
+      // The ambiguous pointer is another lane's, counted and named, never its text or id.
+      expect(login[3]).toBe('1 other lane holds a live pointer, not shown here; the most recent: ambiguous writer (chapter summary, 0 minutes old, 1 live pointer). '
+        + 'To look: treecontext_status with scope "all", or treecontext_export with writer naming the lane.')
+      expect(login).toHaveLength(4)
+      expect(login.join('\n')).not.toContain(guess)
+      const search = selfLines(db, { worktree: 'feature-search', branch: null }, at)
       expect(search[0]).toBe('This session runs in the worktree "feature-search"; it re-orients on that worktree\'s own thread.')
       expect(search[1]).toMatch(/^Brief for this worktree from main, 0 minutes old \(id [0-9a-f]+\): build the search box$/)
       expect(search[2]).toBe('The worktree "feature-search" has no chapter summary of its own yet; it starts from the brief.')
-      expect(worktreeSelfLines(db, { worktree: 'feature-x', branch: null }, at)[1])
+      expect(selfLines(db, { worktree: 'feature-x', branch: null }, at)[1])
         .toBe('No chapter summary or brief exists for the worktree "feature-x" yet; it starts fresh.')
-      expect(worktreeSelfLines(db, { worktree: null, branch: 'main' }, at)).toEqual([])
+      const main = selfLines(db, { worktree: null, branch: 'main' }, at)
+      expect(main[0]).toBe('This session runs in the main checkout on the branch "main"; it re-orients on the main lane\'s own thread.')
+      expect(main[1]).toBe('No chapter summary, bookmark or brief exists for the main lane yet; it starts fresh.')
+      expect(main[2]).toMatch(/^2 other lanes hold live pointers, not shown here; the most recent: (ambiguous writer|worktree:feature-login) \(chapter summary/)
+    } finally { db.close() }
+  })
+
+  it('pins the main lane\'s lines: its chapter (an unstamped one is main\'s), its bookmark alone, its brief, and the other lanes capped at three', async () => {
+    const s = await open()
+    const t = Math.floor(Date.now() / 1000)
+    const older = (await s.insert('plan: the first release', { metadata: { next_session: true }, createdAt: t - 7200 })).nodeId
+    const unknown = (await s.insert('plan: a stranger', { metadata: { next_session: true, _writer_src: 'unregistered' }, createdAt: t - 60 })).nodeId
+    for (const [i, n] of ['a', 'b', 'c', 'd'].entries()) {
+      await s.insert(`plan: worktree ${n}`, { metadata: { next_session: true, _writer: `worktree:${n}`, _writer_src: 'self' }, createdAt: t - 600 + i * 60 })
+    }
+    await s.close()
+    let db = new DatabaseSync(path())
+    try {
+      const main = selfLines(db, { worktree: null, branch: 'main', toplevel: '/repo' }, t)
+      expect(main[1]).toBe(`The main lane's own chapter summary, 2 hours old (id ${older}): plan: the first release`)
+      expect(main[2]).toBe('  referenced by: none')
+      // Newest first, three named, the rest counted; "writer unknown" a lane apart.
+      expect(main[3]).toBe('5 other lanes hold live pointers, not shown here; the most recent: writer unknown (chapter summary, 1 minute old, 1 live pointer); '
+        + 'worktree:d (chapter summary, 7 minutes old, 1 live pointer); worktree:c (chapter summary, 8 minutes old, 1 live pointer); and 2 more. '
+        + 'To look: treecontext_status with scope "all", or treecontext_export with writer naming the lane.')
+      expect(main).toHaveLength(4)
+      expect(main.join('\n')).not.toContain(unknown)
+      expect(main.join('\n')).not.toContain('stranger')
+      expect(selfLines(db, { worktree: null, branch: null, toplevel: null }, t)[0])
+        .toBe('This session runs outside any git checkout, in the main lane; it re-orients on the main lane\'s own thread.')
+    } finally { db.close() }
+    // Bookmark only, and a brief to main.
+    const s2 = await open()
+    await s2.delete(older)
+    const bm = (await s2.insert('at: README install section half rewritten', { metadata: { next_session: true, kind: 'bookmark', _writer: 'main', _writer_src: 'self' }, createdAt: t - 120 })).nodeId
+    const brief = (await s2.insert('document the doctor table', { metadata: { brief_for: 'main', _writer: 'tester', _writer_src: 'self' }, createdAt: t - 30 })).nodeId
+    await s2.close()
+    db = new DatabaseSync(path())
+    try {
+      const main = selfLines(db, { worktree: null, branch: 'main', toplevel: '/repo' }, t)
+      expect(main[1]).toBe(`The main lane has no chapter summary of its own; its live bookmark, 2 minutes old (id ${bm}): at: README install section half rewritten`)
+      expect(main[2]).toBe(`Brief for this checkout from tester, 0 minutes old (id ${brief}): document the doctor table`)
+      expect(main[3]).toMatch(/^5 other lanes hold live pointers/)
     } finally { db.close() }
   })
 })
 
-describe('status in a worktree lists its own lane (F5, D242)', () => {
-  it('confines the pointers with a scope disclosure; scope "all" and the main checkout list every lane', async () => {
+describe('status lists the session\'s own lane (F5, D242, D372)', () => {
+  it('confines the pointers with a scope block in a worktree and in the main checkout; scope "all" lists every lane flat, each naming its lane', async () => {
     const s = await open()
     withRaw((db) => { registerSelf(db, 'wt', WT, 100); registerSelf(db, 'm', MAIN, 100) })
     const wt = await client(s, 'wt')
     const own = (await insert(wt.c, 'plan: the login form', { next_session: true }))['node_id'] as string
     const m = await client(s, 'm')
     const mainPtr = (await insert(m.c, 'plan: the release', { next_session: true }))['node_id'] as string
-    await s.insert('plan: an older unstamped pointer', { metadata: { next_session: true } })
+    const older = (await s.insert('plan: an older unstamped pointer', { metadata: { next_session: true } })).nodeId
     const st = parseToolResult(await wt.c.callTool({ name: 'treecontext_status', arguments: {} }))
     expect((st['resume_pointers'] as Array<{ node_id: string }>).map((p) => p.node_id)).toEqual([own])
+    expect((st['resume_pointers'] as Array<{ lane: string }>)[0]!.lane).toBe('worktree:feature-login')
     expect(st['scope']).toEqual({
       lane: 'worktree:feature-login', listed: "the resume pointers of this worktree's own lane (worktree:feature-login)",
-      other_lanes: 2, widen: 'pass scope "all" to list every lane\'s pointers',
+      left_out: 2, other_lanes: 1, lanes: [{ lane: 'main', kind: 'chapter summary', age: '0 minutes old', pointers: 2 }],
+      widen: 'pass scope "all" to list every lane\'s pointers; treecontext_export with writer reads one lane\'s trail',
     })
     const every = parseToolResult(await wt.c.callTool({ name: 'treecontext_status', arguments: { scope: 'all' } }))
-    expect((every['resume_pointers'] as unknown[]).length).toBe(3)
+    expect((every['resume_pointers'] as Array<{ lane: string }>).map((p) => p.lane).sort()).toEqual(['main', 'main', 'worktree:feature-login'])
     expect(every['scope']).toBeUndefined()
     const ms = parseToolResult(await m.c.callTool({ name: 'treecontext_status', arguments: {} }))
-    expect((ms['resume_pointers'] as Array<{ node_id: string }>).map((p) => p.node_id)).toContain(mainPtr)
-    expect((ms['resume_pointers'] as unknown[]).length).toBe(3)
-    expect(ms['scope']).toBeUndefined()
+    expect((ms['resume_pointers'] as Array<{ node_id: string }>).map((p) => p.node_id).sort()).toEqual([older, mainPtr].sort())
+    expect(ms['scope']).toEqual({
+      lane: 'main', listed: "the resume pointers of the main checkout's own lane (main)",
+      left_out: 1, other_lanes: 1, lanes: [{ lane: 'worktree:feature-login', kind: 'chapter summary', age: '0 minutes old', pointers: 1 }],
+      widen: 'pass scope "all" to list every lane\'s pointers; treecontext_export with writer reads one lane\'s trail',
+    })
+    expect(JSON.stringify(ms)).not.toContain(own)
+    expect(JSON.stringify(ms)).not.toContain('login form')
     await wt.close(); await m.close()
+    await s.close()
+  })
+
+  it('lists every lane flat for a worker of the ticket door, naming it a worker, never unplaced', async () => {
+    const s = await open()
+    withRaw((db) => { registerSelf(db, 'm', MAIN, 100); registerSelf(db, 'wt', WT, 100) })
+    const m = await client(s, 'm')
+    const mainPtr = (await insert(m.c, 'plan: the release', { next_session: true }))['node_id'] as string
+    const wt = await client(s, 'wt')
+    const wtPtr = (await insert(wt.c, 'plan: the login form', { next_session: true }))['node_id'] as string
+    await s.registerWorker({
+      sessionId: 'w1', door: 'library',
+      ticket: { parent: { id: 'm' }, run: 'r1', key: 'k', role: 'builder', checkpointer: 'builder' },
+      process: { pid: 4242, start: 1000, host: 'a-host-that-is-not-this-one' },
+    })
+    const w = await client(s, 'w1')
+    const st = parseToolResult(await w.c.callTool({ name: 'treecontext_status', arguments: {} }))
+    expect((st['resume_pointers'] as Array<{ node_id: string; lane: string }>).map((p) => [p.node_id, p.lane]).sort())
+      .toEqual([[mainPtr, 'main'], [wtPtr, 'worktree:feature-login']].sort())
+    expect(st['scope']).toEqual({
+      listed: "every lane's resume pointers, flat, each naming its lane",
+      worker: 'this session is a worker of the ticket door (builder), in no checkout\'s lane: its harness feeds it by its brief and the key lookup, so status lists every lane',
+    })
+    expect(JSON.stringify(st['scope'])).not.toContain('could not be placed')
+    await m.close(); await wt.close(); await w.close()
+    await s.close()
+  })
+
+  it('lists every lane flat for a session it cannot place, and says so', async () => {
+    const s = await open()
+    withRaw((db) => registerSelf(db, 'm', MAIN, 100))
+    const m = await client(s, 'm')
+    await insert(m.c, 'plan: the release', { next_session: true })
+    const u = await client(s, 'nobody')
+    const st = parseToolResult(await u.c.callTool({ name: 'treecontext_status', arguments: {} }))
+    expect((st['resume_pointers'] as unknown[]).length).toBe(1)
+    expect(st['scope']).toEqual({
+      listed: "every lane's resume pointers, flat, each naming its lane",
+      unplaced: 'this session could not be placed: no session-start hook registered it in a checkout, so status lists every lane',
+    })
+    await m.close(); await u.close()
     await s.close()
   })
 })

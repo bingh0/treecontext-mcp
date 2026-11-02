@@ -140,6 +140,44 @@ export function laneWriterOf(meta: Record<string, unknown> | null | undefined): 
   return writer === undefined || writer === MAIN_WRITER ? MAIN_LANE : writer
 }
 
+/** How many other lanes a status panel or a fresh start's packet names
+ *  (D372, D373): the rest are counted, never listed, so a store of a
+ *  thousand worktrees costs the same line as one of four. */
+export const OTHER_LANES_NAMED = 3
+
+/** One lane holding live pointers, as status and the packet say it: its
+ *  name, how many live pointers it holds, and the kind and moment of the
+ *  newest. Never a pointer's text or id (D373). */
+export interface LaneSummary {
+  /** The lane key (laneWriterOf). */
+  laneKey: string
+  /** The lane as a reader is told it (laneLabelOf). */
+  lane: string
+  pointers: number
+  newestKind: 'chapter' | 'bookmark'
+  newestAt: number
+}
+
+/** The lanes a set of live pointers belongs to, the most recently active
+ *  first (by each lane's newest pointer). */
+export function summarizeLanes(
+  pointers: ReadonlyArray<{ laneKey: string; kind: 'chapter' | 'bookmark'; createdAt: number }>,
+): LaneSummary[] {
+  const by = new Map<string, LaneSummary>()
+  for (const p of pointers) {
+    const s = by.get(p.laneKey)
+    if (!s) { by.set(p.laneKey, { laneKey: p.laneKey, lane: laneLabelOf(p.laneKey), pointers: 1, newestKind: p.kind, newestAt: p.createdAt }); continue }
+    s.pointers += 1
+    if (p.createdAt > s.newestAt) { s.newestAt = p.createdAt; s.newestKind = p.kind }
+  }
+  return [...by.values()].sort((a, b) => b.newestAt - a.newestAt || a.lane.localeCompare(b.lane))
+}
+
+/** A lane's kind of newest pointer, in the words status uses (D158). */
+export function pointerKindWords(kind: 'chapter' | 'bookmark'): string {
+  return kind === 'bookmark' ? 'bookmark' : 'chapter summary'
+}
+
 /** One referrer as every read surface shows it. */
 export interface Referrer {
   nodeId: string

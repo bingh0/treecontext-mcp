@@ -111,8 +111,9 @@ scenario, are in `docs/beta3-bindings-audit.md`.
   supersession respects, the writer an entry is shown with, and
   "referenced by" one hop deep
 - `src/checkpoints.ts` — chapter summaries and bookmarks, the bookmark
-  interval, the /clear session chain, the re-orientation packet, a
-  worktree's self lines
+  interval, the /clear session chain, the re-orientation packet, a fresh
+  start's self lines for a worktree and the main checkout alike, and its
+  other-lanes line (counted, at most three named, never their text)
 - `src/persistence/session-registry.ts` — the session registry (self and
   live subagents) and the writer stamp a tool-written row gets at insert
 - `src/persistence/leg-registry.ts` — legs and workers on the registry

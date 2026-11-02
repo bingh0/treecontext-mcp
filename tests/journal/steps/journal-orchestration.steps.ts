@@ -17,7 +17,7 @@ import { writeAgentTranscript } from '../capture-harness.js'
 import { TS_ROOT, tsxArgv } from '../proc.js'
 import { sandboxedSpawnEnv } from '../../helpers/cli-spawn.js'
 import { storesDirIn } from '../../helpers/store-fixtures.js'
-import { ageText } from '../../../src/references.js'
+import { ageText, UNKNOWN_WRITER_LABEL } from '../../../src/references.js'
 import {
   runHook, hookJson, spawnHooksAtOnce, drainStaging, bashPayload,
 } from '../capture-harness.js'
@@ -484,6 +484,11 @@ export const orchestrationDefiner = (reg: Registry<OrchestrationWorld>): void =>
     // Nor a resume pointer: the status panel the next session reads.
     const panel = await statusPanel(w)
     expect(JSON.stringify(panel['resume_pointers'] ?? [])).not.toContain(w.noteId!)
+    // Nor named in the scope block, nor listed when every lane is asked for.
+    expect(JSON.stringify(panel['scope'] ?? {})).not.toContain(w.noteId!)
+    const every = parseTool(await w.client!.callTool({ name: 'treecontext_status', arguments: { scope: 'all' } }))
+    expect(every['scope']).toBeUndefined()
+    expect(JSON.stringify(every)).not.toContain(w.noteId!)
   })
 
   // ── D263: what an earlier treecontext stored, re-marked on open ──
@@ -663,7 +668,15 @@ export const orchestrationDefiner = (reg: Registry<OrchestrationWorld>): void =>
   reg.define(/^the packet handed to a session starting in the main checkout at the same time does not carry it$/, (w) => {
     w.sessionId = `cc-${randomBytes(6).toString('hex')}`
     const main = sessionStart(w, w.repo!)
+    // D373: the packet it is checked against is one that orients: it opens
+    // on the main lane's own line and names the worktree's lane among the
+    // others, by kind and age, so an absence below is the lane rule's.
+    expect(main.split('\n')[0], main).toBe(MAIN_SELF_LINE)
+    expect(namedInLine(otherLanesLineOf(main) ?? '')).toEqual([{
+      lane: 'worktree:feature-login', kind: 'chapter summary', age: `${ageText(createdAtOf(w, w.planId!), now())} old`, pointers: 1,
+    }])
     expect(main).not.toContain(String(w.chapterRow!['text']))
+    expect(main).not.toContain(String(w.chapterRow!['text']).slice(0, 20))
     expect(main).not.toContain(w.planId!)
     // The main checkout registered as itself: no worktree.
     expect(rawAll(w, "SELECT worktree FROM session_registry WHERE session_id = ? AND agent_id = ''", w.sessionId)).toEqual([{ worktree: null }])
@@ -962,6 +975,321 @@ export const orchestrationDefiner = (reg: Registry<OrchestrationWorld>): void =>
       expect(contentBytes(now[id]!.content).equals(contentBytes(before.content))).toBe(true)
     }
   })
+
+  // ── D372, D373: status and the fresh start, scoped to the session's lane ──
+  //
+  // Every lane's chapter is written through the tools by a session the
+  // real SessionStart hook registered in its checkout (laneChapter), so
+  // its stamp is the registry's; every status is read through a client
+  // opened under the session under test (statusOf), never a client left
+  // over from a Given; every packet is the real hook's output for a new
+  // session id in that checkout (startIn).
+  reg.define(/^the main checkout's live chapter summary "([^"]+)"$/, async (w, text$) => {
+    await openGitWorld(w)
+    w.laneSessions = { main: w.sessionId! }
+    w.entries = { main: await laneChapter(w, 'main', String(text$)) }
+  })
+  reg.define(/^a live chapter summary written later from the worktree "([^"]+)" that reads "([^"]+)"$/, async (w, name$, text$) => {
+    const lane = `worktree:${String(name$)}`
+    w.entries![lane] = await laneChapter(w, lane, String(text$))
+    expect(createdAtOf(w, w.entries![lane]!.id)).toBeGreaterThan(createdAtOf(w, w.entries!['main']!.id))
+  })
+  reg.define(/^an older chapter summary written before the store recorded writers, reading "([^"]+)"$/, async (w, text$) => {
+    const text = String(text$)
+    w.entries!['older'] = { id: await olderChapter(w, text), text }
+  })
+  reg.define(/^the main checkout's live chapter summary and a live chapter summary from the worktree "([^"]+)"$/, async (w, name$) => {
+    await openGitWorld(w)
+    w.laneSessions = { main: w.sessionId! }
+    w.entries = { main: await laneChapter(w, 'main', 'plan: rewrite the README\'s install section') }
+    const lane = `worktree:${String(name$)}`
+    w.entries[lane] = await laneChapter(w, lane, 'plan: scaffold the subproject')
+  })
+  reg.define(/^the main checkout's live chapter summary and live chapter summaries from (\d+) worktrees, each written later than the last$/, async (w, n$) => {
+    await openGitWorld(w)
+    w.laneSessions = { main: w.sessionId! }
+    w.entries = { main: await laneChapter(w, 'main', 'plan: rewrite the README\'s install section') }
+    for (let i = 1; i <= Number(n$); i++) {
+      const lane = `worktree:wt-${i}`
+      w.entries[lane] = await laneChapter(w, lane, `plan: the wt-${i} worktree's own chapter, number ${i}`)
+    }
+  })
+
+  reg.define(/^the session in the worktree "([^"]+)" calls status$/, async (w, name$) => {
+    w.statusReply = await statusOf(w, w.laneSessions![`worktree:${String(name$)}`]!)
+  })
+  reg.define(/^the main checkout's session calls status$/, async (w) => {
+    w.statusReply = await statusOf(w, w.laneSessions!['main']!)
+  })
+  reg.define(/^the main checkout's session calls status and then starts a new session$/, async (w) => {
+    w.statusReply = await statusOf(w, w.laneSessions!['main']!)
+    w.startPackets = { main: startIn(w, 'main') }
+  })
+
+  reg.define(/^the developer sees the worktree's chapter as the only live pointer listed$/, (w) => {
+    const lane = Object.keys(w.entries!).find((k) => k.startsWith('worktree:'))!
+    expect(pointersOf(w.statusReply!).map((p) => [p.node_id, p.lane])).toEqual([[w.entries![lane]!.id, lane]])
+  })
+  reg.define(/^the developer sees the main checkout's chapter and the older chapter as the main lane's live pointers, newest first, and nothing else$/, (w) => {
+    const { main, older } = w.entries!
+    expect(createdAtOf(w, main!.id)).toBeGreaterThan(createdAtOf(w, older!.id))
+    expect(pointersOf(w.statusReply!).map((p) => [p.node_id, p.lane])).toEqual([[main!.id, 'main'], [older!.id, 'main']])
+    expect(w.statusReply!['resume_message']).toMatch(/^2 resume pointer\(s\)/)
+  })
+  reg.define(/^the status names the (worktree's|main) lane, counts (\d+) live pointers? of other lanes left out, names (?:the main lane|the worktree "([^"]+)") with the kind and age of its newest pointer, and says how to widen$/, (w, whose$, n$, other$) => {
+    const own = whose$ === 'main' ? 'main' : Object.keys(w.laneSessions!).find((k) => k.startsWith('worktree:'))!
+    const other = other$ ? `worktree:${String(other$)}` : 'main'
+    const block = blockOf(w.statusReply!)
+    expect(block.lane).toBe(own)
+    expect(block.listed).toContain(`(${own})`)
+    expect(block.left_out).toBe(Number(n$))
+    expect(block.other_lanes).toBe(1)
+    expect(block.lanes).toEqual([lanePanelEntry(w, other)])
+    expect(block.widen).toContain('scope "all"')
+  })
+  reg.define(/^the status carries none of the main checkout's chapter's text or id$/, (w) => {
+    expectNoneOf(JSON.stringify(w.statusReply), [w.entries!['main']!])
+  })
+  reg.define(/^the worktree's chapter is not listed though it is the newest in the store, and none of its text or id appears$/, (w) => {
+    const lane = Object.keys(w.entries!).find((k) => k.startsWith('worktree:'))!
+    const wt = w.entries![lane]!
+    const newest = rawAll<{ node_id: string }>(w,
+      "SELECT node_id FROM nodes WHERE json_extract(metadata_json, '$.next_session') = 1 ORDER BY created_at DESC LIMIT 1")
+    expect(newest).toEqual([{ node_id: wt.id }])
+    expect(pointersOf(w.statusReply!).map((p) => p.node_id)).not.toContain(wt.id)
+    expectNoneOf(JSON.stringify(w.statusReply), [wt])
+  })
+
+  reg.define(/^the developer sees both chapters in one list, newest first, each naming its lane$/, (w) => {
+    const lane = Object.keys(w.entries!).find((k) => k.startsWith('worktree:'))!
+    expect(pointersOf(w.statusReply!).map((p) => [p.node_id, p.lane])).toEqual([[w.entries![lane]!.id, lane], [w.entries!['main']!.id, 'main']])
+  })
+  reg.define(/^no lane is set apart and no count of lanes left out is given$/, (w) => {
+    expect(w.statusReply!['scope']).toBeUndefined()
+    const text = JSON.stringify(w.statusReply)
+    for (const k of ['"other_lanes"', '"left_out"', '"lanes"', '"listed"']) expect(text).not.toContain(k)
+  })
+
+  reg.define(/^the status and the packet each count (\d+) other lanes and name the (\d+) whose newest pointer is most recent, newest first$/, (w, n$, named$) => {
+    const n = Number(n$)
+    const named = Number(named$)
+    // The other lanes, newest first, as SQLite holds their chapters.
+    const others = Object.keys(w.entries!).filter((k) => k !== 'main')
+      .sort((a, b) => createdAtOf(w, w.entries![b]!.id) - createdAtOf(w, w.entries![a]!.id))
+    expect(others).toHaveLength(n)
+    const block = blockOf(w.statusReply!)
+    expect(block.lane).toBe('main')
+    expect(block.other_lanes).toBe(n)
+    expect(block.left_out).toBe(n)
+    expect((block.lanes ?? []).map((l) => l.lane)).toEqual(others.slice(0, named))
+    for (const l of block.lanes ?? []) expect(l).toEqual(lanePanelEntry(w, l.lane))
+    const packet = w.startPackets!['main']!
+    const line = otherLanesLineOf(packet)
+    if (n === 0) {
+      expect(line, packet).toBeUndefined()
+      return
+    }
+    expect(line, packet).toBeTruthy()
+    expect(line).toMatch(new RegExp(`^${n === 1 ? '1 other lane holds a live pointer' : `${n} other lanes hold live pointers`}, `))
+    expect(namedInLine(line!).map((l) => l.lane)).toEqual(others.slice(0, named))
+    if (n > named) expect(line).toContain(`; and ${n - named} more.`)
+    else expect(line).toMatch(/ live pointers?\)\. To look: /)
+  })
+  reg.define(/^neither carries any other lane's chapter text or id$/, (w) => {
+    const others = Object.entries(w.entries!).filter(([k]) => k !== 'main').map(([, e]) => e)
+    expectNoneOf(JSON.stringify(w.statusReply), others)
+    expectNoneOf(w.startPackets!['main']!, others)
+    // The main lane's own chapter is what both lead with.
+    expect(pointersOf(w.statusReply!).map((p) => p.node_id)).toEqual([w.entries!['main']!.id])
+    expect(w.startPackets!['main']!).toContain(`(id ${w.entries!['main']!.id})`)
+  })
+
+  // ── D373: the restarted main checkout (the owner's incident) ──
+  reg.define(/^a session in the main checkout that wrote the chapter summary "([^"]+)" and then stopped$/, async (w, text$) => {
+    await openGitWorld(w)
+    w.laneSessions = { main: w.sessionId! }
+    w.entries = { main: await laneChapter(w, 'main', String(text$)) }
+  })
+  reg.define(/^a session in the worktree "([^"]+)" that wrote the newer chapter summary "([^"]+)"$/, async (w, name$, text$) => {
+    const lane = `worktree:${String(name$)}`
+    w.entries![lane] = await laneChapter(w, lane, String(text$))
+    expect(createdAtOf(w, w.entries![lane]!.id)).toBeGreaterThan(createdAtOf(w, w.entries!['main']!.id))
+  })
+  reg.define(/^a new session starts in the main checkout under a new session id, by a startup and again by a resume$/, (w) => {
+    const before = w.laneSessions!['main']
+    const startup = startIn(w, 'main', 'startup')
+    w.laneSessions!['main:startup'] = w.sessionId!
+    const resume = startIn(w, 'main', 'resume')
+    w.laneSessions!['main:resume'] = w.sessionId!
+    expect(new Set([before, w.laneSessions!['main:startup'], w.laneSessions!['main:resume']]).size).toBe(3)
+    w.startPackets = { startup, resume }
+  })
+  reg.define(/^the packet handed to its agent opens by saying the session runs in the main checkout and re-orients on the main lane's own thread$/, (w) => {
+    for (const packet of Object.values(w.startPackets!)) expect(packet.split('\n')[0], packet).toBe(MAIN_SELF_LINE)
+  })
+  reg.define(/^the packet carries the main checkout's chapter summary labeled as its own, with its age and id$/, (w) => {
+    const main = w.entries!['main']!
+    for (const [source, packet] of Object.entries(w.startPackets!)) {
+      const lines = packet.split('\n')
+      expect(lines[1], packet).toBe(`The main lane's own chapter summary, ${ageText(createdAtOf(w, main.id), now())} old (id ${main.id}): ${main.text}`)
+      if (source === 'resume') {
+        // The self lines stand whole outside a resume's budget of 500
+        // characters; only what follows them is the budget's.
+        const selfEnd = lines.findIndex((l) => /^(No prior snapshot|Snapshot #)/.test(l))
+        expect(selfEnd, packet).toBeGreaterThan(2)
+        expect(otherLanesLineOf(lines.slice(0, selfEnd).join('\n'))).toMatch(/To look: treecontext_status with scope "all", or treecontext_export with writer naming the lane\.$/)
+        expect(lines.slice(selfEnd).join('\n').length).toBeLessThanOrEqual(500)
+      }
+    }
+  })
+  reg.define(/^the packet says (\d+) other lanes? holds? a live pointer, names the worktree "([^"]+)" with the kind and age of that pointer, and says where to look$/, (w, n$, name$) => {
+    const lane = `worktree:${String(name$)}`
+    for (const packet of Object.values(w.startPackets!)) {
+      const line = otherLanesLineOf(packet)
+      expect(line, packet).toMatch(new RegExp(`^${Number(n$)} other lanes? holds? a live pointer, `))
+      expect(namedInLine(line!)).toEqual([packetEntry(w, lane)])
+      expect(line).toContain('To look: treecontext_status with scope "all", or treecontext_export with writer naming the lane.')
+    }
+  })
+  reg.define(/^the packet carries none of the worktree's chapter's text or id$/, (w) => {
+    const others = Object.entries(w.entries!).filter(([k]) => k.startsWith('worktree:')).map(([, e]) => e)
+    for (const packet of Object.values(w.startPackets!)) expectNoneOf(packet, others)
+  })
+  reg.define(/^the status it calls lists the main checkout's chapter as its own and not the worktree's$/, async (w) => {
+    // A fresh client under the restarted session's own id: what its own
+    // server would read.
+    const reply = await statusOf(w, w.laneSessions!['main:resume']!)
+    const lane = Object.keys(w.entries!).find((k) => k.startsWith('worktree:'))!
+    expect(pointersOf(reply).map((p) => [p.node_id, p.lane])).toEqual([[w.entries!['main']!.id, 'main']])
+    const block = blockOf(reply)
+    expect(block.lane).toBe('main')
+    expect(block.lanes).toEqual([lanePanelEntry(w, lane)])
+    expectNoneOf(JSON.stringify(reply), [w.entries![lane]!])
+  })
+
+  // ── D373: a bookmark only; the main checkout alone ──
+  reg.define(/^a main checkout whose only checkpoint is the live bookmark "([^"]+)"$/, async (w, text$) => {
+    const text = String(text$)
+    await openGitWorld(w)
+    w.laneSessions = { main: w.sessionId! }
+    await mcpOver(w, { ccSessionId: w.sessionId! })
+    const reply = await insert(w, text, { kind: 'bookmark' })
+    expect(reply).toMatchObject({ writer: 'main', writer_src: 'self' })
+    w.entries = { bookmark: { id: reply['node_id'] as string, text } }
+    expect(rawAll(w, "SELECT node_id FROM nodes WHERE json_extract(metadata_json, '$.next_session') = 1")).toEqual([{ node_id: w.entries['bookmark']!.id }])
+  })
+  reg.define(/^a session in the worktree "([^"]+)" that wrote the chapter summary "([^"]+)"$/, async (w, name$, text$) => {
+    const lane = `worktree:${String(name$)}`
+    w.entries![lane] = await laneChapter(w, lane, String(text$))
+  })
+  reg.define(/^a session starts in the main checkout$/, (w) => {
+    w.startPackets = { main: startIn(w, 'main') }
+  })
+  reg.define(/^the packet says the main lane has no chapter summary of its own and carries the bookmark, named as a bookmark, with its age and id$/, (w) => {
+    const packet = w.startPackets!['main']!
+    const bm = w.entries!['bookmark']!
+    const lines = packet.split('\n')
+    expect(lines[0], packet).toBe(MAIN_SELF_LINE)
+    expect(lines[1]).toBe(`The main lane has no chapter summary of its own; its live bookmark, ${ageText(createdAtOf(w, bm.id), now())} old (id ${bm.id}): ${bm.text}`)
+    // No chapter line anywhere among the self lines: the bookmark line is
+    // followed directly by the other lanes' line.
+    expect(lines[2]).toBe(otherLanesLineOf(packet))
+  })
+  reg.define(/^the packet names the worktree "([^"]+)" among other lanes and carries none of its chapter's text or id$/, (w, name$) => {
+    const lane = `worktree:${String(name$)}`
+    const packet = w.startPackets!['main']!
+    expect(namedInLine(otherLanesLineOf(packet) ?? '')).toEqual([packetEntry(w, lane)])
+    expectNoneOf(packet, [w.entries![lane]!])
+  })
+  reg.define(/^a store in which only the main checkout ever wrote, holding one live chapter summary$/, async (w) => {
+    await openGitWorld(w)
+    w.laneSessions = { main: w.sessionId! }
+    w.entries = { main: await laneChapter(w, 'main', 'plan: rewrite the README\'s install section') }
+    expect(rawAll(w, 'SELECT DISTINCT worktree FROM session_registry')).toEqual([{ worktree: null }])
+    expect(rawAll(w, "SELECT node_id FROM nodes WHERE json_extract(metadata_json, '$.next_session') = 1")).toEqual([{ node_id: w.entries['main']!.id }])
+  })
+  reg.define(/^the packet opens with the main checkout's own line and carries its chapter summary labeled as its own$/, (w) => {
+    const packet = w.startPackets!['main']!
+    const main = w.entries!['main']!
+    const lines = packet.split('\n')
+    expect(lines[0], packet).toBe(MAIN_SELF_LINE)
+    expect(lines[1]).toBe(`The main lane's own chapter summary, ${ageText(createdAtOf(w, main.id), now())} old (id ${main.id}): ${main.text}`)
+  })
+  reg.define(/^the packet carries no line about other lanes$/, (w) => {
+    const packet = w.startPackets!['main']!
+    expect(otherLanesLineOf(packet), packet).toBeUndefined()
+    // The self lines end with the chapter's referrers; what follows is the
+    // start's own payload, a fresh session's with nothing staged.
+    expect(packet.split('\n').slice(2)).toEqual(['  referenced by: none', 'No prior context available. Use treecontext_query to search project memory.'])
+  })
+
+  // ── D376: the undetermined writers in status and the packet ──
+  reg.define(/^the status and the packet list the main checkout's chapter as the main lane's own, and not the unplaced one$/, (w) => {
+    const { main, unknown } = w.entries!
+    expect(pointersOf(w.statusReply!).map((p) => [p.node_id, p.lane])).toEqual([[main!.id, 'main']])
+    expect(blockOf(w.statusReply!).lane).toBe('main')
+    const packet = w.startPackets!['main']!
+    expect(packet.split('\n')[0]).toBe(MAIN_SELF_LINE)
+    expect(packet.split('\n')[1]).toBe(`The main lane's own chapter summary, ${ageText(createdAtOf(w, main!.id), now())} old (id ${main!.id}): ${main!.text}`)
+    expectNoneOf(JSON.stringify(w.statusReply), [unknown!])
+    expectNoneOf(packet, [unknown!])
+  })
+  reg.define(/^both count the unplaced chapter under a lane named "writer unknown"$/, (w) => {
+    const block = blockOf(w.statusReply!)
+    expect(block.other_lanes).toBe(2)
+    expect(block.lanes).toContainEqual(lanePanelEntry(w, UNKNOWN_WRITER_LABEL))
+    expect(namedInLine(otherLanesLineOf(w.startPackets!['main']!) ?? '')).toContainEqual(packetEntry(w, UNKNOWN_WRITER_LABEL))
+  })
+  reg.define(/^a session in the worktree "([^"]+)" calling status counts the unplaced chapter under "writer unknown", never as its own, and its packet does the same$/, async (w, name$) => {
+    const lane = `worktree:${String(name$)}`
+    const { unknown } = w.entries!
+    const reply = await statusOf(w, w.laneSessions![lane]!)
+    expect(pointersOf(reply).map((p) => [p.node_id, p.lane])).toEqual([[w.entries![lane]!.id, lane]])
+    const block = blockOf(reply)
+    expect(block.lane).toBe(lane)
+    expect(block.lanes).toContainEqual(lanePanelEntry(w, UNKNOWN_WRITER_LABEL))
+    expectNoneOf(JSON.stringify(reply), [unknown!])
+    const packet = startIn(w, lane)
+    expect(packet.split('\n')[1]).toContain(`(id ${w.entries![lane]!.id})`)
+    expect(namedInLine(otherLanesLineOf(packet) ?? '')).toContainEqual(packetEntry(w, UNKNOWN_WRITER_LABEL))
+    expectNoneOf(packet, [unknown!])
+  })
+  reg.define(/^asking for every lane lists it labeled "writer unknown", its other metadata readable$/, async (w) => {
+    const { unknown } = w.entries!
+    const reply = await statusOf(w, w.laneSessions!['main']!, { scope: 'all' })
+    expect(reply['scope']).toBeUndefined()
+    const p = pointersOf(reply).find((x) => x.node_id === unknown!.id)
+    expect(p).toBeTruthy()
+    expect(p!.lane).toBe(UNKNOWN_WRITER_LABEL)
+    expect(p!.metadata).toMatchObject({ _writer_src: 'unregistered', _cc_session_id: w.laneSessions!['unplaced'], next_session: true })
+    expect(new Set(pointersOf(reply).map((x) => x.lane))).toEqual(new Set(['main', 'worktree:subproject', UNKNOWN_WRITER_LABEL]))
+  })
+  reg.define(/^the developer sees the newer chapter as the one live pointer labeled "writer unknown", the first superseded$/, (w) => {
+    const { first, second } = w.entries!
+    const unknown = pointersOf(w.statusReply!).filter((p) => p.lane === UNKNOWN_WRITER_LABEL)
+    expect(unknown.map((p) => p.node_id)).toEqual([second!.id])
+    expect(unknown[0]!.supersedes).toEqual([first!.id])
+    expect(pointersOf(w.statusReply!).map((p) => p.node_id)).not.toContain(first!.id)
+    expect(rawMeta(w, first!.id)).toMatchObject({ superseded_by: second!.id })
+    expect(rawMeta(w, first!.id)['next_session']).not.toBe(true)
+  })
+  reg.define(/^a session in the worktree "([^"]+)" sees it counted among other lanes, never as its own$/, async (w, name$) => {
+    const lane = `worktree:${String(name$)}`
+    const { older } = w.entries!
+    const path = addWorktree(w, String(name$), `${String(name$)}-branch`)
+    w.sessionId = `cc-${randomBytes(6).toString('hex')}`
+    const packet = sessionStart(w, path)
+    w.laneSessions![lane] = w.sessionId
+    const reply = await statusOf(w, w.sessionId)
+    expect(pointersOf(reply)).toEqual([])
+    const block = blockOf(reply)
+    expect(block.lane).toBe(lane)
+    expect(block).toMatchObject({ left_out: 1, other_lanes: 1 })
+    expect(block.lanes).toEqual([lanePanelEntry(w, 'main')])
+    expectNoneOf(JSON.stringify(reply), [older!])
+    expect(namedInLine(otherLanesLineOf(packet) ?? '')).toEqual([packetEntry(w, 'main')])
+    expectNoneOf(packet, [older!])
+  })
 }
 
 /** A chapter summary written through the tools by the session the world
@@ -1014,4 +1342,92 @@ async function olderChapter(w: OrchestrationWorld, text: string): Promise<string
   for (const k of ['_writer', '_writer_src', '_door', '_identity']) expect(m[k], k).toBeUndefined()
   expect(rawAll(w, 'SELECT 1 FROM session_registry WHERE session_id = ?', session)).toEqual([])
   return r.nodeId
+}
+
+// ── Status and the fresh start, as the session under test reads them ────
+
+/** The first line of a fresh start in the main checkout of the git world
+ *  (branch "main"), the line D373 says the packet opens with. */
+const MAIN_SELF_LINE = 'This session runs in the main checkout on the branch "main"; it re-orients on the main lane\'s own thread.'
+
+type PanelPointer = { node_id: string; kind: string; lane?: string; supersedes?: string[]; metadata?: Record<string, unknown> }
+type LaneEntry = { lane: string; kind: string; age: string; pointers: number }
+type ScopeBlock = { lane?: string; listed?: string; left_out?: number; other_lanes?: number; lanes?: LaneEntry[]; widen?: string; worker?: string; unplaced?: string }
+
+/** Status as the session `session` reads it: a client opened under that
+ *  session id, never one a Given left behind. */
+async function statusOf(w: OrchestrationWorld, session: string, args: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
+  await mcpOver(w, { ccSessionId: session })
+  w.clientSession = session
+  return parseTool(await w.client!.callTool({ name: 'treecontext_status', arguments: args }))
+}
+
+/** A new Claude Code session in the checkout `lane` names (`main` or
+ *  `worktree:<name>`): a new id, the real SessionStart hook in that
+ *  directory; returns the packet the hook handed the agent. */
+function startIn(w: OrchestrationWorld, lane: string, source = 'startup'): string {
+  const cwd = lane === 'main' ? w.repo! : w.worktrees![lane.slice('worktree:'.length)]!
+  w.sessionId = `cc-${randomBytes(6).toString('hex')}`
+  return sessionStart(w, cwd, source)
+}
+
+const pointersOf = (reply: Record<string, unknown>): PanelPointer[] => (reply['resume_pointers'] as PanelPointer[] | undefined) ?? []
+function blockOf(reply: Record<string, unknown>): ScopeBlock {
+  const block = reply['scope'] as ScopeBlock | undefined
+  expect(block, JSON.stringify(reply)).toBeTruthy()
+  return block!
+}
+
+function createdAtOf(w: OrchestrationWorld, id: string): number {
+  return rawAll<{ t: number }>(w, 'SELECT created_at AS t FROM nodes WHERE node_id = ?', id)[0]!.t
+}
+
+/** The lane a Given's named entry was written into, as the test knows it
+ *  (never read back through the production lane key). */
+function laneOfEntry(key: string): string {
+  if (key === 'main' || key === 'older' || key === 'bookmark') return 'main'
+  if (key === 'unknown' || key === 'first' || key === 'second') return UNKNOWN_WRITER_LABEL
+  return key
+}
+
+/** What status and the packet must say of `lane`: the kind and age of its
+ *  newest live pointer and how many it holds, from SQLite directly. */
+function laneEntry(w: OrchestrationWorld, lane: string): LaneEntry {
+  const live = Object.entries(w.entries!).filter(([k]) => laneOfEntry(k) === lane)
+    .map(([, e]) => ({ e, m: rawMeta(w, e.id), at: createdAtOf(w, e.id) }))
+    .filter((x) => x.m['next_session'] === true)
+    .sort((a, b) => b.at - a.at)
+  expect(live.length, `no live pointer of ${lane}`).toBeGreaterThan(0)
+  return {
+    lane, kind: live[0]!.m['kind'] === 'bookmark' ? 'bookmark' : 'chapter summary',
+    age: `${ageText(live[0]!.at, now())} old`, pointers: live.length,
+  }
+}
+const lanePanelEntry = laneEntry
+const packetEntry = laneEntry
+
+/** The packet's one line about the other lanes, if it has one. */
+function otherLanesLineOf(packet: string): string | undefined {
+  return packet.split('\n').find((l) => /^\d+ other lanes? holds? (a )?live pointers?, /.test(l))
+}
+
+/** The lanes that line names, in its order, each as status gives it. */
+function namedInLine(line: string): LaneEntry[] {
+  const m = /the most recent: (.*?)(?:; and \d+ more)?\. To look: /.exec(line)
+  expect(m, line).toBeTruthy()
+  return m![1]!.split('; ').map((part) => {
+    const p = /^(.+) \((chapter summary|bookmark), (\d+ \w+ old), (\d+) live pointers?\)$/.exec(part)
+    expect(p, part).toBeTruthy()
+    return { lane: p![1]!, kind: p![2]!, age: p![3]!, pointers: Number(p![4]) }
+  })
+}
+
+/** Neither the text (whole, or its first words) nor the id of any of
+ *  `entries` appears in `text`. */
+function expectNoneOf(text: string, entries: Array<{ id: string; text: string }>): void {
+  for (const e of entries) {
+    expect(text).not.toContain(e.id)
+    expect(text).not.toContain(e.text)
+    expect(text).not.toContain(e.text.slice(0, 20))
+  }
 }

@@ -17,7 +17,8 @@
  */
 import type { SqlHandle as DatabaseType } from './persistence/node-sqlite.js'
 import { decodeContent } from './persistence/content-codec.js'
-import { referencedBy, ageText, plural } from './references.js'
+import { referencedBy, ageText, plural, laneWriterOf, summarizeLanes, pointerKindWords, MAIN_LANE, OTHER_LANES_NAMED, type LaneSummary } from './references.js'
+import { MAIN_WRITER } from './persistence/session-registry.js'
 
 export { ageText, plural }
 
@@ -647,32 +648,39 @@ export function markNudged(db: DatabaseType, chain: string[], localDate: string)
   )
 }
 
-// ── Self on a fresh start (D167, D190) ─────────────────────────────
+// ── Self on a fresh start (D167, D190, D373) ───────────────────────
 //
-// A session that starts in a linked worktree, by restart or brand new,
-// orients on its self: the worktree it runs in, whatever its process or
-// session id. Its own thread is the newest live chapter summary written by
-// that worktree's own lane (`_writer` `worktree:<name>`, stamped by the
-// server from the registry), across every session that ever ran there; a
-// chapter of another worktree or of the main checkout is never its own. A
-// new worktree has no chapter yet and is a new subagent process: it orients
-// on the brief addressed to it, an entry whose `brief_for` names the
-// worktree (written by the orchestrator, typically before the worktree's
-// first session starts). The main checkout's fresh start is unchanged.
+// A session that starts in a linked worktree or in the main checkout, by
+// restart or brand new, orients on its self: the checkout it runs in,
+// whatever its process or session id. Its own thread is the newest live
+// chapter summary of its own lane (the lane key, references.ts
+// laneWriterOf: `_writer` `worktree:<name>` for a worktree; `main`, or no
+// stamp at all, for the main checkout), across every session that ever
+// ran there; a chapter of another lane, or one whose writer could not be
+// identified, is never its own. A lane with no chapter but a live
+// bookmark is handed the bookmark, named as one. A new worktree has no
+// chapter yet and is a new subagent process: it orients on the brief
+// addressed to it, an entry whose `brief_for` names the worktree (or
+// `main` for the main checkout), written by the orchestrator, typically
+// before the worktree's first session starts. The other lanes holding
+// live pointers are counted and at most three named, never their text or
+// id (D373).
 
 /** The metadata key that addresses an entry to a worktree or a subagent
  *  role as its brief. */
 export const BRIEF_FOR_KEY = 'brief_for'
 
-function newestOfWorktree(db: DatabaseType, writer: string): CheckpointRow | null {
-  const r = db.prepare(
+/** Every live pointer of the store with its lane key, newest first. */
+function livePointers(db: DatabaseType): Array<CheckpointRow & { laneKey: string }> {
+  const rows = db.prepare(
     `SELECT node_id, created_at, metadata_json, content FROM nodes
-      WHERE ${IN_TREES} AND ${LIVE_POINTER} AND json_extract(metadata_json, '$._writer') = ?
-        AND COALESCE(json_extract(metadata_json, '$._writer_src'), '') != 'ambiguous'
-        AND COALESCE(json_extract(metadata_json, '$.kind'), '') != '${BOOKMARK_KIND}'
-      ORDER BY created_at DESC, rowid DESC LIMIT 1`,
-  ).get(writer) as RawRow | undefined
-  return r ? toCheckpoint(r) : null
+      WHERE ${IN_TREES} AND ${LIVE_POINTER}
+      ORDER BY created_at DESC, rowid DESC`,
+  ).all() as unknown as RawRow[]
+  return rows.map((r) => {
+    const cp = toCheckpoint(r)
+    return { ...cp, laneKey: laneWriterOf(cp.metadata) }
+  })
 }
 
 function newestBrief(db: DatabaseType, addressee: string): CheckpointRow | null {
@@ -685,26 +693,58 @@ function newestBrief(db: DatabaseType, addressee: string): CheckpointRow | null 
   return r ? toCheckpoint(r) : null
 }
 
-/** The lines a fresh start in a linked worktree opens its packet with:
- *  the worktree's own chapter, labeled as its own, and the brief addressed
- *  to it. Empty for the main checkout. */
-export function worktreeSelfLines(
-  db: DatabaseType, self: { worktree: string | null; branch: string | null }, nowSec: number,
+/** The lines a fresh start in a linked worktree or the main checkout
+ *  opens its packet with (D167, D373): where it runs, its lane's own
+ *  chapter labeled as its own (or its live bookmark, named as one), the
+ *  brief addressed to it, and the other lanes holding live pointers,
+ *  counted and at most three named. Kept outside the start's budget by
+ *  the caller; each line is bounded by its own clip. */
+export function selfLines(
+  db: DatabaseType, self: { worktree: string | null; branch: string | null; toplevel?: string | null }, nowSec: number,
 ): string[] {
-  if (!self.worktree) return []
   const lines: string[] = []
   const name = self.worktree
-  lines.push(`This session runs in the worktree "${name}"${self.branch ? ` on the branch "${self.branch}"` : ''}; it re-orients on that worktree's own thread.`)
-  const chapter = newestOfWorktree(db, `worktree:${name}`)
+  const own = name ? `worktree:${name}` : MAIN_LANE
+  const on = self.branch ? ` on the branch "${self.branch}"` : ''
+  if (name) lines.push(`This session runs in the worktree "${name}"${on}; it re-orients on that worktree's own thread.`)
+  else if (self.toplevel === null) lines.push('This session runs outside any git checkout, in the main lane; it re-orients on the main lane\'s own thread.')
+  else lines.push(`This session runs in the main checkout${on}; it re-orients on the main lane's own thread.`)
+  const pointers = livePointers(db)
+  const mine = pointers.filter((p) => p.laneKey === own)
+  const chapter = mine.find((p) => p.kind === 'chapter') ?? null
+  const bookmark = chapter ? null : (mine.find((p) => p.kind === 'bookmark') ?? null)
+  const whose = name ? "The worktree's own" : "The main lane's own"
   if (chapter) {
-    lines.push(`The worktree's own chapter summary, ${ageText(chapter.createdAt, nowSec)} old (id ${chapter.nodeId}): ${checkpointBody(chapter)}`)
+    lines.push(`${whose} chapter summary, ${ageText(chapter.createdAt, nowSec)} old (id ${chapter.nodeId}): ${checkpointBody(chapter)}`)
     lines.push(referencedByLine(db, chapter, nowSec))
+  } else if (bookmark) {
+    lines.push(`${name ? `The worktree "${name}"` : 'The main lane'} has no chapter summary of its own; its live bookmark, ${ageText(bookmark.createdAt, nowSec)} old (id ${bookmark.nodeId}): ${checkpointBody(bookmark)}`)
   }
-  const brief = newestBrief(db, name)
+  const brief = newestBrief(db, name ?? MAIN_WRITER)
   if (brief) {
-    lines.push(`Brief for this worktree from ${clip(String(brief.metadata['_writer'] ?? 'an unnamed writer'), HANDOFF_NAME_CHARS)}, ${ageText(brief.createdAt, nowSec)} old (id ${brief.nodeId}): ${checkpointBody({ ...brief, kind: 'chapter' })}`)
+    lines.push(`Brief for this ${name ? 'worktree' : 'checkout'} from ${clip(String(brief.metadata['_writer'] ?? 'an unnamed writer'), HANDOFF_NAME_CHARS)}, ${ageText(brief.createdAt, nowSec)} old (id ${brief.nodeId}): ${checkpointBody({ ...brief, kind: 'chapter' })}`)
   }
-  if (!chapter && !brief) lines.push(`No chapter summary or brief exists for the worktree "${name}" yet; it starts fresh.`)
-  else if (!chapter) lines.push(`The worktree "${name}" has no chapter summary of its own yet; it starts from the brief.`)
+  if (!chapter && !bookmark) {
+    if (name) {
+      if (!brief) lines.push(`No chapter summary or brief exists for the worktree "${name}" yet; it starts fresh.`)
+      else lines.push(`The worktree "${name}" has no chapter summary of its own yet; it starts from the brief.`)
+    } else if (!brief) lines.push('No chapter summary, bookmark or brief exists for the main lane yet; it starts fresh.')
+    else lines.push('The main lane has no chapter summary of its own yet; it starts from the brief.')
+  }
+  const others = summarizeLanes(pointers.filter((p) => p.laneKey !== own).map((p) => ({ laneKey: p.laneKey, kind: p.kind, createdAt: p.createdAt })))
+  if (others.length > 0) lines.push(otherLanesLine(others, nowSec))
   return lines
+}
+
+/** The packet's one line about the other lanes (D373): how many hold live
+ *  pointers, at most three named, the most recently active first, each
+ *  with the kind and age of its newest pointer and its pointer count, and
+ *  where to look. Never a pointer's text or id. */
+export function otherLanesLine(others: LaneSummary[], nowSec: number): string {
+  const named = others.slice(0, OTHER_LANES_NAMED).map((l) =>
+    `${clip(l.lane, HANDOFF_NAME_CHARS)} (${pointerKindWords(l.newestKind)}, ${ageText(l.newestAt, nowSec)} old, ${plural(l.pointers, 'live pointer')})`)
+  const rest = others.length - named.length
+  const holds = others.length === 1 ? '1 other lane holds a live pointer' : `${others.length} other lanes hold live pointers`
+  return `${holds}, not shown here; the most recent: ${named.join('; ')}${rest > 0 ? `; and ${rest} more` : ''}. `
+    + 'To look: treecontext_status with scope "all", or treecontext_export with writer naming the lane.'
 }

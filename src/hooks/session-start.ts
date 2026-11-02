@@ -5,7 +5,7 @@ import { parseHookInput, resolveDbPath, normalizeSource, buildRehydrationPayload
 import { dbg } from '../debug.js'
 import { writeSessionBeacon } from '../session-beacon.js'
 import { readSessionBeacon } from '../session-beacon.js'
-import { buildClearPacket, localDateOf, markNudged, recordSessionLink, sessionChain, worktreeSelfLines, CHAPTER_HOWTO } from '../checkpoints.js'
+import { buildClearPacket, localDateOf, markNudged, recordSessionLink, sessionChain, selfLines, CHAPTER_HOWTO } from '../checkpoints.js'
 import { hasRegistry, registerSelf, retireAllSubagents, type GitSelf } from '../persistence/session-registry.js'
 import { retirePhantoms, NOTICED_BY_SESSION_START } from '../persistence/leg-registry.js'
 import { gitSelfOf } from './git-self.js'
@@ -307,14 +307,17 @@ export async function main(preParsed?: Record<string, unknown>): Promise<void> {
         }
       } else {
         payload = buildRehydrationPayload(db, sessionId, source, dbPath)
-        // D167: a fresh start in a linked worktree re-orients on that
-        // worktree's own thread, or on the brief addressed to it.
-        if (self?.worktree) {
+        // D167, D373: a fresh start in a linked worktree or in the main
+        // checkout re-orients on its own lane's thread (or the brief
+        // addressed to it), told what other lanes exist. The self lines
+        // sit outside the start's budget: a resume's budget would cut the
+        // lane's own anchor.
+        if (self) {
           try {
-            const own = worktreeSelfLines(db, self, Date.now() / 1000)
+            const own = selfLines(db, self, Date.now() / 1000)
             if (own.length > 0) payload = `${own.join('\n')}\n${payload}`
           } catch (err) {
-            dbg('hook:session-start', 'worktree self read FAILED', { error: messageOf(err) })
+            dbg('hook:session-start', 'self lines read FAILED', { error: messageOf(err) })
           }
         }
       }

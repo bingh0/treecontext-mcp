@@ -145,6 +145,9 @@ export interface ResumePointer {
   /** Entries this pointer superseded, newest first — a retraction names
    *  the chapter it took back (D185). Absent when it superseded none. */
   supersedes?: string[]
+  /** The lane the pointer belongs to, as a reader is told it (D372):
+   *  `main`, `worktree:<name>`, a role, or "writer unknown". */
+  lane?: string
 }
 
 /**
@@ -245,6 +248,10 @@ export interface TreeStatus {
   /** Live pointers of other lanes left out when status was confined to
    *  one lane (D242). */
   resumePointerOtherLanes?: number
+  /** The other lanes holding live pointers when status was confined to
+   *  one lane (D372), the most recently active first: each lane's name,
+   *  pointer count, and its newest pointer's kind and moment. */
+  otherLanes?: Array<{ laneKey: string; lane: string; pointers: number; newestKind: 'chapter' | 'bookmark'; newestAt: number }>
   /** Byte-budget gauge. `storeBytes` is the stored (compressed) content
    *  size; `overBudget` means the store exceeds `budgetBytes` — the
    *  retention valve could not (or has not yet) brought it under, e.g.

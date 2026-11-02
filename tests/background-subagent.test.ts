@@ -67,8 +67,10 @@ async function insert(
 }
 const meta = (w: W, id: string): Record<string, unknown> =>
   JSON.parse(rawAll<{ m: string }>(w, 'SELECT metadata_json AS m FROM nodes WHERE node_id = ?', id)[0]!.m) as Record<string, unknown>
+/** Every live pointer of the store, whichever lane holds it: status asked
+ *  for every lane (D372 scopes the main checkout's own status to its lane). */
 async function livePointers(w: W): Promise<string[]> {
-  const st = parseTool(await w.client!.callTool({ name: 'treecontext_status', arguments: {} }))
+  const st = parseTool(await w.client!.callTool({ name: 'treecontext_status', arguments: { scope: 'all' } }))
   return ((st['resume_pointers'] as Array<{ node_id: string }> | undefined) ?? []).map((p) => p.node_id)
 }
 

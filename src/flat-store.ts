@@ -45,7 +45,7 @@ import { stampEchoBoundaries } from './persistence/echo-index.js'
 import { roleWeightVector } from './persistence/fts.js'
 import { BOOKMARK_KIND, checkpointKindOf, placeChaptersAboveBookmarks, searchCheckpointKindOf, sessionChainWith } from './checkpoints.js'
 import { metadataFilterSql } from './persistence/metadata-filter.js'
-import { AMBIGUOUS_LANE, laneWriterOf, referencedBy, refIdsOf } from './references.js'
+import { AMBIGUOUS_LANE, laneLabelOf, laneWriterOf, referencedBy, refIdsOf, summarizeLanes, type LaneSummary } from './references.js'
 import { checkoutOfLane, isPlacedLane, laneRowsSql, placedLaneOf, type PlacedLane } from './persistence/lane-scope.js'
 import { resolveWriter, selfOf, selfWriterOf, agentWriterOf, stampMetadata, legTraceOf, MAIN_WRITER, STORE_WRITER, type WriterStamp, type GitSelf } from './persistence/session-registry.js'
 import {
@@ -2195,8 +2195,9 @@ export class FlatStore implements MemoryStore {
    *  pointers" (supersession hygiene). */
   static readonly MAX_RESUME_POINTERS = 20
 
-  /** D167 (F5, D242): `lane` confines the resume pointers to one lane —
-   *  a linked worktree's session orients on its own pointers first. */
+  /** D167 (F5, D242, D372): `lane` (`main` or `worktree:<name>`) confines
+   *  the resume pointers to that placed lane, the other lanes summarized
+   *  in `otherLanes`; every pointer names its lane. */
   status(opts?: { lane?: string }): TreeStatus {
     this.ensureOpen()
     // Aggregates SQL-side — status() must not decode (zstd) every row of a
@@ -2221,9 +2222,19 @@ export class FlatStore implements MemoryStore {
       )
       .all(this.treeId) as unknown as Array<NodeRow & { content: unknown }>
     const allPointers = pointerRows.length
+    // Every pointer's lane key (D376: its writer stamp; an unstamped row
+    // is main's, an `unregistered` one the undetermined writers').
+    const laneKeys = new Map(pointerRows.map((r) => [r.node_id, laneWriterOf(parseMeta(r.metadata_json))]))
+    let otherLanes: LaneSummary[] | undefined
     if (opts?.lane !== undefined) {
-      const lane = opts.lane
-      const kept = pointerRows.filter((r) => laneWriterOf(parseMeta(r.metadata_json)) === lane)
+      // D372: a placed lane's own pointers (`main` or `worktree:<name>`,
+      // the writer a session's self is stamped with); the others are
+      // summarized by lane, never listed.
+      const own = laneWriterOf({ _writer: opts.lane })
+      const kept = pointerRows.filter((r) => laneKeys.get(r.node_id) === own)
+      otherLanes = summarizeLanes(pointerRows
+        .filter((r) => laneKeys.get(r.node_id) !== own)
+        .map((r) => ({ laneKey: laneKeys.get(r.node_id)!, kind: checkpointKindOf(parseMeta(r.metadata_json)), createdAt: r.created_at })))
       pointerRows.length = 0
       pointerRows.push(...kept)
     }
@@ -2253,6 +2264,7 @@ export class FlatStore implements MemoryStore {
       createdAt: r.created_at,
       kind: checkpointKindOf(parseMeta(r.metadata_json)),
       ...(supersededBy.has(r.node_id) ? { supersedes: supersededBy.get(r.node_id)! } : {}),
+      lane: laneLabelOf(laneKeys.get(r.node_id)!),
     }))
     return {
       backend: 'lexical',
@@ -2266,7 +2278,7 @@ export class FlatStore implements MemoryStore {
       staleNodeIds: [],
       resumePointers,
       resumePointerTotal: pointerRows.length,
-      ...(opts?.lane !== undefined ? { resumePointerOtherLanes: allPointers - pointerRows.length } : {}),
+      ...(opts?.lane !== undefined ? { resumePointerOtherLanes: allPointers - pointerRows.length, otherLanes: otherLanes ?? [] } : {}),
       // Same stored-bytes gauge demoteOverBudget() steers by, so status
       // and the valve can never disagree about "over budget".
       retention: {

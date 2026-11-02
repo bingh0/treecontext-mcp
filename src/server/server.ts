@@ -35,7 +35,8 @@ import { activeIndexCap, envIndexCapOverride, INDEX_CAP_ENV_FLOOR, STORE_BUDGET_
 import { resolveCcSessionId, writeNamespaceAnnotation, type CcSessionResolution } from '../session-beacon.js'
 import { dbg, warn } from '../debug.js'
 import type { FlatStore } from '../flat-store.js'
-import { selfWriterOf, stampMetadata, WRITER_STAMP_KEYS, type WriterStamp } from '../persistence/session-registry.js'
+import { MAIN_WRITER, stampMetadata, WRITER_STAMP_KEYS, type WriterStamp } from '../persistence/session-registry.js'
+import { ageText, pointerKindWords, OTHER_LANES_NAMED } from '../references.js'
 import { NOTICED_BY_STATUS } from '../persistence/leg-registry.js'
 import {
   DOOR_KEY, IDENTITY_KEY, RUN_OPEN_KIND, RUN_CLOSE_KIND, OPENED_BY_KEY, OPENED_VIA_KEY, CLOSED_BY_KEY, REASON_KEY,
@@ -369,7 +370,7 @@ export function createServer(
   // the hooks keep (persistence/session-registry.ts). A session whose own
   // identity is ambiguous here is not looked up: its stamp would be a
   // guess about a guess.
-  type Stamping = MemoryStore & Partial<Pick<FlatStore, 'writerStampFor' | 'subagentScopeFor' | 'selfOfSession' | 'retirePhantoms'
+  type Stamping = MemoryStore & Partial<Pick<FlatStore, 'writerStampFor' | 'subagentScopeFor' | 'selfOfSession' | 'placedLaneOf' | 'retirePhantoms'
     | 'openRun' | 'closeRun' | 'legOf' | 'lookupKeyReply'>>
   const writerStamp = (ctx: MemoryStore, cc: CcSessionResolution): WriterStamp => {
     const store = ctx as Stamping
@@ -1052,8 +1053,8 @@ export function createServer(
       description: 'Cold-start orientation panel. Returns journal statistics plus resume_pointers — IDs, kinds (chapter summary, or bookmark for metadata.kind="bookmark") and one-line previews of entries tagged metadata.next_session=true or metadata.status="active". Call this at session start; if resume_pointers is non-empty, fetch each via treecontext_export(node_id) BEFORE other work, even when the user has already given you specific pointers. Counts reflect the current namespace only.',
       inputSchema: z.object({
         scope: z.enum(['all']).optional().describe(
-          'A session in a git worktree sees that worktree\'s own resume pointers by default; '
-          + '"all" lists every lane\'s.',
+          'A session in the main checkout or a git worktree sees its own lane\'s resume pointers by default, '
+          + 'the other lanes counted and the most recent three named; "all" lists every lane\'s, each naming its lane.',
         ),
       }),
     },
@@ -1079,23 +1080,40 @@ export function createServer(
           dbg('server', 'phantom pass failed in status — registry left as it was', { error: err instanceof Error ? err.message : String(err) })
         }
       }
-      // D167, D242: a session registered in a linked worktree orients on
-      // its self, so status lists that worktree's own pointers unless
-      // asked for every lane. The main checkout's status is unchanged.
+      // D167, D242, D372: a session placed in a checkout, the main
+      // checkout's or a linked worktree's, orients on its own lane, read
+      // from its self registration; status lists that lane's own pointers
+      // unless asked for every lane. A worker of the ticket door and a
+      // session the server cannot place see every lane flat, the block
+      // saying which.
       let lane: string | undefined
+      let flatWhy: { worker: string } | { unplaced: string } | undefined
       if (scope !== 'all') {
         const cc = resolveCcSession()
-        const selfing = c as Stamping
-        if (cc.ccSessionId !== null && !cc.ambiguous && typeof selfing.selfOfSession === 'function') {
+        const placing = c as Stamping
+        if (typeof placing.placedLaneOf === 'function') {
           try {
-            const self = selfing.selfOfSession(cc.ccSessionId)
-            if (self?.worktree) lane = selfWriterOf(self)
+            const stamp = cc.ccSessionId !== null && !cc.ambiguous ? writerStamp(c, cc) : null
+            if (stamp?.src === 'declared') {
+              flatWhy = { worker: `this session is a worker of the ticket door (${stamp.writer ?? 'worker'}), in no checkout's lane: its harness feeds it by its brief and the key lookup, so status lists every lane` }
+            } else {
+              const placed = cc.ccSessionId !== null && !cc.ambiguous ? placing.placedLaneOf(cc.ccSessionId) : null
+              if (placed) lane = placed
+              else {
+                flatWhy = {
+                  unplaced: cc.ccSessionId === null
+                    ? 'this session could not be placed: the server knows no session for this connection, so status lists every lane'
+                    : cc.ambiguous
+                      ? 'this session could not be placed: its session id is ambiguous on this machine, so status lists every lane'
+                      : 'this session could not be placed: no session-start hook registered it in a checkout, so status lists every lane',
+                }
+              }
+            }
           } catch (err) {
-            dbg('server', 'self lookup failed in status — every lane shown', { error: err instanceof Error ? err.message : String(err) })
+            dbg('server', 'lane lookup failed in status — every lane shown', { error: err instanceof Error ? err.message : String(err) })
           }
         }
       }
-      // A lane is set only for a store that keeps the registry (FlatStore).
       const status = lane !== undefined ? (c as unknown as FlatStore).status({ lane }) : c.status()
       const response: Record<string, unknown> = {
         backend: status.backend ?? null,
@@ -1125,19 +1143,35 @@ export function createServer(
         }
       }
       if (lane !== undefined) {
-        const others = status.resumePointerOtherLanes ?? 0
+        // D372: the other lanes counted, at most three named with the kind
+        // and age of their newest pointer and their pointer count, never
+        // a pointer's text or id.
+        const others = status.otherLanes ?? []
+        const nowSec = Date.now() / 1000
         response.scope = {
           lane,
-          listed: `the resume pointers of this worktree's own lane (${lane})`,
-          other_lanes: others,
-          widen: 'pass scope "all" to list every lane\'s pointers',
+          listed: lane === MAIN_WRITER
+            ? "the resume pointers of the main checkout's own lane (main)"
+            : `the resume pointers of this worktree's own lane (${lane})`,
+          left_out: status.resumePointerOtherLanes ?? 0,
+          other_lanes: others.length,
+          ...(others.length > 0 ? {
+            lanes: others.slice(0, OTHER_LANES_NAMED).map((l) => ({
+              lane: l.lane, kind: pointerKindWords(l.newestKind), age: `${ageText(l.newestAt, nowSec)} old`, pointers: l.pointers,
+            })),
+          } : {}),
+          widen: 'pass scope "all" to list every lane\'s pointers; treecontext_export with writer reads one lane\'s trail',
         }
+      } else if (flatWhy !== undefined) {
+        response.scope = { listed: "every lane's resume pointers, flat, each naming its lane", ...flatWhy }
       }
       if (status.resumePointers && status.resumePointers.length > 0) {
         response.resume_pointers = status.resumePointers.map((p) => ({
           node_id: p.nodeId,
           // D158: each live pointer says which kind of checkpoint it is.
           kind: p.kind === 'bookmark' ? 'bookmark' : 'chapter summary',
+          // D372: every pointer names its lane, scoped or flat.
+          ...(p.lane !== undefined ? { lane: p.lane } : {}),
           ...(p.supersedes ? { supersedes: p.supersedes } : {}),
           preview: p.preview,
           metadata: p.metadata,

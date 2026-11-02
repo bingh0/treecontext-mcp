@@ -513,6 +513,14 @@ export const handoffDefiner = (reg: Registry<HandoffWorld>): void => {
     // Nor did any become one of B's resume pointers (D206).
     const panel = parseTool(await w.bClient!.callTool({ name: 'treecontext_status', arguments: {} }))
     expect(panel['resume_pointers'] ?? []).toEqual([])
+    // Nor named in a scope block, nor listed when every lane is asked for.
+    const imported = importedRows(w).map((r) => r.node_id)
+    expect(imported.length).toBeGreaterThan(0)
+    const every = parseTool(await w.bClient!.callTool({ name: 'treecontext_status', arguments: { scope: 'all' } }))
+    for (const id of imported) {
+      expect(JSON.stringify(panel['scope'] ?? {})).not.toContain(id)
+      expect(JSON.stringify(every['resume_pointers'] ?? [])).not.toContain(id)
+    }
   })
   reg.define(/^the file's claims are kept on each entry as data$/, (w) => {
     const byContent = new Map(importedRows(w).map((r) => [text(r), meta(r)]))
