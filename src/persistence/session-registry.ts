@@ -79,7 +79,7 @@ export const STORE_WRITER = 'treecontext'
 
 /** Whether the registry carries a column (the leg columns arrive with
  *  migration 031; a store the ladder has not reached reads without them). */
-function registryHasColumn(db: RegistryHandle, column: string): boolean {
+export function registryHasColumn(db: RegistryHandle, column: string): boolean {
   try {
     return (db.prepare('PRAGMA table_info(session_registry)').all() as Array<{ name: string }>).some((c) => c.name === column)
   } catch {

@@ -63,6 +63,9 @@ export function refIdsOf(meta: Record<string, unknown> | null | undefined): stri
 export function writerOf(meta: Record<string, unknown> | null | undefined): string {
   const imported = meta?.['_handoff_file']
   if (imported !== undefined && imported !== null) return `imported from ${String(imported)}`
+  // D376: an undetermined writer is shown as such, never by the session
+  // id that would read like a writer; a role it claims is its own word.
+  if (isUnknownWriter(meta)) return named(meta?.['agent_type']) ?? UNKNOWN_WRITER_LABEL
   return named(meta?.['_writer']) ?? named(meta?.['agent_type']) ?? named(meta?.['_cc_session_id'])
     ?? named(meta?.['session_id']) ?? 'unknown writer'
 }
@@ -73,12 +76,46 @@ export function writerOf(meta: Record<string, unknown> | null | undefined): stri
  *  supersession from it is recorded as a reference, never a flag flip. */
 export const AMBIGUOUS_LANE = '\u0000ambiguous'
 
+/** The lane key of the undetermined writers (D376): rows written through
+ *  the tools while the store recorded writers, by a caller it could not
+ *  place (`_writer_src` `unregistered`: no session, a session no hook
+ *  registered, an ambiguous beacon). One lane for supersession, so an
+ *  unplaced writer's chapter retires that lane's earlier ones and a placed
+ *  lane's writer never retires one of them (nor they its); never folded
+ *  into main and never any lane's own. Distinct from AMBIGUOUS_LANE, which
+ *  retires nothing. A row with no stamp at all (written before the store
+ *  recorded writers, or through the library without one) stays main's. */
+export const UNKNOWN_LANE = '\u0000unknown'
+
+/** How the undetermined writers' lane is named wherever it is shown. */
+export const UNKNOWN_WRITER_LABEL = 'writer unknown'
+
+/** The `_writer_src` of a tool-written row whose caller the store could
+ *  not place (session-registry.ts resolveWriter). */
+export const UNREGISTERED_SRC = 'unregistered'
+
+/** Whether a row's writer is undetermined (its stamp says `unregistered`). */
+export function isUnknownWriter(meta: Record<string, unknown> | null | undefined): boolean {
+  return meta?.['_writer_src'] === UNREGISTERED_SRC
+}
+
+/** A lane key as a reader is told it: the main lane `main`, the
+ *  undetermined writers "writer unknown", any other lane by its key. */
+export function laneLabelOf(laneKey: string): string {
+  if (laneKey === MAIN_LANE) return MAIN_WRITER
+  if (laneKey === UNKNOWN_LANE) return UNKNOWN_WRITER_LABEL
+  if (laneKey === AMBIGUOUS_LANE) return 'ambiguous writer'
+  return laneKey
+}
+
 /**
  * The lane an entry's writer owns, for D169's "only a lane's own writer
  * retires that lane's pointers": an imported entry's lane is its session
  * key, `handoff:<claimed session>` (D223); a row written while the store
  * could not tell its writer apart (`_writer_src` `ambiguous`) owns no
- * lane; a row naming a writer (`_writer`, else `agent_type`) is that
+ * lane; a row whose caller could not be placed (`_writer_src`
+ * `unregistered`) is the undetermined writers' lane (UNKNOWN_LANE), its
+ * claimed `agent_type` notwithstanding; a row naming a writer (`_writer`, else `agent_type`) is that
  * writer's lane; a row naming none is the main lane. The session is NOT
  * part of the key: a new session of the main checkout is the same writer
  * as the last one, and its close-out retiring the previous session's
@@ -98,6 +135,7 @@ export function laneWriterOf(meta: Record<string, unknown> | null | undefined): 
   const session = sessionOf(meta ?? null)
   if (session.startsWith(HANDOFF_LANE_PREFIX)) return session
   if (meta?.['_writer_src'] === 'ambiguous') return AMBIGUOUS_LANE
+  if (isUnknownWriter(meta)) return UNKNOWN_LANE
   const writer = named(meta?.['_writer']) ?? named(meta?.['agent_type'])
   return writer === undefined || writer === MAIN_WRITER ? MAIN_LANE : writer
 }

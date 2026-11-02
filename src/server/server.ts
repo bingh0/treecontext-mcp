@@ -492,7 +492,11 @@ export function createServer(
         // rather than guess.
         const ccResolution = resolveCcSession()
         const stamp = writerStamp(resolve(), ccResolution)
-        if (metadataCopy || namespaceTag || sessionIdTag || ccResolution.ccSessionId !== null || stamp.src !== 'unregistered') {
+        // D376: a store that records writers says so of a caller it could
+        // not place, `_writer_src` `unregistered`: the undetermined
+        // writers' lane, never main's (references.ts UNKNOWN_LANE).
+        const recordsWriters = typeof (resolve() as Stamping).writerStampFor === 'function'
+        if (metadataCopy || namespaceTag || sessionIdTag || ccResolution.ccSessionId !== null || stamp.src !== 'unregistered' || recordsWriters) {
           const merged: Record<string, unknown> = { ...metadataCopy }
           if (namespaceTag !== null) merged._namespace = namespaceTag
           if (sessionIdTag !== null) {
@@ -507,7 +511,7 @@ export function createServer(
               if (ccResolution.candidates) merged._cc_session_candidates = ccResolution.candidates
             }
           }
-          if (stamp.src !== 'unregistered') Object.assign(merged, stampMetadata(stamp))
+          if (stamp.src !== 'unregistered' || recordsWriters) Object.assign(merged, stampMetadata(stamp))
           // D293: how the row came in: through the tools, its identity
           // registered by a hook (the session's self or a subagent the
           // hooks registered) or declared (a worker's ticket).

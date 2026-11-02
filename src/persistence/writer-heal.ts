@@ -174,6 +174,10 @@ export function healWriterFromEcho(db: Database, opts: {
     // agent's echo names the worker, never a self it does not have.
     const worker = isAgent ? null : (() => { try { return workerOfSession(db, opts.echoSessionId) } catch { return null } })()
     const self = isAgent || worker ? null : (() => { try { return selfOf(db, opts.echoSessionId) } catch { return null } })()
+    // D376: an echo of the session's own agent whose session the registry
+    // still does not place names no writer either; the row stays the
+    // undetermined writers', never read as main's.
+    if (!isAgent && !worker && !self && meta['_writer_src'] === 'unregistered') return { outcome: 'confirmed' }
     const writer = isAgent ? agentWriterOf(opts.agentType, opts.agentId) : worker ? legWriterOf(worker) : selfWriterOf(self)
     const agentOf = isAgent ? opts.agentId : worker ? WORKER_AGENT_ID : null
     const before = { writer: (meta['_writer'] as string | undefined) ?? null, src: (meta['_writer_src'] as string | undefined) ?? null }

@@ -323,6 +323,18 @@ export interface QueryOptions {
    */
   laneScope?: { writers: string[]; ids: string[] }
   /**
+   * D374, D376: confine the search to a placed lane, `main` or
+   * `worktree:<name>`, as the session registry reads it at the moment of
+   * the search (persistence/lane-scope.ts): the rows of every session
+   * placed in that checkout minus its helpers' trails, each helper's
+   * report by the parent link, the lane's imports, for `main` the rows of
+   * sessions the registry never held, never an undetermined writer's row,
+   * and what the lane's live pointers and briefs reference, one hop.
+   * Applied in SQL before topK and to every conversation window, like
+   * `laneScope`. FlatStore only.
+   */
+  lane?: string
+  /**
    * W4: symmetric read-time neighbor expansion — 0 (off) to 10 entries
    * each side of a hit, from the same session, plus the W9 anchor.
    * Library semantics: omitted = off (explicit-args API). The MCP server

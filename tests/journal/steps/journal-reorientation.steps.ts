@@ -796,6 +796,11 @@ export const reorientationDefiner = (reg: Registry<ReorientationWorld>): void =>
     const oldest = typeof oldest$ === 'string' ? oldest$ : undefined
     await openWorld(w)
     const texts = [oldest ?? 'at: first bookmark', 'at: second bookmark, CSRF next', 'at: third bookmark, tests green']
+    // The session started as Claude Code starts one: the real startup
+    // SessionStart, which registers its self (D190), so its bookmarks are
+    // the main lane's from the first, as each /clear's are (D376: a
+    // writer the store could not place is a lane of its own).
+    runHook(w, 'session-start', { hook_event_name: 'SessionStart', source: 'startup', transcript_path: join(w.proj!, 'transcript.jsonl') })
     w.bookmarkIds = []
     // A /clear between bookmarks, as the team works (D216): each bookmark
     // lands under a new session id, and still supersedes the one before.

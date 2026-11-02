@@ -156,6 +156,11 @@ scenario, are in `docs/beta3-bindings-audit.md`.
 - `src/persistence/writer-heal.ts` — the echo heal that sets a
   tool-written row's writer exactly at the drain, and undoes what a wrong
   first stamp did across lanes
+- `src/persistence/lane-scope.ts` — the lane read (D376, D374): a placed
+  lane's rows (`main`, `worktree:<name>`) read from the session registry
+  at query time, as a search scope (its sessions minus helper trails,
+  helpers' reports by parent link, its imports, never an `unregistered`
+  row) or a writer's trail (the own agent's rows); `placedLaneOf`
 - `src/persistence/reference-index.ts` — the `node_refs` reverse index and
   the triggers that keep it
 - `src/persistence/curated-index.ts` — the partial curated unique index,

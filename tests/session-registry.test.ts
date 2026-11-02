@@ -14,7 +14,7 @@ import { Client, InMemoryTransport } from '@modelcontextprotocol/client'
 import { openNodeSqlite } from '../src/persistence/node-sqlite.js'
 import { FlatStore } from '../src/flat-store.js'
 import { createServer } from '../src/server/server.js'
-import { laneWriterOf, MAIN_LANE, AMBIGUOUS_LANE } from '../src/references.js'
+import { laneWriterOf, laneLabelOf, MAIN_LANE, AMBIGUOUS_LANE, UNKNOWN_LANE } from '../src/references.js'
 import {
   registerSelf, registerSubagent, retireSubagent, resolveWriter, liveSubagents, type GitSelf,
 } from '../src/persistence/session-registry.js'
@@ -343,6 +343,150 @@ describe('the echo heal\'s guards (F-B, F-C, F-F)', () => {
     const m = meta(id)
     for (const k of ['_superseded_prior', '_supersedes_referenced', '_writer_heal_retired', '_writer_heal_unretired']) expect(m[k]).toBeUndefined()
     await close()
+    await s.close()
+  })
+})
+
+// ── The lane read (D376, D374): a lane from the registry ────────────────
+
+describe('the undetermined writers\' lane (D376)', () => {
+  it('keys `unregistered` apart from main and from the ambiguous lane; an unstamped row stays main\'s', () => {
+    expect(laneWriterOf({ _writer_src: 'unregistered' })).toBe(UNKNOWN_LANE)
+    expect(laneWriterOf({ _writer_src: 'unregistered', agent_type: 'tester' })).toBe(UNKNOWN_LANE)
+    expect(UNKNOWN_LANE).not.toBe(AMBIGUOUS_LANE)
+    expect(UNKNOWN_LANE).not.toBe(MAIN_LANE)
+    expect(laneWriterOf({})).toBe(MAIN_LANE)
+    expect(laneWriterOf({ _cc_session_id: 'old' })).toBe(MAIN_LANE)
+    expect(laneLabelOf(UNKNOWN_LANE)).toBe('writer unknown')
+    expect(laneLabelOf(MAIN_LANE)).toBe('main')
+  })
+
+  it('stamps a caller it cannot place, and its chapters supersede one another and no placed lane\'s', async () => {
+    const s = await open()
+    withRaw((db) => registerSelf(db, 'm', MAIN, 100))
+    const m = await client(s, 'm')
+    const mainChapter = (await insert(m.c, 'plan: the release', { next_session: true }))['node_id'] as string
+    const u = await client(s, 'u-unplaced')
+    const first = (await insert(u.c, 'plan: the first draft', { next_session: true }))['node_id'] as string
+    expect(meta(first)).toMatchObject({ _writer_src: 'unregistered' })
+    expect(meta(first)['_writer']).toBeUndefined()
+    // Its own lane: the second retires the first.
+    const second = await insert(u.c, 'plan: the second draft', { next_session: true }, [first])
+    expect(second['superseded']).toEqual([first])
+    expect(meta(first)['next_session']).toBeUndefined()
+    // Never a placed lane's: main's chapter is referenced, not retired …
+    const third = await insert(u.c, 'plan: a third draft', { next_session: true }, [mainChapter])
+    expect(third).toMatchObject({ superseded: [], referenced: [mainChapter] })
+    expect(meta(mainChapter)['next_session']).toBe(true)
+    // … and a placed writer never retires one of them.
+    const fromMain = await insert(m.c, 'plan: main takes over', { next_session: true }, [second['node_id'] as string])
+    expect(fromMain).toMatchObject({ superseded: [], referenced: [second['node_id']] })
+    expect(meta(second['node_id'] as string)['next_session']).toBe(true)
+    await m.close(); await u.close()
+    await s.close()
+  })
+
+  it('an echo of an unplaced session\'s own agent leaves the row undetermined', async () => {
+    const s = await open()
+    const u = await client(s, 'u-unplaced')
+    const id = (await insert(u.c, 'plan: unplaced', { next_session: true }))['node_id'] as string
+    const created = withRaw((db) => (db.prepare('SELECT created_at AS t FROM nodes WHERE node_id = ?').get(id) as { t: number }).t)
+    expect(s.store.healWriterFromEcho({ nodeId: id, echoSessionId: 'u-unplaced', deduplicated: false, agentId: null, agentType: null, echoTs: created + 1 }).outcome).toBe('confirmed')
+    expect(meta(id)).toMatchObject({ _writer_src: 'unregistered' })
+    expect(meta(id)['_writer']).toBeUndefined()
+    await u.close()
+    await s.close()
+  })
+})
+
+describe('a lane read from the registry (D376, D374)', () => {
+  /** A store with every kind of row a lane's read must place:
+   *  main session `m` (its own turn, chapter, a subagent's trail and
+   *  report, the client's internal summary, an unplaced write), worktree
+   *  session `wt` (its own turn from an earlier release, unstamped; its
+   *  subagent's report), a worker of `m` (trail and return), an orphan
+   *  worker (return), imports by `m`, `wt` and the shell, a session the
+   *  registry never held, and an unplaced client's chapter. */
+  async function world(): Promise<{ s: FlatStore; ids: Record<string, string> }> {
+    const s = await open()
+    withRaw((db) => {
+      registerSelf(db, 'm', MAIN, 100)
+      registerSelf(db, 'wt', WT, 100)
+      registerSubagent(db, 'm', 'a1', 'tester', MAIN, 101)
+      registerSubagent(db, 'wt', 'a2', 'tester', WT, 101)
+      const worker = db.prepare(
+        `INSERT INTO session_registry (session_id, agent_id, agent_type, started_at, kind, parent_session) VALUES (?, 'worker', 'doctor-writer', 102, 'worker', ?)`,
+      )
+      worker.run('w1', 'm')
+      worker.run('w-orphan', null)
+    })
+    const ids: Record<string, string> = {}
+    const put = async (name: string, text: string, metadata: Record<string, unknown>): Promise<void> => {
+      ids[name] = (await s.insert(text, { metadata, ...(metadata['source'] ? { sourceLabel: String(metadata['source']) } : {}) })).nodeId
+    }
+    const capture = { source: 'auto-capture', role: 'tool' }
+    await put('mainTurn', 'zeta main turn', { ...capture, session_id: 'm' })
+    await put('mainChapter', 'zeta main chapter', { session_id: 'm', next_session: true, _writer: 'main', _writer_src: 'self' })
+    await put('subTrail', 'zeta tester tool call', { ...capture, session_id: 'm', _writer: 'tester', _writer_agent_id: 'a1', _writer_src: 'hook' })
+    await put('subReport', 'zeta tester report', { session_id: 'm', kind: 'subagent-summary', _writer: 'tester', _writer_agent_id: 'a1', _writer_src: 'hook', source: 'auto-capture' })
+    await put('internal', 'zeta internal summary', { session_id: 'm', kind: 'internal-summary', _writer: 'claude-code', _writer_agent_id: 'a9', _writer_src: 'hook', source: 'auto-capture' })
+    await put('unknownInMain', 'zeta unplaced write in main session', { _cc_session_id: 'm', _writer_src: 'unregistered' })
+    await put('wtTurn', 'zeta worktree turn from an earlier release', { ...capture, session_id: 'wt' })
+    await put('wtReport', 'zeta worktree tester report', { session_id: 'wt', kind: 'subagent-summary', _writer: 'tester', _writer_agent_id: 'a2', _writer_src: 'hook', source: 'auto-capture' })
+    await put('workerTrail', 'zeta worker tool call', { ...capture, session_id: 'w1', _writer: 'doctor-writer', _writer_agent_id: 'worker' })
+    await put('workerReturn', 'zeta worker return', { session_id: 'w1', kind: 'subagent-summary', _writer: 'doctor-writer', _writer_agent_id: 'worker', _writer_src: 'declared' })
+    await put('orphanReturn', 'zeta orphan return', { session_id: 'w-orphan', kind: 'subagent-summary', _writer: 'doctor-writer', _writer_agent_id: 'worker', _writer_src: 'declared' })
+    await put('importByMain', 'zeta imported by main', { session_id: 'handoff:a', _handoff_importer: 'm', _handoff_file: 'a.json' })
+    await put('importByShell', 'zeta imported by the shell', { session_id: 'handoff:b', _handoff_importer: 'shell:bing', _handoff_file: 'b.json' })
+    await put('importByWt', 'zeta imported by the worktree', { session_id: 'handoff:c', _handoff_importer: 'wt', _handoff_file: 'c.json' })
+    await put('neverHeld', 'zeta first release chapter', { _cc_session_id: 'old', next_session: true })
+    await put('unknownChapter', 'zeta unplaced chapter', { _cc_session_id: 'u', _writer_src: 'unregistered', next_session: true })
+    return { s, ids }
+  }
+  const pick = (ids: Record<string, string>, names: string[]): string[] => names.map((n) => ids[n]!).sort()
+  async function scoped(s: FlatStore, lane?: string): Promise<string[]> {
+    const hits = await s.query('zeta', { topK: 100, ...(lane ? { lane } : {}) })
+    return hits.map((h) => h.nodeId).sort()
+  }
+
+  it('scopes main\'s search to its sessions, its helpers\' reports and imports, never a trail or an undetermined writer', async () => {
+    const { s, ids } = await world()
+    expect(await scoped(s, 'main')).toEqual(pick(ids, [
+      'mainTurn', 'mainChapter', 'subReport', 'internal', 'workerReturn', 'importByMain', 'importByShell', 'neverHeld',
+    ]))
+    expect(await scoped(s, 'worktree:feature-login')).toEqual(pick(ids, ['wtTurn', 'wtReport', 'importByWt']))
+    // The whole store still holds every one of them.
+    expect(await scoped(s)).toEqual(Object.values(ids).sort())
+    await s.close()
+  })
+
+  it('confines the conversation window to the lane', async () => {
+    const { s, ids } = await world()
+    const hits = await s.query('zeta main chapter', { topK: 1, lane: 'main', conversationWindow: 5 })
+    expect(hits[0]!.nodeId).toBe(ids['mainChapter'])
+    const around = JSON.stringify(hits[0]!.window ?? [])
+    expect(around).toContain(ids['mainTurn']!)
+    for (const n of ['subTrail', 'unknownInMain']) expect(around).not.toContain(ids[n]!)
+    await s.close()
+  })
+
+  it('reads a checkout\'s trail from the registry, the own agent\'s rows only', async () => {
+    const { s, ids } = await world()
+    const trail = (w: string): string[] => s.writerTrail(w, 100).nodes.map((n) => String(n.nodeId)).sort()
+    expect(trail('worktree:feature-login')).toEqual(pick(ids, ['wtTurn']))
+    expect(trail('main')).toEqual(pick(ids, ['mainTurn', 'mainChapter', 'neverHeld']))
+    // A role's trail is still its stamp.
+    expect(trail('tester')).toEqual(pick(ids, ['subTrail', 'subReport', 'wtReport']))
+    await s.close()
+  })
+
+  it('places a session from its self registration', async () => {
+    const { s } = await world()
+    expect(s.placedLaneOf('m')).toBe('main')
+    expect(s.placedLaneOf('wt')).toBe('worktree:feature-login')
+    expect(s.placedLaneOf('w1')).toBeNull()
+    expect(s.placedLaneOf('u')).toBeNull()
+    expect(s.placedLaneOf(null)).toBeNull()
     await s.close()
   })
 })

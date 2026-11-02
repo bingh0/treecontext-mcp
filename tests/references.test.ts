@@ -212,7 +212,7 @@ describe('which referrer is shown, and from where (D186, D187, D196)', () => {
 })
 
 describe('the insert tool (D165, D169)', () => {
-  async function tool(): Promise<{ call: (args: Record<string, unknown>) => Promise<Record<string, unknown>>; close: () => Promise<void> }> {
+  async function tool(): Promise<{ ctx: Awaited<ReturnType<typeof open>>; call: (args: Record<string, unknown>) => Promise<Record<string, unknown>>; close: () => Promise<void> }> {
     const ctx = await open()
     const server = createServer(ctx, {})
     const [ct, st] = InMemoryTransport.createLinkedPair()
@@ -220,6 +220,7 @@ describe('the insert tool (D165, D169)', () => {
     await server.connect(st)
     await client.connect(ct)
     return {
+      ctx,
       call: async (args) => {
         const res = await client.callTool({ name: 'treecontext_insert', arguments: args }) as { content: Array<{ text: string }> }
         return JSON.parse(res.content[0]!.text) as Record<string, unknown>
@@ -239,7 +240,9 @@ describe('the insert tool (D165, D169)', () => {
 
   it('says what a cross-writer supersedes did, and what a dedup hit could not record', async () => {
     const t = await tool()
-    const plan = (await t.call({ content: 'plan: wire the form', metadata: { next_session: true } }))['node_id'] as string
+    // The plan names no writer (a library write, the main lane); the tool
+    // caller here is unplaced, the undetermined writers' lane (D376).
+    const plan = (await t.ctx.insert('plan: wire the form', { metadata: { next_session: true } })).nodeId
     const r = await t.call({ content: 'tester: CSRF first', metadata: { agent_type: 'tester' }, supersedes: [plan] })
     expect(r['superseded']).toEqual([])
     expect(r['referenced']).toEqual([plan])

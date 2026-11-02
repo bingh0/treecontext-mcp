@@ -46,6 +46,7 @@ import { roleWeightVector } from './persistence/fts.js'
 import { BOOKMARK_KIND, checkpointKindOf, placeChaptersAboveBookmarks, searchCheckpointKindOf, sessionChainWith } from './checkpoints.js'
 import { metadataFilterSql } from './persistence/metadata-filter.js'
 import { AMBIGUOUS_LANE, laneWriterOf, referencedBy, refIdsOf } from './references.js'
+import { checkoutOfLane, isPlacedLane, laneRowsSql, placedLaneOf, type PlacedLane } from './persistence/lane-scope.js'
 import { resolveWriter, selfOf, selfWriterOf, agentWriterOf, stampMetadata, legTraceOf, MAIN_WRITER, STORE_WRITER, type WriterStamp, type GitSelf } from './persistence/session-registry.js'
 import {
   legOf, legsOfRun, workersOfParent, registerSubagentLeg, registerWorkerLeg, recordWorkerProcess, recordOpenedRun, recordSendBack,
@@ -580,6 +581,50 @@ export class FlatStore implements MemoryStore {
   selfOfSession(sessionId: string): ReturnType<typeof selfOf> {
     this.ensureOpen()
     return selfOf(this.db, sessionId)
+  }
+
+  /** A search's scope as SQL over `nodes` (alias prefix `p`): D150's
+   *  subagent scope and D374's placed lane, both when both are given;
+   *  null when neither is. The same predicate confines the hits and every
+   *  conversation window. */
+  private scopeSql(opts: QueryOptions | undefined, p: string): { sql: string; params: unknown[] } | null {
+    const sub = laneScopeSql(opts?.laneScope, p)
+    const lane = opts?.lane !== undefined ? laneRowsSql(this.db, opts.lane, p, 'search', this.laneReferencedIds(opts.lane)) : null
+    if (sub && lane) return { sql: `(${sub.sql} AND ${lane.sql})`, params: [...sub.params, ...lane.params] }
+    return sub ?? lane
+  }
+
+  /** D376: the placed lane a session runs in (`main` or
+   *  `worktree:<name>`), read from its self registration; null for a
+   *  session the registry does not place (unregistered, a worker). */
+  placedLaneOf(sessionId: string | null): PlacedLane | null {
+    this.ensureOpen()
+    return placedLaneOf(this.db, sessionId)
+  }
+
+  /** D374: the entries a placed lane's default search reaches beyond its
+   *  own rows, one hop: what the lane's live pointers reference, and the
+   *  briefs addressed to its checkout (`brief_for` `main` or the
+   *  worktree's name) with what they reference. */
+  laneReferencedIds(lane: PlacedLane): string[] {
+    this.ensureOpen()
+    const checkout = checkoutOfLane(lane)
+    const briefName = checkout ?? MAIN_WRITER
+    const key = laneWriterOf({ _writer: lane })
+    const rows = this.db.prepare(
+      `SELECT node_id, metadata_json FROM nodes WHERE tree_id = ? AND (
+         json_extract(metadata_json, '$.next_session') = 1 OR json_extract(metadata_json, '$.status') = 'active'
+         OR json_extract(metadata_json, '$.brief_for') = ?)`,
+    ).all(this.treeId, briefName) as Array<{ node_id: string; metadata_json: string | null }>
+    const ids = new Set<string>()
+    for (const r of rows) {
+      const meta = parseMeta(r.metadata_json)
+      const brief = meta?.['brief_for'] === briefName
+      if (!brief && laneWriterOf(meta) !== key) continue
+      if (brief) ids.add(r.node_id)
+      for (const ref of refIdsOf(meta)) ids.add(ref)
+    }
+    return [...ids]
   }
 
   /** D190: how a row written through the tools by `sessionId` is stamped,
@@ -1824,7 +1869,7 @@ export class FlatStore implements MemoryStore {
       scoreExpr = 'bm25(nodes_fts, ?, ?, ?, ?) AS score'
       selectParams.push(...weights)
     }
-    const scope = laneScopeSql(opts?.laneScope, 'n.')
+    const scope = this.scopeSql(opts, 'n.')
     if (scope) { where.push(scope.sql); params.push(...scope.params) }
     if (opts?.timeRange?.after !== undefined) { where.push('n.created_at >= ?'); params.push(opts.timeRange.after) }
     if (opts?.timeRange?.before !== undefined) { where.push('n.created_at <= ?'); params.push(opts.timeRange.before) }
@@ -1986,7 +2031,7 @@ export class FlatStore implements MemoryStore {
     }
 
     const n = opts?.conversationWindow
-    if (n !== undefined && n > 0) this.attachWindows(results, n, hitInfo, laneScopeSql(opts?.laneScope, ''))
+    if (n !== undefined && n > 0) this.attachWindows(results, n, hitInfo, this.scopeSql(opts, ''))
     return results
   }
 
@@ -2546,14 +2591,15 @@ export class FlatStore implements MemoryStore {
   writerTrail(writer: string, limit: number): { nodes: ExportedNode[]; total: number } {
     this.ensureOpen()
     const w = "json_extract(metadata_json, '$._writer')"
-    const where = writer === MAIN_WRITER
-      ? `tree_id = ? AND COALESCE(${w}, '${MAIN_WRITER}') = '${MAIN_WRITER}'
-          AND json_extract(metadata_json, '$.agent_type') IS NULL
-          AND COALESCE(json_extract(metadata_json, '$._writer_src'), '') != 'ambiguous'
-          AND COALESCE(session_key, '') NOT LIKE '${HANDOFF_LANE_PREFIX}%'`
+    // D376: a checkout's trail (`main`, `worktree:<name>`) is its lane as
+    // the registry reads it, the session's own agent's rows of every
+    // session placed there; a role's is its stamp, or its unstamped claim.
+    const lane = isPlacedLane(writer) ? laneRowsSql(this.db, writer, '', 'trail') : null
+    const where = lane
+      ? `tree_id = ? AND ${lane.sql}`
       : `tree_id = ? AND (${w} = ? OR json_extract(metadata_json, '$._writer_agent_id') = ?
           OR (${w} IS NULL AND json_extract(metadata_json, '$.agent_type') = ?))`
-    const params = writer === MAIN_WRITER ? [this.treeId] : [this.treeId, writer, writer, writer]
+    const params = lane ? [this.treeId, ...lane.params] : [this.treeId, writer, writer, writer]
     const total = Number((this.db.prepare(`SELECT COUNT(*) AS n FROM nodes WHERE ${where}`).get(...params) as { n: number }).n)
     const rows = this.db.prepare(
       `${EXPORT_COLUMNS} FROM nodes WHERE ${where} ORDER BY created_at DESC, rowid DESC LIMIT ?`,

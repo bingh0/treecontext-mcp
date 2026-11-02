@@ -95,6 +95,13 @@ export interface OrchestrationWorld extends ReorientationWorld {
   /** Rows exactly as SQLite held them before this treecontext opened the
    *  store (D263's migration), by node id. */
   rowsBefore?: Record<string, { metadata_json: string; content: Buffer | string | null }>
+  /** The main-lane build (D372-D376): the session ids by the lane they
+   *  ran in (`main`, `worktree:<name>`, `unplaced`), the words a Given's
+   *  rows carry, and the replies a When kept. */
+  laneSessions?: Record<string, string>
+  laneWords?: string
+  turnIds?: string[]
+  statusReply?: Record<string, unknown>
 }
 
 type Hit = { nodeId: string; content: string; metadata: Record<string, unknown> | null; referencedBy?: RefBy }
@@ -849,4 +856,162 @@ export const orchestrationDefiner = (reg: Registry<OrchestrationWorld>): void =>
     expect(lines[at + 1]).toMatch(new RegExp(`^ {2}referenced by: ${w.noteId}, tester, \\d+ minutes? old: "plan: rework the login form`))
   })
 
+  // ── D376: a lane read from the registry ──
+  //
+  // The undetermined writers: a client the server cannot place writes
+  // through the tools of a store that records writers, and the store says
+  // so (`_writer_src` `unregistered`); its chapters are one lane apart,
+  // never main's. The checkout's lanes are read from the registry the
+  // session-start hook keeps, in a real repository with real worktrees.
+  reg.define(/^a chapter summary written through the tools by a session the server could not place, after the store recorded writers$/, async (w) => {
+    await openGitWorld(w)
+    w.laneSessions = { main: w.sessionId! }
+    const unplaced = await unplacedChapter(w, 'plan: an unplaced client\'s chapter')
+    w.entries = { unknown: unplaced }
+  })
+  reg.define(/^the main checkout's own live chapter summary and the worktree "([^"]+)"'s own$/, async (w, name$) => {
+    const name = String(name$)
+    w.entries!['main'] = await laneChapter(w, 'main', 'plan: rewrite the README\'s install section')
+    w.entries![`worktree:${name}`] = await laneChapter(w, `worktree:${name}`, 'plan: scaffold the subproject')
+  })
+
+  reg.define(/^a client the server cannot place that wrote the chapter summary "([^"]+)" and then a chapter summary that supersedes it$/, async (w, text$) => {
+    const text = String(text$)
+    await openGitWorld(w)
+    w.laneSessions = { main: w.sessionId! }
+    // The main checkout's own chapter, which the Then reads as still live.
+    w.entries = { main: await laneChapter(w, 'main', 'plan: rewrite the README\'s install section') }
+    const first = await unplacedChapter(w, text)
+    const reply = await insert(w, 'plan: the second draft, which replaces the first', { next_session: true }, [first.id])
+    // One lane for supersession: the unplaced writer retired its own.
+    expect(reply).toMatchObject({ superseded: [first.id] })
+    expect(rawMeta(w, reply['node_id'] as string)).toMatchObject({ _writer_src: 'unregistered' })
+    w.entries['first'] = first
+    w.entries['second'] = { id: reply['node_id'] as string, text: 'plan: the second draft, which replaces the first' }
+  })
+  reg.define(/^the main checkout's session calls status asking for every lane$/, async (w) => {
+    await mcpOver(w, { ccSessionId: w.laneSessions!['main']! })
+    w.statusReply = parseTool(await w.client!.callTool({ name: 'treecontext_status', arguments: { scope: 'all' } }))
+  })
+  reg.define(/^the main checkout's own chapter summary is still live$/, (w) => {
+    const main = w.entries!['main']!
+    expect(rawMeta(w, main.id)).toMatchObject({ next_session: true, _writer: 'main' })
+    expect(rawMeta(w, main.id)['superseded_by']).toBeUndefined()
+    expect((w.statusReply!['resume_pointers'] as Array<{ node_id: string }>).map((p) => p.node_id)).toContain(main.id)
+  })
+
+  reg.define(/^a store whose chapter summary "([^"]+)" was written before the store recorded writers$/, async (w, text$) => {
+    const text = String(text$)
+    await openGitWorld(w)
+    w.laneSessions = { main: w.sessionId! }
+    w.entries = { older: { id: await olderChapter(w, text), text } }
+  })
+  reg.define(/^the main checkout's session calls status and searches "([^"]+)"$/, async (w, q$) => {
+    await mcpOver(w, { ccSessionId: w.laneSessions!['main']! })
+    w.statusReply = parseTool(await w.client!.callTool({ name: 'treecontext_status', arguments: {} }))
+    w.read = parseTool(await w.client!.callTool({ name: 'treecontext_query', arguments: { query: String(q$), top_k: 10 } }))
+  })
+
+  // ── D374, D376: a worktree's conversation an earlier release captured ──
+  reg.define(/^a store in which an earlier treecontext captured a worktree "([^"]+)" session's turns with no writer$/, async (w, name$) => {
+    const name = String(name$)
+    await openGitWorld(w)
+    w.laneSessions = { main: w.sessionId! }
+    // The main checkout's own work, so its trail is not empty.
+    runHook(w, 'user-prompt-submit', { hook_event_name: 'UserPromptSubmit', prompt: 'rewrite the README install section', cwd: w.repo })
+    const path = addWorktree(w, name, `${name}-branch`)
+    w.sessionId = `cc-${randomBytes(6).toString('hex')}`
+    sessionStart(w, path)
+    w.laneSessions[`worktree:${name}`] = w.sessionId
+    // The worktree session's own turns, captured by the real hooks: the
+    // session's own agent sends no agent fields, and the drain stamps no
+    // writer on them, exactly as every earlier release left them.
+    w.laneWords = 'quillmarsh scaffolding'
+    runHook(w, 'user-prompt-submit', { hook_event_name: 'UserPromptSubmit', prompt: `set up the ${w.laneWords} for the subproject`, cwd: path })
+    runHook(w, 'post-tool-use', { ...bashPayload(w, 'mkdir -p subproject/src', `created the ${w.laneWords} directories`), cwd: path })
+    await drainStaging(w)
+    const turns = storedRows(w, 'session_key = ? AND content LIKE ?', w.sessionId, '%quillmarsh%')
+    expect(turns.length).toBe(2)
+    for (const t of turns) {
+      const m = JSON.parse(t.metadata_json) as Record<string, unknown>
+      for (const k of ['_writer', '_writer_src', '_writer_agent_id', 'agent_type']) expect(m[k], k).toBeUndefined()
+    }
+    w.turnIds = turns.map((t) => t.node_id)
+    w.rowsBefore = Object.fromEntries(storedRows(w, '1').map((r) => [r.node_id, { metadata_json: r.metadata_json, content: r.content }]))
+  })
+  reg.define(/^the session in the worktree "([^"]+)" searches those turns' words$/, async (w, name$) => {
+    await mcpOver(w, { ccSessionId: w.laneSessions![`worktree:${String(name$)}`]! })
+    w.read = parseTool(await w.client!.callTool({ name: 'treecontext_query', arguments: { query: w.laneWords!, top_k: 10 } }))
+  })
+  reg.define(/^an export of the worktree's trail carries those turns, and the main checkout's trail does not$/, async (w) => {
+    const lane = Object.keys(w.laneSessions!).find((k) => k.startsWith('worktree:'))!
+    const trail = async (writer: string): Promise<string[]> =>
+      ((parseTool(await w.client!.callTool({ name: 'treecontext_export', arguments: { writer } }))['nodes']) as Array<{ nodeId: string }>).map((n) => n.nodeId)
+    const own = await trail(lane)
+    for (const id of w.turnIds!) expect(own).toContain(id)
+    const main = await trail('main')
+    for (const id of w.turnIds!) expect(main).not.toContain(id)
+    // The main checkout's trail is read, not empty: its own prompt is there.
+    expect(main.length).toBeGreaterThan(0)
+  })
+  reg.define(/^the store's rows are unchanged byte for byte$/, (w) => {
+    const now = Object.fromEntries(storedRows(w, '1').map((r) => [r.node_id, r]))
+    for (const [id, before] of Object.entries(w.rowsBefore!)) {
+      expect(now[id], id).toBeTruthy()
+      expect(now[id]!.metadata_json).toBe(before.metadata_json)
+      expect(contentBytes(now[id]!.content).equals(contentBytes(before.content))).toBe(true)
+    }
+  })
+}
+
+/** A chapter summary written through the tools by the session the world
+ *  keeps for `lane` (`main`, or `worktree:<name>`, a new session started
+ *  in that worktree by the real SessionStart hook), stamped from the
+ *  registry with that lane's writer. */
+async function laneChapter(w: OrchestrationWorld, lane: string, text: string): Promise<{ id: string; text: string }> {
+  w.laneSessions ??= {}
+  if (!w.laneSessions[lane]) {
+    const name = lane.slice('worktree:'.length)
+    const path = w.worktrees![name] ?? addWorktree(w, name, `${name}-branch`)
+    w.sessionId = `cc-${randomBytes(6).toString('hex')}`
+    sessionStart(w, path)
+    w.laneSessions[lane] = w.sessionId
+  }
+  await mcpOver(w, { ccSessionId: w.laneSessions[lane] })
+  const reply = await insert(w, text, { next_session: true })
+  expect(reply).toMatchObject({ writer: lane, writer_src: 'self' })
+  return { id: reply['node_id'] as string, text }
+}
+
+/** A chapter summary written through the tools by a client the server
+ *  cannot place: a Claude Code session no hook registered. The store
+ *  records writers, so the row says its writer is undetermined. */
+async function unplacedChapter(w: OrchestrationWorld, text: string): Promise<{ id: string; text: string }> {
+  w.laneSessions ??= {}
+  w.laneSessions['unplaced'] ??= `cc-${randomBytes(6).toString('hex')}`
+  const session = w.laneSessions['unplaced']
+  expect(rawAll(w, 'SELECT 1 FROM session_registry WHERE session_id = ?', session)).toEqual([])
+  await mcpOver(w, { ccSessionId: session })
+  const reply = await insert(w, text, { next_session: true })
+  const m = rawMeta(w, reply['node_id'] as string)
+  expect(m).toMatchObject({ _writer_src: 'unregistered', _cc_session_id: session, next_session: true })
+  expect(m['_writer']).toBeUndefined()
+  return { id: reply['node_id'] as string, text }
+}
+
+/** A chapter summary as a release before the store recorded writers wrote
+ *  it through the tools: the metadata that insert tool stamped (the
+ *  Claude Code session it resolved, the connection) and no writer, no
+ *  door, no identity, from a session the registry never held. Written
+ *  through the library, which stamps nothing of its own. */
+async function olderChapter(w: OrchestrationWorld, text: string): Promise<string> {
+  const session = `cc-${randomBytes(6).toString('hex')}`
+  const r = await w.store!.insert(text, {
+    metadata: { next_session: true, _cc_session_id: session, _cc_session_src: 'env', _session_id: 'conn-old', _conn_id: 'conn-old' },
+    createdAt: now() - 86_400 * 30,
+  })
+  const m = rawMeta(w, r.nodeId)
+  for (const k of ['_writer', '_writer_src', '_door', '_identity']) expect(m[k], k).toBeUndefined()
+  expect(rawAll(w, 'SELECT 1 FROM session_registry WHERE session_id = ?', session)).toEqual([])
+  return r.nodeId
 }
