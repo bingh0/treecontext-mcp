@@ -19,3 +19,8 @@ files record how it was reached.
 
 Paths inside these files that point at a session scratchpad refer to the
 copies here.
+- `d378-draft.md` → `d378-review.md` → `d378-draft-v2.md`: ruling R14 as D378,
+  the pre-stamp door (Fable draft, Opus review, Opus-merged v2; committed
+  b29820d).
+- `u2-review.md`: the failure-ladder review of unit U2 (commit 197c3b9);
+  its fixes are carried into U3.
