@@ -311,3 +311,11 @@ node dist/server/cli.js doctor      # after a build
 - The curated unique index is partial: `dedup_class = 'curated'` outside
   handoff lanes (`CURATED_INDEX_WHERE`). Inside a handoff lane identity
   decides, not content; any rebuild must reuse the shared DDL
+- A search by a session's own agent placed in a checkout is scoped to its
+  lane (`QueryOptions.lane`, read from the registry, D374); the lane's
+  one-hop reach is read once per search and shared by the hits and every
+  window. A scoped relevance page keeps a seat for the lane's own live
+  chapter the search matched (`seatOwnChapter`): the last place, never
+  first by rule. A worker of the ticket door, a caller that cannot be told
+  apart (D240) and an unplaced caller search the whole store, the reply's
+  `scope` saying which

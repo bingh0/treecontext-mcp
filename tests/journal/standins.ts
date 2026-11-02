@@ -23,8 +23,8 @@
  *  | `runWorker` + standin-claude-p         | Claude Code's headless client (`claude -p`): it fires the   |
  *  |   (tests/helpers/standin-claude-p.ts)  | real hooks the install wires, with the payloads Claude Code |
  *  |                                        | sends, in the order it sends them                           |
- *  | a plan's `viaTools` / `toolNotes`      | a worker's CLI writing through its own tools: a real        |
- *  |                                        | `treecontext serve` the stand-in starts with its own env    |
+ *  | a plan's `viaTools` / `toolNotes` /    | a worker's CLI writing and reading through its own tools: a |
+ *  |   `reads`                              | real `treecontext serve` the stand-in starts with its env   |
  *  | `workerLeg`, `registerThroughLibrary`  | a spawner registering a worker through the library door     |
  *  |                                        | (`FlatStore.registerWorker`), no worker process running     |
  *  | `retiredWithoutReturn`, `cutByTimeout`,| a leg already ended, for a Given of history: retired with   |
@@ -77,10 +77,14 @@
  * `checkpoints` (under its ticket's key, each superseding the one before
  * by the store's own rule), `invalidRow` (the one row an invalid ticket
  * asks for), `viaTools` (notes and texts through a real `treecontext
- * serve` instead of the library), `at` (the rows' moment), `waitFor` (a
- * file it waits for after writing `<file>.ready`), `print` (its last
- * output), `exit` (a code, or `'hang'`). The run that opens on the door's
- * send-back message follows `rerun`.
+ * serve` instead of the library), `reads` (after its writes, the reads
+ * a worker's CLI makes through those same tools: `query` a
+ * treecontext_query call with these arguments, `status` a
+ * treecontext_status call; each reply recorded whole in its log line as
+ * `reads`; reads imply the real serve), `at` (the rows' moment),
+ * `waitFor` (a file it waits for after writing `<file>.ready`), `print`
+ * (its last output), `exit` (a code, or `'hang'`). The run that opens on
+ * the door's send-back message follows `rerun`.
  *
  * standin-claude-p (STANDIN_CLAUDE_PLAN, `ClaudePPlan`): `tools` (Bash
  * calls, each a PostToolUse), `toolText` (their output, `{i}` the call's
@@ -231,6 +235,8 @@ export const STANDIN_CLAUDE_P = join(TS_ROOT, 'tests', 'helpers', 'standin-claud
 export interface WorkerStep {
   notes?: number; label?: string; texts?: string[]; checkpoint?: string; checkpoints?: string[]; invalidRow?: boolean; print?: string
   exit?: number | 'hang'; waitFor?: string; at?: number; viaTools?: boolean
+  /** Reads through its own tools after its writes (the real serve). */
+  reads?: { query?: Record<string, unknown>; status?: Record<string, unknown> }
 }
 /** The hook-less stand-in's plan (STANDIN_PLAN). */
 export interface WorkerPlan { first: WorkerStep; rerun?: WorkerStep; claim?: { prompt?: string } }
@@ -261,6 +267,9 @@ export interface StandinRecord {
   /** The stand-in `claude -p` child's: its session-start hook's stdout,
    *  whole, as Claude Code reads it. */
   startStdout?: string
+  /** The hook-less stand-in's reads through its own tools (a plan's
+   *  `reads`): each tool's reply, parsed, as its CLI received it. */
+  reads?: { query?: Record<string, unknown>; status?: Record<string, unknown> }
 }
 
 /** What spawns the worker: the wrapper, the library call, or nothing (a

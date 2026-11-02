@@ -574,6 +574,58 @@ describe('a lane read from the registry (D376, D374)', () => {
     await s.close()
   })
 
+  it('reaches one hop from the lane\'s own pointers and briefs only, the pointers placed by session (U1-F2, F7)', async () => {
+    const { s, ids } = await world()
+    // Rows no lane's default search holds of its own: an orphan worker's
+    // trail, so only a one-hop reach can bring them in.
+    const out = async (name: string, metadata: Record<string, unknown> = {}): Promise<void> => {
+      ids[name] = (await s.insert(`kappa ${name}`, { metadata: { session_id: 'w-orphan', _writer: 'doctor-writer', _writer_agent_id: 'worker', ...metadata } })).nodeId
+    }
+    for (const n of ['mainRefTarget', 'wtRefTarget', 'briefMainTarget']) await out(n)
+    await out('briefMain', { brief_for: 'main', refs: [ids['briefMainTarget']] })
+    await out('briefWt', { brief_for: 'feature-login' })
+    // Main's live plan names its target; the worktree's chapter from an
+    // earlier release carries no stamp at all and sits in the worktree's
+    // session: it is the worktree's by the registry, never main's by its
+    // missing stamp.
+    ids['mainPlan'] = (await s.insert('kappa main plan', { metadata: { session_id: 'm', next_session: true, _writer: 'main', _writer_src: 'self', refs: [ids['mainRefTarget']] } })).nodeId
+    ids['wtPlan'] = (await s.insert('kappa worktree plan', { metadata: { session_id: 'wt', next_session: true, refs: [ids['wtRefTarget']] } })).nodeId
+    const mainReach = s.laneReferencedIds('main')
+    const wtReach = s.laneReferencedIds('worktree:feature-login')
+    for (const n of ['mainRefTarget', 'briefMain', 'briefMainTarget']) {
+      expect(mainReach, n).toContain(ids[n])
+      expect(wtReach, n).not.toContain(ids[n])
+    }
+    for (const n of ['wtRefTarget', 'briefWt']) {
+      expect(wtReach, n).toContain(ids[n])
+      expect(mainReach, n).not.toContain(ids[n])
+    }
+    const kappa = async (lane: string): Promise<string[]> => (await s.query('kappa', { topK: 100, lane })).map((h) => h.nodeId).sort()
+    expect(await kappa('main')).toEqual(pick(ids, ['mainRefTarget', 'briefMain', 'briefMainTarget', 'mainPlan']))
+    expect(await kappa('worktree:feature-login')).toEqual(pick(ids, ['wtRefTarget', 'briefWt', 'wtPlan']))
+    await s.close()
+  })
+
+  it('keeps a seat for the lane\'s own live chapter that the search matched, never first by rule (D374)', async () => {
+    const { s, ids } = await world()
+    const t0 = Date.now() / 1000
+    ids['oldPlan'] = (await s.insert('omega plan: rewrite the install section', { metadata: { session_id: 'm', next_session: true, _writer: 'main', _writer_src: 'self' }, createdAt: t0 - 3600 })).nodeId
+    // Newer rows of the lane's own session that match more of the words.
+    for (let i = 0; i < 6; i++) {
+      ids[`turn${i}`] = (await s.insert(`omega next step ${i}: the doctor table rows`, { metadata: { source: 'auto-capture', role: 'user', session_id: 'm' }, sourceLabel: 'auto-capture', createdAt: t0 - 60 + i })).nodeId
+    }
+    const q = 'omega next step the doctor table'
+    const whole = await s.query(q, { topK: 3, recencyWeight: 0.25 })
+    expect(whole.map((h) => h.nodeId)).not.toContain(ids['oldPlan'])
+    const own = await s.query(q, { topK: 3, recencyWeight: 0.25, lane: 'main' })
+    expect(own).toHaveLength(3)
+    expect(own.map((h) => h.nodeId)).toEqual([...whole.slice(0, 2).map((h) => h.nodeId), ids['oldPlan']])
+    // A temporal listing is not a relevance page: no seat.
+    const listed = await s.query(q, { topK: 3, lane: 'main', sortBy: 'reverse_chronological', chapterPlacement: false })
+    expect(listed.map((h) => h.nodeId)).not.toContain(ids['oldPlan'])
+    await s.close()
+  })
+
   it('places a session from its self registration', async () => {
     const { s } = await world()
     expect(s.placedLaneOf('m')).toBe('main')

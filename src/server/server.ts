@@ -795,8 +795,10 @@ export function createServer(
       scope: z.enum(['all']).optional().describe(
         'While one subagent is the only live one and the session\'s own agent is '
         + 'waiting on it, a search is read as that subagent\'s and covers its role\'s '
-        + 'trail and the plan it was spawned under; "all" searches the whole store. '
-        + 'Otherwise every search covers the whole store. The reply\'s scope says which ran.',
+        + 'trail and the plan it was spawned under; a session\'s own agent in the main checkout or a '
+        + 'git worktree searches its own lane (its sessions, its helpers\' reports, its imports); '
+        + '"all" searches the whole store. Otherwise every search covers the whole store. '
+        + 'The reply\'s scope says which ran.',
       ),
       conversation_window: z.number().int().min(0).max(10).optional().describe(
         'Also return up to N same-session entries before and after each '
@@ -932,6 +934,37 @@ export function createServer(
               why: stamp.src === 'concurrent'
                 ? "a subagent of this session is live but the session's own agent has been active beside it, so the caller cannot be told apart and no subagent scope applies"
                 : 'several subagents of this session are live, so the caller cannot be told apart and no subagent scope applies',
+            }
+          } else if (stamp.src === 'declared') {
+            // D374: a worker of the ticket door is fed by its brief and the
+            // key lookup (D336), not by a scope; it searches as before.
+            scopeNote = {
+              searched: 'the whole store',
+              worker: `this session is a worker of the ticket door (${stamp.writer ?? 'worker'}), in no checkout's lane: a worker searches the whole store as its harness feeds it, by its brief and the key lookup`,
+            }
+          } else if (typeof scoping.placedLaneOf === 'function') {
+            // D374, D376: the session's own agent, placed in the main
+            // checkout or a linked worktree, searches its own lane as the
+            // registry reads it now; hits and windows alike.
+            const placed = stamp.src === 'self' && cc.ccSessionId !== null && !cc.ambiguous ? scoping.placedLaneOf(cc.ccSessionId) : null
+            if (placed) {
+              queryOpts.lane = placed
+              scopeNote = {
+                lane: placed,
+                searched: placed === MAIN_WRITER
+                  ? "the main checkout's own lane (main): its sessions' own rows, its helpers' reports and its imports, never a helper's trail"
+                  : `this worktree's own lane (${placed}): its sessions' own rows, its helpers' reports and its imports, never a helper's trail`,
+                widen: 'pass scope "all" to search the whole store',
+              }
+            } else if (stamp.src === 'unregistered') {
+              scopeNote = {
+                searched: 'the whole store',
+                unplaced: cc.ccSessionId === null
+                  ? 'this session could not be placed: the server knows no session for this connection, so the search covers the whole store'
+                  : cc.ambiguous
+                    ? 'this session could not be placed: its session id is ambiguous on this machine, so the search covers the whole store'
+                    : 'this session could not be placed: no session-start hook registered it in a checkout, so the search covers the whole store',
+              }
             }
           }
         }

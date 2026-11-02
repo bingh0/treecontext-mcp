@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { hostname, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -15,7 +16,7 @@ import { SUBAGENT_SUMMARY_KIND } from '../../../src/handoff.js'
 import { decodeContent } from '../../../src/persistence/content-codec.js'
 import { parseTool, rawAll, mcpOver } from '../world.js'
 import { TS_ROOT, tsxArgv } from '../proc.js'
-import { drainStaging } from '../capture-harness.js'
+import { drainStaging, runHook } from '../capture-harness.js'
 import { sandboxedSpawnEnv, nodeTsArgs, spawnCli, CLI_TS } from '../../helpers/cli-spawn.js'
 import { agentConfigPath } from '../install-harness.js'
 import { mintTicket, readTicket, type TicketFields } from '../../../src/ticket.js'
@@ -123,6 +124,7 @@ export const workersDefiner = (reg: Registry<WorkersWorld>): void => {
   const define = stringSteps(reg)
   ticketDoorSteps(define)
   claudeChildSteps(define)
+  workerLaneSteps(define)
 
   // ── D294: the parent as declared, or as a hook registered it ──
 
@@ -884,7 +886,13 @@ export function ticketDoorSteps(define: (re: RegExp, fn: (w: WorkersWorld, ...ca
 
   define(/^an agent searching the prompt's words sees a bounded preview ending in the availability marker$/, async (w) => {
     await mcpOver(w, { ccSessionId: w.sessionId! })
-    const r = parseTool(await w.client!.callTool({ name: 'treecontext_query', arguments: { query: 'quokkaconfig deploy configuration', top_k: 5 } }))
+    // The spawner's own search is scoped to its lane (D374), which holds a
+    // worker's return but not its first moment, the worker's own capture in
+    // the worker's lane: the default says so and how to widen, and the
+    // widened search is the one that reaches the row.
+    const own = parseTool(await w.client!.callTool({ name: 'treecontext_query', arguments: { query: 'quokkaconfig deploy configuration', top_k: 5 } }))
+    expect(own['scope']).toMatchObject({ lane: 'main', widen: 'pass scope "all" to search the whole store' })
+    const r = parseTool(await w.client!.callTool({ name: 'treecontext_query', arguments: { query: 'quokkaconfig deploy configuration', top_k: 5, scope: 'all' } }))
     const hit = (r['results'] as Array<{ nodeId: string; content: string }>).find((h) => h.nodeId === firstRow(w).node_id)
     expect(hit, 'the first-moment row is a hit').toBeTruthy()
     const n = (w.facts!['prompt'] as string).length
@@ -1861,4 +1869,79 @@ function owingSpec(w: WorkersWorld): WorkerSpec {
     ticket: ticketFields(w, { checkpointer: 'builder', canWrite: true }),
     plan: { first: {} },
   }
+}
+
+// ── D374, D372: a worker's search and status, every lane flat ──
+//
+// The spawner and the worktree are real checkouts of one git repository,
+// each session started there by the real SessionStart hook, each chapter
+// written through the tools by that session (stamped from the registry);
+// the worker runs through the real ticket door (the library spawner) and
+// reads through its own tools, as a hook-less worker's CLI does (a real
+// `treecontext serve` it starts with the ticket and the lane the door
+// named): the replies are what that serve said to it, recorded whole.
+
+const ORIENTATION_QUERY = 'what was I working on, what was the next step'
+
+export function workerLaneSteps(define: (re: RegExp, fn: (w: WorkersWorld, ...caps: string[]) => void | Promise<void>) => void): void {
+  define(/^a spawner in the main checkout holding its live chapter summary, and a worktree "([^"]+)" holding its own$/, async (w, name) => {
+    await openGitSession(w, `cc-${randomUUID().slice(0, 12)}`, 'main')
+    const spawner = w.sessionId!
+    const chapterBy = async (session: string, text: string, writer: string): Promise<string> => {
+      const client = await mcpOver(w, { ccSessionId: session })
+      const reply = parseTool(await client.callTool({ name: 'treecontext_insert', arguments: { content: text, metadata: { next_session: true } } }))
+      expect(reply).toMatchObject({ writer, writer_src: 'self' })
+      return reply['node_id'] as string
+    }
+    w.ids!['main'] = await chapterBy(spawner, 'plan: rewrite the README install section; next: the doctor table', 'main')
+    // The worktree: `git worktree add` beside the main checkout, its own
+    // session started there by the real hook.
+    const env = { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('GIT_'))),
+      GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' }
+    const path = join(dirname(w.proj!), name)
+    execFileSync('git', ['worktree', 'add', '-q', '-b', `${name}-branch`, path], { cwd: w.proj!, env })
+    const wtSession = `cc-${randomUUID().slice(0, 12)}`
+    runHook(w, 'session-start', { session_id: wtSession, hook_event_name: 'SessionStart', source: 'startup', cwd: realpathSync.native(path) })
+    w.ids![`worktree:${name}`] = await chapterBy(wtSession, 'plan: scaffold the subproject; next: its first test', `worktree:${name}`)
+    w.sessionId = spawner
+    w.facts!['lanes'] = ['main', `worktree:${name}`]
+  })
+  define(/^a worker the spawner launched through the ticket door with its brief and key$/, async (w) => {
+    w.ids!['brief'] = (await w.store!.writeBrief('BRIEF: write the doctor table from the README install section', {
+      run: 'r-lanes', key: 'doctor-table', role: 'builder', checkpointer: 'builder', by: 'harness',
+    })).nodeId
+    w.facts!['spec'] = {
+      spawner: 'library', prompt: 'write the doctor table',
+      ticket: ticketFields(w, { run: 'r-lanes', key: 'doctor-table', role: 'builder', checkpointer: 'builder' }),
+      plan: { first: {} },
+    } satisfies WorkerSpec
+  })
+  define(/^the worker searches through its tools and calls status$/, async (w) => {
+    const spec = specOf(w)
+    spec.plan.first.reads = { query: { query: ORIENTATION_QUERY, top_k: 10 }, status: {} }
+    const out = await runWorker(w, spec)
+    expect(out.exitCode).toBe(0)
+    // A worker of the door, its parent the spawner as its hook registered it.
+    expect(rawOne(w, 'SELECT kind, parent_session FROM session_registry WHERE session_id = ?', out.sessionId))
+      .toMatchObject({ kind: 'worker', parent_session: w.sessionId })
+  })
+  define(/^its search covers the whole store, the reply saying a worker searches as its harness feeds it$/, (w) => {
+    const reply = outOf(w).log[0]!.reads!.query!
+    const scope = reply['scope'] as Record<string, unknown> | undefined
+    expect(scope, JSON.stringify(reply).slice(0, 1500)).toMatchObject({ searched: 'the whole store' })
+    expect(scope!['worker']).toContain('a worker searches the whole store as its harness feeds it')
+    expect(scope!['lane']).toBeUndefined()
+    const hits = (reply['results'] as Array<{ nodeId: string }>).map((h) => h.nodeId)
+    for (const lane of w.facts!['lanes'] as string[]) expect(hits, lane).toContain(w.ids![lane])
+  })
+  define(/^its status lists both chapters flat, the block naming it a worker, never calling it unplaced$/, (w) => {
+    const reply = outOf(w).log[0]!.reads!.status!
+    const pointers = (reply['resume_pointers'] as Array<{ node_id: string; lane?: string }> | undefined) ?? []
+    for (const lane of w.facts!['lanes'] as string[]) expect(pointers.map((p) => [p.node_id, p.lane])).toContainEqual([w.ids![lane], lane])
+    const scope = reply['scope'] as Record<string, unknown> | undefined
+    expect(scope, JSON.stringify(reply).slice(0, 1500)).toBeTruthy()
+    expect(scope!['listed']).toBe("every lane's resume pointers, flat, each naming its lane")
+    expect(scope!['worker']).toContain('this session is a worker of the ticket door (builder)')
+    for (const k of ['unplaced', 'lane', 'left_out', 'other_lanes']) expect(scope![k], k).toBeUndefined()
+  })
 }

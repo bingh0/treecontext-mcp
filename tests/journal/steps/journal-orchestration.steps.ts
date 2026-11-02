@@ -1,4 +1,4 @@
-import { mkdtempSync, realpathSync, rmSync } from 'node:fs'
+import { copyFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
 import { maxSupportedVersion } from '../../../src/persistence/migrations/index.js'
 import { tmpdir } from 'node:os'
 import { join, basename } from 'node:path'
@@ -22,8 +22,10 @@ import {
   runHook, hookJson, spawnHooksAtOnce, drainStaging, bashPayload,
 } from '../capture-harness.js'
 import {
-  type ReorientationWorld, openWorld, now, toolEntry, mcpNote, clear, statusPanel,
+  openWorld, now, toolEntry, mcpNote, clear, statusPanel,
 } from './journal-reorientation.steps.js'
+import { type RunWorld } from '../run-world.js'
+import { runWorker } from '../standins.js'
 
 // ── journal-orchestration ───────────────────────────────────────────────
 //
@@ -61,7 +63,7 @@ import {
  *  sandbox, a real store, an MCP client, the /clear hook driver — the
  *  D169 and D190 bindings will need the last) plus what these scenarios
  *  carry from a Given to a Then. */
-export interface OrchestrationWorld extends ReorientationWorld {
+export interface OrchestrationWorld extends RunWorld {
   /** Named entries of the D186 chain and their texts. */
   entries?: Record<string, { id: string; text: string }>
   /** The parsed response of the last search or fetch. */
@@ -102,6 +104,13 @@ export interface OrchestrationWorld extends ReorientationWorld {
   laneWords?: string
   turnIds?: string[]
   statusReply?: Record<string, unknown>
+  /** The captured conversation of each lane's session, by lane. */
+  laneTurns?: Record<string, string[]>
+  /** The search replies a When kept, by what was searched. */
+  searches?: Record<string, Record<string, unknown>>
+  /** The helpers' rows a Given stored: each helper's report (or return)
+   *  and its trail, by the helper's name in the scenario. */
+  helpers?: Record<string, { report: string; trail: string[] }>
 }
 
 type Hit = { nodeId: string; content: string; metadata: Record<string, unknown> | null; referencedBy?: RefBy }
@@ -429,8 +438,9 @@ export const orchestrationDefiner = (reg: Registry<OrchestrationWorld>): void =>
     const q = String(q$)
     await sessionClient(w)
     const res = parseTool(await w.client!.callTool({ name: 'treecontext_query', arguments: { query: q, top_k: 5 } }))
-    // The orchestrator's search is the whole store: no subagent is live.
-    expect(res['scope']).toBeUndefined()
+    // No subagent is live: the orchestrator's own search, scoped to its
+    // own lane (D374), which holds its helpers' reports (D147).
+    expect(res['scope']).toMatchObject({ lane: 'main' })
     const hits = res['results'] as Array<{ nodeId: string; content: string; metadata: Record<string, unknown> }>
     const hit = hits.find((h) => h.content === w.report)
     expect(hit, JSON.stringify(hits.map((h) => h.content))).toBeTruthy()
@@ -1108,10 +1118,18 @@ export const orchestrationDefiner = (reg: Registry<OrchestrationWorld>): void =>
   reg.define(/^a session in the main checkout that wrote the chapter summary "([^"]+)" and then stopped$/, async (w, text$) => {
     await openGitWorld(w)
     w.laneSessions = { main: w.sessionId! }
+    // The session's own conversation, as the hooks captured it, then its
+    // chapter through the tools.
+    await conversationIn(w, 'main', 'what is the next step on the README? I was working on its install section', 'M README.md (the install section, half rewritten)')
     w.entries = { main: await laneChapter(w, 'main', String(text$)) }
   })
   reg.define(/^a session in the worktree "([^"]+)" that wrote the newer chapter summary "([^"]+)"$/, async (w, name$, text$) => {
     const lane = `worktree:${String(name$)}`
+    // The worktree session's own conversation, captured by the hooks with
+    // no writer, as the drain stores a session's own turns; it carries the
+    // orientation words, so a lane read by writer stamp would hand it to
+    // the main checkout.
+    await conversationIn(w, lane, 'what was I working on in the subproject? the next step is its first test', '?? subproject/ (the scaffold, its first test next)')
     w.entries![lane] = await laneChapter(w, lane, String(text$))
     expect(createdAtOf(w, w.entries![lane]!.id)).toBeGreaterThan(createdAtOf(w, w.entries!['main']!.id))
   })
@@ -1290,6 +1308,299 @@ export const orchestrationDefiner = (reg: Registry<OrchestrationWorld>): void =>
     expect(namedInLine(otherLanesLineOf(packet) ?? '')).toEqual([packetEntry(w, 'main')])
     expectNoneOf(packet, [older!])
   })
+
+  // ── D374: the search scoped to the session's own lane ──
+  //
+  // Every search is the real query tool through a client opened under the
+  // session under test (searchAs), never one a Given left behind. Which
+  // lane a row is in is the test's own record, the sessions it started in
+  // each checkout through the real SessionStart hook (w.laneSessions), read
+  // against the row's session_key in SQLite, never the production lane read.
+  reg.define(/^a main checkout session whose captured conversation and chapter summary "([^"]+)" are its own$/, async (w, text$) => {
+    await openGitWorld(w)
+    w.laneSessions = { main: w.sessionId! }
+    await conversationIn(w, 'main', 'what is the next step on the README? I was working on the install section', 'M README.md (install section; the doctor table is next)')
+    w.entries = { main: await laneChapter(w, 'main', String(text$)) }
+  })
+  reg.define(/^a worktree "([^"]+)" session whose captured conversation and newer chapter summary "([^"]+)" are its own$/, async (w, name$, text$) => {
+    const lane = `worktree:${String(name$)}`
+    await conversationIn(w, lane, 'what was I working on in the subproject? the next step is its scaffold', '?? subproject/ (the scaffold; its first test is next)')
+    w.entries![lane] = await laneChapter(w, lane, String(text$))
+    expect(createdAtOf(w, w.entries![lane]!.id)).toBeGreaterThan(createdAtOf(w, w.entries!['main']!.id))
+  })
+  reg.define(/^the main checkout's session searches "([^"]+)"$/, async (w, q$) => {
+    w.laneWords = String(q$)
+    // The handshake's second step as the agent makes it: the query alone.
+    w.read = await searchAs(w, w.laneSessions!['main']!, w.laneWords)
+  })
+  reg.define(/^the main checkout's hits are its own chapter and its own conversation, and none of the worktree's$/, (w) => {
+    expectOwnLaneReply(w, w.read!, 'main')
+  })
+  reg.define(/^the reply says the main lane was searched and how to widen$/, (w) => {
+    const block = w.read!['scope'] as { lane?: string; searched?: string; widen?: string }
+    expect(block, JSON.stringify(w.read)).toBeTruthy()
+    expect(block.lane).toBe('main')
+    expect(block.searched).toContain("the main checkout's own lane (main)")
+    expect(block.widen).toContain('scope "all"')
+  })
+  reg.define(/^the worktree's session running the same search gets its own chapter and conversation and none of the main checkout's$/, async (w) => {
+    const lane = Object.keys(w.laneSessions!).find((k) => k.startsWith('worktree:'))!
+    const reply = await searchAs(w, w.laneSessions![lane]!, w.laneWords!)
+    expectOwnLaneReply(w, reply, lane)
+    expect((reply['scope'] as { searched?: string }).searched).toContain(`this worktree's own lane (${lane})`)
+  })
+  reg.define(/^either session asking for the whole store gets both$/, async (w) => {
+    for (const lane of Object.keys(w.laneTurns!)) {
+      const reply = await searchAs(w, w.laneSessions![lane]!, w.laneWords!, { scope: 'all', top_k: 10 })
+      expect(reply['scope']).toBeUndefined()
+      const hits = hitIdsOf(reply)
+      const shown = shownIdsOf(reply)
+      for (const each of Object.keys(w.laneTurns!)) {
+        expect(hits).toContain(w.entries![each]!.id)
+        for (const id of w.laneTurns![each]!) expect(shown).toContain(id)
+      }
+    }
+  })
+
+  // ── D374: the restarted main checkout's orientation search (the walk) ──
+  reg.define(/^its search "([^"]+)" finds the main checkout's chapter and none of the worktree's$/, async (w, q$) => {
+    // A client under the restarted session's own id: what its own server
+    // would read, the query alone as the handshake makes it.
+    const reply = await searchAs(w, w.laneSessions!['main:resume']!, String(q$))
+    const lane = Object.keys(w.entries!).find((k) => k.startsWith('worktree:'))!
+    expect(hitIdsOf(reply), JSON.stringify(reply).slice(0, 2000)).toContain(w.entries!['main']!.id)
+    const shown = shownIdsOf(reply)
+    const theirs = sessionsOfLane(w, lane)
+    for (const id of shown) expect(theirs, `row ${id} of the worktree shown to main`).not.toContain(sessionKeyOf(w, id))
+    for (const id of [w.entries![lane]!.id, ...(w.laneTurns?.[lane] ?? [])]) expect(shown).not.toContain(id)
+    // The worktree's own conversation matches the query: hidden, not absent.
+    const all = await searchAs(w, w.laneSessions!['main:resume']!, String(q$), { scope: 'all', top_k: 10 })
+    expect(shownIdsOf(all).filter((id) => (w.laneTurns?.[lane] ?? []).includes(id)).length).toBeGreaterThan(0)
+    expect(reply['scope']).toMatchObject({ lane: 'main' })
+  })
+
+  // ── D376, D374: the rows from before the store recorded writers ──
+  reg.define(/^the chapter is listed and found as the main lane's own$/, (w) => {
+    const older = w.entries!['older']!
+    expect(pointersOf(w.statusReply!).map((p) => [p.node_id, p.lane])).toContainEqual([older.id, 'main'])
+    expect(blockOf(w.statusReply!).lane).toBe('main')
+    expect(hitIdsOf(w.read!)).toContain(older.id)
+    expect(w.read!['scope']).toMatchObject({ lane: 'main' })
+  })
+
+  // ── D374, D376: an earlier release's worktree turns, the worktree's own ──
+  reg.define(/^it finds them as its own, and the main checkout's session finds them only when it asks for the whole store$/, async (w) => {
+    const lane = Object.keys(w.laneSessions!).find((k) => k.startsWith('worktree:'))!
+    const hits = hitIdsOf(w.read!)
+    for (const id of w.turnIds!) expect(hits).toContain(id)
+    expect(w.read!['scope']).toMatchObject({ lane })
+    const main = await searchAs(w, w.laneSessions!['main']!, w.laneWords!, { top_k: 10 })
+    expect(main['scope']).toMatchObject({ lane: 'main' })
+    for (const id of w.turnIds!) expect(shownIdsOf(main)).not.toContain(id)
+    const all = await searchAs(w, w.laneSessions!['main']!, w.laneWords!, { top_k: 10, scope: 'all' })
+    expect(all['scope']).toBeUndefined()
+    for (const id of w.turnIds!) expect(hitIdsOf(all)).toContain(id)
+  })
+
+  // ── D374, D147, D263, D151: a lane's helpers' reports and its imports ──
+  //
+  // The tester through the real SubagentStart, PostToolUse and SubagentStop
+  // hooks under the main session; the worker through the real ticket door
+  // (the library spawner), its parent the main session, writing through
+  // its own tools as a hook-less worker's CLI does (a real `treecontext
+  // serve`: its tool calls are its treecontext_insert calls), its return
+  // the summary row the door writes from its last output; the import
+  // through the main session's own treecontext_import; the orphan through
+  // the same door under a harness that holds no session (its ticket's
+  // parent is the harness's own name, which no registration holds: an
+  // empty parent id is a damaged ticket, D294). Every tool row carries the
+  // searched words, so a search that leaves them out has left them out.
+  reg.define(/^a main checkout session that spawned a tester subagent whose (\d+) tool calls and report "([^"]+)" are stored$/, async (w, n$, report$) => {
+    await openGitWorld(w)
+    w.laneSessions = { main: w.sessionId! }
+    w.facts = {}
+    w.legs = {}
+    const report = String(report$)
+    w.testerId = `agent-${randomBytes(4).toString('hex')}`
+    await testerTrail(w, w.testerId, Array.from({ length: Number(n$) }, (_, i) => `case ${i}: ${report} (${randomBytes(3).toString('hex')})`), report)
+    w.helpers = { tester: helperRowsOf(w, w.testerId, Number(n$)) }
+  })
+  reg.define(/^a worker the same session spawned through the ticket door, whose return "([^"]+)" is stored with its (\d+) tool calls$/, async (w, ret$, n$) => {
+    const ret = String(ret$)
+    const texts = Array.from({ length: Number(n$) }, (_, i) => `doctor table row ${i} is written (${randomBytes(3).toString('hex')})`)
+    const out = await runWorker(w, {
+      spawner: 'library', prompt: 'write the doctor table',
+      ticket: { run: 'r-docs', key: 'doctor-table', role: 'builder', parent: { id: w.laneSessions!['main']!, cli: 'claude-code' } },
+      plan: { first: { viaTools: true, texts, print: ret } },
+    }, 'docs-worker')
+    expect(out.exitCode).toBe(0)
+    expect(rawAll(w, 'SELECT parent_session, parent_src FROM session_registry WHERE session_id = ?', out.sessionId))
+      .toEqual([{ parent_session: w.laneSessions!['main'], parent_src: 'hook' }])
+    w.helpers!['worker'] = workerRowsOf(w, out.sessionId!, ret, Number(n$))
+  })
+  reg.define(/^a handoff file from developer A holding "([^"]+)" that this session imported$/, async (w, text$) => {
+    const text = String(text$)
+    // Developer A's own store and server, on another machine: A writes the
+    // chapter summary and exports the summaries to a file in A's project.
+    const aDir = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-orch-devA-')))
+    w.defer(() => rmSync(aDir, { recursive: true, force: true }))
+    const aStore = await FlatStore.open({ database: openNodeSqlite(new DatabaseSync(join(aDir, 'a.db'))), ownsDatabase: true })
+    w.defer(() => aStore.close())
+    await aStore.insert(text, { metadata: { next_session: true } })
+    const aClient = await mcpOver(w, { projectDir: aDir }, aStore)
+    const exported = await aClient.callTool({ name: 'treecontext_export', arguments: { path: 'handoffs/login-plan.json' } }) as { isError?: boolean; content?: Array<{ text?: string }> }
+    expect(exported.isError, exported.content?.[0]?.text).toBeFalsy()
+    // B pulls it into the main checkout and the main session imports it.
+    mkdirSync(join(w.repo!, 'handoffs'), { recursive: true })
+    copyFileSync(join(aDir, 'handoffs', 'login-plan.json'), join(w.repo!, 'handoffs', 'login-plan.json'))
+    await mcpOver(w, { ccSessionId: w.laneSessions!['main']!, projectDir: w.repo! })
+    const imported = await w.client!.callTool({ name: 'treecontext_import', arguments: { path: 'handoffs/login-plan.json' } }) as { isError?: boolean; content?: Array<{ text?: string }> }
+    expect(imported.isError, imported.content?.[0]?.text).toBeFalsy()
+    const rows = storedRows(w, "session_key LIKE 'handoff:%'").filter((r) => decodeContent(r.content) === text)
+    expect(rows).toHaveLength(1)
+    expect(JSON.parse(rows[0]!.metadata_json)).toMatchObject({ _handoff_importer: w.laneSessions!['main'] })
+    w.helpers!['import'] = { report: rows[0]!.node_id, trail: [] }
+  })
+  reg.define(/^a worktree "([^"]+)" session that spawned its own tester whose report reads "([^"]+)"$/, async (w, name$, report$) => {
+    const lane = `worktree:${String(name$)}`
+    w.sessionId = laneSession(w, lane)
+    const agent = `agent-${randomBytes(4).toString('hex')}`
+    subagentStart(w, agent, 'tester')
+    subagentStop(w, agent, 'tester', String(report$))
+    await drainStaging(w)
+    const rows = storedRows(w, "json_extract(metadata_json, '$._writer_agent_id') = ? AND json_extract(metadata_json, '$.kind') = ?", agent, SUBAGENT_SUMMARY_KIND)
+    expect(rows).toHaveLength(1)
+    expect(rawRow(w, rows[0]!.node_id)['session_key']).toBe(w.laneSessions![lane])
+    w.helpers!['subproject'] = { report: rows[0]!.node_id, trail: [] }
+  })
+  reg.define(/^a worker spawned by a harness with no session, whose return reads "([^"]+)"$/, async (w, ret$) => {
+    const ret = String(ret$)
+    const out = await runWorker(w, {
+      spawner: 'library', prompt: 'write the orphan table',
+      ticket: { run: 'r-nightly', key: 'orphan-table', role: 'builder', parent: { id: 'nightly-harness', cli: 'cron' } },
+      plan: { first: { checkpoint: 'state: the orphan table is half written', print: ret } },
+    }, 'orphan')
+    expect(out.exitCode).toBe(0)
+    // Its parent is a name, not a session: no registration holds it.
+    expect(rawAll(w, 'SELECT parent_session, parent_src FROM session_registry WHERE session_id = ?', out.sessionId))
+      .toEqual([{ parent_session: 'nightly-harness', parent_src: 'declared' }])
+    expect(rawAll(w, "SELECT 1 FROM session_registry WHERE session_id = 'nightly-harness'")).toEqual([])
+    w.helpers!['orphan'] = workerRowsOf(w, out.sessionId!, ret, 0)
+  })
+  reg.define(/^the main checkout's session searches without asking for the whole store$/, async (w) => {
+    const main = w.laneSessions!['main']!
+    w.searches = {}
+    for (const [name, q] of Object.entries(HELPER_WORDS)) w.searches[name] = await searchAs(w, main, q, { top_k: 10 })
+  })
+  reg.define(/^it finds the tester's report, the worker's return and the imported plan by their words$/, (w) => {
+    for (const name of ['tester', 'worker', 'import']) {
+      expect(hitIdsOf(w.searches![name]!), name).toContain(w.helpers![name]!.report)
+      expect(w.searches![name]!['scope'], name).toMatchObject({ lane: 'main' })
+    }
+  })
+  reg.define(/^it finds none of the tester's or the worker's tool calls until it asks for the whole store$/, async (w) => {
+    for (const name of ['tester', 'worker']) {
+      const { trail } = w.helpers![name]!
+      expect(trail.length).toBeGreaterThan(0)
+      expect(shownIdsOf(w.searches![name]!).filter((id) => trail.includes(id)), name).toEqual([])
+      const all = await searchAs(w, w.laneSessions!['main']!, HELPER_WORDS[name]!, { top_k: 20, scope: 'all' })
+      expect(all['scope']).toBeUndefined()
+      expect(hitIdsOf(all).filter((id) => trail.includes(id)).length, `${name}'s tool calls under scope "all"`).toBeGreaterThan(0)
+    }
+  })
+  reg.define(/^it finds the subproject's tester's report only when it asks for the whole store$/, async (w) => {
+    await expectOnlyWhole(w, 'subproject')
+  })
+  reg.define(/^it finds the orphan worker's return only when it asks for the whole store, the key lookup reaching it as before$/, async (w) => {
+    await expectOnlyWhole(w, 'orphan')
+    const lookup = parseTool(await w.client!.callTool({ name: 'treecontext_query', arguments: { key_lookup: { run: 'r-nightly', key: 'orphan-table' } } }))
+    const cps = lookup['checkpoints'] as Array<{ return: { summary_node_id: string | null } }>
+    expect(cps, JSON.stringify(lookup).slice(0, 1500)).toHaveLength(1)
+    expect(cps[0]!.return.summary_node_id).toBe(w.helpers!['orphan']!.report)
+  })
+
+  // ── D374 (R12): the flood ──
+  //
+  // Each helper through the real SubagentStart, PostToolUse and
+  // SubagentStop hooks under the main session, in batches; with the main
+  // session's ordinary work the store passes 256 rows, so high-frequency
+  // query words are discounted (flat-store.ts DF_PRUNE_MIN_DOCS).
+  reg.define(/^a main checkout session holding the chapter summary "([^"]+)"$/, async (w, text$) => {
+    await openGitWorld(w)
+    w.laneSessions = { main: w.sessionId! }
+    w.entries = { main: await laneChapter(w, 'main', String(text$)) }
+    // The session's own ordinary work, captured as the journal holds it.
+    w.sessionId = w.laneSessions['main']!
+    await work(w, now() - 3600, 60)
+  })
+  reg.define(/^(\d+) subagents that session spawned, each leaving a report that mentions its next step$/, async (w, n$) => {
+    const n = Number(n$)
+    w.sessionId = w.laneSessions!['main']!
+    const agents = Array.from({ length: n }, (_, i) => ({ id: `agent-${i}-${randomBytes(3).toString('hex')}`, type: `helper-${i % 7}` }))
+    const reports = agents.map((_, i) => `Done: refactored module ${i} and the tests pass. Next step: wire module ${i} into the app.`)
+    const width = 24
+    for (let i = 0; i < n; i += width) {
+      const batch = agents.slice(i, i + width)
+      await spawnHooksAtOnce(w, 'subagent-start', batch.map((a) => ({ hook_event_name: 'SubagentStart', agent_id: a.id, agent_type: a.type })))
+      await spawnHooksAtOnce(w, 'subagent-stop', batch.map((a, j) => ({
+        hook_event_name: 'SubagentStop', agent_id: a.id, agent_type: a.type, stop_hook_active: false,
+        agent_transcript_path: join(w.proj!, `agent-${a.id}.jsonl`), last_assistant_message: reports[i + j],
+      })))
+    }
+    await drainStaging(w)
+    const summaries = storedRows(w, "json_extract(metadata_json, '$.kind') = ?", SUBAGENT_SUMMARY_KIND)
+    expect(summaries).toHaveLength(n)
+    expect(Number(rawAll<{ n: number }>(w, 'SELECT COUNT(*) AS n FROM nodes')[0]!.n)).toBeGreaterThan(256)
+    w.helpers = Object.fromEntries(summaries.map((r) => [r.node_id, { report: r.node_id, trail: [] }]))
+    w.facts ??= {}
+    w.facts['reports'] = reports
+  })
+  reg.define(/^the main checkout stops and a new session starts in it$/, (w) => {
+    const packet = startIn(w, 'main')
+    w.laneSessions!['main:restart'] = w.sessionId!
+    w.startPackets = { main: packet }
+  })
+  reg.define(/^the status lists the chapter as the main lane's only live pointer and counts no other lane$/, async (w) => {
+    const reply = await statusOf(w, w.laneSessions!['main:restart']!)
+    expect(pointersOf(reply).map((p) => [p.node_id, p.lane])).toEqual([[w.entries!['main']!.id, 'main']])
+    const block = blockOf(reply)
+    expect(block).toMatchObject({ lane: 'main', left_out: 0, other_lanes: 0 })
+    expect(block.lanes).toBeUndefined()
+  })
+  reg.define(/^the packet carries the chapter as the main checkout's own and no report$/, (w) => {
+    const packet = w.startPackets!['main']!
+    const main = w.entries!['main']!
+    expect(packet.split('\n')[1], packet).toBe(`The main lane's own chapter summary, ${ageText(createdAtOf(w, main.id), now())} old (id ${main.id}): ${main.text}`)
+    for (const id of Object.keys(w.helpers!)) expect(packet).not.toContain(id)
+    // The reports' own texts, each one stored (the Given counted them).
+    for (const r of w.facts!['reports'] as string[]) expect(packet).not.toContain(r)
+    expect(otherLanesLineOf(packet), packet).toBeUndefined()
+  })
+  reg.define(/^the orientation search finds the chapter, and no report it finds is offered as the main checkout's own thread$/, async (w) => {
+    const reply = await searchAs(w, w.laneSessions!['main:restart']!, ORIENTATION_QUERY)
+    const hits = (reply['results'] as WindowedHit[])
+    const rank = hits.findIndex((h) => h.nodeId === w.entries!['main']!.id)
+    // Found, at whatever rank (R8a): recorded, not promised.
+    console.error(`[flood] the chapter's rank in the orientation search: ${rank + 1} of ${hits.length}`)
+    expect(rank, JSON.stringify(hits.map((h) => h.content.slice(0, 60)))).toBeGreaterThanOrEqual(0)
+    expect(reply['scope']).toMatchObject({ lane: 'main' })
+    for (const h of hits) {
+      if (h.nodeId === w.entries!['main']!.id) continue
+      const m = rawMeta(w, h.nodeId)
+      // Not a resume pointer, and not the session's own writing: a report
+      // is its helper's, by its writer and agent id.
+      expect(m['next_session'], h.nodeId).not.toBe(true)
+      expect(m['status'], h.nodeId).not.toBe('active')
+      expect(h.metadata?.['next_session'], h.nodeId).not.toBe(true)
+      if (w.helpers![h.nodeId]) {
+        for (const meta of [m, h.metadata ?? {}]) {
+          expect(meta).toMatchObject({ kind: SUBAGENT_SUMMARY_KIND })
+          expect(meta['_writer'], h.nodeId).not.toBe('main')
+          expect(typeof meta['_writer_agent_id'], h.nodeId).toBe('string')
+        }
+      }
+    }
+  })
 }
 
 /** A chapter summary written through the tools by the session the world
@@ -1297,6 +1608,16 @@ export const orchestrationDefiner = (reg: Registry<OrchestrationWorld>): void =>
  *  in that worktree by the real SessionStart hook), stamped from the
  *  registry with that lane's writer. */
 async function laneChapter(w: OrchestrationWorld, lane: string, text: string): Promise<{ id: string; text: string }> {
+  await mcpOver(w, { ccSessionId: laneSession(w, lane) })
+  const reply = await insert(w, text, { next_session: true })
+  expect(reply).toMatchObject({ writer: lane, writer_src: 'self' })
+  return { id: reply['node_id'] as string, text }
+}
+
+/** The session the world keeps for `lane` (`main`, or `worktree:<name>`:
+ *  a new session started in that worktree, added on first use, by the real
+ *  SessionStart hook). */
+function laneSession(w: OrchestrationWorld, lane: string): string {
   w.laneSessions ??= {}
   if (!w.laneSessions[lane]) {
     const name = lane.slice('worktree:'.length)
@@ -1305,10 +1626,135 @@ async function laneChapter(w: OrchestrationWorld, lane: string, text: string): P
     sessionStart(w, path)
     w.laneSessions[lane] = w.sessionId
   }
-  await mcpOver(w, { ccSessionId: w.laneSessions[lane] })
-  const reply = await insert(w, text, { next_session: true })
-  expect(reply).toMatchObject({ writer: lane, writer_src: 'self' })
-  return { id: reply['node_id'] as string, text }
+  return w.laneSessions[lane]
+}
+
+/** The directory a lane's checkout is: the main checkout or the worktree. */
+function checkoutDir(w: OrchestrationWorld, lane: string): string {
+  return lane === 'main' ? w.repo! : w.worktrees![lane.slice('worktree:'.length)]!
+}
+
+/** A lane's session's own captured conversation: the developer's prompt
+ *  and one tool call of the session's own agent, through the real
+ *  UserPromptSubmit and PostToolUse hooks in that checkout (no agent
+ *  fields: the session's own agent), drained by the production drain.
+ *  Returns the two rows' ids. */
+async function conversationIn(w: OrchestrationWorld, lane: string, prompt: string, output: string): Promise<string[]> {
+  const session = laneSession(w, lane)
+  const cwd = checkoutDir(w, lane)
+  w.sessionId = session
+  runHook(w, 'user-prompt-submit', { hook_event_name: 'UserPromptSubmit', prompt, cwd })
+  runHook(w, 'post-tool-use', { ...bashPayload(w, 'git status --short', output), cwd })
+  await drainStaging(w)
+  const rows = storedRows(w, 'session_key = ?', session)
+    .filter((r) => { const c = decodeContent(r.content); return c.includes(prompt) || c.includes(output) })
+  expect(rows.length, 'the prompt and the tool call, captured').toBe(2)
+  for (const r of rows) {
+    const m = JSON.parse(r.metadata_json) as Record<string, unknown>
+    expect(m['_writer_agent_id']).toBeUndefined()
+  }
+  w.laneTurns ??= {}
+  w.laneTurns[lane] = [...(w.laneTurns[lane] ?? []), ...rows.map((r) => r.node_id)]
+  return rows.map((r) => r.node_id)
+}
+
+/** A search as the session `session` makes it: a client opened under that
+ *  session id, never one a Given left behind; `args` beside the query. */
+async function searchAs(w: OrchestrationWorld, session: string, q: string, args: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
+  await mcpOver(w, { ccSessionId: session, projectDir: w.repo ?? w.proj! })
+  w.clientSession = session
+  return parseTool(await w.client!.callTool({ name: 'treecontext_query', arguments: { query: q, ...args } }))
+}
+
+type WindowedHit = Hit & { window?: { before?: Array<{ nodeId: string }>; after?: Array<{ nodeId: string }>; anchor?: { nodeId?: string; ref?: string } | null } }
+const hitIdsOf = (reply: Record<string, unknown>): string[] => ((reply['results'] as WindowedHit[] | undefined) ?? []).map((h) => h.nodeId)
+/** Every row a search reply shows: its hits and every row of their
+ *  conversation windows (before, after, the anchor). */
+function shownIdsOf(reply: Record<string, unknown>): string[] {
+  const ids: string[] = []
+  for (const h of (reply['results'] as WindowedHit[] | undefined) ?? []) {
+    ids.push(h.nodeId)
+    for (const e of [...(h.window?.before ?? []), ...(h.window?.after ?? [])]) ids.push(e.nodeId)
+    const a = h.window?.anchor
+    if (a) ids.push(a.nodeId ?? a.ref!)
+  }
+  return ids
+}
+
+/** The sessions the test started in `lane`'s checkout (its own record:
+ *  `main`, `main:startup`, `main:resume` are all the main checkout's). */
+function sessionsOfLane(w: OrchestrationWorld, lane: string): string[] {
+  return Object.entries(w.laneSessions ?? {}).filter(([k]) => k === lane || k.startsWith(`${lane}:`)).map(([, v]) => v)
+}
+
+function sessionKeyOf(w: OrchestrationWorld, id: string): string | null {
+  const r = rawAll<{ s: string | null }>(w, 'SELECT session_key AS s FROM nodes WHERE node_id = ?', id)[0]
+  expect(r, `no row ${id}`).toBeTruthy()
+  return r!.s
+}
+
+/** A search reply that is `lane`'s own and nothing else's: it shows its
+ *  chapter and some of its captured conversation, every row it shows
+ *  (hits and windows alike) sits in a session the test started in that
+ *  checkout, and no row of any other lane's sessions, chapter or turns. */
+function expectOwnLaneReply(w: OrchestrationWorld, reply: Record<string, unknown>, lane: string): void {
+  const hits = hitIdsOf(reply)
+  const shown = shownIdsOf(reply)
+  expect(hits, JSON.stringify(reply).slice(0, 2000)).toContain(w.entries![lane]!.id)
+  expect(shown.filter((id) => w.laneTurns![lane]!.includes(id)).length, 'its own conversation').toBeGreaterThan(0)
+  const own = sessionsOfLane(w, lane)
+  for (const id of shown) expect(own, `row ${id} shown to ${lane}`).toContain(sessionKeyOf(w, id))
+  for (const other of Object.keys(w.laneTurns!).filter((k) => k !== lane)) {
+    for (const id of [w.entries![other]!.id, ...w.laneTurns![other]!]) expect(shown).not.toContain(id)
+  }
+  expect(reply['scope']).toMatchObject({ lane })
+}
+
+/** The handshake's second step, verbatim. */
+const ORIENTATION_QUERY = 'what was I working on, what was the next step'
+
+/** The words each helper's report (or the import) is searched by. */
+const HELPER_WORDS: Record<string, string> = {
+  tester: '12 tests pass, CSRF fails',
+  worker: 'the doctor table is written',
+  import: 'plan: wire the login form',
+  subproject: "the subproject's first test passes",
+  orphan: "the orphan's table is written",
+}
+
+/** A subagent's rows as the drain stored them under its agent id: its one
+ *  report and its `n` tool calls. */
+function helperRowsOf(w: OrchestrationWorld, agentId: string, n: number): { report: string; trail: string[] } {
+  const rows = storedRows(w, "json_extract(metadata_json, '$._writer_agent_id') = ?", agentId)
+  const report = rows.filter((r) => (JSON.parse(r.metadata_json) as Record<string, unknown>)['kind'] === SUBAGENT_SUMMARY_KIND)
+  expect(report).toHaveLength(1)
+  const trail = rows.filter((r) => r !== report[0])
+  expect(trail).toHaveLength(n)
+  return { report: report[0]!.node_id, trail: trail.map((r) => r.node_id) }
+}
+
+/** A worker's rows in its own session: the summary row the door wrote
+ *  from its last output, and the `n` rows its tool calls wrote. */
+function workerRowsOf(w: OrchestrationWorld, session: string, ret: string, n: number): { report: string; trail: string[] } {
+  const rows = storedRows(w, 'session_key = ?', session)
+  const report = rows.filter((r) => decodeContent(r.content) === ret)
+  expect(report).toHaveLength(1)
+  expect(JSON.parse(report[0]!.metadata_json)).toMatchObject({ kind: SUBAGENT_SUMMARY_KIND })
+  const trail = rows.filter((r) => decodeContent(r.content).startsWith('doctor table row '))
+  expect(trail).toHaveLength(n)
+  for (const r of trail) expect(JSON.parse(r.metadata_json)).toMatchObject({ _writer: 'builder', _writer_src: 'declared', _door: 'tools' })
+  return { report: report[0]!.node_id, trail: trail.map((r) => r.node_id) }
+}
+
+/** The main session's default search for a helper's words shows nothing
+ *  of it, hit or window; the same search over the whole store finds it. */
+async function expectOnlyWhole(w: OrchestrationWorld, name: string): Promise<void> {
+  const { report } = w.helpers![name]!
+  expect(shownIdsOf(w.searches![name]!), name).not.toContain(report)
+  expect(w.searches![name]!['scope']).toMatchObject({ lane: 'main' })
+  const all = await searchAs(w, w.laneSessions!['main']!, HELPER_WORDS[name]!, { top_k: 10, scope: 'all' })
+  expect(all['scope']).toBeUndefined()
+  expect(hitIdsOf(all), name).toContain(report)
 }
 
 /** A chapter summary written through the tools by a client the server

@@ -67,10 +67,12 @@ const record = {
 raw.close()
 const label = step.label ?? (rerun ? 'second run' : 'first run')
 const at = (): Record<string, number> => (step.at !== undefined ? { createdAt: step.at } : {})
-if (leg && step.viaTools) {
+const reads: { query?: Record<string, unknown>; status?: Record<string, unknown> } = {}
+if (leg && (step.viaTools || step.reads)) {
   // Through the tools, as a real worker's CLI writes: a real `treecontext
   // serve` this worker starts with its own environment (its ticket and the
-  // lane the door named), each note a treecontext_insert call.
+  // lane the door named), each note a treecontext_insert call; then the
+  // reads its plan names, through the same tools.
   const transport = new StdioClientTransport({
     command: process.execPath, args: nodeTsArgs(CLI_TS, ['serve', '--lexical', '--store', dbPath]),
     env: Object.fromEntries(Object.entries(process.env).filter((e): e is [string, string] => e[1] !== undefined)), cwd: process.cwd(), stderr: 'ignore',
@@ -82,6 +84,10 @@ if (leg && step.viaTools) {
     for (let i = 1; i <= (step.notes ?? 0); i++) {
       await client.callTool({ name: 'treecontext_insert', arguments: { content: `${label} note ${i} of ${leg.sessionId}: step ${i} of the work` } })
     }
+    const replyOf = (res: unknown): Record<string, unknown> =>
+      JSON.parse(((res as { content: Array<{ text: string }> }).content[0]!).text) as Record<string, unknown>
+    if (step.reads?.query) reads.query = replyOf(await client.callTool({ name: 'treecontext_query', arguments: step.reads.query }))
+    if (step.reads?.status) reads.status = replyOf(await client.callTool({ name: 'treecontext_status', arguments: step.reads.status }))
   } finally { await client.close() }
 } else if (leg) {
   for (const text of step.texts ?? []) await store.insert(text, { leg, ...at() })
@@ -103,7 +109,7 @@ if (leg) {
   }
 }
 await store.close()
-if (log) appendFileSync(log, `${JSON.stringify(record)}\n`)
+if (log) appendFileSync(log, `${JSON.stringify(Object.keys(reads).length > 0 ? { ...record, reads } : record)}\n`)
 if (step.waitFor !== undefined) {
   writeFileSync(`${step.waitFor}.ready`, String(process.pid))
   const deadline = Date.now() + 60_000

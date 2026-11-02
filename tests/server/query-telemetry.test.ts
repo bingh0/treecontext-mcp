@@ -93,7 +93,11 @@ describe('query telemetry (recency-ruling instrument)', () => {
     expect(line!.shadow?.ages_d).toHaveLength(2)
     expect(line!.shadow?.top1_pos).toBeGreaterThanOrEqual(0)
     // Observation only: nothing telemetry-shaped leaks into the response.
-    expect(Object.keys(response).sort()).toEqual(['results'])
+    // (The scope block is the search's own: this connection names no
+    // session, so the reply says the whole store was searched, D374.)
+    expect(Object.keys(response).sort()).toEqual(['results', 'scope'])
+    expect(response['scope']).toMatchObject({ searched: 'the whole store' })
+    expect(JSON.stringify(response['scope'])).not.toMatch(/shadow|telemetry|recency/)
   })
 
   it('an omitted recency_weight serves and records the 0.25 default (ruling 2026-08-01, amended by D273)', async () => {

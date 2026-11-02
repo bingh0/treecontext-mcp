@@ -254,7 +254,7 @@ export function spawnHook(w: CaptureWorld, hook: 'user-prompt-submit' | 'post-to
  *  SessionStart racing the server it starts beside, or of several agents
  *  bound to one store. Each must exit 0 exactly as spawnHook demands. */
 export async function spawnHooksAtOnce(
-  w: CaptureWorld, hook: 'user-prompt-submit' | 'post-tool-use', payloads: Array<Record<string, unknown>>,
+  w: CaptureWorld, hook: 'user-prompt-submit' | 'post-tool-use' | 'subagent-start' | 'subagent-stop', payloads: Array<Record<string, unknown>>,
 ): Promise<void> {
   const env = sandboxedSpawnEnv(w.home!, {
     TREECONTEXT_BINDINGS_FILE: join(w.home!, '.treecontext', 'bindings.json'),
@@ -279,7 +279,7 @@ export async function spawnHooksAtOnce(
  *  hooks staged before the next batch starts, so staging order (and the
  *  honest timestamps the drain keeps) follows batch order. */
 export async function spawnHooksInBatches(
-  w: CaptureWorld, hook: 'user-prompt-submit' | 'post-tool-use', payloads: Array<Record<string, unknown>>, width = 12,
+  w: CaptureWorld, hook: 'user-prompt-submit' | 'post-tool-use' | 'subagent-start' | 'subagent-stop', payloads: Array<Record<string, unknown>>, width = 12,
 ): Promise<void> {
   for (let i = 0; i < payloads.length; i += width) await spawnHooksAtOnce(w, hook, payloads.slice(i, i + width))
 }

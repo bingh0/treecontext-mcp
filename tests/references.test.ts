@@ -15,6 +15,7 @@ import { migrations } from '../src/persistence/migrations/index.js'
 import { referencedBy, laneWriterOf, MAIN_LANE } from '../src/references.js'
 import { createServer } from '../src/server/server.js'
 import { Client, InMemoryTransport } from '@modelcontextprotocol/client'
+import { registerSelf, registerSubagent } from '../src/persistence/session-registry.js'
 
 let tmpDir: string
 beforeEach(() => { tmpDir = mkdtempSync(join(tmpdir(), 'tc-refs-')) })
@@ -236,6 +237,33 @@ describe('the insert tool (D165, D169)', () => {
     expect(m['kind']).toBe('note')
     expect(Object.keys(m).filter((k) => k.startsWith('_handoff_'))).toEqual([])
     await t.close()
+  })
+
+  it('keeps a registered subagent from retiring the main lane\'s plan through the tool, recording a reference (D169, U1-F6)', async () => {
+    const ctx = await open()
+    const raw = new DatabaseSync(path())
+    const self = { worktree: null, branch: 'main', cwd: '/repo', toplevel: '/repo', commonDir: '/repo/.git' }
+    registerSelf(raw, 's1', self, Date.now() / 1000 - 60)
+    const server = createServer(ctx, { ccSessionId: 's1' })
+    const [ct, st] = InMemoryTransport.createLinkedPair()
+    const client = new Client({ name: 't', version: '0.0.0' })
+    await server.connect(st)
+    await client.connect(ct)
+    const call = async (args: Record<string, unknown>): Promise<Record<string, unknown>> =>
+      JSON.parse(((await client.callTool({ name: 'treecontext_insert', arguments: args })) as { content: Array<{ text: string }> }).content[0]!.text) as Record<string, unknown>
+    const plan = await call({ content: 'plan: wire the form', metadata: { next_session: true } })
+    expect(plan).toMatchObject({ writer: 'main', writer_src: 'self' })
+    // The orchestrator spawns a tester and waits on it: the tester's call
+    // is read as the tester's, provisionally, from the registry.
+    registerSubagent(raw, 's1', 'a1', 'tester', self, Date.now() / 1000 + 1)
+    const r = await call({ content: 'tester: CSRF first, then the form', metadata: { next_session: true }, supersedes: [plan['node_id']] })
+    expect(r).toMatchObject({ writer: 'tester', writer_src: 'provisional', superseded: [], referenced: [plan['node_id']] })
+    expect(r['referenced_note']).toMatch(/another writer.*refs.*referenced-by/)
+    const m = meta(plan['node_id'] as string)
+    expect(m['next_session']).toBe(true)
+    expect(m['superseded_by']).toBeUndefined()
+    expect(meta(r['node_id'] as string)['refs']).toEqual([plan['node_id']])
+    await client.close(); await server.close(); raw.close(); await ctx.close()
   })
 
   it('says what a cross-writer supersedes did, and what a dedup hit could not record', async () => {

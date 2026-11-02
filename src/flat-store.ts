@@ -587,9 +587,9 @@ export class FlatStore implements MemoryStore {
    *  subagent scope and D374's placed lane, both when both are given;
    *  null when neither is. The same predicate confines the hits and every
    *  conversation window. */
-  private scopeSql(opts: QueryOptions | undefined, p: string): { sql: string; params: unknown[] } | null {
+  private scopeSql(opts: QueryOptions | undefined, p: string, laneIds?: string[]): { sql: string; params: unknown[] } | null {
     const sub = laneScopeSql(opts?.laneScope, p)
-    const lane = opts?.lane !== undefined ? laneRowsSql(this.db, opts.lane, p, 'search', this.laneReferencedIds(opts.lane)) : null
+    const lane = opts?.lane !== undefined ? laneRowsSql(this.db, opts.lane, p, 'search', laneIds ?? this.laneReferencedIds(opts.lane)) : null
     if (sub && lane) return { sql: `(${sub.sql} AND ${lane.sql})`, params: [...sub.params, ...lane.params] }
     return sub ?? lane
   }
@@ -605,26 +605,49 @@ export class FlatStore implements MemoryStore {
   /** D374: the entries a placed lane's default search reaches beyond its
    *  own rows, one hop: what the lane's live pointers reference, and the
    *  briefs addressed to its checkout (`brief_for` `main` or the
-   *  worktree's name) with what they reference. */
+   *  worktree's name) with what they reference. A pointer is the lane's
+   *  as the registry reads the lane (D376), by its session, never by its
+   *  writer stamp: an earlier release's unstamped chapter in a worktree's
+   *  session is the worktree's. */
   laneReferencedIds(lane: PlacedLane): string[] {
+    return this.laneReach(lane).ids
+  }
+
+  /** The lane's one-hop reach (laneReferencedIds) and its own live
+   *  chapter summaries: pointers of the lane's own sessions (never an
+   *  import, never a bookmark), the ones a scoped search keeps a seat for. */
+  private laneReach(lane: PlacedLane): { ids: string[]; ownChapters: Set<string> } {
     this.ensureOpen()
     const checkout = checkoutOfLane(lane)
     const briefName = checkout ?? MAIN_WRITER
-    const key = laneWriterOf({ _writer: lane })
-    const rows = this.db.prepare(
-      `SELECT node_id, metadata_json FROM nodes WHERE tree_id = ? AND (
-         json_extract(metadata_json, '$.next_session') = 1 OR json_extract(metadata_json, '$.status') = 'active'
-         OR json_extract(metadata_json, '$.brief_for') = ?)`,
+    const own = laneRowsSql(this.db, lane, '', 'search')
+    // The pointer predicate is spelled as idx_nodes_resume_pointers' WHERE,
+    // so the partial index answers it. A brief is written, never captured
+    // (as checkpoints.ts newestBrief reads it), and a cheap text test runs
+    // before the JSON read (metadata_json is always JSON.stringify's text).
+    const pointers = this.db.prepare(
+      `SELECT node_id, metadata_json, session_key FROM nodes WHERE tree_id = ?
+         AND (json_extract(metadata_json, '$.next_session') = 1 OR json_extract(metadata_json, '$.status') = 'active')
+         AND ${own.sql}
+       ORDER BY created_at DESC, rowid DESC`,
+    ).all(this.treeId, ...own.params) as Array<{ node_id: string; metadata_json: string | null; session_key: string | null }>
+    const briefs = this.db.prepare(
+      `SELECT node_id, metadata_json FROM nodes WHERE tree_id = ?
+         AND COALESCE(source_label, '') != 'auto-capture'
+         AND instr(metadata_json, '"brief_for"') > 0 AND json_extract(metadata_json, '$.brief_for') = ?`,
     ).all(this.treeId, briefName) as Array<{ node_id: string; metadata_json: string | null }>
     const ids = new Set<string>()
-    for (const r of rows) {
+    const ownChapters = new Set<string>()
+    for (const r of pointers) {
       const meta = parseMeta(r.metadata_json)
-      const brief = meta?.['brief_for'] === briefName
-      if (!brief && laneWriterOf(meta) !== key) continue
-      if (brief) ids.add(r.node_id)
       for (const ref of refIdsOf(meta)) ids.add(ref)
+      if (checkpointKindOf(meta) === 'chapter' && !(r.session_key ?? '').startsWith(HANDOFF_LANE_PREFIX)) ownChapters.add(r.node_id)
     }
-    return [...ids]
+    for (const r of briefs) {
+      ids.add(r.node_id)
+      for (const ref of refIdsOf(parseMeta(r.metadata_json))) ids.add(ref)
+    }
+    return { ids: [...ids], ownChapters }
   }
 
   /** D190: how a row written through the tools by `sessionId` is stamped,
@@ -1869,7 +1892,11 @@ export class FlatStore implements MemoryStore {
       scoreExpr = 'bm25(nodes_fts, ?, ?, ?, ?) AS score'
       selectParams.push(...weights)
     }
-    const scope = this.scopeSql(opts, 'n.')
+    // The lane's one-hop reach is read once per search: the hits and every
+    // window share it.
+    const reach = opts?.lane !== undefined ? this.laneReach(opts.lane) : undefined
+    const laneIds = reach?.ids
+    const scope = this.scopeSql(opts, 'n.', laneIds)
     if (scope) { where.push(scope.sql); params.push(...scope.params) }
     if (opts?.timeRange?.after !== undefined) { where.push('n.created_at >= ?'); params.push(opts.timeRange.after) }
     if (opts?.timeRange?.before !== undefined) { where.push('n.created_at <= ?'); params.push(opts.timeRange.before) }
@@ -1982,9 +2009,9 @@ export class FlatStore implements MemoryStore {
         : computeAdaptiveCount(hits.map((r) => r.similarity), topK, adaptiveMax)
       const finalK = Math.max(1, Math.min(applied.k, adaptiveMax, hits.length))
       opts?.onAdaptive?.({ returnedK: finalK, confidence: applied.confidence, flat: applied.flat })
-      hits = this.placeChapters(hits, phrase, sortBy, opts?.chapterPlacement).slice(0, finalK)
+      hits = this.seatOwnChapter(this.placeChapters(hits, phrase, sortBy, opts?.chapterPlacement), finalK, reach?.ownChapters, phrase, sortBy, opts?.chapterPlacement)
     } else {
-      hits = this.placeChapters(hits, phrase, sortBy, opts?.chapterPlacement).slice(0, topK)
+      hits = this.seatOwnChapter(this.placeChapters(hits, phrase, sortBy, opts?.chapterPlacement), topK, reach?.ownChapters, phrase, sortBy, opts?.chapterPlacement)
     }
 
     // Fetch + decode content for the RETURNED hits only.
@@ -2031,7 +2058,7 @@ export class FlatStore implements MemoryStore {
     }
 
     const n = opts?.conversationWindow
-    if (n !== undefined && n > 0) this.attachWindows(results, n, hitInfo, this.scopeSql(opts, ''))
+    if (n !== undefined && n > 0) this.attachWindows(results, n, hitInfo, this.scopeSql(opts, '', laneIds))
     return results
   }
 
@@ -2152,6 +2179,22 @@ export class FlatStore implements MemoryStore {
   ): T[] {
     if (!phrase || sortBy !== 'relevance' || enabled === false) return hits
     return placeChaptersAboveBookmarks(hits, (h) => searchCheckpointKindOf(h.metadata, h.sourceLabel))
+  }
+
+  /** D374: a search scoped to a placed lane keeps a seat for the lane's
+   *  own live chapter summary when the search matched one: a cut of `k`
+   *  that holds none of them gives its last place to the best ranked of
+   *  them. Found, never first by rule; where fusion and placement put it
+   *  when it made the cut. Relevance order only, as the placement. */
+  private seatOwnChapter<T extends { nodeId: string }>(
+    ordered: T[], k: number, own: Set<string> | undefined,
+    phrase: string | null | undefined, sortBy: string, enabled: boolean | undefined,
+  ): T[] {
+    const page = ordered.slice(0, k)
+    if (!own || own.size === 0 || !phrase || sortBy !== 'relevance' || enabled === false || k < 1) return page
+    if (page.some((h) => own.has(h.nodeId))) return page
+    const chapter = ordered.find((h) => own.has(h.nodeId))
+    return chapter ? [...page.slice(0, k - 1), chapter] : page
   }
 
   private matchesMeta(

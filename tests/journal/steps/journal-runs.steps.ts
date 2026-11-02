@@ -283,7 +283,13 @@ export const runsDefiner = (reg: Registry<RunsWorld>): void => {
 
   define(/^an agent queries for what ran last Tuesday$/, async (w) => {
     const after = w.moments!['tuesday']!
-    w.facts!['hits'] = await query(w, 'login piece', { top_k: 20, time_range: { after, before: after + 24 * HOUR } })
+    // The session's own search is scoped to its lane (D374): a worker's
+    // first moment is the worker's own capture, in the worker's lane, so
+    // the agent asks for the whole store, as the scoped reply says to.
+    await sessionClient(w)
+    const own = parseTool(await w.client!.callTool({ name: 'treecontext_query', arguments: { query: 'login piece', top_k: 20, time_range: { after, before: after + 24 * HOUR } } }))
+    expect(own['scope']).toMatchObject({ widen: 'pass scope "all" to search the whole store' })
+    w.facts!['hits'] = await query(w, 'login piece', { top_k: 20, time_range: { after, before: after + 24 * HOUR }, scope: 'all' })
   })
 
   define(/^the agent's hits include that run's (\d+) first-moment rows, each carrying the run and its key$/, (w, n) => {
@@ -307,7 +313,10 @@ export const runsDefiner = (reg: Registry<RunsWorld>): void => {
 
   define(/^a query filtered by the run those rows carry returns the run's checkpoints and summary rows$/, async (w) => {
     const run = w.facts!['found-run'] as string
-    const hits = await query(w, 'login piece', { top_k: 20, metadata_filter: { run } })
+    // Walked over the whole store, as the agent already asked (D374: a
+    // worker's checkpoints sit in the worker's lane, its return by the
+    // parent link in the spawner's).
+    const hits = await query(w, 'login piece', { top_k: 20, metadata_filter: { run }, scope: 'all' })
     const want = rawAll<{ node_id: string }>(w,
       `SELECT node_id FROM nodes WHERE json_extract(metadata_json, '$.run') = ? AND json_extract(metadata_json, '$.kind') IN ('checkpoint', ?)`, run, SUBAGENT_SUMMARY_KIND)
       .map((r) => r.node_id)

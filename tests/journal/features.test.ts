@@ -163,8 +163,6 @@ runFeatures(join(HERE, '../../features'), {
       feature: 'journal-workers',
       scenarios: [
         'a <worker> worker under a <parent> parent writes into its own lane with its role as writer',
-        // D374, D372 (2026-11-02): bound in the main-lane build.
-        'a worker of the ticket door searches the whole store and sees every lane',
       ],
     },
     // The main checkout's own lane (D372-D376, 2026-11-02): scenarios added by
@@ -174,13 +172,7 @@ runFeatures(join(HERE, '../../features'), {
     {
       feature: 'journal-orchestration',
       scenarios: [
-        'a restarted main checkout opens on its own thread and is told what else exists',
-        'the orientation search is scoped to the session\'s own lane',
-        'a lane\'s search finds its helpers\' reports and its imports, never a helper\'s trail',
-        'a worktree\'s conversation from an earlier release is the worktree\'s own',
-        'two hundred helpers do not displace the main checkout\'s own thread',
         'a fresh start adopts a recovery snapshot only from its own lane',
-        'rows from before the store recorded writers stay the main lane\'s',
         // D378 (2026-11-02): the pre-stamp door, unbound until its unit.
         // The @D376 scenario gained one Then (D378); its new step is unbound.
         'an unplaced writer\'s chapters still supersede one another',
