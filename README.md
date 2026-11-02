@@ -308,6 +308,24 @@ adds `_insert` and nothing that removes. Details in
 - **Capture is verified only on Claude Code.** A teammate on Codex,
   Gemini, Cursor, VS Code or OpenCode gets the tools: they can search and
   write notes, but nothing of their session is captured for them (§6).
+- **The main checkout is a lane like any worktree.** In the main checkout
+  or a linked worktree, `treecontext_status`, the fresh-start packet and
+  the orientation search are scoped to the session's own lane: its own
+  chapters and bookmarks, its helpers' reports (a subagent's summary, a
+  worker's return) and the handoffs imported there, never a helper's tool
+  calls. Other lanes are counted (`other_lane_count`) and at most three are
+  named, never their text; `scope: "all"` widens a search or the status.
+  After a restart your own chapter is among the orientation search's
+  results (it may be given the last place of a page of two or more), not
+  promised first. A caller the server cannot place, such as a client
+  without hooks, is stamped `unregistered` and shows as "writer unknown":
+  a lane of its own, never main's. Such a client may retire its
+  pre-upgrade chapters only while no session has run in the main checkout;
+  each retirement is recorded on the entry (who, what, when, how). A
+  headless worker started by `treecontext run` searches the whole store.
+  The recovery snapshot is claimed only in the lane it was written for;
+  adapters that register no session (Cursor, Codex, Gemini, opencode)
+  claim none.
 - **A run as a unit.** When the work ran as legs under a run, `treecontext
   export handoffs/login-run.json --run login` writes that run: its
   skeleton, meaning the open and close, every brief, every checkpoint,
