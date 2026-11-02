@@ -24,3 +24,8 @@ copies here.
   b29820d).
 - `u2-review.md`: the failure-ladder review of unit U2 (commit 197c3b9);
   its fixes are carried into U3.
+- `u3-review.md`, `u4-review.md` (+ `u4probe/real-order.patch`): the
+  failure-ladder reviews of U3 (1f78148) and U4 (b9ab9bf). U3's
+  adjudications A (the own chapter's seat) and B (a worker's trail found by
+  asking for the whole store) are entered as D374 clauses in the charter
+  commit that follows them.
