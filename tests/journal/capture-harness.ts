@@ -374,6 +374,26 @@ export function bashPayload(w: CaptureWorld, command: string, stdout: string): R
   }
 }
 
+/** A subagent's own transcript (`agent_transcript_path`) in the reference
+ *  platform's JSONL shape, as Claude Code 2.1.316 writes it in auto mode
+ *  (read 2026-11-02): a tool_use-only turn, then the hand-back turn — one
+ *  `SubagentHandback` tool_use whose `input.message` is the report, its
+ *  tool_result — and, when the subagent said anything after, a closing
+ *  text turn. The report is never a text block of its own. */
+export function writeAgentTranscript(w: CaptureWorld, agentId: string, o: { handback: string; closing?: string }): string {
+  const p = join(w.proj!, `agent-${agentId}.jsonl`)
+  const stamp = new Date().toISOString()
+  const lines: unknown[] = [
+    { type: 'user', sessionId: w.sessionId, agentId, uuid: 'u-1', timestamp: stamp, message: { role: 'user', content: [{ type: 'text', text: 'do the work and report' }] } },
+    { type: 'assistant', sessionId: w.sessionId, agentId, uuid: 'a-1', timestamp: stamp, message: { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_01', name: 'Bash', input: { command: 'npm test' } }] } },
+    { type: 'assistant', sessionId: w.sessionId, agentId, uuid: 'a-2', timestamp: stamp, message: { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_02', name: 'SubagentHandback', input: { message: o.handback } }] } },
+    { type: 'user', sessionId: w.sessionId, agentId, uuid: 'u-2', timestamp: stamp, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_02', content: [{ type: 'text', text: '{"success":true,"message":"Report delivered to your caller."}' }] }] } },
+  ]
+  if (o.closing !== undefined) lines.push({ type: 'assistant', sessionId: w.sessionId, agentId, uuid: 'a-3', timestamp: stamp, message: { role: 'assistant', content: [{ type: 'text', text: o.closing }] } })
+  writeFileSync(p, lines.map((l) => JSON.stringify(l)).join('\n') + '\n')
+  return p
+}
+
 /** A session transcript in the reference platform's JSONL shape: a user
  *  turn, a tool_use-only assistant entry (no text — must be skipped),
  *  then the turn-final assistant text. */

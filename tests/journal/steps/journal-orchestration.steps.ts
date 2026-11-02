@@ -13,6 +13,7 @@ import { writeSessionBeacon } from '../../../src/session-beacon.js'
 import { SUBAGENT_SUMMARY_KIND, INTERNAL_SUMMARY_KIND, CLIENT_WRITER } from '../../../src/handoff.js'
 import { decodeContent } from '../../../src/persistence/content-codec.js'
 import { mcpOver, parseTool, rawAll } from '../world.js'
+import { writeAgentTranscript } from '../capture-harness.js'
 import { TS_ROOT, tsxArgv } from '../proc.js'
 import { sandboxedSpawnEnv } from '../../helpers/cli-spawn.js'
 import { storesDirIn } from '../../helpers/store-fixtures.js'
@@ -135,11 +136,17 @@ function subagentStart(w: OrchestrationWorld, agentId: string, agentType: string
   runHook(w, 'subagent-start', { hook_event_name: 'SubagentStart', agent_id: agentId, agent_type: agentType })
 }
 
-/** The subagent finishes: SubagentStop with its last assistant message. */
-function subagentStop(w: OrchestrationWorld, agentId: string, agentType: string, report: string): void {
+/** The subagent finishes: SubagentStop with its last assistant message,
+ *  or, through the client's hand-back tool (Claude Code 2.1.271 and later
+ *  in auto mode, D371), with the report as the `SubagentHandback` call's
+ *  message in the subagent's own transcript and the payload's text only
+ *  its closing words. Both shapes are the reference platform's; the
+ *  D147 summary scenario takes the hand-back, the others the text. */
+function subagentStop(w: OrchestrationWorld, agentId: string, agentType: string, report: string, handback?: { closing: string }): void {
+  const transcript = handback ? writeAgentTranscript(w, agentId, { handback: report, closing: handback.closing }) : join(w.proj!, `agent-${agentId}.jsonl`)
   runHook(w, 'subagent-stop', {
     hook_event_name: 'SubagentStop', agent_id: agentId, agent_type: agentType, stop_hook_active: false,
-    agent_transcript_path: join(w.proj!, `agent-${agentId}.jsonl`), last_assistant_message: report,
+    agent_transcript_path: transcript, last_assistant_message: handback ? handback.closing : report,
   })
 }
 
@@ -403,7 +410,9 @@ export const orchestrationDefiner = (reg: Registry<OrchestrationWorld>): void =>
     w.report = report
   })
   reg.define(/^the tester finishes$/, async (w) => {
-    subagentStop(w, w.testerId!, 'tester', w.report!)
+    // Through the hand-back tool, with closing words that are not the
+    // report: the summary the orchestrator finds must be the report.
+    subagentStop(w, w.testerId!, 'tester', w.report!, { closing: 'Report delivered to the orchestrator.' })
     await drainStaging(w)
     // Retired: the registration is no longer live.
     const [reg0] = rawAll<{ stopped_at: number | null }>(w, 'SELECT stopped_at FROM session_registry WHERE agent_id = ?', w.testerId)

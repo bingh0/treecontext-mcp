@@ -386,7 +386,11 @@ who is speaking. The store stamps the writer instead
   subagent still live under the session. SubagentStart registers a
   subagent (`agent_id`, `agent_type`) under the parent's session id;
   SubagentStop stages its report as kind `subagent-summary` and retires
-  it.
+  it. The report is read from where the client put it (D371): the
+  `message` of the newest `SubagentHandback` tool call in the subagent's
+  own transcript (`agent_transcript_path`) when it made one, else the
+  payload's `last_assistant_message`, else that transcript's last
+  assistant text; a hand-back's closing text is never the summary.
 - **Captured rows** take `_writer` from the payload's agent fields at the
   drain (`_writer_src: "hook"`); a row naming none is the session's own
   agent's.
@@ -508,6 +512,19 @@ surfaces, not in the record.
 - **Unlink-while-open**: POSIX allows it, Windows does not — why every
   test closes its stores, and why the full-matrix Windows lane is a
   release gate (it has caught real defects three releases running).
+- **A subagent's report has two shapes on Claude Code, both live.** In
+  default mode the report is the subagent's final text, carried in
+  SubagentStop's `last_assistant_message`. In auto mode on 2.1.271 and
+  later the subagent is handed the `SubagentHandback` tool and "delivers
+  its report through that tool rather than returning it as text" (hooks
+  reference, read 2026-11-02): the report is the call's `message`, the
+  transcript ends in tool_use-only turns, and `last_assistant_message`
+  holds its closing words, if any. The Agent tool's result then carries
+  a short note about the hand-back in place of the text. Seen live on
+  2.1.316 at the beta.3 smoketest, where the hooks door's leg retired
+  with no summary row until the hook read the transcript's hand-back
+  (D371). The bindings deliver through both shapes
+  (`tests/journal/capture-harness.ts`, `writeAgentTranscript`).
 - **The interpreter is probed, not assumed**: install pins a node that
   demonstrably meets the Node floor and runs this package (its own
   `node:sqlite` opens a database with FTS5); doctor grades the pinned

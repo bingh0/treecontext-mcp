@@ -444,6 +444,12 @@ ratification. [ruled: D253] The constraints the build must not cross:
   `internal-summary` with writer `claude-code`, outside the summaries
   default, the packet and the resume pointers. [ruled: D235, D236,
   D237, D238, D239, D240, D241, D242, D243, D244, D245, D263]
+  Amended 2026-11-02: the subagent's report is read from where the
+  client put it — on Claude Code 2.1.271 and later in auto mode, the
+  `message` of its `SubagentHandback` tool call in its own transcript,
+  the payload's text being only its closing words; a pinned payload
+  shape below the feature layer, no scenario's words changed. [ruled:
+  D371]
 - **Deferred, after the betas**: nothing of the beta.2 set remains
   unbuilt (references, the file-bound handoff, doctor per client, self
   registration and the subagent set all landed on 2026-10-08); what

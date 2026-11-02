@@ -27,7 +27,7 @@ import { type LegRef } from '../../src/persistence/leg-registry.js'
 import type { KeyLookup } from '../../src/key-lookup.js'
 import { mcpOver, parseTool, rawAll } from './world.js'
 import { TS_ROOT } from './proc.js'
-import { runHook } from './capture-harness.js'
+import { runHook, writeAgentTranscript } from './capture-harness.js'
 import { type ReorientationWorld, openWorld } from './steps/journal-reorientation.steps.js'
 
 /** The world the three beta.3 waves share. */
@@ -106,10 +106,14 @@ export function startContext(stdout: string): string | null {
 
 /** The subagent finishes: the real SubagentStop hook with its report. A
  *  stop after a block carries `stop_hook_active` as the platform sends it. */
-export function subagentStopHook(w: RunWorld, agentId: string, agentType: string, report: string, opts: { stopActive?: boolean } = {}): string {
+export function subagentStopHook(w: RunWorld, agentId: string, agentType: string, report: string, opts: { stopActive?: boolean; handback?: { closing?: string } } = {}): string {
+  // Through the hand-back tool (Claude Code 2.1.271+, auto mode): the
+  // report sits in the subagent's transcript as the tool call's message,
+  // and the payload's text is its closing words or nothing (D371).
+  const transcript = opts.handback ? writeAgentTranscript(w, agentId, { handback: report, ...(opts.handback.closing !== undefined ? { closing: opts.handback.closing } : {}) }) : join(w.proj!, `agent-${agentId}.jsonl`)
   return runHook(w, 'subagent-stop', {
     hook_event_name: 'SubagentStop', agent_id: agentId, agent_type: agentType, stop_hook_active: opts.stopActive ?? false,
-    agent_transcript_path: join(w.proj!, `agent-${agentId}.jsonl`), last_assistant_message: report,
+    agent_transcript_path: transcript, last_assistant_message: opts.handback ? (opts.handback.closing ?? '') : report,
   }).stdout
 }
 

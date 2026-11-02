@@ -96,9 +96,9 @@ async function toolCalls(w: HooksWorld, name: string, role: string, n: number): 
   await drainStaging(w)
 }
 
-function stopLeg(w: HooksWorld, name: string, role: string, report: string, stopActive = false): void {
+function stopLeg(w: HooksWorld, name: string, role: string, report: string, stopActive = false, handback?: { closing?: string }): void {
   const before = Date.now() / 1000
-  w.stops![name] = subagentStopHook(w, w.legs![name]!.agentId, role, report, { stopActive })
+  w.stops![name] = subagentStopHook(w, w.legs![name]!.agentId, role, report, { stopActive, ...(handback ? { handback } : {}) })
   w.moments![`stop:${name}`] = before
   w.moments![`stopped:${name}`] = Date.now() / 1000
 }
@@ -593,8 +593,8 @@ export function hooksDoorSteps(define: Define): void {
     expect((reply['checkpoint'] as Record<string, unknown>)['number']).toBe(4)
   }
 
-  function finish(w: HooksWorld, report: string): void {
-    stopLeg(w, 'builder', 'builder', report)
+  function finish(w: HooksWorld, report: string, o: { handback?: { closing?: string } } = {}): void {
+    stopLeg(w, 'builder', 'builder', report, false, o.handback)
     expect(blocks(w.stops!['builder']!)).toBe(false)
     w.facts!['agent-return'] = agentToolReturns(w, w.legs!['builder']!.agentId, 'builder', 'wire the submit of the login form', report)
   }
@@ -636,7 +636,10 @@ export function hooksDoorSteps(define: Define): void {
   })
 
   define(/^the builder finishes with the report "([^"]+)"$/, (w, report) => {
-    finish(w, report!)
+    // Through the client's hand-back tool with no closing text, the
+    // reference platform's shape in auto mode (D371); the pointer and the
+    // row it names must hold the report all the same.
+    finish(w, report!, { handback: {} })
     w.facts!['report'] = report
   })
 

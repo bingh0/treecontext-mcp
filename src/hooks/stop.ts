@@ -138,6 +138,8 @@ function firstReport(sessionId: string): boolean {
 interface TranscriptContentBlock {
   type?: string
   text?: string
+  name?: string
+  input?: Record<string, unknown>
 }
 
 interface TranscriptEntry {
@@ -157,30 +159,7 @@ interface TranscriptEntry {
  * assistant text at all.
  */
 export function extractLastAssistantText(transcriptPath: string): string | null {
-  let raw: string
-  try {
-    raw = readFileSync(transcriptPath, 'utf8')
-  } catch {
-    return null
-  }
-
-  const lines = raw.split('\n')
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const rawLine = lines[i]
-    if (rawLine === undefined) continue
-    const line = rawLine.trim()
-    if (!line) continue
-
-    let entry: TranscriptEntry
-    try {
-      entry = JSON.parse(line) as TranscriptEntry
-    } catch {
-      continue
-    }
-
-    if (entry.type !== 'assistant' && entry.message?.role !== 'assistant') continue
-
-    const content = entry.message?.content
+  for (const content of assistantContentsNewestFirst(transcriptPath)) {
     if (typeof content === 'string') {
       if (content.trim()) return content
       continue
@@ -195,6 +174,83 @@ export function extractLastAssistantText(transcriptPath: string): string | null 
     }
   }
   return null
+}
+
+/** The client's hand-back tool: on Claude Code 2.1.271 and later, in auto
+ *  mode, a subagent delivers its report through a `SubagentHandback` tool
+ *  call "rather than returning it as text" (hooks reference, read
+ *  2026-11-02); SubagentStop's `last_assistant_message` then holds its
+ *  closing text, if any, which is not the report. */
+export const HANDBACK_TOOL = 'SubagentHandback'
+
+/**
+ * The report a subagent handed back through the client's tool in the
+ * finish just ended: the `message` of the newest `SubagentHandback` call
+ * after the newest prompting user turn (a user entry that is not a tool
+ * result: the prompt, or the message that resumed the subagent), or null
+ * when that finish made none, its message is blank, or the file is
+ * unreadable. The scan stops at that turn: a subagent resumed and
+ * finished again with text alone must not be summarised by the hand-back
+ * of its earlier finish (review of 2026-11-02). The newest call within
+ * the finish, because a hand-back a hook denied is made again.
+ */
+export function extractHandbackReport(transcriptPath: string): string | null {
+  for (const entry of entriesNewestFirst(transcriptPath)) {
+    const content = entry.message?.content
+    if (entry.type === 'user' || entry.message?.role === 'user') {
+      if (isPromptingTurn(content)) return null
+      continue
+    }
+    if (entry.type !== 'assistant' && entry.message?.role !== 'assistant') continue
+    if (!Array.isArray(content)) continue
+    for (let j = content.length - 1; j >= 0; j--) {
+      const block = content[j]
+      if (block?.type !== 'tool_use' || block.name !== HANDBACK_TOOL) continue
+      const message = block.input?.['message']
+      return typeof message === 'string' && message.trim() ? message : null
+    }
+  }
+  return null
+}
+
+/** A user entry that prompts the subagent (its task, or the message
+ *  that resumed it) rather than carrying a tool's result back. */
+function isPromptingTurn(content: TranscriptContentBlock[] | string | undefined): boolean {
+  if (typeof content === 'string') return content.trim() !== ''
+  if (!Array.isArray(content)) return false
+  return content.some((b) => b?.type !== 'tool_result')
+}
+
+/** Each assistant entry's content in the transcript, newest first; an
+ *  unreadable file or a line that is not JSON yields nothing for it. */
+function* assistantContentsNewestFirst(transcriptPath: string): Generator<TranscriptContentBlock[] | string | undefined> {
+  for (const entry of entriesNewestFirst(transcriptPath)) {
+    if (entry.type !== 'assistant' && entry.message?.role !== 'assistant') continue
+    yield entry.message?.content
+  }
+}
+
+/** The transcript's JSONL entries, newest first; an unreadable file
+ *  yields nothing and a line that is not JSON is skipped. */
+function* entriesNewestFirst(transcriptPath: string): Generator<TranscriptEntry> {
+  let raw: string
+  try {
+    raw = readFileSync(transcriptPath, 'utf8')
+  } catch {
+    return
+  }
+  const lines = raw.split('\n')
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i]?.trim()
+    if (!line) continue
+    let entry: TranscriptEntry
+    try {
+      entry = JSON.parse(line) as TranscriptEntry
+    } catch {
+      continue
+    }
+    yield entry
+  }
 }
 
 /**

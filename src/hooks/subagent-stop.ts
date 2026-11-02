@@ -7,10 +7,14 @@
  * (probe of 2026-09-25) — the report the subagent hands its orchestrator.
  * That report is staged as the subagent's summary: an assistant row with
  * kind `subagent-summary`, stamped with the subagent as its writer, so the
- * orchestrator finds it by search marked as that subagent's summary. When a
- * payload carries no message, the last assistant text of the subagent's
- * own transcript (`agent_transcript_path`) stands in for it, as the Stop
- * hook reads the main transcript. Then the registration is retired, on the
+ * orchestrator finds it by search marked as that subagent's summary. On
+ * Claude Code 2.1.271 and later in auto mode the subagent delivers its
+ * report through the `SubagentHandback` tool instead, and the payload's
+ * text is only its closing words, if any: the newest hand-back call in
+ * the subagent's own transcript (`agent_transcript_path`) is then the
+ * report (D371, live on 2.1.316, 2026-11-02). When a payload carries no
+ * message and no hand-back was made, the last assistant text of that
+ * transcript stands in for it, as the Stop hook reads the main transcript. Then the registration is retired, on the
  * same connection, so the next tool-written row is no longer the
  * subagent's. The capture comes first: retiring never displaces it.
  *
@@ -38,7 +42,7 @@
  */
 import type { DatabaseSync as DatabaseType } from 'node:sqlite'
 import { parseHookInput, resolveDbPath, writeStaging, openHookDb, isDirectInvocation, payloadWriter, storeRefusesWrites, blockOutput, STOP_GUARD_TIMEOUT_MS, HOOK_STARTED_AT } from './shared.js'
-import { extractLastAssistantText } from './stop.js'
+import { extractLastAssistantText, extractHandbackReport } from './stop.js'
 import { hookStoreOn, hookTreeOf } from './hook-store.js'
 import { recordHookGap } from './gap-ledger.js'
 import { legOf, hasLegColumns, isLiveLeg, legOwnsKey, capRefusalOf, retireLeg, settleLegKey, type LegRegistration, type LegRef } from '../persistence/leg-registry.js'
@@ -190,11 +194,24 @@ async function run(preParsed?: Record<string, unknown>): Promise<void> {
     const { agentId, agentType } = payloadWriter(input)
     dbg('hook:subagent-stop', 'invoked', { sessionId: sessionId ?? null, agentId: agentId ?? null, agentType: agentType ?? null })
 
-    let report = typeof input['last_assistant_message'] === 'string' && input['last_assistant_message'].trim() !== ''
-      ? input['last_assistant_message']
-      : null
-    const transcript = input['agent_transcript_path']
-    if (!report && typeof transcript === 'string' && transcript !== '') report = extractLastAssistantText(transcript)
+    // The report, from where the client put it: a hand-back tool call in
+    // the subagent's transcript is the delivered report and the payload's
+    // `last_assistant_message` then only its closing text, if any (Claude
+    // Code 2.1.271 and later, auto mode; D371); with no hand-back the
+    // payload's text is the report, and with neither the transcript's
+    // last assistant text stands in.
+    const transcript = typeof input['agent_transcript_path'] === 'string' && input['agent_transcript_path'] !== '' ? input['agent_transcript_path'] : null
+    let report = transcript ? extractHandbackReport(transcript) : null
+    let reportSrc: 'handback' | 'payload' | 'transcript' | null = report ? 'handback' : null
+    if (!report && typeof input['last_assistant_message'] === 'string' && input['last_assistant_message'].trim() !== '') {
+      report = input['last_assistant_message']
+      reportSrc = 'payload'
+    }
+    if (!report && transcript) {
+      report = extractLastAssistantText(transcript)
+      if (report) reportSrc = 'transcript'
+    }
+    if (reportSrc) dbg('hook:subagent-stop', 'report read', { from: reportSrc, chars: report!.length })
     const content = report ? report.substring(0, STORE_SAFETY_CAP) : null
 
     const dbPath = resolveDbPath(cwd)
