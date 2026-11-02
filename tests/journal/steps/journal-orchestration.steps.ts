@@ -2034,26 +2034,28 @@ function snapshotLaneSteps(reg: Registry<OrchestrationWorld>): void {
     sessionStart(w, path)
     w.laneSessions[lane] = w.sessionId
     const turns = await laneTurns(w, lane, path, 'quillfeather')
-    preCompact(w, path)
+    // The worktree session's PreCompact fires in the next Given, after the
+    // main checkout's: "earlier" there is the order of the two hooks.
     snapshotLanes.set(w, {
-      snapshot: { [lane]: snapshotOf(w, w.sessionId) }, compacted: { [lane]: w.sessionId }, turns: { [lane]: turns }, recovery: {},
+      snapshot: {}, compacted: { [lane]: w.sessionId }, turns: { [lane]: turns }, recovery: {},
     })
   })
   reg.define(/^a session in the main checkout that compacted earlier, leaving its own unclaimed$/, async (w) => {
     const s = snapshotLanes.get(w)!
-    const worktreeLane = Object.keys(s.snapshot)[0]!
+    const worktreeLane = Object.keys(s.compacted)[0]!
     w.sessionId = w.laneSessions!['main']!
     s.turns['main'] = await laneTurns(w, 'main', w.repo!, 'marmotdoc')
     preCompact(w, w.repo!)
     s.snapshot['main'] = snapshotOf(w, w.sessionId)
     s.compacted['main'] = w.sessionId
-    // "Earlier": the compaction's moment set before the worktree's, so the
-    // worktree's is the store's newest unclaimed snapshot, the one a claim
-    // by any other session would take. Only the moment is set; the row is
-    // the PreCompact hook's.
-    const wt = rawAll<{ t: number }>(w, 'SELECT created_at AS t FROM snapshots WHERE id = ?', s.snapshot[worktreeLane])[0]!.t
-    const raw = new DatabaseSync(w.dbPath!)
-    try { raw.prepare('UPDATE snapshots SET created_at = ? WHERE id = ?').run(wt - 60, s.snapshot['main']!) } finally { raw.close() }
+    // "Earlier": main's PreCompact fires before the worktree session's, by
+    // the hooks' own order and moments, so the worktree's is the store's
+    // newest unclaimed snapshot, the one a claim by any other session
+    // would take.
+    w.sessionId = s.compacted[worktreeLane]!
+    preCompact(w, w.worktrees![worktreeLane.slice('worktree:'.length)]!)
+    s.snapshot[worktreeLane] = snapshotOf(w, w.sessionId)
+    w.sessionId = w.laneSessions!['main']!
     const newest = rawAll<{ id: number }>(w, 'SELECT id FROM snapshots WHERE claimed_by IS NULL ORDER BY created_at DESC, id DESC LIMIT 1')[0]!
     expect(newest.id).toBe(s.snapshot[worktreeLane])
     // The negatives below can fail: the recovery queries, asked of the

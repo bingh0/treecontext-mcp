@@ -35,6 +35,7 @@ import { dbg } from './debug.js'
 import { sessionOf, resolveSessionKey, isAutoCaptureSource, effectiveSource, dedupClassOf, parseMeta, NO_SESSION } from './dedup-identity.js'
 import { LeaseClient, SWEEP_LEASE_TTL_SECS } from './persistence/leases.js'
 import { MERGE_SRC_ALIAS, attachedNamespaces } from './persistence/merge-source.js'
+import { RECOVERY_SNAPSHOT_SOURCE, recoveryIdentityOf } from './persistence/recovery-snapshot.js'
 import type { MergeCounts, NamespaceCounts } from './persistence/merge-source.js'
 import { hostname } from 'node:os'
 import { NodeNotFoundError } from './errors/index.js'
@@ -547,9 +548,25 @@ export class FlatStore implements MemoryStore {
     if (cls === 'auto') {
       return this.persistence.liveAnchor(treeId, sessionOf(meta), fp, createdAt, DEDUP_WINDOW_SECS) !== undefined
     }
-    // A run's rows dedup by identity alone, never by text (D329).
-    if (cls !== 'curated') return false
+    // A recovery row dedups by its claim (D375); a run's rows by identity
+    // alone, never by text (D329).
+    if (cls !== 'curated') return this.recoveryHolder(treeId, meta) !== undefined
     return this.persistence.curatedHolder(treeId, fp) !== undefined
+  }
+
+  /** D375: the recovery row already written for this claim, the same
+   *  snapshot (or staged row) and the same claiming session, in the tree;
+   *  undefined when the row carries no claim or none is written yet. A
+   *  re-drained claim finds its row; another claim never does, whatever
+   *  its text. */
+  private recoveryHolder(treeId: number, meta: Record<string, unknown> | null): string | undefined {
+    const claim = recoveryIdentityOf(meta)
+    if (!claim) return undefined
+    const row = this.db.prepare(
+      `SELECT node_id FROM nodes WHERE tree_id = ? AND json_extract(metadata_json, '$.source') = ?
+         AND json_extract(metadata_json, '$.${claim.by}') = ? AND json_extract(metadata_json, '$.session_id') = ? LIMIT 1`,
+    ).get(treeId, RECOVERY_SNAPSHOT_SOURCE, claim.id, claim.session) as { node_id: string } | undefined
+    return row?.node_id
   }
 
   static async open(opts: FlatStoreOptions): Promise<FlatStore> {
@@ -1624,6 +1641,13 @@ export class FlatStore implements MemoryStore {
         }
       }
 
+      // D375: a recovery row's claim is its identity; a re-drained claim
+      // returns the row it already wrote, never a second.
+      const claimed = this.recoveryHolder(this.treeId, meta)
+      if (claimed !== undefined) {
+        return { nodeId: claimed, path: [claimed], depth: 0, deduplicated: true, driftDetected: false, staleNodes: [] }
+      }
+
       const nodeId = randomUUID().replace(/-/g, '')
       const node: PersistedNode = {
         nodeId,
@@ -2238,17 +2262,20 @@ export class FlatStore implements MemoryStore {
     return placeChaptersAboveBookmarks(hits, (h) => searchCheckpointKindOf(h.metadata, h.sourceLabel))
   }
 
-  /** D374: a search scoped to a placed lane keeps a seat for the lane's
-   *  own live chapter summary when the search matched one: a cut of `k`
-   *  that holds none of them gives its last place to the best ranked of
-   *  them. Found, never first by rule; where fusion and placement put it
-   *  when it made the cut. Relevance order only, as the placement. */
+  /** D374: a lane-scoped relevance page of two or more places that holds
+   *  none of the lane's own live chapter summaries the search matched
+   *  gives its last place to the best ranked of them, never the first:
+   *  a page of one place keeps its best hit. Never on a temporal listing,
+   *  and never past the filters: the chapter is taken from the filtered
+   *  candidates only. No score or count changes: the seated chapter keeps
+   *  its own score and the page its length. Where fusion and placement
+   *  put it when it made the cut. */
   private seatOwnChapter<T extends { nodeId: string }>(
     ordered: T[], k: number, own: Set<string> | undefined,
     phrase: string | null | undefined, sortBy: string, enabled: boolean | undefined,
   ): T[] {
     const page = ordered.slice(0, k)
-    if (!own || own.size === 0 || !phrase || sortBy !== 'relevance' || enabled === false || k < 1) return page
+    if (!own || own.size === 0 || !phrase || sortBy !== 'relevance' || enabled === false || k < 2) return page
     if (page.some((h) => own.has(h.nodeId))) return page
     const chapter = ordered.find((h) => own.has(h.nodeId))
     return chapter ? [...page.slice(0, k - 1), chapter] : page

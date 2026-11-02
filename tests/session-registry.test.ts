@@ -203,6 +203,20 @@ describe('the reply fields of a stamp (F4)', () => {
     expect(meta(k['node_id'] as string)).toMatchObject({ _writer: 'main', _writer_src: 'concurrent', _writer_candidates: [{ agent_id: 'a1', agent_type: 'tester' }] })
     const q2 = parseToolResult(await c.callTool({ name: 'treecontext_query', arguments: { query: 'note' } }))
     expect(q2['scope']).toEqual({ searched: 'the whole store', why: "a subagent of this session is live but the session's own agent has been active beside it, so the caller cannot be told apart and no subagent scope applies" })
+    // The reply's "whole store" is the search's (D240, D374, U3-F3): the
+    // tester's provisional row lies outside main's lane, a helper's trail,
+    // and a concurrent caller still finds it.
+    const contentsOf = (r: Record<string, unknown>): string[] => (r['results'] as Array<{ content: string }>).map((h) => h.content)
+    expect(contentsOf(q2)).toContain('note one')
+    expect(contentsOf(q2)).toContain('note two')
+    // An ambiguous caller alike: a main session with two live subagents
+    // finds the first session's tester row, outside its lane.
+    withRaw((db) => { registerSelf(db, 's3', MAIN, 400); registerSubagent(db, 's3', 'b1', 'tester', MAIN, 401); registerSubagent(db, 's3', 'b2', 'reviewer', MAIN, 402) })
+    const amb = await client(s, 's3')
+    const q3 = parseToolResult(await amb.c.callTool({ name: 'treecontext_query', arguments: { query: 'note' } }))
+    expect(q3['scope']).toEqual({ searched: 'the whole store', why: 'several subagents of this session are live, so the caller cannot be told apart and no subagent scope applies' })
+    expect(contentsOf(q3)).toContain('note one')
+    await amb.close()
     const all = parseToolResult(await c.callTool({ name: 'treecontext_query', arguments: { query: 'note', scope: 'all' } }))
     expect(all['scope']).toBeUndefined()
     await close()
@@ -684,9 +698,97 @@ describe('a lane read from the registry (D376, D374)', () => {
     const own = await s.query(q, { topK: 3, recencyWeight: 0.25, lane: 'main' })
     expect(own).toHaveLength(3)
     expect(own.map((h) => h.nodeId)).toEqual([...whole.slice(0, 2).map((h) => h.nodeId), ids['oldPlan']])
-    // A temporal listing is not a relevance page: no seat.
-    const listed = await s.query(q, { topK: 3, lane: 'main', sortBy: 'reverse_chronological', chapterPlacement: false })
+    // A temporal listing is not a relevance page: no seat. Asked with the
+    // placement left on, so the listing itself is what keeps it out.
+    // A namespace exclusion widens the candidate pool past the page, so the
+    // chapter is among the candidates the listing reads.
+    const listed = await s.query(q, { topK: 3, lane: 'main', sortBy: 'reverse_chronological', excludeNamespaces: ['elsewhere'] })
+    expect(listed).toHaveLength(3)
     expect(listed.map((h) => h.nodeId)).not.toContain(ids['oldPlan'])
+    await s.close()
+  })
+
+  it('seats the own chapter on a page of two or more places only, last, within the filters, changing no score or count (D374, U3-F1, F2)', async () => {
+    const { s, ids } = await world()
+    const t0 = Date.now() / 1000
+    ids['oldPlan'] = (await s.insert('omega plan: rewrite the install section', { metadata: { session_id: 'm', next_session: true, _writer: 'main', _writer_src: 'self' }, createdAt: t0 - 3600 })).nodeId
+    for (let i = 0; i < 6; i++) {
+      ids[`turn${i}`] = (await s.insert(`omega next step ${i}: the doctor table rows`, { metadata: { source: 'auto-capture', role: 'user', session_id: 'm' }, sourceLabel: 'auto-capture', createdAt: t0 - 60 + i })).nodeId
+    }
+    const q = 'omega next step the doctor table'
+    const fused = { recencyWeight: 0.25 }
+    const wide = await s.query(q, { topK: 100, ...fused, lane: 'main' })
+    const scoreOf = new Map(wide.map((h) => [h.nodeId, h.similarity]))
+    expect(wide.map((h) => h.nodeId)).toContain(ids['oldPlan'])
+    // A page of one place: the best hit keeps it, never the chapter.
+    const one = await s.query(q, { topK: 1, ...fused, lane: 'main' })
+    expect(one.map((h) => h.nodeId)).toEqual([wide[0]!.nodeId])
+    expect(one[0]!.nodeId).not.toBe(ids['oldPlan'])
+    // A page of two: the chapter takes the second place, never the first.
+    const two = await s.query(q, { topK: 2, ...fused, lane: 'main' })
+    expect(two.map((h) => h.nodeId)).toEqual([wide[0]!.nodeId, ids['oldPlan']])
+    // No score changes: every hit, the seated chapter too, keeps the score
+    // it has on a page wide enough to hold it without a seat.
+    for (const h of two) expect(h.similarity, h.nodeId).toBe(scoreOf.get(h.nodeId))
+    // No count changes, under the adaptive count as well.
+    let returnedK = -1
+    const adaptive = await s.query(q, { topK: 3, ...fused, lane: 'main', adaptive: true, onAdaptive: (a) => { returnedK = a.returnedK } })
+    expect(adaptive).toHaveLength(returnedK)
+    expect(adaptive.map((h) => h.nodeId)).toContain(ids['oldPlan'])
+    expect(adaptive[0]!.nodeId).not.toBe(ids['oldPlan'])
+    // Never past the filters: a metadata filter or a time range that
+    // leaves the chapter out leaves it out of the page too.
+    const filtered = await s.query(q, { topK: 3, ...fused, lane: 'main', metadataFilter: { role: 'user' } })
+    expect(filtered).toHaveLength(3)
+    expect(filtered.map((h) => h.nodeId)).not.toContain(ids['oldPlan'])
+    const recent = await s.query(q, { topK: 3, ...fused, lane: 'main', timeRange: { after: t0 - 120 } })
+    expect(recent).toHaveLength(3)
+    expect(recent.map((h) => h.nodeId)).not.toContain(ids['oldPlan'])
+    await s.close()
+  })
+
+  it('searches the whole store for a session no hook placed, the reply saying so (D374, U3-F4)', async () => {
+    const { s, ids } = await world()
+    // A hookless client with a session id: the registry never held it.
+    const { c, close } = await client(s, 'ghost')
+    const q = parseToolResult(await c.callTool({ name: 'treecontext_query', arguments: { query: 'zeta worktree turn', top_k: 20 } }))
+    expect(q['scope']).toEqual({
+      searched: 'the whole store',
+      unplaced: 'this session could not be placed: no session-start hook registered it in a checkout, so the search covers the whole store',
+    })
+    const hit = (q['results'] as Array<{ nodeId: string }>).map((h) => h.nodeId)
+    // A worktree's row and a helper's trail, outside main's lane: the
+    // unplaced caller is never folded into main.
+    expect(hit).toContain(ids['wtTurn'])
+    expect(hit).toContain(ids['subTrail'])
+    await close()
+    await s.close()
+  })
+
+  it('keeps a writer-unknown chapter out of main\'s default search and its windows, found by asking for the whole store (D374, D376, U3-F6)', async () => {
+    const s = await open()
+    withRaw((db) => registerSelf(db, 'm', MAIN, 100))
+    // A hookless client the server cannot place writes its chapter
+    // through the tools: the store stamps it `unregistered`.
+    const u = await client(s, 'hookless')
+    const written = await insert(u.c, 'plan: psi migrate the doctor table', { next_session: true })
+    await u.close()
+    const id = written['node_id'] as string
+    expect(meta(id)).toMatchObject({ _writer_src: 'unregistered' })
+    // Main's own turn in its session, the same words, for the window.
+    s.store.insertStaging({ sessionId: 'm', role: 'user', content: 'psi the doctor table next', timestamp: Date.now() / 1000 })
+    const { IngestionLoop } = await import('../src/server/ingestion.js')
+    await new IngestionLoop(s).ingestBatch()
+    const { c, close } = await client(s, 'm')
+    const own = parseToolResult(await c.callTool({ name: 'treecontext_query', arguments: { query: 'psi doctor table', top_k: 10, conversation_window: 3 } }))
+    expect(own['scope']).toMatchObject({ lane: 'main' })
+    const ownIds = (own['results'] as Array<{ nodeId: string }>).map((h) => h.nodeId)
+    expect(ownIds.length).toBeGreaterThan(0)
+    expect(ownIds).not.toContain(id)
+    expect(JSON.stringify(own['results'])).not.toContain(id)
+    const all = parseToolResult(await c.callTool({ name: 'treecontext_query', arguments: { query: 'psi doctor table', top_k: 10, scope: 'all' } }))
+    expect((all['results'] as Array<{ nodeId: string }>).map((h) => h.nodeId)).toContain(id)
+    await close()
     await s.close()
   })
 

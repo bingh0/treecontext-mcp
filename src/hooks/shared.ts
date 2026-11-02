@@ -550,7 +550,9 @@ export function buildRehydrationPayload(
       writeStaging(dbPath, {
         sessionId,
         role: 'snapshot',
-        content: JSON.stringify({ queries: snapshot.queries, original_session_id: snapshot.originalSessionId }),
+        // D375: the snapshot's id travels with the claim, so the drain's
+        // row is identified by the claim, never by its text.
+        content: JSON.stringify({ queries: snapshot.queries, original_session_id: snapshot.originalSessionId, snapshot_id: snapshot.id }),
         timestamp: Date.now() / 1000,
         priority: 0,
       })

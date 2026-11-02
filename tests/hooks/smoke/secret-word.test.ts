@@ -95,11 +95,22 @@ describe('Secret word smoke test (round-trip)', () => {
          VALUES (?, 'user', ?, ?, 1, 0, ?)`
       ).run('sess-1', 'The secret word is bamboozle', Date.now() / 1000, Date.now() / 1000)
 
+      let prior = 0
       if (source === 'startup') {
-        db.prepare('INSERT INTO snapshots (session_id, queries) VALUES (?, ?)')
-          .run('sess-prior', JSON.stringify(['what was I doing']))
+        prior = Number(db.prepare('INSERT INTO snapshots (session_id, queries) VALUES (?, ?)')
+          .run('sess-prior', JSON.stringify(['what was I doing'])).lastInsertRowid)
       }
       db.close()
+      if (source === 'startup') {
+        // The prior session started in this checkout through the real
+        // hook, which registers its self, so the startup's claim reaches
+        // its snapshot (D375: claimed only from the claimant's own lane).
+        vi.spyOn(shared, 'parseHookInput').mockReturnValue({
+          session_id: 'sess-prior', cwd: '/tmp', source: 'startup',
+        })
+        sessionStartMain()
+        stdoutSpy.mockClear()
+      }
 
       vi.spyOn(shared, 'parseHookInput').mockReturnValue({
         session_id: 'sess-1', cwd: '/tmp', source,
@@ -115,6 +126,19 @@ describe('Secret word smoke test (round-trip)', () => {
       expect(output.hookSpecificOutput.hookEventName).toBe('SessionStart')
       expect(typeof output.hookSpecificOutput.additionalContext).toBe('string')
       expect(output.hookSpecificOutput.additionalContext.length).toBeGreaterThan(0)
+      if (source === 'startup') {
+        // The startup claimed the prior session's snapshot: its line in the
+        // packet, the snapshot marked claimed, and the claim staged.
+        const context = output.hookSpecificOutput.additionalContext as string
+        expect(context).toContain(`[Prior session snapshot #${prior} from session sess-prior]`)
+        expect(context).toContain('Recovery queries: what was I doing')
+        const check = new DatabaseSync(tempDbPath)
+        try {
+          expect(check.prepare('SELECT claimed_by AS c FROM snapshots WHERE id = ?').get(prior)).toEqual({ c: 'sess-1' })
+          const staged = check.prepare("SELECT session_id AS s, content AS c FROM staging WHERE role = 'snapshot'").all() as Array<{ s: string; c: string }>
+          expect(staged.map((r) => [r.s, JSON.parse(r.c)])).toEqual([['sess-1', { queries: ['what was I doing'], original_session_id: 'sess-prior', snapshot_id: prior }]])
+        } finally { check.close() }
+      }
     })
   }
 

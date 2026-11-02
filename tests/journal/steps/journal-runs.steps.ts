@@ -288,7 +288,18 @@ export const runsDefiner = (reg: Registry<RunsWorld>): void => {
     // the agent asks for the whole store, as the scoped reply says to.
     await sessionClient(w)
     const own = parseTool(await w.client!.callTool({ name: 'treecontext_query', arguments: { query: 'login piece', top_k: 20, time_range: { after, before: after + 24 * HOUR } } }))
-    expect(own['scope']).toMatchObject({ widen: 'pass scope "all" to search the whole store' })
+    expect(own['scope']).toMatchObject({ lane: 'main', widen: 'pass scope "all" to search the whole store' })
+    // Before widening, the default search already shows the agent that
+    // day's run: its legs' summary rows are the spawning lane's by the
+    // parent link, each carrying the run (D374, U3-F7).
+    const summaries = rawAll<{ node_id: string }>(w,
+      `SELECT node_id FROM nodes WHERE json_extract(metadata_json, '$.kind') = ? AND json_extract(metadata_json, '$.run') = 'the-tuesday-run'`, SUBAGENT_SUMMARY_KIND)
+      .map((r) => r.node_id)
+    expect(summaries).toHaveLength(3)
+    const lane = own['results'] as Hit[]
+    for (const id of summaries) expect(lane.map((h) => h.nodeId), `the Tuesday run's summary row ${id} on the default search`).toContain(id)
+    // Every run the default hits carry is that day's.
+    expect(lane.every((h) => h.metadata?.['run'] === undefined || h.metadata['run'] === 'the-tuesday-run')).toBe(true)
     w.facts!['hits'] = await query(w, 'login piece', { top_k: 20, time_range: { after, before: after + 24 * HOUR }, scope: 'all' })
   })
 
@@ -583,19 +594,51 @@ export const runsDefiner = (reg: Registry<RunsWorld>): void => {
   })
 
   define(/^an agent queries "([^"]+)"$/, async (w, q) => {
-    w.facts!['hits'] = await query(w, q!)
+    await sessionClient(w)
+    const own = parseTool(await w.client!.callTool({ name: 'treecontext_query', arguments: { query: q!, top_k: 10 } }))
+    w.facts!['hits'] = own['results'] as Hit[]
+    w.facts!['scope'] = own['scope']
+    // D374: a run's rows in a worker's own lane, its checkpoints among
+    // them, are found by asking for the whole store, the scoped reply
+    // saying how; the agent asks, as the reply says to.
+    if (own['scope'] !== undefined) w.facts!['widened'] = await query(w, q!, { scope: 'all' })
   })
 
-  define(/^the agent's hits are rows of "([^"]+)" and none of "([^"]+)"$/, (w, mine, theirs) => {
-    const hits = w.facts!['hits'] as Hit[]
-    expect(hits.length).toBeGreaterThan(0)
+  define(/^the agent's hits are rows of "([^"]+)" and none of "([^"]+)"$/, async (w, mine, theirs) => {
     const ours = runRowIds(w, mine!)
     const other = runRowIds(w, theirs!)
     expect(other.size).toBeGreaterThan(0)
-    for (const h of hits) {
-      expect(ours.has(h.nodeId), `hit ${h.nodeId} (${h.content.slice(0, 60)}) is not a row of "${mine}"`).toBe(true)
-      expect(other.has(h.nodeId)).toBe(false)
+    const onlyOurs = (hits: Hit[], which: string): void => {
+      expect(hits.length, which).toBeGreaterThan(0)
+      for (const h of hits) {
+        expect(ours.has(h.nodeId), `${which} hit ${h.nodeId} (${h.content.slice(0, 60)}) is not a row of "${mine}"`).toBe(true)
+        expect(other.has(h.nodeId), `${which} hit ${h.nodeId} is a row of "${theirs}"`).toBe(false)
+      }
     }
+    onlyOurs(w.facts!['hits'] as Hit[], 'the default search\'s')
+    // The default search is the session's lane, and its reply says how to
+    // widen (D374). The run's name reaches its open row in the lane, the
+    // row a library write naming no session leaves in main's; the widened
+    // search reaches no row of the other run either.
+    expect(w.facts!['scope']).toMatchObject({ lane: 'main', widen: 'pass scope "all" to search the whole store' })
+    const open = openRowOf(w, mine!).node_id
+    expect((w.facts!['hits'] as Hit[]).map((h) => h.nodeId)).toContain(open)
+    const widened = w.facts!['widened'] as Hit[]
+    onlyOurs(widened, 'the widened search\'s')
+    // A checkpoint's text does not name its run, so the name alone finds
+    // the run's open; the walk from it by the run the hit carries, over
+    // the whole store the reply named, returns the run's checkpoints, in
+    // the workers' own lanes, and none of the other run's (D309).
+    const carried = (w.facts!['hits'] as Hit[]).find((h) => h.nodeId === open)!.metadata!['run']
+    expect(carried).toBe(mine)
+    const walked = new Set((await query(w, 'state login form', { scope: 'all', metadata_filter: { run: carried } })).map((h) => h.nodeId))
+    const checkpointsOf = (run: string): string[] => rawAll<{ node_id: string }>(w,
+      `SELECT node_id FROM nodes WHERE json_extract(metadata_json, '$.run') = ? AND json_extract(metadata_json, '$.kind') = 'checkpoint'`, run)
+      .map((r) => r.node_id)
+    expect(checkpointsOf(mine!)).toHaveLength(2)
+    for (const id of checkpointsOf(mine!)) expect(walked.has(id), `the checkpoint ${id} of "${mine}" on the walk`).toBe(true)
+    expect(checkpointsOf(theirs!)).toHaveLength(2)
+    for (const id of checkpointsOf(theirs!)) expect(walked.has(id), `the checkpoint ${id} of "${theirs}" on the walk`).toBe(false)
   })
 
   define(/^a run "([^"]+)" opened on Tuesday and closed on Wednesday with the reason "([^"]+)"$/, async (w, run, reason) => {

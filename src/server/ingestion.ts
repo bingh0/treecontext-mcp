@@ -30,7 +30,7 @@ import { newerSchemaLine } from '../persistence/migrations.js'
 import { healEchoIndex } from '../persistence/echo-reindex.js'
 import {
   buildRecoveryContent, recoverySnapshotBoundaries, RECOVERY_SNAPSHOT_SOURCE, RECOVERY_QUERIES_KEY,
-  RECOVERY_HITS_PER_QUERY, type RecoveryHit,
+  RECOVERY_HITS_PER_QUERY, RECOVERY_SNAPSHOT_ID_KEY, RECOVERY_STAGING_ID_KEY, type RecoveryHit,
 } from '../persistence/recovery-snapshot.js'
 import { agentWriterOf, INTERNAL_SUMMARY_KIND, CLIENT_WRITER } from '../persistence/session-registry.js'
 import { SUBAGENT_SUMMARY_KIND } from '../handoff.js'
@@ -568,6 +568,7 @@ export class IngestionLoop {
           }
           const queries = (snap.queries as string[]) || []
           const origSession = (snap.original_session_id as string) || 'unknown'
+          const snapshotId = typeof snap.snapshot_id === 'number' && Number.isInteger(snap.snapshot_id) ? snap.snapshot_id : undefined
 
           // D286: the recovery row quotes what its queries found — each hit
           // at its display view, cut at the quote cap, named by its id —
@@ -600,6 +601,10 @@ export class IngestionLoop {
           // D375: the row is the claiming session's own, in its session,
           // so every lane read places it where the claim was made; a row
           // with no session read as the main lane's whoever claimed it.
+          // It is identified by the claim, the snapshot (or, staged before
+          // the claim carried it, the staged row) and the claiming session,
+          // never by its text: a recovery that reads like another lane's or
+          // an earlier claim's is still written, here.
           await target.insert(recoveredText, {
             decayRate: this.options.decayRate,
             createdAt: row.timestamp,
@@ -607,6 +612,8 @@ export class IngestionLoop {
               source: RECOVERY_SNAPSHOT_SOURCE,
               session_id: row.sessionId || undefined,
               original_session_id: origSession,
+              ...(snapshotId !== undefined ? { [RECOVERY_SNAPSHOT_ID_KEY]: snapshotId } : {}),
+              [RECOVERY_STAGING_ID_KEY]: row.id,
               recovered_at: Date.now() / 1000,
               [RECOVERY_QUERIES_KEY]: queries,
               // The row's own boundaries: a hit on it is a bounded preview

@@ -12,7 +12,8 @@ import { DatabaseSync, type DatabaseSync as DatabaseType } from 'node:sqlite'
 import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
 import { Persistence } from '../../src/persistence/store.js'
 import { writeSnapshot, claimSnapshot } from '../../src/hooks/shared.js'
-import { hasRegistry, registerSelf } from '../../src/persistence/session-registry.js'
+import { hasRegistry, registerSelf, registerSubagent } from '../../src/persistence/session-registry.js'
+import { registerWorkerLeg } from '../../src/persistence/leg-registry.js'
 
 /** A session's self as the session-start hook registers it: in the main
  *  checkout (`worktree` null) or a linked worktree of that name. */
@@ -120,6 +121,36 @@ describe('Snapshots', () => {
     place(db, 'main-1')
     writeSnapshot(dbPath, 'main-1', ['main'])
     expect(claimSnapshot(db, 'unplaced')).toBeNull()
+    expect(unclaimedCount()).toBe(1)
+  })
+
+  // U4-F3: only a session's self registration places its snapshot. A
+  // subagent's row and a worker's are no self; the join on the self row
+  // (`agent_id = ''`) is what keeps them out of a self's claim.
+  it('a subagent registration of another checkout\'s session never places that session\'s snapshot in the claimant\'s lane', () => {
+    place(db, 'wt-1', 'subproject')
+    // The worktree session's subagent, registered from the main checkout.
+    registerSubagent(db, 'wt-1', 'a1', 'tester', { worktree: null, branch: 'main', cwd: '/repo', toplevel: null, commonDir: null }, Date.now() / 1000)
+    place(db, 'main-2')
+    const wtId = writeSnapshot(dbPath, 'wt-1', ['subproject'])
+    expect(claimSnapshot(db, 'main-2')).toBeNull()
+    expect(unclaimedCount()).toBe(1)
+    place(db, 'wt-2', 'subproject')
+    expect(claimSnapshot(db, 'wt-2')).toMatchObject({ id: wtId, originalSessionId: 'wt-1' })
+  })
+
+  it('a worker\'s snapshot (a `claude -p` child\'s PreCompact) is claimed by no self', () => {
+    place(db, 'main-1')
+    // A ticket worker of main, registered in the main checkout.
+    registerWorkerLeg(db, {
+      sessionId: 'worker-1',
+      ticket: { parent: { id: 'main-1', cli: null, cwd: null, worktree: null, branch: null }, run: 'r1', key: 'k1', role: 'builder' },
+      door: 'ticket', where: { worktree: null, branch: 'main', cwd: '/repo' },
+      process: { pid: null, start: null, host: 'test' }, at: Date.now() / 1000,
+    })
+    writeSnapshot(dbPath, 'worker-1', ['worker'])
+    place(db, 'main-2')
+    expect(claimSnapshot(db, 'main-2')).toBeNull()
     expect(unclaimedCount()).toBe(1)
   })
 

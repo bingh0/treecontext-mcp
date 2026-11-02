@@ -7,6 +7,7 @@
  * so both import this leaf module instead.
  */
 import { isIdentityRow, RUN_DEDUP_CLASS } from './run-kinds.js'
+import { recoveryIdentityOf } from './persistence/recovery-snapshot.js'
 
 /** Sentinel session key for rows with no resolvable session identity.
  *  Deliberately not NULL: dedup windows, retention grouping, and the
@@ -58,7 +59,11 @@ export function dedupClassOf(
   // identified by their place in the run, never by their text: two legs
   // that write the same state write two checkpoints, numbered apart.
   // D303: a refused ticket's row is a fault at its moment, never deduped.
-  return isIdentityRow(meta) ? RUN_DEDUP_CLASS : 'curated'
+  // D375: a recovery row is the answer to one claim, identified by the
+  // snapshot and the claiming session, never by its text, so a second
+  // lane's recovery that reads like the first's is still written in its
+  // own claiming session (FlatStore.recoveryHolder is its identity dedup).
+  return isIdentityRow(meta) || recoveryIdentityOf(meta) !== null ? RUN_DEDUP_CLASS : 'curated'
 }
 
 /** The dedup class as the shipped ladder rungs 021–023 computed it,

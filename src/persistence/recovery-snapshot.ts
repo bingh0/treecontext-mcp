@@ -20,7 +20,11 @@
  *    RECOVERY_QUOTE_CAP, named by its entry id so the quote is followable;
  *  - the query text lives in metadata, never in the indexed content;
  *  - the row carries its own display and index boundaries, so a hit on
- *    it is bounded exactly like a tool event's.
+ *    it is bounded exactly like a tool event's;
+ *  - the row is identified by the snapshot it answers and the session
+ *    that claimed it, never by its text (D375): two lanes, or two claims
+ *    of one lane, whose recoveries read alike each keep their own row in
+ *    the claiming session.
  */
 import { INDEX_CAP_TOOL_DEFAULT } from './capture-constants.js'
 import { EXPLICIT_INDEX_LEN_KEY, EXPLICIT_PREVIEW_LEN_KEY } from './index-text.js'
@@ -38,8 +42,32 @@ export const RECOVERY_INDEX_LEN = INDEX_CAP_TOOL_DEFAULT
 /** Hits asked for per recovery query. */
 export const RECOVERY_HITS_PER_QUERY = 3
 
+/** `metadata.snapshot_id`: the claimed snapshot the row answers (D375). */
+export const RECOVERY_SNAPSHOT_ID_KEY = 'snapshot_id'
+/** `metadata.staging_id`: the staged row it was drained from, the
+ *  identity of a row staged before the claim carried its snapshot's id. */
+export const RECOVERY_STAGING_ID_KEY = 'staging_id'
+
 export function isRecoverySnapshot(meta: Record<string, unknown> | null | undefined): boolean {
   return meta?.['source'] === RECOVERY_SNAPSHOT_SOURCE
+}
+
+/** A recovery row's identity (D375): the snapshot it answers, or failing
+ *  that the staged row it was drained from, and the claiming session.
+ *  Null for a recovery row that carries neither (written by a release
+ *  before this one, or by a library caller), which keeps the curated
+ *  class it always had. */
+export function recoveryIdentityOf(
+  meta: Record<string, unknown> | null | undefined,
+): { by: typeof RECOVERY_SNAPSHOT_ID_KEY | typeof RECOVERY_STAGING_ID_KEY; id: number; session: string } | null {
+  if (!isRecoverySnapshot(meta)) return null
+  const session = meta!['session_id']
+  if (typeof session !== 'string' || session === '') return null
+  for (const by of [RECOVERY_SNAPSHOT_ID_KEY, RECOVERY_STAGING_ID_KEY] as const) {
+    const id = meta![by]
+    if (typeof id === 'number' && Number.isInteger(id)) return { by, id, session }
+  }
+  return null
 }
 
 export interface RecoveryHit {
