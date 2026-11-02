@@ -5,7 +5,10 @@ Feature: Orchestration inside one store — lanes that stay their own
   machine. Nothing is edited in place. Any writer may append into any
   lane so long as the row names its writer and what it refers to; nothing
   outside the writer's own lane is modified; a cross-lane reference is a
-  pointer the owning lane sees, never a flag flip.
+  pointer the owning lane sees, never a flag flip, save one door: a client
+  the server cannot place may retire a chapter written before the store
+  recorded writers, recorded, where no session has run in the main
+  checkout.
   Self is recovered from where a session runs, not from its process, so a
   stopped worktree, or the main checkout beside one, resumes its own
   thread; the main checkout is a lane like any worktree, and a lane is
@@ -15,9 +18,10 @@ Feature: Orchestration inside one store — lanes that stay their own
 
   Rulings D147, D148, D150, D167, D169, D186, D190 of the hackathon
   interview, 2026-10-05 to 2026-10-07; D263 of 2026-10-10; D372 to D376
-  of 2026-11-02 (the main checkout's own lane: status, the fresh start,
-  the search scope read from the registry, the recovery snapshot's lane,
-  the unknown writer). Group orientation (D168) is
+  and D378 of 2026-11-02 (the main checkout's own lane: status, the fresh
+  start, the search scope read from the registry, the recovery snapshot's
+  lane, the unknown writer, the chapter from before writers were
+  recorded). Group orientation (D168) is
   deferred with groups configuration (D209) and carries no scenario yet.
 
   @D147
@@ -218,6 +222,7 @@ Feature: Orchestration inside one store — lanes that stay their own
     When the main checkout's session calls status asking for every lane
     Then the developer sees the newer chapter as the one live pointer labeled "writer unknown", the first superseded
     And the main checkout's own chapter summary is still live
+    And neither chapter carries a retirement across the pre-stamp boundary
 
   @D376
   Scenario: rows from before the store recorded writers stay the main lane's
@@ -225,6 +230,44 @@ Feature: Orchestration inside one store — lanes that stay their own
     When the main checkout's session calls status and searches "first release"
     Then the chapter is listed and found as the main lane's own
     And a session in the worktree "subproject" sees it counted among other lanes, never as its own
+
+  @D378
+  Scenario: a client without hooks retires its chapter from before the upgrade, and the retirement says who, what, when and how
+    Given a store whose chapter summary "plan: the first release" was written before the store recorded writers, where no session has registered in the main checkout since
+    And a client the server cannot place, after the store recorded writers, that claims the role "tester"
+    When that client writes the chapter summary "plan: the second release" superseding "plan: the first release"
+    Then the reply lists "plan: the first release" as retired across the pre-stamp boundary, apart from the lane's own supersessions
+    And "plan: the first release" is retired, its record naming who as "writer unknown" with the stamp source and the retiring session and never the role it claims, what as the retiring entry, when as the moment, and how as "pre-stamp"
+    And "plan: the second release" lists "plan: the first release" as retired across the boundary
+    And that client calling status sees "plan: the second release" as a live pointer labeled "writer unknown" and no pointer of "plan: the first release" in any lane
+    And exporting "plan: the first release" by id and reading the main lane's writer trail both show the record
+
+  @D378
+  Scenario: the boundary opens to no pointer that names a writer, whose session the registry holds, or that was imported
+    Given the worktree "subproject"'s own live chapter summary, where no session has registered in the main checkout
+    And a chapter summary written through the library with no writer stamp in the worktree "subproject"'s session
+    And a chapter summary from before the store recorded writers that claims the role "tester"
+    And a chapter summary imported from a teammate's handoff file
+    And a client the server cannot place, after the store recorded writers, whose metadata carries a retirement record of its own making
+    When that client writes a chapter summary superseding all four
+    Then each of the four is as it was, the reply listing each as referenced, written by another writer, and none as retired across the boundary
+    And no entry in the store carries a retirement across the pre-stamp boundary
+
+  @D378
+  Scenario: the boundary opens for the writer-unknown lane alone
+    Given a store whose chapter summary "plan: the first release" was written before the store recorded writers, where no session has registered in the main checkout since
+    When a session in the worktree "subproject" writes a chapter summary superseding it
+    Then "plan: the first release" stays live, the reply listing it as referenced, written by another writer
+    When the main checkout's session writes a chapter summary superseding it
+    Then "plan: the first release" is retired as the main lane's own, carrying the ordinary trace and no record of a retirement across the boundary
+
+  @D378
+  Scenario: once a session has run in the main checkout, a client without hooks cannot retire the main checkout's chapter from before the upgrade
+    Given a store whose chapter summary "plan: the first release" was written before the store recorded writers
+    And a client the server cannot place, after the store recorded writers
+    When that client writes a chapter summary superseding "plan: the first release"
+    Then "plan: the first release" stays live and unchanged, the reply listing it as referenced, written by another writer, and no entry carries a retirement across the boundary
+    And the main checkout's next fresh start opens on "plan: the first release" as its own chapter
 
   @D190
   Scenario: the session-start hook registers self and the server stamps rows from it

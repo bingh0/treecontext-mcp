@@ -181,6 +181,13 @@ runFeatures(join(HERE, '../../features'), {
         'two hundred helpers do not displace the main checkout\'s own thread',
         'a fresh start adopts a recovery snapshot only from its own lane',
         'rows from before the store recorded writers stay the main lane\'s',
+        // D378 (2026-11-02): the pre-stamp door, unbound until its unit.
+        // The @D376 scenario gained one Then (D378); its new step is unbound.
+        'an unplaced writer\'s chapters still supersede one another',
+        'a client without hooks retires its chapter from before the upgrade, and the retirement says who, what, when and how',
+        'the boundary opens to no pointer that names a writer, whose session the registry holds, or that was imported',
+        'the boundary opens for the writer-unknown lane alone',
+        'once a session has run in the main checkout, a client without hooks cannot retire the main checkout\'s chapter from before the upgrade',
       ],
     },
     // The driver switch, D278 (2026-10-11): three @D51 install scenarios

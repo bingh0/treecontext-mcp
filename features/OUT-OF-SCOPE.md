@@ -455,6 +455,10 @@ re-decided, and the previous text is in git history.
   other lanes' chapters in the packet. (D373, 2026-11-02)
 - Lane derivation: a self stamped on captured rows at the drain; a stamp
   on first open rewriting stored rows. (D376, 2026-11-02)
+- Orphaned pre-stamp chapters: doctor listing them for a human to
+  retire; disclosure only; any writer retiring one; the door open where
+  main has registered; bookmarks through the door; a packet line telling
+  main its chapter was retired. (D378, 2026-11-02)
 - Lane model: cross-lane supersession that retires the target; a
   top-down model where the main lane owns its derivatives. (D169,
   2026-10-07)
