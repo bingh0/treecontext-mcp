@@ -450,6 +450,24 @@ ratification. [ruled: D253] The constraints the build must not cross:
   the payload's text being only its closing words; a pinned payload
   shape below the feature layer, no scenario's words changed. [ruled:
   D371]
+  Amended 2026-11-02: the main checkout is a lane like any worktree.
+  Status is scoped to the session's own lane for both, the block
+  counting other lanes and naming at most three with kind and age, never
+  text; a main checkout's fresh start opens on the main lane's own
+  chapter (or bookmark) the way a worktree's does, the other lanes
+  counted and named, outside the budget. The default search is the
+  session's own lane, read from the registry at the search: the sessions
+  that ran in that checkout, each helper's report by its parent link,
+  the lane's imports, never a helper's trail; the export trail reads the
+  lane the same way; a caller that cannot be told apart still searches
+  the whole store (D240), and a worker of the ticket door searches as
+  its harness feeds it. After a restart the lane's own chapter is found
+  by the orientation search and never contradicted; first place is not
+  promised. A recovery snapshot is claimed only from the own lane and its
+  row written in the claiming session. A row stamped `unregistered` is
+  "writer unknown", its own lane for supersession, never main's; a row
+  with no stamp at all stays main's. Nothing new is stamped and nothing
+  stored is rewritten. [ruled: D372, D373, D374, D375, D376, D377]
 - **Deferred, after the betas**: nothing of the beta.2 set remains
   unbuilt (references, the file-bound handoff, doctor per client, self
   registration and the subagent set all landed on 2026-10-08); what

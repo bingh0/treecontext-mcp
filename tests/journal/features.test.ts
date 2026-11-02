@@ -163,6 +163,32 @@ runFeatures(join(HERE, '../../features'), {
       feature: 'journal-workers',
       scenarios: [
         'a <worker> worker under a <parent> parent writes into its own lane with its role as writer',
+        // D374, D372 (2026-11-02): bound in the main-lane build.
+        'a worker of the ticket door searches the whole store and sees every lane',
+      ],
+    },
+    // The main checkout's own lane (D372-D376, 2026-11-02): scenarios added by
+    // the charter commit, unbound until the main-lane build binds them
+    // (bound in the main-lane build). Scenario-scoped, so the rest of each
+    // file keeps gating; the @D167 Then keeps its words and its binding.
+    {
+      feature: 'journal-orchestration',
+      scenarios: [
+        'a worktree\'s status lists its own lane\'s pointers and says what else exists',
+        'the main checkout\'s status is scoped to the main lane the same way',
+        'asking for every lane lists them flat, each pointer naming its lane',
+        'the other lanes are counted and at most three named with <lanes> other lanes',
+        'a restarted main checkout opens on its own thread and is told what else exists',
+        'a main checkout with only a bookmark is handed the bookmark, never a worktree\'s chapter',
+        'a main checkout alone in its store opens on its own thread and names no other lane',
+        'the orientation search is scoped to the session\'s own lane',
+        'a lane\'s search finds its helpers\' reports and its imports, never a helper\'s trail',
+        'a worktree\'s conversation from an earlier release is the worktree\'s own',
+        'two hundred helpers do not displace the main checkout\'s own thread',
+        'a fresh start adopts a recovery snapshot only from its own lane',
+        'a chapter whose writer could not be identified is set apart as writer unknown in every lane',
+        'an unplaced writer\'s chapters still supersede one another',
+        'rows from before the store recorded writers stay the main lane\'s',
       ],
     },
     // The driver switch, D278 (2026-10-11): three @D51 install scenarios

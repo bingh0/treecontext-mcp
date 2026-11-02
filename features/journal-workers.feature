@@ -13,7 +13,7 @@ Feature: Workers — a headless worker on any CLI, through the ticket door
 
   Rulings D288, D291, D292, D293, D294, D295, D297, D298, D303, D307,
   D313, D315, D316, D317, D329, D332, D335, D340, D341, D342 of the beta.3 interview, 2026-10-30 to
-  2026-10-31. The leg contract the worker fulfils is journal-legs; the
+  2026-10-31; D372 and D374 of 2026-11-02 (a worker's status and search). The leg contract the worker fulfils is journal-legs; the
   run it belongs to is journal-runs. A worker here is bound through a
   stand-in headless process launched through the real door; what the
   model inside a real worker chooses to do is out of reach, so every
@@ -359,3 +359,11 @@ Feature: Workers — a headless worker on any CLI, through the ticket door
     When the harness looks up the run "r1"
     Then the harness sees the first worker under the run "r1" as having ended with no valid instructions
     And the second worker appears under no run, and a reader grouping workers by declared parent finds it under "p1" with its raw ticket text
+
+  @D374 @D372
+  Scenario: a worker of the ticket door searches the whole store and sees every lane
+    Given a spawner in the main checkout holding its live chapter summary, and a worktree "subproject" holding its own
+    And a worker the spawner launched through the ticket door with its brief and key
+    When the worker searches through its tools and calls status
+    Then its search covers the whole store, the reply saying a worker searches as its harness feeds it
+    And its status lists both chapters flat, the block naming it a worker, never calling it unplaced

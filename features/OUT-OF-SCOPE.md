@@ -118,7 +118,11 @@ re-decided, and the previous text is in git history.
   Claude Code's idle-compaction key off when absent and the client is
   known to honor it, says so, never touches a user-set key; doctor
   reports it; the compaction interaction itself stays with ccr, the one
-  declined promise this entry still fences.
+  declined promise this entry still fences. Amended 2026-11-02 (D375):
+  the session-start claim is in the charter, a fresh session claiming a
+  recovery snapshot only from its own lane and the recovery row written
+  in the claiming session; the pre-compact snapshot and the compaction
+  interaction stay with ccr.
 - **`treecontext_feedback`** — dropped from the tool surface: on the
   lexical backend it was an honest no-op that still promised an effect,
   wiring it into ranking is the loop the reference-frequency entry
@@ -353,6 +357,18 @@ re-decided, and the previous text is in git history.
   date of the documentation checked; a row never claims a test it does
   not have, and capture is promised only where verified live, Claude
   Code alone today. (D153, 2026-10-05)
+- Declined alternative, The main checkout's status unscoped, its own pointers labelled and
+  other lanes' chapters listed beside them — the main checkout is a lane
+  like any worktree: scoped to its own by default, aware of the others by
+  count and name, widened on request. (D372, 2026-11-02)
+- Declined alternative, Other lanes' chapter text in a fresh start's packet or status —
+  awareness is a count, at most three lane names and where to look;
+  content is fetched deliberately. (D373, 2026-11-02)
+- Declined alternative, An orientation search left store-wide with a label on each other
+  lane's hit, scoped by writer stamp, or promised to rank the lane's own
+  chapter first — the search is scoped to the session's own lane, read
+  from the registry; the chapter is found and never contradicted;
+  `scope: "all"` widens. (D374, 2026-11-02)
 - Declined alternative, Re-orienting from the project's newest chapter regardless of who
   wrote it — a fresh start anchors on self, recovered from where the
   session runs; a stranger's thread is the confusion self removes.
@@ -435,6 +451,10 @@ re-decided, and the previous text is in git history.
   status entirely. (D166, 2026-10-07)
 - Fresh start: the newest from a session in the same directory with no
   notion of self; nothing automatic on a fresh start. (D167, 2026-10-07)
+- Main checkout fresh start: its own line only beside another lane; the
+  other lanes' chapters in the packet. (D373, 2026-11-02)
+- Lane derivation: a self stamped on captured rows at the drain; a stamp
+  on first open rewriting stored rows. (D376, 2026-11-02)
 - Lane model: cross-lane supersession that retires the target; a
   top-down model where the main lane owns its derivatives. (D169,
   2026-10-07)
