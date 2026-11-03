@@ -208,3 +208,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run lint:fast
+      # The repository is public: the release scan (private identifiers,
+      # secret shapes) runs on every push, not only at pack:beta, where it
+      # found weeks of committed papers naming a user and a machine three
+      # times (the last needed a history rewrite, 2026-11-03).
+      - run: npm run release-scan
