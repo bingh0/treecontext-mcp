@@ -24,7 +24,8 @@ import { maxSupportedVersion } from '../persistence/migrations/index.js'
 import { hasLegColumns } from '../persistence/leg-registry.js'
 import { resolveHookNamespace } from '../session-beacon.js'
 import { nsLeaseLiveFor } from '../persistence/leases.js'
-import { hookBudgetLeftMs } from './shared.js'
+import { hookDeadlineLeft } from './shared.js'
+import { narrowHookDeadline, busySliceUntil, hookDeadlineOf } from './hook-deadline.js'
 
 /** The hooks door's journal, or why the hook may not write one. */
 export type HookStore =
@@ -39,7 +40,9 @@ export type HookStore =
   | { refused: string }
 
 /** (`since`: when the hook's budget began; the hooks pass HOOK_STARTED_AT,
- *  so the opens here wait what is left of it, never a fresh budget.)
+ *  so the opens here, and the door's writes after them, wait what is left
+ *  of it by the clock, never a fresh budget. `db` is the hook handle
+ *  openHookDb returned.)
  *
  *  A FlatStore over a hook's connection, or the reason the store is not
  *  the door's to write: a store below the leg columns has no legs (null,
@@ -60,11 +63,20 @@ export async function hookStoreOn(
     namespace = resolveHookNamespace(dbPath, process.ppid, sessionId ?? undefined,
       (a) => nsLeaseLiveFor(db, a.namespace, a.server_pid, hostname()))
   } catch { /* unresolved: the default */ }
+  // From here every wait on this connection (the wrapper's pragmas, the
+  // journal's open, and the door's writes after it) ends at what is left
+  // of the hook's budget from `since`, by the clock, never a fresh one:
+  // the hook handle's deadline is brought forward to it. Each door call
+  // the hooks make through the store (startHooksLeg, recordWorkerSendBack,
+  // retireHooksLeg, openRunOfLeg, startWorker) is one immediate
+  // transaction, whose wait is its BEGIN; the registry helpers' autocommit
+  // statements are each retried alone (hook-deadline.ts), so a retry never
+  // writes a committed row twice.
+  narrowHookDeadline(db, hookDeadlineLeft(since))
   try {
     const store = await FlatStore.open({
-      // The wrapper's pragmas and the journal's open wait what is left of
-      // the hook's budget, not the wrapper's 10 s default.
-      database: openNodeSqlite(db, { timeoutMs: hookBudgetLeftMs(since) }),
+      // The wrapper's pragmas run at a slice, not the wrapper's 10 s default.
+      database: openNodeSqlite(db, { timeoutMs: busySliceUntil(hookDeadlineOf(db) ?? hookDeadlineLeft(since)) }),
       ownsDatabase: false,
       migrate: false,
       retentionInterval: Number.MAX_SAFE_INTEGER,
@@ -76,7 +88,6 @@ export async function hookStoreOn(
     setPragma(db, 'synchronous = FULL')
     setPragma(db, 'mmap_size = 0')
     setPragma(db, 'temp_store = DEFAULT')
-    setPragma(db, `busy_timeout = ${hookBudgetLeftMs(since)}`)
   }
 }
 

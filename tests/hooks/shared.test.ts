@@ -127,7 +127,7 @@ describe('openHookDb readonly', () => {
 // A hook that fires before any server has run must not lose its event.
 // The opener applies the ONE definition of fresh and the full ladder —
 // and touches nothing that already has a version or data.
-import { HOOK_DB_TIMEOUT_MS as HOOK_BUDGET, HOOK_BOOTSTRAP_TIMEOUT_MS } from '../../src/hooks/shared.js'
+import { HOOK_DB_TIMEOUT_MS as HOOK_BUDGET, HOOK_BOOTSTRAP_TIMEOUT_MS, hookDeadlineOf, HOOK_BUSY_SLICE_MS } from '../../src/hooks/shared.js'
 import { statSync, writeFileSync as writeFile3 } from 'node:fs'
 import { maxSupportedVersion } from '../../src/persistence/migrations/index.js'
 import { ensureBaseSchema } from '../../src/persistence/migrations.js'
@@ -253,7 +253,10 @@ describe('openHookDb bootstraps a fresh store', () => {
         const waited = Date.now() - t0
         expect(waited).toBeGreaterThanOrEqual(HOOK_BOOTSTRAP_TIMEOUT_MS - 50)
         expect(waited).toBeLessThan(HOOK_BOOTSTRAP_TIMEOUT_MS + 2000)
-        const left = pragmaValue(db, 'busy_timeout') as number
+        // What is left is the connection's deadline, by the clock (the
+        // ruling of 2026-11-03); SQLite itself is only handed a slice.
+        const left = hookDeadlineOf(db)! - Date.now()
+        expect(pragmaValue(db, 'busy_timeout') as number).toBeLessThanOrEqual(HOOK_BUSY_SLICE_MS)
         expect(left).toBeLessThanOrEqual(HOOK_BUDGET - HOOK_BOOTSTRAP_TIMEOUT_MS + 50)
         expect(left).toBeGreaterThan(HOOK_BUDGET - HOOK_BOOTSTRAP_TIMEOUT_MS - 2000)
         expect(db.isTransaction).toBe(false)
@@ -382,8 +385,10 @@ describe('openHookDb bootstraps a fresh store', () => {
       const db = openHookDb(path)
       try {
         // The write's budget is what the bootstrap left of the hook's —
-        // never the wrapper's 10s, never a fresh budget on top.
-        const left = pragmaValue(db, 'busy_timeout') as number
+        // never the wrapper's 10s, never a fresh budget on top. It is the
+        // connection's deadline, by the clock; SQLite waits in slices.
+        const left = hookDeadlineOf(db)! - Date.now()
+        expect(pragmaValue(db, 'busy_timeout') as number).toBeLessThanOrEqual(HOOK_BUSY_SLICE_MS)
         expect(left).toBeLessThanOrEqual(HOOK_BUDGET)
         expect(left).toBeGreaterThan(HOOK_BUDGET - HOOK_BOOTSTRAP_TIMEOUT_MS)
         // And the wrapper's pragma set is gone: FULL sync, no mmap, no

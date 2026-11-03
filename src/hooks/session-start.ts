@@ -23,10 +23,12 @@ export const UNKNOWN_PREDECESSOR =
   + '(treecontext_query "chapter summary" or status for the live pointers) rather than assuming none exist.\n'
   + CHAPTER_HOWTO
 
-/** The busy budget for the /clear packet's reads. The developer's next
- *  prompt waits on this hook, so a store held by another process costs at
- *  most this long before the packet says what it could not read (D175) —
- *  well inside every platform's hook budget. */
+/** The budget for the /clear packet's reads, by the clock from the open,
+ *  for the open and every read and write on that connection after it (the
+ *  registration, the chain, the packet). The developer's next prompt waits
+ *  on this hook, so a store held by another process costs at most this
+ *  long, and one slice's overrun, before the packet says what it could not
+ *  read (D175) — well inside every platform's hook budget. */
 export const CLEAR_READ_TIMEOUT_MS = 1500
 
 function isLocked(err: unknown): boolean {

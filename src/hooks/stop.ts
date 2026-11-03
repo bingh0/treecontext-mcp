@@ -26,7 +26,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { DatabaseSync } from 'node:sqlite'
-import { resolveDbPath, writeStaging, parseHookInput, isDirectInvocation, openHookDb, STOP_GUARD_TIMEOUT_MS, storeRefusesWrites, blockOutput, HOOK_STARTED_AT } from './shared.js'
+import { resolveDbPath, writeStaging, parseHookInput, isDirectInvocation, openHookDb, STOP_GUARD_TIMEOUT_MS, storeRefusesWrites, blockOutput, HOOK_STARTED_AT, hookDeadlineLeft } from './shared.js'
 import { STORE_SAFETY_CAP, activeIndexCap } from '../persistence/capture-constants.js'
 import { dbg } from '../debug.js'
 import { checkpointDue, bookmarkRequest, markBookmarkAsked, hookNowSec, type CheckpointDue } from '../checkpoints.js'
@@ -56,11 +56,12 @@ export function isStaleRecapture(dbPath: string, sessionId: string | undefined, 
   if (!sessionId) return false
   let db: DatabaseSync | null = null
   try {
-    // Through the one opener, at the GUARD budget: this hook opens the
-    // store twice (this guard, then writeStaging's write), and the
-    // two busy budgets sum against the platform's 10s kill — the full
-    // write budget here made the worst case 16s, converting a duplicate-capture
-    // risk into total capture loss (pass-2 review 2026-08-15).
+    // Through the one opener, at the GUARD budget (1 s by the clock from
+    // here): this hook opens the store twice (this guard, then
+    // writeStaging's write), and the two budgets sum against the
+    // platform's kill — the full write budget here made the worst case
+    // 16s, converting a duplicate-capture risk into total capture loss
+    // (pass-2 review 2026-08-15).
     db = openHookDb(dbPath, { readonly: true, timeoutMs: STOP_GUARD_TIMEOUT_MS })
     return staleOn(db, sessionId, text)
   } catch {
@@ -94,10 +95,11 @@ function guardRead(
   let db: DatabaseSync | null = null
   try {
     db = openHookDb(dbPath, { readonly: true, timeoutMs: STOP_GUARD_TIMEOUT_MS })
-    // One busy wait for the whole guard: a store another process holds
-    // answers this probe after the guard's budget, and then no further
-    // read is tried (each would wait the budget again: the guard's reads
-    // must never stack past the platform's kill with the write behind).
+    // One wait for the whole guard: the connection's deadline is the
+    // guard's 1 s from its open, by the clock, shared by every read on it,
+    // so a store another process holds answers this probe at the deadline
+    // and every read after it one short try (the guard's reads never
+    // stack past the platform's kill with the write behind).
     db.prepare('SELECT 1 FROM sqlite_master LIMIT 1').get()
     const stale = text !== null && staleOn(db, sessionId, text)
     // A worker's stop (D295) is read on the same guard connection, so a
@@ -340,7 +342,9 @@ async function workerStop(input: Record<string, unknown>, dbPath: string, sessio
   if (!verdict.sendBack) return
   let db: DatabaseSync | null = null
   try {
-    db = openHookDb(dbPath)
+    // A second write open behind the guard and the staging write: it waits
+    // what is left of the hook's budget by the clock, never a fresh one.
+    db = openHookDb(dbPath, { deadlineAt: hookDeadlineLeft(HOOK_STARTED_AT) })
     const opened = await hookStoreOn(db, dbPath, sessionId, HOOK_STARTED_AT)
     if (!opened || 'refused' in opened) {
       if (opened) recordHookGap(dbPath, { hook: 'stop', sessionId, at: Date.now() / 1000, error: opened.refused, lost: 'The worker was owed its one send-back and was not sent back here; its wrapper may send it back at its exit.' })

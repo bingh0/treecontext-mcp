@@ -15,6 +15,9 @@ import { ensureBaseSchema, runMigrations } from '../persistence/migrations.js'
 import { maxSupportedVersion } from '../persistence/migrations/index.js'
 import { hostname } from 'node:os'
 import { dbg, enableDebug } from '../debug.js'
+import { hookHandle, withHookDeadline, busySliceUntil, hookDeadlineOf, HOOK_BUSY_SLICE_MS } from './hook-deadline.js'
+
+export { withHookDeadline, hookHandle, hookDeadlineOf, narrowHookDeadline, busySliceUntil, isHookBusy, HOOK_BUSY_SLICE_MS } from './hook-deadline.js'
 
 // Auto-enable debug in hook subprocesses when the env var is set.
 if (process.env.TREECONTEXT_DEBUG === '1') enableDebug()
@@ -34,17 +37,20 @@ armStormProofStdio()
 
 // ── Layer 2 primitives (journaling hooks) ──────────────────────────
 
-/** Busy timeout for every hook-owned store connection. Must stay strictly
- *  below the smallest platform hook kill budget — VS Code registers every
- *  hook with timeoutSec: 15 (installer.ts; Claude Code's own default is
- *  60 s) — because SQLite's busy wait blocks the event loop: a hook killed
- *  mid-wait loses its failure diagnostic and its close(). The bar is wall
- *  time, not the constant: the rule is the kill minus a second to fail
- *  gracefully (14 s), the same on every OS, and the real hooks against a
- *  store another process holds whole are held to it by
- *  tests/hooks/hook-budget-locked.test.ts. Locally Stop measures 8.1 s
- *  (guard 1 s + write 7 s + start); the macOS CI runner's cold start put
- *  it at 11.2 s, which the 10 s kill this replaced would have cut. */
+/** A hook's write budget on the store: how long, by the clock, one write
+ *  connection's waits may last from its open (a single-open hook's whole
+ *  wait). Must stay strictly below the smallest platform hook kill budget
+ *  — VS Code registers every hook with timeoutSec: 15 (installer.ts;
+ *  Claude Code's own default is 60 s) — because a busy wait blocks the
+ *  event loop: a hook killed mid-wait loses its failure diagnostic and its
+ *  close(). Wall time, on every OS (2026-11-03): SQLite is only ever handed
+ *  a slice of it (HOOK_BUSY_SLICE_MS, hook-deadline.ts), because its busy
+ *  handler counts the sleeps it asked for, not the time that passed, and a
+ *  loaded macOS runner's oversleeps ran this 7 s to 13.6 s (CI run
+ *  41670918705). The bar is the kill minus a second to fail gracefully
+ *  (14 s), the same on every OS, and the real hooks against a store
+ *  another process holds whole are held to it by
+ *  tests/hooks/hook-budget-locked.test.ts. */
 export const HOOK_DB_TIMEOUT_MS = 7000
 
 /** When this hook process started, to the millisecond that matters: shared.ts
@@ -54,15 +60,23 @@ export const HOOK_STARTED_AT = Date.now()
 
 /** What is left of a hook's write budget, `since` the moment it counts
  *  from (the hook's start by default), never below 100 ms. A second open
- *  inside the hook (the wrapper's pragmas, the journal's open) gets this,
- *  not a fresh budget on top of the first. */
+ *  inside the hook (the wrapper's pragmas, the journal's open, a staging
+ *  write after the door's) gets this, not a fresh budget on top of the
+ *  first. */
 export function hookBudgetLeftMs(since: number = HOOK_STARTED_AT): number {
   return Math.max(HOOK_DB_TIMEOUT_MS - (Date.now() - since), 100)
 }
 
-/** The busy budget for the Stop hook's PRE-WRITE guard read. The Stop
- *  hook is the one hook that opens the store twice (guard, then write),
- *  and its budgets SUM against the platform's 10s kill: giving the
+/** The absolute moment a second phase's waits end: what is left of the
+ *  hook's budget (hookBudgetLeftMs), from now. */
+export function hookDeadlineLeft(since: number = HOOK_STARTED_AT): number {
+  return Date.now() + hookBudgetLeftMs(since)
+}
+
+/** The wall-clock budget of the Stop-shaped hooks' PRE-WRITE guard read,
+ *  counted from when the guard begins. The Stop hook is the one hook that
+ *  opens the store twice (guard, then write),
+ *  and its budgets SUM against the platform's kill: giving the
  *  guard the full write budget put the worst case at 16s and turned a
  *  duplicate-capture risk into total capture loss (pass-2 review
  *  2026-08-15). 1s is plenty for a WAL read (readers rarely block at
@@ -72,18 +86,25 @@ export function hookBudgetLeftMs(since: number = HOOK_STARTED_AT): number {
  *  tests/hooks/hook-budget-locked.test.ts. */
 export const STOP_GUARD_TIMEOUT_MS = 1000
 
-/** The one place hook code opens the store: shared timeout + WAL. Every
- *  hook and adapter must open through here so a timeout tuning cannot
- *  miss a site again — including read-only opens: stop.ts kept a raw
+/** The one place hook code opens the store: a hook handle (hook-deadline.ts)
+ *  whose every wait ends at its deadline by the clock, waiting in slices of
+ *  HOOK_BUSY_SLICE_MS, plus WAL. Every hook and adapter must open through
+ *  here so a budget change cannot miss a site again — including read-only
+ *  opens: stop.ts kept a raw
  *  2s open and its stale-recapture guard silently disarmed on exactly
  *  the busy stores the 8s budget was shipped for (release-diff review
  *  2026-08-15). journal_mode is skipped for readonly opens (the pragma
  *  is a write when it changes the mode; WAL is already the store's
- *  recorded mode). `timeoutMs` exists for callers whose budgets STACK
- *  (the Stop hook's guard+write pair) — a single-open hook never
- *  passes it. */
-export function openHookDb(dbPath: string, opts?: { readonly?: boolean; timeoutMs?: number }): DatabaseType {
-  const timeoutMs = opts?.timeoutMs ?? HOOK_DB_TIMEOUT_MS
+ *  recorded mode).
+ *
+ *  The deadline is one for the whole connection, its open and every
+ *  statement after it, never a budget per statement: `HOOK_DB_TIMEOUT_MS`
+ *  from the open by default; `timeoutMs` for callers with a budget of their
+ *  own counted from the open (the Stop-shaped guard's 1 s, the /clear
+ *  read's 1.5 s); `deadlineAt` for a second write open inside a hook, which
+ *  waits what is left (hookDeadlineLeft), never a fresh budget. */
+export function openHookDb(dbPath: string, opts?: { readonly?: boolean; timeoutMs?: number; deadlineAt?: number }): DatabaseType {
+  const deadlineAt = opts?.deadlineAt ?? Date.now() + (opts?.timeoutMs ?? HOOK_DB_TIMEOUT_MS)
   const readonly = opts?.readonly ?? false
   if (!readonly) {
     // The directory too (release review 2026-09-02, finding 1): the first
@@ -98,20 +119,31 @@ export function openHookDb(dbPath: string, opts?: { readonly?: boolean; timeoutM
       fs.mkdirSync(dirname(dbPath), { recursive: true, mode: 0o700 })
     } catch { /* the open reports it */ }
   }
-  const db = openRaw(dbPath, { timeoutMs, readOnly: readonly })
-  if (!readonly) {
-    setPragma(db, 'journal_mode = WAL')
-    // FULL on purpose (D278): a hook is a short-lived writer of one event
-    // and its row must be on disk when the process exits. node:sqlite's
-    // default happens to be FULL; pinned here so the hooks never inherit
-    // a driver default they did not choose.
-    setPragma(db, 'synchronous = FULL')
-    bootstrapFreshStore(db, dbPath, timeoutMs)
+  // SQLite is handed a slice, never the budget; the handle's loop counts
+  // the budget by the clock. The pragmas below (journal_mode = WAL can be
+  // busy) run through the same loop.
+  const raw = openRaw(dbPath, { timeoutMs: HOOK_BUSY_SLICE_MS, readOnly: readonly })
+  const db = hookHandle(raw, deadlineAt)
+  try {
+    if (!readonly) {
+      setPragma(db, 'journal_mode = WAL')
+      // FULL on purpose (D278): a hook is a short-lived writer of one event
+      // and its row must be on disk when the process exits. node:sqlite's
+      // default happens to be FULL; pinned here so the hooks never inherit
+      // a driver default they did not choose.
+      setPragma(db, 'synchronous = FULL')
+      bootstrapFreshStore(db, dbPath, deadlineAt)
+    }
+  } catch (err) {
+    // The handle this open made is its to close on the way out.
+    try { raw.close() } catch { /* already gone */ }
+    throw err
   }
   return db
 }
 
-/** The bootstrap's share of a hook's budget. The base schema and the
+/** The bootstrap's share of a hook's budget, by the clock from the moment
+ *  it begins. The base schema and the
  *  ladder on a fresh store take tens of milliseconds; this cap only bites
  *  when another starter holds the store mid-ladder, and then the staging
  *  write behind it still needs its turn INSIDE the same HOOK_DB_TIMEOUT_MS
@@ -158,7 +190,7 @@ export const HOOK_BOOTSTRAP_TIMEOUT_MS = 1000
  *  Anything that still throws here is logged and swallowed: by then the
  *  other starter holds the tables the staging write needs, and a hook's
  *  exit code is never the place to report it. */
-export function bootstrapFreshStore(db: DatabaseType, dbPath: string, timeoutMs: number): boolean {
+export function bootstrapFreshStore(db: DatabaseType, dbPath: string, deadlineAt: number): boolean {
   // The cheap gate, on the raw handle: a store at (or beyond) the head is
   // not ours to touch, and the common case pays one pragma read.
   const version = pragmaValue(db, 'user_version') as number
@@ -179,28 +211,32 @@ export function bootstrapFreshStore(db: DatabaseType, dbPath: string, timeoutMs:
       return false // no journal tables at a nonzero version: not a shape this knows
     }
   }
-  const started = Date.now()
+  // The bootstrap's share, by the clock from here, and never past the
+  // connection's own deadline: the write behind it keeps the rest.
+  const shareEnds = Math.min(Date.now() + HOOK_BOOTSTRAP_TIMEOUT_MS, deadlineAt)
   try {
-    const wrapped = openNodeSqlite(db, { timeoutMs: Math.min(HOOK_BOOTSTRAP_TIMEOUT_MS, timeoutMs) })
-    // The wrapper's constructor ran its pragmas under the same share, not
-    // its 10 s default. The bootstrap waits at most its own
-    // share (HOOK_BOOTSTRAP_TIMEOUT_MS) for a lock; the finally below
-    // hands whatever is left of the hook's budget to the write.
-    setPragma(db, `busy_timeout = ${Math.min(HOOK_BOOTSTRAP_TIMEOUT_MS, timeoutMs)}`)
-    if (version === 0 && !ensureBaseSchema(wrapped)) {
-      // Not fresh after all. Two shapes share this branch: a v0-era store
-      // with tables (the server's, behind its backup), and a concurrent
-      // starter that committed the base schema while this one waited for
-      // the lock — in which case the ladder is still ours to finish, or
-      // the write lands on version 5 through the legacy tier.
-      if ((pragmaValue(db, 'user_version') as number) === 0) {
-        dbg('hook', 'v0-era store with data — left for the server to migrate', { dbPath })
-        return false
+    // One unit, run again whole when a lock cuts a try short: safe to
+    // repeat, because the base schema is decided under BEGIN IMMEDIATE (a
+    // loser re-checks and no-ops) and the ladder skips the versions
+    // already applied (see Concurrency above). The wrapper's constructor
+    // runs its pragmas at a slice, not its 10 s default.
+    return withHookDeadline(db, shareEnds, () => {
+      const wrapped = openNodeSqlite(db, { timeoutMs: busySliceUntil(shareEnds) })
+      if (version === 0 && !ensureBaseSchema(wrapped)) {
+        // Not fresh after all. Two shapes share this branch: a v0-era store
+        // with tables (the server's, behind its backup), and a concurrent
+        // starter that committed the base schema while this one waited for
+        // the lock — in which case the ladder is still ours to finish, or
+        // the write lands on version 5 through the legacy tier.
+        if ((pragmaValue(db, 'user_version') as number) === 0) {
+          dbg('hook', 'v0-era store with data — left for the server to migrate', { dbPath })
+          return false
+        }
       }
-    }
-    const report = runMigrations(wrapped, { migrate: true })
-    dbg('hook', 'fresh store bootstrapped', { dbPath, from: report.from, to: report.to, applied: report.applied.length })
-    return true
+      const report = runMigrations(wrapped, { migrate: true })
+      dbg('hook', 'fresh store bootstrapped', { dbPath, from: report.from, to: report.to, applied: report.applied.length })
+      return true
+    })
   } catch (err) {
     dbg('hook', 'fresh-store bootstrap did not complete', { dbPath, error: err instanceof Error ? err.message : String(err) })
     return false
@@ -216,14 +252,15 @@ export function bootstrapFreshStore(db: DatabaseType, dbPath: string, timeoutMs:
     // has (finding 7): the wrapper's pragmas — synchronous NORMAL, the
     // 256MB mmap, temp_store MEMORY — are the library's choices for a
     // long-lived server handle, not a hook's, and a hook's durability
-    // must not depend on whether it happened to bootstrap. And the write
-    // gets what the bootstrap left of the hook's budget, never a fresh
-    // one (finding 2).
+    // must not depend on whether it happened to bootstrap. The write
+    // gets what the bootstrap left of the connection's deadline, never a
+    // fresh one (finding 2): the deadline is the connection's, and the
+    // wrapper's busy_timeout is set back to a slice before the next
+    // statement (hook-deadline.ts).
     setPragma(db, 'synchronous = FULL')
     setPragma(db, 'mmap_size = 0')
     setPragma(db, 'temp_store = DEFAULT')
     setPragma(db, 'foreign_keys = ON')
-    setPragma(db, `busy_timeout = ${Math.max(timeoutMs - (Date.now() - started), 100)}`)
   }
 }
 
@@ -237,11 +274,18 @@ export function resolveDbPath(cwd?: string): string {
 
 /** Stage one event. `andThen` runs on the same write connection after the
  *  staged row lands — the Stop hook records its bookmark ask there rather
- *  than opening the store a third time; its failure never undoes the row. */
-export function writeStaging(dbPath: string, entry: StagingEntry, andThen?: (db: DatabaseType) => void): void {
+ *  than opening the store a third time; its failure never undoes the row.
+ *  The connection is a hook handle (openHookDb), so the open, the
+ *  namespace read and the INSERT each wait by the clock against one
+ *  deadline: HOOK_DB_TIMEOUT_MS from the open, or `deadlineAt` when the
+ *  write is a second phase of a hook that already waited (a staging write
+ *  behind the hooks door's, or behind session-start's reads), which then
+ *  waits what is left, never a fresh budget. The INSERT is one autocommit
+ *  statement, so the handle's retry of it never stages a row twice. */
+export function writeStaging(dbPath: string, entry: StagingEntry, andThen?: (db: DatabaseType) => void, opts?: { deadlineAt?: number }): void {
   let db: DatabaseType | null = null
   try {
-    db = openHookDb(dbPath)
+    db = openHookDb(dbPath, opts?.deadlineAt !== undefined ? { deadlineAt: opts.deadlineAt } : undefined)
     // C1 capture attribution: stamp the namespace of the session this hook
     // belongs to — first by the session-keyed annotation the drain
     // publishes from echo evidence (§7.8; causal, pid-free, works where
@@ -552,6 +596,9 @@ export function buildRehydrationPayload(
       parts.push(`[Prior session snapshot #${snapshot.id} from session ${snapshot.originalSessionId}]`)
       parts.push(`Recovery queries: ${snapshot.queries.join(', ')}`)
 
+      // A second phase of this hook's wait: what is left of the reading
+      // connection's deadline, never a fresh budget.
+      const deadlineAt = hookDeadlineOf(db)
       writeStaging(dbPath, {
         sessionId,
         role: 'snapshot',
@@ -560,7 +607,7 @@ export function buildRehydrationPayload(
         content: JSON.stringify({ queries: snapshot.queries, original_session_id: snapshot.originalSessionId, snapshot_id: snapshot.id }),
         timestamp: Date.now() / 1000,
         priority: 0,
-      })
+      }, undefined, deadlineAt !== null ? { deadlineAt } : undefined)
     }
   }
 
