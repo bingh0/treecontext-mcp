@@ -32,7 +32,7 @@
  * exists in the store's directory" merges the outline's readdir probe
  * over its second user (prune-spare), a strengthening.
  */
-import { mkdirSync, rmSync, copyFileSync, existsSync, readdirSync, readFileSync } from 'node:fs'
+import { mkdirSync, rmSync, copyFileSync, existsSync, readdirSync, readFileSync, realpathSync } from 'node:fs'
 import { join, basename, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { expect, vi } from 'vitest'
@@ -172,7 +172,9 @@ export const backupLifecycleDefiner = (reg: Registry<World>): void => {
     raw.close()
     expect(report.to).toBe(maxSupportedVersion)
     if (w.staleBytes) {
-      expect(report.backupPath).toBe(w.bakPath)
+      // Compared resolved: a wrapped DatabaseSync reports location(), which
+      // resolves symlinks (macOS /var -> /private/var).
+      expect(realpathSync(report.backupPath!)).toBe(realpathSync(w.bakPath!))
       expect(report.verdict).toBeUndefined()
     } else {
       expect(report.backupPath).toBeDefined()

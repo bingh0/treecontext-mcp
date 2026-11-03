@@ -2058,7 +2058,12 @@ export function buildVscodeHooksConfig(): Record<string, unknown> {
       type: 'command',
       bash: claudeHookCommand(wrapper, 'bash'),
       powershell: claudeHookCommand(wrapper, 'powershell'),
-      timeoutSec: 10,
+      // 15 s: the hooks are held to this kill less a second on every OS
+      // (tests/hooks/hook-budget-locked.test.ts reads it from this config);
+      // at 10 s a slow machine's process start alone overran Stop (CI run
+      // 41646667559, 2026-11-03: 11.2 s on the macOS runner, the lock adding
+      // only its 8 s).
+      timeoutSec: 15,
     }
   }
 

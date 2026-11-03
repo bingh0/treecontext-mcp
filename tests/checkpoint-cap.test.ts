@@ -479,7 +479,10 @@ describe('the main agent beside a live leg (P2, P3): the refusal lands on the wr
     const { c, close } = await connect(s)
     const a = await put(c, text(20_000, 'A'))
     const b = await put(c, text(20_000, 'B'))
-    const resolved = resolveStagedCapRefusals(new DatabaseSync(path()) as never, 's1')
+    // The handle is closed here: an open one keeps Windows from removing tmpDir.
+    const probe = new DatabaseSync(path())
+    let resolved: number
+    try { resolved = resolveStagedCapRefusals(probe as never, 's1') } finally { probe.close() }
     await close(); await s.close()
     expect([a.r['refused'], b.r['refused'], a.r['writer_pending'], resolved]).toEqual([true, true, true, 0])
     expect(refusedOf('s1', '')).toEqual([expect.objectContaining({ src: 'pending', candidates: expect.any(Array) })])

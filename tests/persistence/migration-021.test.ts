@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { DatabaseSync } from 'node:sqlite'
-import { mkdtempSync, rmSync, existsSync } from 'node:fs'
+import { mkdtempSync, rmSync, existsSync, realpathSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
@@ -24,7 +24,9 @@ describe('migration 021_store_as_arbiter', () => {
   let dir: string
 
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'tc-mig21-'))
+    // realpath: a wrapped DatabaseSync reports location(), which resolves
+    // symlinks (macOS /var -> /private/var), so name the dir as it resolves.
+    dir = realpathSync(mkdtempSync(join(tmpdir(), 'tc-mig21-')))
   })
   afterEach(() => {
     rmSync(dir, { recursive: true, force: true })

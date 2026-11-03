@@ -1427,8 +1427,10 @@ export const runsDefiner = (reg: Registry<RunsWorld>): void => {
       expect(m[k], `${k} at the top level`).toBeUndefined()
     }
     expect([m['_door'], m['_identity']]).toEqual(['import', 'imported'])
-    expect(JSON.stringify(m)).toContain(String(claims['_cwd']))
-    expect(JSON.stringify({ ...m, _handoff_claims: undefined })).not.toContain(String(claims['_cwd']))
+    // Searched for in its JSON spelling: a Windows path's backslashes are escaped there.
+    const cwdJson = JSON.stringify(String(claims['_cwd']))
+    expect(JSON.stringify(m)).toContain(cwdJson)
+    expect(JSON.stringify({ ...m, _handoff_claims: undefined })).not.toContain(cwdJson)
     // The remote leg's registration facts arrived as claims too, never as the row's own top level.
     const reg = rawAll<{ m: string }>(w, "SELECT metadata_json AS m FROM nodes WHERE json_extract(metadata_json, '$.kind') = 'leg-registration' AND session_key = ?", `handoff:${w.ids!['third-session']}`)
     expect(reg).toHaveLength(1)

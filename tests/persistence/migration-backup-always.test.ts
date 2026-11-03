@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { DatabaseSync } from 'node:sqlite'
-import { mkdtempSync, rmSync, existsSync } from 'node:fs'
+import { mkdtempSync, rmSync, existsSync, realpathSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { openNodeSqlite, pragmaValue, setPragma } from '../../src/persistence/node-sqlite.js'
@@ -14,7 +14,9 @@ import { readVerdict } from '../../src/persistence/backup-verdict.js'
 // bare on every store that crossed them.
 describe('every pending migration runs behind a backup (D59, D256)', () => {
   let dir: string
-  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'tc-migbak-')) })
+  // realpath: a wrapped DatabaseSync reports location(), which resolves
+  // symlinks (macOS /var -> /private/var), so name the dir as it resolves.
+  beforeEach(() => { dir = realpathSync(mkdtempSync(join(tmpdir(), 'tc-migbak-'))) })
   afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
 
   /** A store with journal rows whose pending set is ADDITIVE ONLY: the

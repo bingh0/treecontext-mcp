@@ -64,7 +64,9 @@
  */
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { runFeatures, type Definer, type Registry } from 'gherkin-node-test/vitest'
+import { test, expect } from 'vitest'
+import gnt from 'gherkin-node-test'
+import { type Definer, type Registry } from 'gherkin-node-test/vitest'
 import { wholeFeatureWip } from './wip-register.js'
 import { type SidecarWorld } from './sidecar-world.js'
 import { type InstallWorld } from './install-harness.js'
@@ -90,6 +92,31 @@ import { type RunsWorld, runsDefiner } from './steps/journal-runs.steps.js'
 import { type LegsWorld, legsDefiner } from './steps/journal-legs.steps.js'
 import { type WorkersWorld, workersDefiner } from './steps/journal-workers.steps.js'
 const HERE = fileURLToPath(new URL('.', import.meta.url))
+
+// ── Host skips ──────────────────────────────────────────────────────────
+// A scenario whose promise this host's OS cannot keep is SKIPPED here, by
+// title and with its reason, never passed hollow: gherkin-node-test has no
+// per-platform tag, and an early return inside a step would be green while
+// proving nothing. An entry that names no registered scenario fails below.
+const HOST_SKIPS: Record<string, string> = process.platform === 'win32' ? {
+  // process-probe.ts reads no process start moment on win32 (startMoment
+  // returns null): telling a reused process number from the worker needs
+  // one. Windows is the host of D317's "a host whose process start moment
+  // cannot be read" scenario, which runs here; exists() works on win32,
+  // so a dead worker is still a phantom.
+  "a reused process number is told from the worker by the process's start moment": 'win32: no process start moment (process-probe.ts)',
+  'a live worker with its own start moment stays live': 'win32: no process start moment (process-probe.ts)',
+  "a worker's re-run for its missing checkpoint is the same leg in the same lane": 'win32: the scenario asserts each process carries its start moment (process-probe.ts)',
+} : {}
+const hostSkipped = new Set<string>()
+type TestFn = (name: string, fn: () => unknown) => unknown
+const hostTest = Object.assign((name: string, fn: () => unknown): unknown => {
+  const hit = Object.keys(HOST_SKIPS).find((sc) => name.endsWith(` :: ${sc}`))
+  if (hit === undefined) return (test as unknown as TestFn)(name, fn)
+  hostSkipped.add(hit)
+  return (test.skip as unknown as TestFn)(`${name} [host skip: ${HOST_SKIPS[hit]}]`, fn)
+}, { skip: test.skip, todo: test.todo })
+const { runFeatures } = gnt.bindRunner(hostTest) as { runFeatures: typeof import('gherkin-node-test/vitest').runFeatures }
 
 
 // ── Runner ──────────────────────────────────────────────────────────────
@@ -289,3 +316,7 @@ runFeatures(join(HERE, '../../features'), {
 
 
 
+
+test('every host skip names a scenario this run registered', () => {
+  expect(Object.keys(HOST_SKIPS).filter((sc) => !hostSkipped.has(sc))).toEqual([])
+})

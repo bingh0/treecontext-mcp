@@ -36,14 +36,15 @@ armStormProofStdio()
 
 /** Busy timeout for every hook-owned store connection. Must stay strictly
  *  below the smallest platform hook kill budget — VS Code registers every
- *  hook with timeoutSec: 10 (installer.ts) — because SQLite's busy
- *  wait blocks the event loop: a hook killed mid-wait loses its failure
- *  diagnostic and its close(). The bar is wall time, not the constant: the
- *  rule is 9 s (the kill minus a second to fail gracefully), and the real
- *  hooks against a store another process holds whole are held to it by
- *  tests/hooks/hook-budget-locked.test.ts. At 8 s the Stop hook measured
- *  9.2 s with process start counted (guard 1 s + write 8 s), over; at 7 s
- *  it measures 8.2 s and the single-open hooks 7.2 s. */
+ *  hook with timeoutSec: 15 (installer.ts; Claude Code's own default is
+ *  60 s) — because SQLite's busy wait blocks the event loop: a hook killed
+ *  mid-wait loses its failure diagnostic and its close(). The bar is wall
+ *  time, not the constant: the rule is the kill minus a second to fail
+ *  gracefully (14 s), the same on every OS, and the real hooks against a
+ *  store another process holds whole are held to it by
+ *  tests/hooks/hook-budget-locked.test.ts. Locally Stop measures 8.1 s
+ *  (guard 1 s + write 7 s + start); the macOS CI runner's cold start put
+ *  it at 11.2 s, which the 10 s kill this replaced would have cut. */
 export const HOOK_DB_TIMEOUT_MS = 7000
 
 /** When this hook process started, to the millisecond that matters: shared.ts

@@ -419,7 +419,7 @@ describe('openHookDb bootstraps a fresh store', () => {
 // ── The cross-file timeout invariant, enforced instead of prosed ─────
 // HOOK_DB_TIMEOUT_MS's own doc comment says it "must stay strictly
 // below the smallest platform hook kill budget — VS Code registers
-// every hook with timeoutSec: 10". Two files, one invariant, and until
+// every hook with timeoutSec: 15" (10 until 2026-11-03). Two files, one invariant, and until
 // 2026-08-15 nothing failed if either side moved (flagged by the F
 // scout and again by the release-diff review). This reads the budget
 // from the GENERATED config, not a copied literal.

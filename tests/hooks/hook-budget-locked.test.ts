@@ -4,8 +4,9 @@
  * real number is over: unit 4's review timed the real hooks against a
  * store another process holds whole-locked and found Stop at 9.09 s,
  * SubagentStop 9.08 s and SubagentStart 8.09 s, against a 9 s rule (VS
- * Code's adapter kills a hook at 10 s, and a second is left to fail
- * gracefully). This runs the real hook subprocess against a store
+ * Code's adapter then killed a hook at 10 s, and a second is left to fail
+ * gracefully). The kill is now 15 s and the rule 14 s, the same on every
+ * OS (2026-11-03: the macOS runner's cold start put Stop at 11.2 s). This runs the real hook subprocess against a store
  * tests/helpers/store-locker.cjs holds, and asserts the wall time two ways:
  *
  *  - absolutely, under the 9 s rule; and
@@ -28,9 +29,15 @@ import type { RunWorld } from '../journal/run-world.js'
 import { TS_ROOT, tsxArgv } from '../journal/proc.js'
 import { sandboxedSpawnEnv } from '../helpers/cli-spawn.js'
 import { HOOK_DB_TIMEOUT_MS, STOP_GUARD_TIMEOUT_MS } from '../../src/hooks/shared.js'
+import { buildVscodeHooksConfig } from '../../src/server/installer.js'
 
-/** The rule: the smallest platform kill (10 s) less a second to fail gracefully. */
-const RULE_MS = 9000
+/** The rule: the smallest hook kill treecontext installs (VS Code's
+ *  timeoutSec, read from the generated config) less a second to fail
+ *  gracefully. One rule on every OS: a slow runner gets the same bar. */
+const RULE_MS = (() => {
+  const cfg = buildVscodeHooksConfig() as { hooks: Record<string, Array<{ timeoutSec: number }>> }
+  return Math.min(...Object.values(cfg.hooks).flat().map((e) => e.timeoutSec * 1000)) - 1000
+})()
 /** Slack on the relative bound: scheduler jitter between two spawns. */
 const JITTER_MS = 500
 
