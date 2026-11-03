@@ -4162,6 +4162,33 @@ public static class TreecontextRm {
 [TreecontextRm]::List($env:TREECONTEXT_LOCKED_STORE) | ForEach-Object { [Console]::Out.WriteLine($_) }
 `
 
+/** lsof's `-F pcfl` fields as the store's openers: a process counts only
+ *  through an open file descriptor (a numeric `f` field). A process that
+ *  has the file only memory-mapped (`txt`, `mem`) holds no fcntl lock and
+ *  cannot be the cause, so it is no opener: on macOS a process keeps a
+ *  store it once opened mapped after closing it, and doctor's
+ *  stop-every-opener fix named such a process (it killed the test runner's
+ *  own worker, CI 2026-11-03). Off Linux, a write-lock field (`l` with
+ *  W/w) on a descriptor names a holder. */
+export function parseLsofOpeners(stdout: string, platform: NodeJS.Platform): { openers: Map<number, string | undefined>; holders: Set<number> } {
+  const commands = new Map<number, string | undefined>()
+  const withFd = new Set<number>()
+  const holders = new Set<number>()
+  let pid = 0
+  let fdOpen = false
+  for (const field of stdout.split('\n')) {
+    const tag = field[0]
+    const value = field.slice(1)
+    if (tag === 'p') { pid = Number(value) || 0; fdOpen = false; if (pid && !commands.has(pid)) commands.set(pid, undefined) }
+    else if (tag === 'c' && pid) commands.set(pid, value || undefined)
+    else if (tag === 'f' && pid) { fdOpen = /^\d+$/.test(value); if (fdOpen) withFd.add(pid) }
+    else if (tag === 'l' && pid && fdOpen && /[wW]/.test(value) && platform !== 'linux') holders.add(pid)
+  }
+  const openers = new Map<number, string | undefined>()
+  for (const [p, command] of commands) if (withFd.has(p)) openers.set(p, command)
+  return { openers, holders }
+}
+
 /** Probe who has a locked store open, as honestly as this platform can.
  *  Linux reads /proc/locks by the file's inode for the holder; lsof
  *  (`-F pcl`) lists openers with their command, and on Darwin its lock
@@ -4204,16 +4231,10 @@ export function probeStoreLock(dbPath: string): StoreLockProcesses {
       }
     } catch { canTellHolder = false; holders.clear() }
     try {
-      const r = spawnSync('lsof', ['-F', 'pcl', '--', dbPath], { encoding: 'utf8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] })
-      let pid = 0
-      for (const field of (r.stdout ?? '').split('\n')) {
-        if (field.startsWith('p')) { pid = Number(field.slice(1)); if (pid) openers.set(pid, undefined) }
-        else if (field.startsWith('c') && pid) openers.set(pid, field.slice(1) || undefined)
-        else if (field.startsWith('l') && pid && /[wW]/.test(field.slice(1)) && process.platform !== 'linux') {
-          holders.add(pid)
-          canTellHolder = true
-        }
-      }
+      const r = spawnSync('lsof', ['-F', 'pcfl', '--', dbPath], { encoding: 'utf8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] })
+      const parsed = parseLsofOpeners(r.stdout ?? '', process.platform)
+      for (const [pid, command] of parsed.openers) openers.set(pid, command)
+      for (const pid of parsed.holders) { holders.add(pid); canTellHolder = true }
     } catch { /* nothing named is better than a wrong name */ }
   }
   holders.delete(process.pid)

@@ -1031,6 +1031,10 @@ export const reorientationDefiner = (reg: Registry<ReorientationWorld>): void =>
       expect(fix).toMatch(process.platform === 'win32' ? /^taskkill \/F (\/PID \d+ ?)+/ : /^kill (\d+ ?)+/)
       const killed = [...fix!.split(/\s+#|\s+&\s+rem\b/)[0]!.matchAll(/\d+/g)].map((m) => Number(m[0]))
       expect(killed).toEqual(expect.arrayContaining([w.lockerPid, w.readerPid]))
+      // The test runner's own worker is no party to the developer's lock: a
+      // fix naming it would kill the run (macOS CI, 2026-11-03), so it fails
+      // here, loudly, before anything is run.
+      expect(killed, 'the fix names the test process itself').not.toContain(process.pid)
       // Both must be gone afterwards; a bounded wait, never a hang.
       const gone = async (c: ChildProcess): Promise<void> => {
         if (c.exitCode !== null || c.signalCode !== null) return

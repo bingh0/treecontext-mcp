@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import {
-  storeLockRow, probeStoreLock, setStoreLockProbeForTests, type StoreLockProcesses,
+  storeLockRow, probeStoreLock, setStoreLockProbeForTests, parseLsofOpeners, type StoreLockProcesses,
 } from '../../src/server/installer.js'
 
 // D175: doctor names the piece that is down and the one command that
@@ -85,5 +85,28 @@ describe('doctor store-lock row (D175)', () => {
     expect(probeStoreLock(PATH)).toBe(twoOpeners)
     setStoreLockProbeForTests(null)
     expect(probeStoreLock('/nonexistent/treecontext.db')).not.toBe(twoOpeners)
+  })
+})
+
+// lsof -F pcfl as macOS printed it in CI run 41670918705: the test
+// runner's worker had the store only memory-mapped (fd `txt`), the locker
+// and a reader through descriptors. The mapped-only process is no opener:
+// it holds no lock, and doctor's stop-every-opener fix killed it.
+describe('lsof openers count descriptors, never mappings', () => {
+  const MAC = ['p3224', 'cnode', 'ftxt', 'l ', 'p23122', 'cnode', 'f11', 'l ', 'p23166', 'cnode', 'f11', 'l ', ''].join('\n')
+  it('a process with the store only mapped is not an opener; the descriptor holders are', () => {
+    const { openers, holders } = parseLsofOpeners(MAC, 'darwin')
+    expect([...openers.keys()].sort()).toEqual([23122, 23166])
+    expect(openers.get(23122)).toBe('node')
+    expect(holders.size).toBe(0)
+  })
+  it('a mapping and a descriptor in one process: an opener, by its descriptor', () => {
+    const { openers } = parseLsofOpeners(['p7', 'cserve', 'ftxt', 'f12', ''].join('\n'), 'darwin')
+    expect([...openers]).toEqual([[7, 'serve']])
+  })
+  it('a write-lock field names a holder off Linux, only on a descriptor', () => {
+    const out = ['p8', 'cnode', 'f9', 'lW', 'p9', 'cnode', 'ftxt', 'lW', ''].join('\n')
+    expect([...parseLsofOpeners(out, 'darwin').holders]).toEqual([8])
+    expect(parseLsofOpeners(out, 'linux').holders.size).toBe(0)
   })
 })
