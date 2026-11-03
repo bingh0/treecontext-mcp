@@ -351,7 +351,7 @@ resolver derives; `tool` is the real MCP tool over a connection under the
 caller's Claude Code session id; `hook-out` here is the packet the
 SessionStart hook emitted.
 
-### journal-orchestration.feature and journal-workers.feature (20 scenarios, one outline of 4 rows; 0 open)
+### journal-orchestration.feature and journal-workers.feature (21 scenarios with D379's, one outline of 4 rows; 0 open)
 
 | line | scenario | door (act; Given if different) | Then's evidence | rung | note |
 | ---- | -------- | ------------------------------ | --------------- | ---- | ---- |
@@ -374,6 +374,7 @@ SessionStart hook emitted.
 | o246 | the boundary opens to no pointer that names a writer, whose session the registry holds, or that was imported | tool `treecontext_insert`; Given tool, library, import | tool-reply + file (as was, byte for byte) | — | P2–P5 red; P4b (liveness alone) green as disclosed, the handoff test still guarding |
 | o257 | the boundary opens for the writer-unknown lane alone | tool `treecontext_insert` by a worktree session, then by main | tool-reply + file | — | P7 red |
 | o265 | once a session has run in the main checkout, a client without hooks cannot retire the main checkout's chapter from before the upgrade | tool `treecontext_insert`; then hook SessionStart in main | tool-reply + hook-out + file | — | P1 (the incident guard) red |
+| o273 | a chapter a program wrote through the library in a worktree's session is the worktree's in every reader (D379) | library `FlatStore.insert` with no stamp under the worktree session's id (the door under test); Given hook SessionStart in main and in the worktree; then tool status per session, hook SessionStart per checkout, tool query per session | tool-reply + hook-out + file | — | gate finding #1's world. The whole src fix reverted: red at the status Then. Status alone back to the stamp: red. The packet's self lines alone back to the stamp: red (main's packet opened on the chapter). The search Then held before the fix (the registry already decided it) and binds the agreement |
 | w364 | a worker of the ticket door searches the whole store and sees every lane | ticket door (`spawnWorker`, standin-worker through its tools) | tool-reply (the worker's) + file | — | |
 
 (`o` is journal-orchestration.feature, `w` journal-workers.feature.)
@@ -382,7 +383,8 @@ SessionStart hook emitted.
 
 - **The door and read_only (final unit, review F1, medium).** `retireAcross` retired a read-only pre-stamp chapter, which ordinary supersession refuses. `splitSupersedes` now routes a read-only target of the door to the ordinary retirement, whose reply is `supersede_misses` `{reason: "read_only"}` with nothing recorded across. `tests/lane-door.test.ts` drives it through the real insert tool; dropping the check is red.
 - **The recovery identity's staging fallback (final unit, review F8, unlit).** A snapshot claim staged before the claim carried `snapshot_id` is identified by its staged row. `tests/persistence/recovery-identity.test.ts` drains such a row twice (one row, `staging_id` set) and a second such claim (two rows); Q7 (drop `staging_id` from the identity) is red.
-- **Unit-tier only, by design:** the lane panel's kind and age on any order (I-kind, I-age, U2-F4), the packet's bookmark from the own lane (I-bookmark-any), the door's undo by the echo heal (P10, P11), the bookmark exclusion (P12), a fresh start whose registration did not land (P14), `writerOf` for an unplaced row (P16), the concurrent and ambiguous callers' whole-store search (Q3), an unplaced caller's search (Q4).
+- **Unit-tier only, by design:** the lane panel's kind and age on any order (I-kind, I-age, U2-F4), the packet's bookmark from the own lane (I-bookmark-any), the door's undo by the echo heal (P10, P11), the bookmark exclusion (P12), a fresh start whose registration did not land (P14), `writerOf` for an unplaced row (P16), the concurrent and ambiguous callers' whole-store search (Q3), an unplaced caller's search (Q4), the D376 heal guard (`src/persistence/writer-heal.ts`: a row stamped `unregistered` stays undetermined when its echo comes from a hooked session whose registration did not land; Fable gate finding #2), held by `tests/session-registry.test.ts` "an echo of an unplaced session's own agent leaves the row undetermined".
+- **D379, below the charter (the gate fix).** The readers the @D379 scenario does not walk are held at unit tier in `tests/session-registry.test.ts` "one lane rule for every reader (D379)", each through the real store and, where a tool writes, the real insert tool: supersession's own and foreign test (worktree retires the library chapter, main is referenced), the echo heal (a provisional tester's row the echo moves to the worktree performs the supersession it was refused), the referrer shown from another lane, a subagent's scope (the spawning lane's pointers), and `laneOfRow` itself (helper rows, a claimed role, `unregistered`, `ambiguous`, an import, never placed). Each reader put back on the stamp alone is red in its own test; dropping the helper-agent-id test from `isSessionOwnRow` is red in the `laneOfRow` test.
 - **Carried, charter text:** the packet of a start whose registration did not land says nothing about the checkout; D373's comment does not yet disclose it (final review F4). The skill text's "each reply … counts the other lanes" holds for status and the packet, not the search reply (final review F14); D374 promises the lane and how to widen only.
 
 | unit | bound | hollow | vacuous | narrowed | half-lit | unlit | probes run | silent |
@@ -394,6 +396,7 @@ SessionStart hook emitted.
 | U3b | 9 | 0 | 1 (the @D376 added Then) | 0 | 0 | 0 | 20 + 1 scratch | 1 at scenario level (P15), P4b as disclosed |
 | U34-fix | 9 | 0 | 0 | 0 | — | 1 (staging fallback) | 9 | 1 (Q7) |
 | final fixes | 2 scenario rebinds + 2 units | 0 | 0 (the @D376 Then cured) | 0 | 0 | 0 (staging fallback lit) | 4 | 0 (F1 probe, P13, P15, Q7 all red) |
+| D379 gate fix | 1 scenario + 6 units | 0 | 0 | 0 | 0 | 0 | 8 (whole fix, status, packet at scenario level; supersession, heal, referrer, subagent scope, helper agent id at unit tier) | 0 (the search Then held before the fix by design: it binds agreement, the registry already deciding it) |
 
 Each later unit cured what the one before left where it says so: U3 the
 U2 walk, U34-fix U3-2, U3-9b and U4's P1 and P10, U3b U2's I-kind, I-age

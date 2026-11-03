@@ -32,7 +32,8 @@
  * finds the lane unchanged and changes nothing.
  */
 import type { Database } from './database.js'
-import { laneWriterOf, RETIRED_ACROSS_KEY, SUPERSEDES_ACROSS_KEY } from '../references.js'
+import { isSessionOwnRow, laneOfRow, laneWriterOf, RETIRED_ACROSS_KEY, SUPERSEDES_ACROSS_KEY } from '../references.js'
+import { placementsOf, type PlacedLane } from './lane-scope.js'
 import { sessionOf, NO_SESSION } from '../dedup-identity.js'
 import { agentWriterOf, selfOf, selfWriterOf } from './session-registry.js'
 import { capRefusalsOf, confirmedCapRefusal, legOf, legWriterOf, workerOfSession, settleLegKey, unsettleLegKey, recordOpenedRun, WORKER_AGENT_ID } from './leg-registry.js'
@@ -73,6 +74,22 @@ function refsOf(meta: Record<string, unknown>): string[] {
 
 const isLive = (m: Record<string, unknown>): boolean => m['next_session'] === true || m['status'] === 'active'
 
+/** A row's lane as every reader reads it (D379, references.ts laneOfRow),
+ *  so the heal's own and foreign test is insert's: the session's own
+ *  agent's row in a session the registry places is that checkout's. The
+ *  placement is read once per session per heal, never once per row. */
+type LaneOf = (meta: Record<string, unknown> | null) => string
+function laneReader(db: Database): LaneOf {
+  const placed = new Map<string, PlacedLane | null>()
+  return (meta) => {
+    if (!isSessionOwnRow(meta)) return laneWriterOf(meta)
+    const session = sessionOf(meta)
+    if (session === NO_SESSION) return laneWriterOf(meta)
+    if (!placed.has(session)) placed.set(session, placementsOf(db, [session]).get(session) ?? null)
+    return laneOfRow(meta, placed.get(session))
+  }
+}
+
 /**
  * Retire a pointer's metadata in place and return it: the flags cleared,
  * `superseded_by` set, and `_superseded_prior` keeping what it was — its
@@ -97,7 +114,7 @@ export function retireMeta(meta: Record<string, unknown>, by: string, now: numbe
 
 /** The newest live bookmark of `meta`'s session in `lane`, newer than
  *  `after`, other than `self`. */
-function newerLiveBookmark(db: Database, treeId: number, meta: Record<string, unknown>, after: number, self: string, lane: string): string | null {
+function newerLiveBookmark(db: Database, treeId: number, meta: Record<string, unknown>, after: number, self: string, lane: string, laneOf: LaneOf): string | null {
   const session = sessionOf(meta)
   if (session === NO_SESSION) return null
   const rows = db.prepare(
@@ -105,7 +122,7 @@ function newerLiveBookmark(db: Database, treeId: number, meta: Record<string, un
         AND json_extract(metadata_json, '$.kind') = '${BOOKMARK}' AND json_extract(metadata_json, '$.next_session') = 1
       ORDER BY created_at DESC, rowid DESC`,
   ).all(treeId, session, self, after) as Array<{ node_id: string; metadata_json: string | null }>
-  return rows.find((r) => laneWriterOf(parse(r.metadata_json)) === lane)?.node_id ?? null
+  return rows.find((r) => laneOf(parse(r.metadata_json)) === lane)?.node_id ?? null
 }
 
 /**
@@ -115,7 +132,7 @@ function newerLiveBookmark(db: Database, treeId: number, meta: Record<string, un
  * newer live bookmark of its session, which stays retired, pointing at
  * that one (D241).
  */
-function unretire(db: Database, treeId: number, id: string, createdAt: number, meta: Record<string, unknown>, now: number): void {
+function unretire(db: Database, treeId: number, id: string, createdAt: number, meta: Record<string, unknown>, now: number, laneOf: LaneOf): void {
   const prior = (meta['_superseded_prior'] ?? { next_session: true }) as Record<string, unknown>
   // D378: a retirement across the pre-stamp boundary undone takes its
   // record with it, so a live chapter never carries one.
@@ -131,7 +148,7 @@ function unretire(db: Database, treeId: number, id: string, createdAt: number, m
     return
   }
   if (prior['next_session'] === true && meta['kind'] === BOOKMARK) {
-    const newer = newerLiveBookmark(db, treeId, meta, createdAt, id, laneWriterOf(meta))
+    const newer = newerLiveBookmark(db, treeId, meta, createdAt, id, laneOf(meta), laneOf)
     if (newer) {
       meta['superseded_by'] = newer
       meta['superseded_at'] = now
@@ -185,7 +202,8 @@ export function healWriterFromEcho(db: Database, opts: {
     const writer = isAgent ? agentWriterOf(opts.agentType, opts.agentId) : worker ? legWriterOf(worker) : selfWriterOf(self)
     const agentOf = isAgent ? opts.agentId : worker ? WORKER_AGENT_ID : null
     const before = { writer: (meta['_writer'] as string | undefined) ?? null, src: (meta['_writer_src'] as string | undefined) ?? null }
-    const oldLane = laneWriterOf(meta)
+    const laneOf = laneReader(db)
+    const oldLane = laneOf(meta)
     const next: Record<string, unknown> = { ...meta, _writer: writer, _writer_src: 'echo' }
     if (agentOf !== null) next['_writer_agent_id'] = agentOf
     else delete next['_writer_agent_id']
@@ -193,7 +211,7 @@ export function healWriterFromEcho(db: Database, opts: {
     if (!isAgent && self?.worktree) next['_worktree'] = self.worktree
     const changed = before.writer !== writer || (meta['_writer_agent_id'] ?? null) !== (next['_writer_agent_id'] ?? null)
     if (changed) next['_writer_stamped'] = before
-    const newLane = laneWriterOf(next)
+    const newLane = laneOf(next)
 
     const now = Date.now() / 1000
     const result: WriterHealResult = { outcome: changed ? 'corrected' : 'confirmed' }
@@ -209,8 +227,8 @@ export function healWriterFromEcho(db: Database, opts: {
       ).all(row.tree_id, opts.nodeId) as Array<{ node_id: string; created_at: number; metadata_json: string | null }>
       for (const t of targets) {
         const tm = parse(t.metadata_json)
-        if (!tm || laneWriterOf(tm) === newLane) continue
-        unretire(db, row.tree_id, t.node_id, t.created_at, tm, now)
+        if (!tm || laneOf(tm) === newLane) continue
+        unretire(db, row.tree_id, t.node_id, t.created_at, tm, now, laneOf)
         upd.run(JSON.stringify(tm), now, t.node_id)
         reverted.push(t.node_id)
       }
@@ -236,8 +254,8 @@ export function healWriterFromEcho(db: Database, opts: {
       if (typeof by === 'string') {
         const r = sel.get(by, row.tree_id) as { metadata_json: string | null } | undefined
         const rm = r ? parse(r.metadata_json) : null
-        if (rm && laneWriterOf(rm) !== newLane) {
-          unretire(db, row.tree_id, opts.nodeId, row.created_at, next, now)
+        if (rm && laneOf(rm) !== newLane) {
+          unretire(db, row.tree_id, opts.nodeId, row.created_at, next, now, laneOf)
           rm['refs'] = [...new Set([...refsOf(rm), opts.nodeId])]
           upd.run(JSON.stringify(rm), now, by)
           next['_writer_heal_unretired'] = by
@@ -252,7 +270,7 @@ export function healWriterFromEcho(db: Database, opts: {
       for (const id of asked) {
         const t = sel.get(id, row.tree_id) as { created_at: number; read_only: number; metadata_json: string | null } | undefined
         const tm = t ? parse(t.metadata_json) : null
-        if (!t || !tm || t.read_only || laneWriterOf(tm) !== newLane || !isLive(tm)) continue
+        if (!t || !tm || t.read_only || laneOf(tm) !== newLane || !isLive(tm)) continue
         upd.run(JSON.stringify(retireMeta(tm, opts.nodeId, now)), now, id)
         retired.push(id)
       }

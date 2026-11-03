@@ -31,6 +31,11 @@
  *
  * Both are SQL predicates over `nodes`, so a scope is applied in the store
  * before a result count and to every conversation window alike.
+ *
+ * A POINTER's lane is read the same way (D379, references.ts laneOfRow):
+ * the session's own agent's row in a session the registry places is that
+ * checkout's, whatever its stamp; placementsOf reads the placement once
+ * per call for every reader that lists, counts or retires pointers.
  */
 import { HANDOFF_LANE_PREFIX } from '../handoff.js'
 import { SUBAGENT_SUMMARY_KIND } from '../run-kinds.js'
@@ -67,6 +72,42 @@ export function placedLaneOf(db: RegistryHandle, sessionId: string | null): Plac
   const self = selfOf(db, sessionId)
   if (!self) return null
   return self.worktree ? `${WORKTREE_WRITER_PREFIX}${self.worktree}` : MAIN_WRITER
+}
+
+/** The least a placement read needs from a database handle: a FlatStore's
+ *  wrapped database, a hook's raw handle and references.ts's ReadHandle
+ *  alike. */
+interface PlacementHandle { prepare(sql: string): { all(...p: unknown[]): unknown[] } }
+
+/** How many session ids one placement read binds at a time. */
+const PLACEMENT_CHUNK = 500
+
+/**
+ * The placed lanes of `sessionIds`, read from their self registrations in
+ * one pass per call (D379): each session the registry places, mapped to
+ * `main` or `worktree:<name>`, the same spelling placedLaneOf gives and the
+ * same sessions laneRowsSql reads as a checkout's. A session absent from
+ * the map is placed nowhere: never registered, a ticket-door worker, or a
+ * store whose registry cannot be read, so its rows' lane stays their
+ * writer stamp (references.ts laneOfRow).
+ */
+export function placementsOf(db: PlacementHandle, sessionIds: Iterable<string | null | undefined>): Map<string, PlacedLane> {
+  const wanted = [...new Set([...sessionIds].filter((s): s is string => typeof s === 'string' && s !== ''))]
+  const out = new Map<string, PlacedLane>()
+  if (wanted.length === 0) return out
+  try {
+    for (let i = 0; i < wanted.length; i += PLACEMENT_CHUNK) {
+      const chunk = wanted.slice(i, i + PLACEMENT_CHUNK)
+      const rows = db.prepare(
+        `SELECT session_id, worktree FROM session_registry WHERE agent_id = '' AND session_id IN (${chunk.map(() => '?').join(',')})`,
+      ).all(...chunk) as Array<{ session_id: string; worktree: string | null }>
+      for (const r of rows) out.set(r.session_id, r.worktree ? `${WORKTREE_WRITER_PREFIX}${r.worktree}` : MAIN_WRITER)
+    }
+  } catch {
+    // No registry (a store older than it, or unreadable): nothing placed.
+    return new Map()
+  }
+  return out
 }
 
 export interface LaneSql { sql: string; params: unknown[] }

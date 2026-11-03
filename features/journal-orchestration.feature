@@ -21,8 +21,8 @@ Feature: Orchestration inside one store — lanes that stay their own
   and D378 of 2026-11-02 (the main checkout's own lane: status, the fresh
   start, the search scope read from the registry, the recovery snapshot's
   lane, the unknown writer, the chapter from before writers were
-  recorded). Group orientation (D168) is
-  deferred with groups configuration (D209) and carries no scenario yet.
+  recorded); D379 of 2026-11-03 (one lane rule for every reader). Group
+  orientation (D168) is deferred with groups configuration (D209), no scenario yet.
 
   @D147
   Scenario: the orchestrator finds the subagent's summary by search
@@ -268,6 +268,19 @@ Feature: Orchestration inside one store — lanes that stay their own
     When that client writes a chapter summary superseding "plan: the first release"
     Then "plan: the first release" stays live and unchanged, the reply listing it as referenced, written by another writer, and no entry carries a retirement across the boundary
     And the main checkout's next fresh start opens on "plan: the first release" as its own chapter
+
+  @D379
+  Scenario: a chapter a program wrote through the library in a worktree's session is the worktree's in every reader
+    Given a session in the main checkout and a session in the worktree "subproject", each registered by its session-start hook
+    And a chapter summary written through the library with no writer stamp in the worktree "subproject"'s session
+    When the main checkout's session calls status and then starts a new session
+    Then neither the status nor the packet lists the chapter as the main lane's own, and both count it under the worktree "subproject"
+    And the worktree's session calling status lists the chapter as its own, and the packet of a new session in the worktree opens on it
+    And the main checkout's search for the chapter's words does not find it as its own, and the worktree's search does
+    # Gate finding #1, 2026-11-03: the panel and the packet read the
+    # chapter's lane from its writer stamp, and it has none, so they gave
+    # it to main; the search read the registry and gave it to the
+    # worktree. One rule now: the registry places the session first.
 
   @D190
   Scenario: the session-start hook registers self and the server stamps rows from it

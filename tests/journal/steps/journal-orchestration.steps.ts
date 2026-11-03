@@ -354,6 +354,8 @@ export const orchestrationDefiner = (reg: Registry<OrchestrationWorld>): void =>
   snapshotLaneSteps(reg)
   // D378: the pre-stamp door (its own section, below).
   preStampSteps(reg)
+  // D379: one lane rule for every reader (its own section, below).
+  oneLaneSteps(reg)
   // ── D186: one hop deep, the rest on request ──
   reg.define(/^an entry A, an entry B that names A, and an entry C that names B$/, async (w) => {
     await openWorld(w)
@@ -2399,5 +2401,99 @@ function preStampSteps(reg: Registry<OrchestrationWorld>): void {
       expect(m['_supersedes_across'], k).toBeUndefined()
     }
     expect(acrossRows(w)).toBe(0)
+  })
+}
+
+// ── D379: one lane rule for every reader ────────────────────────────────
+//
+// Gate finding #1's world, through real doors: both sessions register
+// through the real SessionStart hook in their checkouts (openGitWorld,
+// laneSession); the chapter is the library's insert, the door under test,
+// under the worktree session's id with no stamp (the D378 Given, reused);
+// status is the real tool through a client under the session under test,
+// each packet the real hook's output for a new session in that checkout,
+// each search the real query tool. Which lane a row is in is the test's
+// own record (the session it wrote under, read from SQLite), never the
+// production lane read.
+
+/** The worktree as status and the packet must name it: one live chapter,
+ *  the library's, its age read from SQLite. */
+function libraryLaneEntry(w: OrchestrationWorld, lane: string): LaneEntry {
+  const lib = w.entries!['library']!
+  expect(rawMeta(w, lib.id)['next_session']).toBe(true)
+  expect(sessionKeyOf(w, lib.id)).toBe(w.laneSessions![lane])
+  return { lane, kind: 'chapter summary', age: `${ageText(createdAtOf(w, lib.id), now())} old`, pointers: 1 }
+}
+
+/** The words the library chapter is searched by. */
+const LIBRARY_CHAPTER_WORDS = 'test layout script'
+
+function oneLaneSteps(reg: Registry<OrchestrationWorld>): void {
+  reg.define(/^a session in the main checkout and a session in the worktree "([^"]+)", each registered by its session-start hook$/, async (w, name$) => {
+    await openGitWorld(w)
+    w.laneSessions = { main: w.sessionId! }
+    w.entries = {}
+    const wt = laneSession(w, `worktree:${String(name$)}`)
+    // Both selves as the registry holds them: main with no worktree, the
+    // worktree under its name.
+    expect(rawAll(w, "SELECT worktree FROM session_registry WHERE session_id = ? AND agent_id = ''", w.laneSessions['main'])).toEqual([{ worktree: null }])
+    expect(rawAll(w, "SELECT worktree FROM session_registry WHERE session_id = ? AND agent_id = ''", wt)).toEqual([{ worktree: String(name$) }])
+    // No live pointer yet: the library's chapter is the only one there is.
+    expect(rawAll(w, "SELECT 1 FROM nodes WHERE json_extract(metadata_json, '$.next_session') = 1")).toEqual([])
+  })
+
+  reg.define(/^neither the status nor the packet lists the chapter as the main lane's own, and both count it under the worktree "([^"]+)"$/, (w, name$) => {
+    const lib = w.entries!['library']!
+    const entry = libraryLaneEntry(w, `worktree:${String(name$)}`)
+    // Status: main's lane lists nothing; the chapter is the one other
+    // lane's one pointer, counted, its text and id absent.
+    expect(pointersOf(w.statusReply!)).toEqual([])
+    const block = blockOf(w.statusReply!)
+    expect(block.lane).toBe('main')
+    expect(block).toMatchObject({ other_lanes: 1, other_lane_count: 1 })
+    expect(block.other_lanes).toBe(leftOutOf(w, w.statusReply!))
+    expect(block.lanes).toEqual([entry])
+    expectNoneOf(JSON.stringify(w.statusReply), [lib])
+    // The packet: main's own line, no chapter of its own, the worktree
+    // named among the other lanes, the chapter's text and id absent.
+    const packet = w.startPackets!['main']!
+    const lines = packet.split('\n')
+    expect(lines[0]).toBe(MAIN_SELF_LINE)
+    // The line after the self line is where main's own chapter would stand
+    // (as the D373 and D378 Thens read it): it says main has none.
+    expect(lines[1]).toBe('No chapter summary, bookmark or brief exists for the main lane yet; it starts fresh.')
+    expect(namedInLine(otherLanesLineOf(packet) ?? '')).toEqual([entry])
+    expectNoneOf(packet, [lib])
+  })
+
+  reg.define(/^the worktree's session calling status lists the chapter as its own, and the packet of a new session in the worktree opens on it$/, async (w) => {
+    const lib = w.entries!['library']!
+    const lane = Object.keys(w.laneSessions!).find((k) => k.startsWith('worktree:'))!
+    const name = lane.slice('worktree:'.length)
+    const reply = await statusOf(w, w.laneSessions![lane]!)
+    expect(pointersOf(reply).map((p) => [p.node_id, p.lane])).toEqual([[lib.id, lane]])
+    const block = blockOf(reply)
+    expect(block.lane).toBe(lane)
+    expect(block).toMatchObject({ other_lanes: 0, other_lane_count: 0 })
+    const packet = startIn(w, lane)
+    const lines = packet.split('\n')
+    expect(lines[0]).toBe(`This session runs in the worktree "${name}" on the branch "${name}-branch"; it re-orients on that worktree's own thread.`)
+    expect(lines[1]).toBe(`The worktree's own chapter summary, ${ageText(createdAtOf(w, lib.id), now())} old (id ${lib.id}): ${lib.text}`)
+    expect(otherLanesLineOf(packet), packet).toBeUndefined()
+  })
+
+  reg.define(/^the main checkout's search for the chapter's words does not find it as its own, and the worktree's search does$/, async (w) => {
+    const lib = w.entries!['library']!
+    const lane = Object.keys(w.laneSessions!).find((k) => k.startsWith('worktree:'))!
+    const main = await searchAs(w, w.laneSessions!['main']!, LIBRARY_CHAPTER_WORDS)
+    expect(main['scope']).toMatchObject({ lane: 'main' })
+    expect(shownIdsOf(main)).not.toContain(lib.id)
+    // Hidden from main's own lane, not absent: the whole store has it.
+    const all = await searchAs(w, w.laneSessions!['main']!, LIBRARY_CHAPTER_WORDS, { scope: 'all' })
+    expect(all['scope']).toBeUndefined()
+    expect(hitIdsOf(all)).toContain(lib.id)
+    const wt = await searchAs(w, w.laneSessions![lane]!, LIBRARY_CHAPTER_WORDS)
+    expect(wt['scope']).toMatchObject({ lane })
+    expect(hitIdsOf(wt), JSON.stringify(wt).slice(0, 2000)).toContain(lib.id)
   })
 }

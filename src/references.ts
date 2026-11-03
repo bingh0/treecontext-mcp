@@ -23,7 +23,8 @@
 import { decodeContent } from './persistence/content-codec.js'
 import { sessionOf } from './dedup-identity.js'
 import { HANDOFF_LANE_PREFIX } from './handoff.js'
-import { MAIN_WRITER } from './persistence/session-registry.js'
+import { MAIN_WRITER, WORKTREE_WRITER_PREFIX } from './persistence/session-registry.js'
+import { placementsOf } from './persistence/lane-scope.js'
 
 interface Prepared { get(...p: unknown[]): unknown; all(...p: unknown[]): unknown[] }
 /** The one capability the reads need from a database handle. */
@@ -85,7 +86,9 @@ export const AMBIGUOUS_LANE = '\u0000ambiguous'
  *  lane's writer never retires one of them (nor they its); never folded
  *  into main and never any lane's own. Distinct from AMBIGUOUS_LANE, which
  *  retires nothing. A row with no stamp at all (written before the store
- *  recorded writers, or through the library without one) stays main's. */
+ *  recorded writers, or through the library without one) stays main's,
+ *  unless the registry places its session in a checkout (D379,
+ *  laneOfRow). */
 export const UNKNOWN_LANE = '\u0000unknown'
 
 /** How the undetermined writers' lane is named wherever it is shown. */
@@ -142,6 +145,10 @@ export function laneLabelOf(laneKey: string): string {
  * through the tools, and on every row a subagent's hook captured; the
  * insert tool drops a caller's copy. `agent_type` stays a fallback for
  * rows the stamp never reached (library writes, unregistered sessions).
+ *
+ * This is the STAMP's lane alone. A reader that lists, counts or retires
+ * pointers reads laneOfRow, which places the session's own agent's rows
+ * by the registry first (D379).
  */
 export function laneWriterOf(meta: Record<string, unknown> | null | undefined): string {
   const session = sessionOf(meta ?? null)
@@ -150,6 +157,46 @@ export function laneWriterOf(meta: Record<string, unknown> | null | undefined): 
   if (isUnknownWriter(meta)) return UNKNOWN_LANE
   const writer = named(meta?.['_writer']) ?? named(meta?.['agent_type'])
   return writer === undefined || writer === MAIN_WRITER ? MAIN_LANE : writer
+}
+
+/**
+ * Whether a row is its session's own agent's, the row a checkout's lane
+ * owns by its session (D379), read as laneRowsSql's trail reads it: not
+ * imported, not stamped `ambiguous` or `unregistered`, no helper's agent
+ * id (`_writer_agent_id`: a subagent's, a worker's, the client's own
+ * internal agent's), and a writer that is a checkout's (`main`,
+ * `worktree:<name>`) or none at all, no role claimed as `agent_type`
+ * either (D243: such a row is the role's).
+ */
+export function isSessionOwnRow(meta: Record<string, unknown> | null | undefined): boolean {
+  if (sessionOf(meta ?? null).startsWith(HANDOFF_LANE_PREFIX)) return false
+  const src = meta?.['_writer_src']
+  if (src === 'ambiguous' || src === UNREGISTERED_SRC) return false
+  if (named(meta?.['_writer_agent_id']) !== undefined) return false
+  const writer = named(meta?.['_writer'])
+  if (writer !== undefined) return writer === MAIN_WRITER || writer.startsWith(WORKTREE_WRITER_PREFIX)
+  return named(meta?.['agent_type']) === undefined
+}
+
+/**
+ * The lane every reader reads a row in (D379, amending D376): the one
+ * rule for status, the fresh start's self lines and its other-lanes line,
+ * supersession's own and foreign test, the echo heal and the referrer
+ * shown, agreeing with the search's scope (lane-scope.ts laneRowsSql). A
+ * row of its session's own agent (isSessionOwnRow) whose session the
+ * registry places (`placed`, from lane-scope.ts placementsOf, read once
+ * per call) is that checkout's lane, `main` (MAIN_LANE) or
+ * `worktree:<name>`, its stamp or the lack of one notwithstanding: a
+ * chapter a program wrote through the library in a worktree's session is
+ * the worktree's. Every other row's lane is its writer stamp, exactly as
+ * laneWriterOf reads it: a row with no stamp whose session the registry
+ * never placed stays main's (D243, R7a), `unregistered` is writer
+ * unknown, `ambiguous` owns no lane, a helper's row is its role's, an
+ * import is its handoff lane. Nothing is written: the lane is read.
+ */
+export function laneOfRow(meta: Record<string, unknown> | null | undefined, placed: string | null | undefined): string {
+  if (placed && isSessionOwnRow(meta)) return placed === MAIN_WRITER ? MAIN_LANE : placed
+  return laneWriterOf(meta)
 }
 
 /** How many other lanes a status panel or a fresh start's packet names
@@ -253,18 +300,22 @@ function hasRefIndex(db: ReadHandle): boolean {
  */
 export function referencedBy(db: ReadHandle, nodeId: string, nowSec: number = Date.now() / 1000): ReferencedBy | null {
   if (!hasRefIndex(db)) return null
-  const target = db.prepare('SELECT tree_id, metadata_json FROM nodes WHERE node_id = ?').get(nodeId) as
-    | { tree_id: number; metadata_json: string | null }
+  const target = db.prepare('SELECT tree_id, metadata_json, session_key FROM nodes WHERE node_id = ?').get(nodeId) as
+    | { tree_id: number; metadata_json: string | null; session_key: string | null }
     | undefined
   if (!target) return null
   const rows = db.prepare(
-    `SELECT n.node_id, n.created_at, n.metadata_json FROM node_refs r JOIN nodes n ON n.node_id = r.node_id
+    `SELECT n.node_id, n.created_at, n.metadata_json, n.session_key FROM node_refs r JOIN nodes n ON n.node_id = r.node_id
       WHERE r.ref_id = ? AND n.tree_id = ? ORDER BY n.created_at DESC, n.rowid DESC`,
-  ).all(nodeId, target.tree_id) as Array<{ node_id: string; created_at: number; metadata_json: string | null }>
+  ).all(nodeId, target.tree_id) as Array<{ node_id: string; created_at: number; metadata_json: string | null; session_key: string | null }>
   if (rows.length === 0) return null
-  const lane = laneWriterOf(parseMetaSafe(target.metadata_json))
+  // D379: "another lane" as every reader reads it, the registry placing
+  // the session's own agent's rows, read once for the target and its
+  // referrers.
+  const placed = placementsOf(db, [target.session_key, ...rows.map((r) => r.session_key)])
+  const lane = laneOfRow(parseMetaSafe(target.metadata_json), placed.get(target.session_key ?? ''))
   const parsed = rows.map((r) => ({ ...r, meta: parseMetaSafe(r.metadata_json) }))
-  const top = parsed.find((r) => laneWriterOf(r.meta) !== lane) ?? parsed[0]!
+  const top = parsed.find((r) => laneOfRow(r.meta, placed.get(r.session_key ?? '')) !== lane) ?? parsed[0]!
   const content = (db.prepare('SELECT content FROM nodes WHERE node_id = ?').get(top.node_id) as { content: unknown }).content
   return {
     count: rows.length,

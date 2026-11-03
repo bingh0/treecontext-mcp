@@ -17,8 +17,9 @@
  */
 import type { SqlHandle as DatabaseType } from './persistence/node-sqlite.js'
 import { decodeContent } from './persistence/content-codec.js'
-import { referencedBy, ageText, plural, laneWriterOf, summarizeLanes, pointerKindWords, MAIN_LANE, OTHER_LANES_NAMED, type LaneSummary } from './references.js'
+import { referencedBy, ageText, plural, laneOfRow, summarizeLanes, pointerKindWords, MAIN_LANE, OTHER_LANES_NAMED, type LaneSummary } from './references.js'
 import { MAIN_WRITER } from './persistence/session-registry.js'
+import { placementsOf } from './persistence/lane-scope.js'
 
 export { ageText, plural }
 
@@ -654,11 +655,13 @@ export function markNudged(db: DatabaseType, chain: string[], localDate: string)
 // restart or brand new, orients on its self: the checkout it runs in,
 // whatever its process or session id. Its own thread is the newest live
 // chapter summary of its own lane (the lane key, references.ts
-// laneWriterOf: `_writer` `worktree:<name>` for a worktree; `main`, or no
-// stamp at all, for the main checkout), across every session that ever
-// ran there; a chapter of another lane, or one whose writer could not be
-// identified, is never its own. A lane with no chapter but a live
-// bookmark is handed the bookmark, named as one. A new worktree has no
+// laneOfRow, D379: the session's own agent's chapter in a session the
+// registry places in that checkout, whatever its stamp; otherwise its
+// stamp, `_writer` `worktree:<name>` for a worktree, `main` or no stamp at
+// all from a session the registry never placed for the main checkout),
+// across every session that ever ran there; a chapter of another lane, or
+// one whose writer could not be identified, is never its own. A lane with
+// no chapter but a live bookmark is handed the bookmark, named as one. A new worktree has no
 // chapter yet and is a new subagent process: it orients on the brief
 // addressed to it, an entry whose `brief_for` names the worktree (or
 // `main` for the main checkout), written by the orchestrator, typically
@@ -670,16 +673,19 @@ export function markNudged(db: DatabaseType, chain: string[], localDate: string)
  *  role as its brief. */
 export const BRIEF_FOR_KEY = 'brief_for'
 
-/** Every live pointer of the store with its lane key, newest first. */
+/** Every live pointer of the store with its lane key, newest first: the
+ *  lane every reader reads (D379, references.ts laneOfRow), the placement
+ *  of the pointers' sessions read once. */
 function livePointers(db: DatabaseType): Array<CheckpointRow & { laneKey: string }> {
   const rows = db.prepare(
-    `SELECT node_id, created_at, metadata_json, content FROM nodes
+    `SELECT node_id, created_at, metadata_json, content, session_key FROM nodes
       WHERE ${IN_TREES} AND ${LIVE_POINTER}
       ORDER BY created_at DESC, rowid DESC`,
-  ).all() as unknown as RawRow[]
+  ).all() as unknown as Array<RawRow & { session_key: string | null }>
+  const placed = placementsOf(db, rows.map((r) => r.session_key))
   return rows.map((r) => {
     const cp = toCheckpoint(r)
-    return { ...cp, laneKey: laneWriterOf(cp.metadata) }
+    return { ...cp, laneKey: laneOfRow(cp.metadata, placed.get(r.session_key ?? '')) }
   })
 }
 
