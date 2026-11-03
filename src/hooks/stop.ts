@@ -346,10 +346,13 @@ async function workerStop(input: Record<string, unknown>, dbPath: string, sessio
   }
   try {
     if (capped) {
+      // The door's open failed: it holds nothing to inherit from, so the
+      // staging write waits what is left of the hook's budget, never a
+      // fresh 7 s behind a failed 7 s (re-check of 2364fdf, s5: 14.0 s).
       writeStaging(dbPath, {
         sessionId, role: 'assistant', content: capped, timestamp: Date.now() / 1000, priority: 2,
         indexLen: Math.min(activeIndexCap('assistant'), capped.length),
-      })
+      }, undefined, openError !== null ? { deadlineAt: hookDeadlineLeft(HOOK_STARTED_AT) } : undefined)
     }
     if (invalid) {
       process.stdout.write(JSON.stringify({ systemMessage: invalidStopLine(w.leg) }) + '\n')

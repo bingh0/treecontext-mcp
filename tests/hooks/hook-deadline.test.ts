@@ -422,4 +422,27 @@ describe.skipIf(process.platform === 'win32')('a hook\'s wait on a real store an
       rmSync(dir, { recursive: true, force: true })
     }
   }, 60_000)
+
+  // stop.ts workerStop: when the door's open failed, the turn's staging
+  // write is handed what is left of the hook's budget (re-check of 2364fdf,
+  // s5: a fresh 7 s behind the failed 7 s made Stop 14.0 s). The call site
+  // itself is reached only by a lock that arrives between the guard and the
+  // door; this binds the option it relies on.
+  it('writeStaging given a deadline gives up by it, never at a fresh write budget', async () => {
+    const { dir, dbPath } = freshStore()
+    const locker = await lockWhole(dbPath)
+    try {
+      const t0 = Date.now()
+      let threw = false
+      try {
+        writeStaging(dbPath, { sessionId: 's-left', role: 'user', content: 'behind a failed door', timestamp: Date.now() / 1000 }, undefined, { deadlineAt: t0 + 1500 })
+      } catch { threw = true }
+      const took = Date.now() - t0
+      expect(took, `writeStaging took ${took} ms with 1500 ms left`).toBeLessThan(1500 + 1000)
+      expect(threw || existsSync(join(dir, 'hook-gaps.jsonl')), 'the write neither failed nor left a gap').toBe(true)
+    } finally {
+      await gone(locker)
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }, 60_000)
 })

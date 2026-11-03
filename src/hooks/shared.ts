@@ -291,10 +291,13 @@ export function resolveDbPath(cwd?: string): string {
  *  is left of that one, never a fresh budget (openWriteDeadline). The
  *  INSERT is one autocommit statement, so the handle's retry of it never
  *  stages a row twice. */
-export function writeStaging(dbPath: string, entry: StagingEntry, andThen?: (db: DatabaseType) => void): void {
+export function writeStaging(dbPath: string, entry: StagingEntry, andThen?: (db: DatabaseType) => void, opts?: { deadlineAt?: number }): void {
   let db: DatabaseType | null = null
   try {
-    db = openHookDb(dbPath)
+    // `deadlineAt`: a write phase behind an earlier one that is no longer
+    // open to inherit from (stop.ts: the door's open failed) waits what is
+    // left of the hook's budget, never a fresh one.
+    db = openHookDb(dbPath, opts?.deadlineAt !== undefined ? { deadlineAt: opts.deadlineAt } : undefined)
     // C1 capture attribution: stamp the namespace of the session this hook
     // belongs to — first by the session-keyed annotation the drain
     // publishes from echo evidence (§7.8; causal, pid-free, works where
