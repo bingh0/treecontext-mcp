@@ -41,7 +41,10 @@ describe.skipIf(process.platform === 'win32')('hookStoreOn waits what is left of
       let outcome: unknown = 'opened'
       try { outcome = await hookStoreOn(raw, dbPath, null, since) } catch (err) { outcome = (err as Error).message }
       const took = Date.now() - t0
-      expect(took, `hookStoreOn took ${took} ms (${String(outcome).slice(0, 80)}) with ${left} ms of the budget left`).toBeLessThan(left + 1500)
+      // Slack 3 s on every OS (the macOS runner's busy wait overran 1.5 s by
+      // 0.3 s, run 41654065600); the wrapper's 10 s this guards against
+      // still fails it.
+      expect(took, `hookStoreOn took ${took} ms (${String(outcome).slice(0, 80)}) with ${left} ms of the budget left`).toBeLessThan(left + 3000)
       // and the connection leaves with the remainder as its busy wait, not 10 s
       const wait = pragmaValue(raw, 'busy_timeout') as number
       expect(wait).toBeLessThanOrEqual(1500)

@@ -373,8 +373,20 @@ describe('the cut reaches the whole worker', () => {
       expect([r.ended, r.exitCode, r.sentBack, r.output]).toEqual(['cut', 143, false, ''])
       expect(took).toBeLessThan(2000 + TIMEOUT_GRACE_MS + STDOUT_DRAIN_MS)
       const pid = r.runs[0]!.pid!
-      // The worker led its own process group; no member of it is left.
-      expect(() => process.kill(-pid, 0)).toThrow(/ESRCH/)
+      // The worker led its own process group; no member of it is left. A
+      // member killed a moment ago may still be a zombie awaiting its reaper,
+      // which macOS answers with EPERM, not ESRCH: wait for the reap (2 s).
+      const gone = async (): Promise<string> => {
+        for (let i = 0; i < 40; i++) {
+          try { process.kill(-pid, 0) } catch (err) {
+            const code = (err as NodeJS.ErrnoException).code ?? ''
+            if (code !== 'EPERM') return code
+          }
+          await new Promise((res) => setTimeout(res, 50))
+        }
+        return 'still there'
+      }
+      expect(await gone()).toBe('ESRCH')
       expect(raw<{ ended: string }>('SELECT ended FROM session_registry WHERE session_id = ?', r.sessionId)[0]!.ended).toBe('cut')
     } finally { await s.close() }
   }, 30_000)

@@ -38,8 +38,12 @@ const RULE_MS = (() => {
   const cfg = buildVscodeHooksConfig() as { hooks: Record<string, Array<{ timeoutSec: number }>> }
   return Math.min(...Object.values(cfg.hooks).flat().map((e) => e.timeoutSec * 1000)) - 1000
 })()
-/** Slack on the relative bound: scheduler jitter between two spawns. */
-const JITTER_MS = 500
+/** Slack on the relative bound, the same on every OS: scheduler jitter
+ *  between two spawns and SQLite's busy-wait sleeps on a loaded runner
+ *  (the macOS runner overran a 0.5 s slack by 2–4 s, run 41654065600).
+ *  The regression this bound exists for, an open granted a fresh budget,
+ *  adds a whole 7 s and still fails it. */
+const JITTER_MS = 3000
 
 type W = CaptureWorld & { cleanups: Array<() => unknown> }
 function mkWorld(): W {
