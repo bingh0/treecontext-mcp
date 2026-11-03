@@ -311,20 +311,22 @@ export async function main(preParsed?: Record<string, unknown>): Promise<void> {
           payload = `treecontext could not read this session's journal after the clear: ${why}. No chapter summary, bookmark or recent developer turn was read; re-orient from the conversation, and run \`treecontext doctor\`.`
         }
       } else {
-        payload = buildRehydrationPayload(db, sessionId, source, dbPath)
         // D167, D373: a fresh start in a linked worktree or in the main
         // checkout re-orients on its own lane's thread (or the brief
         // addressed to it), told what other lanes exist. The self lines
         // sit outside the start's budget: a resume's budget would cut the
-        // lane's own anchor.
+        // lane's own anchor. Shown, they replace the start's "no prior
+        // context" fallback, which would contradict them.
+        let own: string[] = []
         if (self && placed) {
           try {
-            const own = selfLines(db, self, Date.now() / 1000)
-            if (own.length > 0) payload = `${own.join('\n')}\n${payload}`
+            own = selfLines(db, self, Date.now() / 1000)
           } catch (err) {
             dbg('hook:session-start', 'self lines read FAILED', { error: messageOf(err) })
           }
         }
+        const rest = buildRehydrationPayload(db, sessionId, source, dbPath, { selfLinesShown: own.length > 0 })
+        payload = [...own, ...(rest ? [rest] : [])].join('\n')
       }
       emit({ systemMessage: sign, additionalContext: payload })
 

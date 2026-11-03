@@ -1279,9 +1279,10 @@ export const orchestrationDefiner = (reg: Registry<OrchestrationWorld>): void =>
   reg.define(/^the packet carries no line about other lanes$/, (w) => {
     const packet = w.startPackets!['main']!
     expect(otherLanesLineOf(packet), packet).toBeUndefined()
-    // The self lines end with the chapter's referrers; what follows is the
-    // start's own payload, a fresh session's with nothing staged.
-    expect(packet.split('\n').slice(2)).toEqual(['  referenced by: none', 'No prior context available. Use treecontext_query to search project memory.'])
+    // The self lines end with the chapter's referrers. A fresh session with
+    // nothing staged adds nothing after them: the start's "no prior
+    // context" fallback would contradict the lines above it.
+    expect(packet.split('\n').slice(2)).toEqual(['  referenced by: none'])
   })
 
   // ── D376: the undetermined writers in status and the packet ──

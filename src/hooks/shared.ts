@@ -537,6 +537,10 @@ export function buildRehydrationPayload(
   sessionId: string,
   source: SessionSource,
   dbPath: string,
+  /** Whether the caller shows the lane's own lines (session-start.ts
+   *  selfLines) above this payload: the "no prior context" fallback would
+   *  contradict them, so it is left out. */
+  opts: { selfLinesShown?: boolean } = {},
 ): string {
   const budget = SOURCE_BUDGETS[source]
   const parts: string[] = []
@@ -600,7 +604,7 @@ export function buildRehydrationPayload(
     parts.push('\nNote: The prior summary may have collapsed branching threads. This snapshot preserves the active thread.')
   }
 
-  if (parts.length === 0) {
+  if (parts.length === 0 && !opts.selfLinesShown) {
     parts.push('No prior context available. Use treecontext_query to search project memory.')
   }
 
