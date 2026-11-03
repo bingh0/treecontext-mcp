@@ -32,10 +32,13 @@
  * Both are SQL predicates over `nodes`, so a scope is applied in the store
  * before a result count and to every conversation window alike.
  *
- * A POINTER's lane is read the same way (D379, references.ts laneOfRow):
- * the session's own agent's row in a session the registry places is that
- * checkout's, whatever its stamp; placementsOf reads the placement once
- * per call for every reader that lists, counts or retires pointers.
+ * A POINTER's lane is read with the same cuts (D379, references.ts
+ * laneOfRow): the session's own agent's row in a session the registry
+ * places is that checkout's, whatever its stamp; an unstamped row is
+ * main's only where the registry never held its session, and writer
+ * unknown where it holds the session but places it nowhere. placementsOf
+ * reads the placement once per call for every reader that lists, counts
+ * or retires pointers, and for the search's own-chapter seat.
  */
 import { HANDOFF_LANE_PREFIX } from '../handoff.js'
 import { SUBAGENT_SUMMARY_KIND } from '../run-kinds.js'
@@ -83,28 +86,35 @@ interface PlacementHandle { prepare(sql: string): { all(...p: unknown[]): unknow
 const PLACEMENT_CHUNK = 500
 
 /**
- * The placed lanes of `sessionIds`, read from their self registrations in
- * one pass per call (D379): each session the registry places, mapped to
- * `main` or `worktree:<name>`, the same spelling placedLaneOf gives and the
- * same sessions laneRowsSql reads as a checkout's. A session absent from
- * the map is placed nowhere: never registered, a ticket-door worker, or a
- * store whose registry cannot be read, so its rows' lane stays their
- * writer stamp (references.ts laneOfRow).
+ * The placement of `sessionIds`, read from the registry in one pass per
+ * call (D379): each session whose SELF registration the registry holds,
+ * mapped to `main` or `worktree:<name>`, the same spelling placedLaneOf
+ * gives and the same sessions laneRowsSql reads as a checkout's; each
+ * session the registry holds by another registration only (a ticket-door
+ * worker, a subagent whose session's self never registered), mapped to
+ * null: held, placed in no checkout. A session absent from the map is one
+ * the registry never held, as laneRowsSql's never-held cut reads it (R7a):
+ * the store's rows from before it recorded writers. A store whose registry
+ * cannot be read holds none. references.ts laneOfRow reads all three.
  */
-export function placementsOf(db: PlacementHandle, sessionIds: Iterable<string | null | undefined>): Map<string, PlacedLane> {
+export function placementsOf(db: PlacementHandle, sessionIds: Iterable<string | null | undefined>): Map<string, PlacedLane | null> {
   const wanted = [...new Set([...sessionIds].filter((s): s is string => typeof s === 'string' && s !== ''))]
-  const out = new Map<string, PlacedLane>()
+  const out = new Map<string, PlacedLane | null>()
   if (wanted.length === 0) return out
   try {
     for (let i = 0; i < wanted.length; i += PLACEMENT_CHUNK) {
       const chunk = wanted.slice(i, i + PLACEMENT_CHUNK)
       const rows = db.prepare(
-        `SELECT session_id, worktree FROM session_registry WHERE agent_id = '' AND session_id IN (${chunk.map(() => '?').join(',')})`,
-      ).all(...chunk) as Array<{ session_id: string; worktree: string | null }>
-      for (const r of rows) out.set(r.session_id, r.worktree ? `${WORKTREE_WRITER_PREFIX}${r.worktree}` : MAIN_WRITER)
+        `SELECT session_id, agent_id, worktree FROM session_registry WHERE session_id IN (${chunk.map(() => '?').join(',')})`,
+      ).all(...chunk) as Array<{ session_id: string; agent_id: string; worktree: string | null }>
+      for (const r of rows) {
+        // Only the session's self places it; any other registration holds it.
+        if (r.agent_id === '') out.set(r.session_id, r.worktree ? `${WORKTREE_WRITER_PREFIX}${r.worktree}` : MAIN_WRITER)
+        else if (!out.has(r.session_id)) out.set(r.session_id, null)
+      }
     }
   } catch {
-    // No registry (a store older than it, or unreadable): nothing placed.
+    // No registry (a store older than it, or unreadable): nothing held.
     return new Map()
   }
   return out

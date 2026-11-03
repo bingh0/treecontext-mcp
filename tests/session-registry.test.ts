@@ -18,6 +18,8 @@ import { laneWriterOf, laneOfRow, laneLabelOf, writerOf, referencedBy, summarize
 import {
   registerSelf, registerSubagent, retireSubagent, resolveWriter, liveSubagents, type GitSelf,
 } from '../src/persistence/session-registry.js'
+import { registerWorkerLeg } from '../src/persistence/leg-registry.js'
+import { placementsOf } from '../src/persistence/lane-scope.js'
 import { parseToolResult } from './helpers/mcp-result.js'
 
 let tmpDir: string
@@ -578,9 +580,16 @@ describe('one lane rule for every reader (D379)', () => {
     expect(laneOfRow({ _cc_session_id: 'wt' }, wt)).toBe(wt)
     expect(laneOfRow({ _cc_session_id: 'wt', _writer: 'main', _writer_src: 'self' }, wt)).toBe(wt)
     expect(laneOfRow({ _cc_session_id: 'm', _writer: wt, _writer_src: 'self' }, 'main')).toBe(MAIN_LANE)
-    // Never placed: its stamp, an unstamped row main's (D243, R7a).
-    expect(laneOfRow({ _cc_session_id: 'old' }, null)).toBe(MAIN_LANE)
+    // Never held: its stamp, an unstamped row main's (D243, R7a).
     expect(laneOfRow({ _cc_session_id: 'old' }, undefined)).toBe(MAIN_LANE)
+    expect(laneOfRow({ _cc_session_id: 'old', _writer: 'main', _writer_src: 'self' }, undefined)).toBe(MAIN_LANE)
+    // Held, placed in no checkout (a worker's session, a self that never
+    // registered): an unstamped row is writer unknown, never main (R7); a
+    // stamp still decides.
+    expect(laneOfRow({ _cc_session_id: 'wk' }, null)).toBe(UNKNOWN_LANE)
+    expect(laneOfRow({ _cc_session_id: 'wk', _writer: 'main', _writer_src: 'self' }, null)).toBe(MAIN_LANE)
+    expect(laneOfRow({ _cc_session_id: 'wk', _writer: 'builder', _writer_agent_id: 'worker' }, null)).toBe('builder')
+    expect(laneOfRow({ _cc_session_id: 'wk', agent_type: 'tester' }, null)).toBe('tester')
     // A helper's row stays its role's (R8), however the session is placed.
     expect(laneOfRow({ _cc_session_id: 'wt', _writer: 'tester', _writer_src: 'echo', _writer_agent_id: 'a2' }, wt)).toBe('tester')
     expect(laneOfRow({ _cc_session_id: 'wt', _writer: 'claude-code', _writer_agent_id: 'x9', kind: 'internal-summary' }, wt)).toBe('claude-code')
@@ -672,6 +681,222 @@ describe('one lane rule for every reader (D379)', () => {
     const { s, lib } = await libraryWorld(1)
     expect(s.subagentScopeFor('wt', 'tester').ids).toContain(lib[0])
     expect(s.subagentScopeFor('m', 'tester').ids).not.toContain(lib[0])
+    await s.close()
+  })
+})
+
+describe('one lane rule for every reader: the cut, the seat, and each reader\'s own half (D379, the gate-fix review)', () => {
+  const lanesOf = (st: { otherLanes?: Array<{ lane: string; pointers: number }> }): Array<[string, number]> =>
+    (st.otherLanes ?? []).map((l) => [l.lane, l.pointers])
+
+  /** A lane-scoped relevance page in `wt` that would seat a chapter of the
+   *  worktree's session: six newer captured turns of the session that match
+   *  more of the words, the chapter matching one. Returns the query. */
+  async function seatWorld(s: FlatStore): Promise<string> {
+    const t0 = Date.now() / 1000
+    for (let i = 0; i < 6; i++) {
+      await s.insert(`omega next step ${i}: the doctor table rows`, { metadata: { source: 'auto-capture', role: 'user', session_id: 'wt' }, sourceLabel: 'auto-capture', createdAt: t0 + 1 + i })
+    }
+    return 'omega next step the doctor table'
+  }
+  /** The chapter is found by the worktree's search (its scope), and is no
+   *  page's seat: a page of three is the ranking's first three. */
+  async function expectFoundNeverSeated(s: FlatStore, q: string, chapter: string): Promise<void> {
+    const lane = 'worktree:feature-login'
+    const wide = await s.query(q, { topK: 100, recencyWeight: 0.25, lane })
+    expect(wide.map((h) => h.nodeId), 'found by the lane\'s search').toContain(chapter)
+    expect(wide.slice(0, 3).map((h) => h.nodeId), 'ranked below the page').not.toContain(chapter)
+    const page = await s.query(q, { topK: 3, recencyWeight: 0.25, lane })
+    expect(page.map((h) => h.nodeId)).toEqual(wide.slice(0, 3).map((h) => h.nodeId))
+  }
+
+  it('Z1: an ambiguous chapter written through the tool in a worktree is found by its search and never seated as its own (F1a, P4)', async () => {
+    const s = await open()
+    withRaw((db) => {
+      registerSelf(db, 'wt', WT, 100)
+      registerSubagent(db, 'wt', 'a1', 'tester', WT, 101)
+      registerSubagent(db, 'wt', 'a2', 'reviewer', WT, 101)
+    })
+    const w = await client(s, 'wt')
+    const r = await insert(w.c, 'omega plan: rewrite the install section', { next_session: true })
+    await w.close()
+    const chapter = r['node_id'] as string
+    expect(meta(chapter)).toMatchObject({ _writer_src: 'ambiguous' })
+    // Status: not the worktree's own, counted under the ambiguous writer.
+    const st = s.status({ lane: 'worktree:feature-login' })
+    expect(st.resumePointers).toEqual([])
+    expect(lanesOf(st)).toEqual([['ambiguous writer', 1]])
+    await expectFoundNeverSeated(s, await seatWorld(s), chapter)
+    await s.close()
+  })
+
+  it('Z2: a library chapter in a worktree\'s session claiming a role is the role\'s in status, and never seated as the worktree\'s own (F1b, P2)', async () => {
+    const s = await open()
+    withRaw((db) => registerSelf(db, 'wt', WT, 100))
+    const chapter = (await s.insert('omega plan: rewrite the install section', { metadata: { next_session: true, _cc_session_id: 'wt', agent_type: 'tester' }, createdAt: Date.now() / 1000 - 3600 })).nodeId
+    expect(meta(chapter)['_writer']).toBeUndefined()
+    const st = s.status({ lane: 'worktree:feature-login' })
+    expect(st.resumePointers).toEqual([])
+    expect(lanesOf(st)).toEqual([['tester', 1]])
+    await expectFoundNeverSeated(s, await seatWorld(s), chapter)
+    await s.close()
+  })
+
+  it('Z3: an unstamped library chapter in a ticket-door worker\'s session is writer unknown, never main\'s own (F1c)', async () => {
+    const s = await open()
+    withRaw((db) => {
+      registerSelf(db, 'm', MAIN, 100)
+      registerSelf(db, 'wt', WT, 100)
+      registerWorkerLeg(db, {
+        sessionId: 'wk', door: 'library', at: 102, where: { worktree: 'feature-login' },
+        ticket: { parent: { id: 'wt' }, run: 'r1', key: 'k', role: 'builder', checkpointer: 'builder' },
+        process: { pid: null, start: null, host: 'laptop' },
+      })
+    })
+    const chapter = (await s.insert('plan: zebra quokka worker notes', { metadata: { next_session: true, _cc_session_id: 'wk' } })).nodeId
+    expect(meta(chapter)['_writer']).toBeUndefined()
+    // Main's status and packet: nothing of its own; the chapter counted
+    // under writer unknown, never its text or id.
+    const main = s.status({ lane: 'main' })
+    expect(main.resumePointers).toEqual([])
+    expect(lanesOf(main)).toEqual([['writer unknown', 1]])
+    const lines = withRaw((db) => selfLines(db, { worktree: null, branch: 'main', toplevel: '/repo' }, Date.now() / 1000))
+    expect(lines[1]).toBe('No chapter summary, bookmark or brief exists for the main lane yet; it starts fresh.')
+    expect(lines[2]).toMatch(/^1 other lane holds a live pointer, not shown here; the most recent: writer unknown \(chapter summary/)
+    expect(lines.join('\n')).not.toContain(chapter)
+    expect(lines.join('\n')).not.toContain('zebra')
+    // Nor the worktree's, whose worker it is (R8: a helper's row is never
+    // its checkout's own).
+    const wt = s.status({ lane: 'worktree:feature-login' })
+    expect(wt.resumePointers).toEqual([])
+    expect(lanesOf(wt)).toEqual([['writer unknown', 1]])
+    // The cut every reader uses: main's search and main's trail agree.
+    expect((await s.query('zebra quokka', { topK: 10, lane: 'main' })).map((h) => h.nodeId)).not.toContain(chapter)
+    expect(s.writerTrail('main', 100).nodes.map((n) => String(n.nodeId))).not.toContain(chapter)
+    await s.close()
+  })
+
+  it('a session the registry holds through a subagent alone is placed nowhere: its unstamped chapter is writer unknown (F1c, P13)', async () => {
+    const s = await open()
+    withRaw((db) => {
+      registerSelf(db, 'm', MAIN, 100)
+      registerSubagent(db, 'so', 'a3', 'tester', WT, 101)
+    })
+    const chapter = (await s.insert('plan: a self that never registered', { metadata: { next_session: true, _cc_session_id: 'so' } })).nodeId
+    const wt = s.status({ lane: 'worktree:feature-login' })
+    expect(wt.resumePointers).toEqual([])
+    expect(lanesOf(wt)).toEqual([['writer unknown', 1]])
+    const main = s.status({ lane: 'main' })
+    expect(main.resumePointers.map((p) => p.nodeId)).not.toContain(chapter)
+    await s.close()
+  })
+
+  it('placementsOf places a session by its self registration only, and tells a held session from one never held (P13)', async () => {
+    const s = await open()
+    withRaw((db) => {
+      registerSelf(db, 'm', MAIN, 100)
+      registerSelf(db, 'wt', WT, 100)
+      registerSubagent(db, 'wt', 'a2', 'tester', WT, 101)
+      registerSubagent(db, 'so', 'a3', 'tester', WT, 101)
+      registerWorkerLeg(db, {
+        sessionId: 'wk', door: 'library', at: 102, where: { worktree: 'feature-login' },
+        ticket: { parent: { id: 'wt' }, run: 'r1', key: 'k', role: 'builder', checkpointer: 'builder' },
+        process: { pid: null, start: null, host: 'laptop' },
+      })
+    })
+    await s.close()
+    const placed = withRaw((db) => placementsOf(db, ['m', 'wt', 'so', 'wk', 'never', null, undefined, '']))
+    expect([...placed.entries()].sort()).toEqual([['m', 'main'], ['so', null], ['wk', null], ['wt', 'worktree:feature-login']])
+    expect(placed.has('never')).toBe(false)
+  })
+
+  it('an unstamped writer in a held but unplaced session never opens the pre-stamp door (D378 unchanged)', async () => {
+    const s = await open()
+    // No session in the main checkout: the door would be open to a writer
+    // the store stamped `unregistered`.
+    withRaw((db) => {
+      registerSelf(db, 'wt', WT, 100)
+      registerWorkerLeg(db, {
+        sessionId: 'wk', door: 'library', at: 102,
+        ticket: { parent: { id: 'wt' }, run: 'r1', key: 'k', role: 'builder', checkpointer: 'builder' },
+        process: { pid: null, start: null, host: 'laptop' },
+      })
+    })
+    const older = (await s.insert('plan: the first release', { metadata: { next_session: true, _cc_session_id: 'old' }, createdAt: Date.now() / 1000 - 86_400 })).nodeId
+    const r = await s.insert('plan: a script in the worker\'s session', { metadata: { next_session: true, _cc_session_id: 'wk' }, supersedes: [older] })
+    expect(r.superseded ?? []).toEqual([])
+    expect(meta(older)['next_session']).toBe(true)
+    expect(meta(older)['_retired_across']).toBeUndefined()
+    expect(meta(r.nodeId)['_supersedes_across']).toBeUndefined()
+    expect(meta(r.nodeId)['refs']).toEqual([older])
+    await s.close()
+  })
+
+  it('a row stamped unregistered stays writer unknown in status after its session registers in a checkout (P3)', async () => {
+    const s = await open()
+    const late = await client(s, 'late')
+    const chapter = (await insert(late.c, 'plan: written before the hook registered', { next_session: true }))['node_id'] as string
+    await late.close()
+    expect(meta(chapter)).toMatchObject({ _writer_src: 'unregistered' })
+    withRaw((db) => registerSelf(db, 'late', WT, 200))
+    const wt = s.status({ lane: 'worktree:feature-login' })
+    expect(wt.resumePointers).toEqual([])
+    expect(lanesOf(wt)).toEqual([['writer unknown', 1]])
+    await s.close()
+  })
+
+  it('a stamped chapter of the session\'s own agent is its session\'s checkout\'s, whatever its stamp (P5)', async () => {
+    const s = await open()
+    withRaw((db) => registerSelf(db, 'moved', MAIN, 100))
+    const c = await client(s, 'moved')
+    const chapter = (await insert(c.c, 'plan: the session resumes in the worktree', { next_session: true }))['node_id'] as string
+    await c.close()
+    expect(meta(chapter)).toMatchObject({ _writer: 'main', _writer_src: 'self' })
+    // Resumed in the worktree: the registry places the session there now.
+    withRaw((db) => registerSelf(db, 'moved', WT, 200))
+    expect(s.status({ lane: 'worktree:feature-login' }).resumePointers.map((p) => p.nodeId)).toEqual([chapter])
+    expect(s.status({ lane: 'main' }).resumePointers).toEqual([])
+    await s.close()
+  })
+
+  it('the inserting row\'s own lane: a library chapter in the worktree\'s session retires the previous one, under main\'s session id it does not (F3, P8)', async () => {
+    const s = await open()
+    withRaw((db) => { registerSelf(db, 'm', MAIN, 100); registerSelf(db, 'wt', WT, 100) })
+    const first = (await s.insert('plan: the layout, from a script', { metadata: { next_session: true, _cc_session_id: 'wt' }, createdAt: Date.now() / 1000 - 60 })).nodeId
+    const second = await s.insert('plan: the layout, settled by the script', { metadata: { next_session: true, _cc_session_id: 'wt' }, supersedes: [first] })
+    expect(second.superseded).toEqual([first])
+    expect(meta(first)).toMatchObject({ superseded_by: second.nodeId })
+    expect(meta(first)['next_session']).toBeUndefined()
+    expect(s.status({ lane: 'worktree:feature-login' }).resumePointers.map((p) => p.nodeId)).toEqual([second.nodeId])
+    // The same insert under main's session id is another lane's writer.
+    const fromMain = await s.insert('plan: main takes the layout', { metadata: { next_session: true, _cc_session_id: 'm' }, supersedes: [second.nodeId] })
+    expect(fromMain.superseded ?? []).toEqual([])
+    expect(meta(second.nodeId)['next_session']).toBe(true)
+    expect(meta(fromMain.nodeId)['refs']).toEqual([second.nodeId])
+    await s.close()
+  })
+
+  it('the bookmark chain reads the same lane: a library bookmark in the worktree\'s session retires its earlier one (F4, P6, P8)', async () => {
+    const s = await open()
+    withRaw((db) => registerSelf(db, 'wt', WT, 100))
+    const first = (await s.insert('at: the layout half done', { metadata: { next_session: true, kind: 'bookmark', _cc_session_id: 'wt' }, createdAt: Date.now() / 1000 - 60 })).nodeId
+    const second = (await s.insert('at: the layout done, tests next', { metadata: { next_session: true, kind: 'bookmark', _cc_session_id: 'wt' } })).nodeId
+    expect(meta(first)).toMatchObject({ superseded_by: second })
+    expect(meta(first)['next_session']).toBeUndefined()
+    expect(s.status({ lane: 'worktree:feature-login' }).resumePointers.map((p) => p.nodeId)).toEqual([second])
+    await s.close()
+  })
+
+  it('the referrer shown reads each referrer\'s lane: a library referrer in the worktree is shown from another lane before main\'s newer one (F4, P12)', async () => {
+    const s = await open()
+    withRaw((db) => { registerSelf(db, 'm', MAIN, 100); registerSelf(db, 'wt', WT, 100) })
+    const m = await client(s, 'm')
+    const plan = (await insert(m.c, 'plan: the release', { next_session: true }))['node_id'] as string
+    const fromWt = (await s.insert('worktree script: the release clashes with the layout', { metadata: { _cc_session_id: 'wt', refs: [plan] }, createdAt: Date.now() / 1000 - 30 })).nodeId
+    // Newer, and main's own: not the one shown.
+    await insert(m.c, 'main: a note on the release', { refs: [plan] })
+    await m.close()
+    expect(withRaw((db) => referencedBy(db, plan))).toMatchObject({ count: 2, newest: { nodeId: fromWt, writer: 'wt' } })
     await s.close()
   })
 })

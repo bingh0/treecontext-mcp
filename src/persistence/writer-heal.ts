@@ -32,7 +32,7 @@
  * finds the lane unchanged and changes nothing.
  */
 import type { Database } from './database.js'
-import { isSessionOwnRow, laneOfRow, laneWriterOf, RETIRED_ACROSS_KEY, SUPERSEDES_ACROSS_KEY } from '../references.js'
+import { isSessionOwnRow, laneOfRow, laneWriterOf, MAIN_LANE, RETIRED_ACROSS_KEY, SUPERSEDES_ACROSS_KEY } from '../references.js'
 import { placementsOf, type PlacedLane } from './lane-scope.js'
 import { sessionOf, NO_SESSION } from '../dedup-identity.js'
 import { agentWriterOf, selfOf, selfWriterOf } from './session-registry.js'
@@ -76,16 +76,21 @@ const isLive = (m: Record<string, unknown>): boolean => m['next_session'] === tr
 
 /** A row's lane as every reader reads it (D379, references.ts laneOfRow),
  *  so the heal's own and foreign test is insert's: the session's own
- *  agent's row in a session the registry places is that checkout's. The
- *  placement is read once per session per heal, never once per row. */
+ *  agent's row in a session the registry places is that checkout's, and
+ *  an unstamped row is main's only where the registry never held its
+ *  session. The placement is read once per session per heal, never once
+ *  per row, and only where it can decide the lane. */
 type LaneOf = (meta: Record<string, unknown> | null) => string
 function laneReader(db: Database): LaneOf {
-  const placed = new Map<string, PlacedLane | null>()
+  // A session's placement: a placed lane, null (held, placed nowhere) or
+  // undefined (never held), as placementsOf reads it.
+  const placed = new Map<string, PlacedLane | null | undefined>()
   return (meta) => {
-    if (!isSessionOwnRow(meta)) return laneWriterOf(meta)
+    const stamped = laneWriterOf(meta)
+    if (!isSessionOwnRow(meta) && stamped !== MAIN_LANE) return stamped
     const session = sessionOf(meta)
-    if (session === NO_SESSION) return laneWriterOf(meta)
-    if (!placed.has(session)) placed.set(session, placementsOf(db, [session]).get(session) ?? null)
+    if (session === NO_SESSION) return stamped
+    if (!placed.has(session)) placed.set(session, placementsOf(db, [session]).get(session))
     return laneOfRow(meta, placed.get(session))
   }
 }

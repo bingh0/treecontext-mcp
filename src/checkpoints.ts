@@ -658,7 +658,8 @@ export function markNudged(db: DatabaseType, chain: string[], localDate: string)
 // laneOfRow, D379: the session's own agent's chapter in a session the
 // registry places in that checkout, whatever its stamp; otherwise its
 // stamp, `_writer` `worktree:<name>` for a worktree, `main` or no stamp at
-// all from a session the registry never placed for the main checkout),
+// all from a session the registry never held for the main checkout; no
+// stamp from a session it holds but places nowhere is writer unknown),
 // across every session that ever ran there; a chapter of another lane, or
 // one whose writer could not be identified, is never its own. A lane with
 // no chapter but a live bookmark is handed the bookmark, named as one. A new worktree has no

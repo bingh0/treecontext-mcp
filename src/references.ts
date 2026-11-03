@@ -86,9 +86,10 @@ export const AMBIGUOUS_LANE = '\u0000ambiguous'
  *  lane's writer never retires one of them (nor they its); never folded
  *  into main and never any lane's own. Distinct from AMBIGUOUS_LANE, which
  *  retires nothing. A row with no stamp at all (written before the store
- *  recorded writers, or through the library without one) stays main's,
- *  unless the registry places its session in a checkout (D379,
- *  laneOfRow). */
+ *  recorded writers, or through the library without one) stays main's
+ *  where the registry never held its session; where the registry places
+ *  its session it is that checkout's, and where it holds the session but
+ *  places it nowhere it is this lane too (D379, laneOfRow). */
 export const UNKNOWN_LANE = '\u0000unknown'
 
 /** How the undetermined writers' lane is named wherever it is shown. */
@@ -181,22 +182,33 @@ export function isSessionOwnRow(meta: Record<string, unknown> | null | undefined
 /**
  * The lane every reader reads a row in (D379, amending D376): the one
  * rule for status, the fresh start's self lines and its other-lanes line,
- * supersession's own and foreign test, the echo heal and the referrer
- * shown, agreeing with the search's scope (lane-scope.ts laneRowsSql). A
- * row of its session's own agent (isSessionOwnRow) whose session the
- * registry places (`placed`, from lane-scope.ts placementsOf, read once
- * per call) is that checkout's lane, `main` (MAIN_LANE) or
+ * supersession's own and foreign test, the echo heal, the referrer shown
+ * and the search's own-chapter seat, with the cuts the search's scope and
+ * the writer trail use (lane-scope.ts laneRowsSql). `placement` is the
+ * session's, from lane-scope.ts placementsOf (read once per call): a
+ * placed lane, null for a session the registry holds but places in no
+ * checkout, undefined for a session it never held.
+ *
+ * A row of its session's own agent (isSessionOwnRow) whose session the
+ * registry places is that checkout's lane, `main` (MAIN_LANE) or
  * `worktree:<name>`, its stamp or the lack of one notwithstanding: a
  * chapter a program wrote through the library in a worktree's session is
- * the worktree's. Every other row's lane is its writer stamp, exactly as
- * laneWriterOf reads it: a row with no stamp whose session the registry
- * never placed stays main's (D243, R7a), `unregistered` is writer
- * unknown, `ambiguous` owns no lane, a helper's row is its role's, an
- * import is its handoff lane. Nothing is written: the lane is read.
+ * the worktree's. A row naming no writer at all, no stamp and no role,
+ * whose session the registry holds but places nowhere (a ticket-door
+ * worker's, a session whose self never registered while a subagent's
+ * did) is writer unknown (R7): written while writers were recorded, its
+ * writer not identified, never main's. Every other row's lane is its
+ * writer stamp, exactly as laneWriterOf reads it: an unstamped row whose
+ * session the registry never held stays main's (D243, R7a), `unregistered`
+ * is writer unknown, `ambiguous` owns no lane, a helper's row is its
+ * role's, an import is its handoff lane. Nothing is written: the lane is
+ * read.
  */
-export function laneOfRow(meta: Record<string, unknown> | null | undefined, placed: string | null | undefined): string {
-  if (placed && isSessionOwnRow(meta)) return placed === MAIN_WRITER ? MAIN_LANE : placed
-  return laneWriterOf(meta)
+export function laneOfRow(meta: Record<string, unknown> | null | undefined, placement: string | null | undefined): string {
+  if (placement && isSessionOwnRow(meta)) return placement === MAIN_WRITER ? MAIN_LANE : placement
+  const lane = laneWriterOf(meta)
+  if (placement === null && lane === MAIN_LANE && named(meta?.['_writer']) === undefined) return UNKNOWN_LANE
+  return lane
 }
 
 /** How many other lanes a status panel or a fresh start's packet names

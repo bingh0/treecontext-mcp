@@ -282,6 +282,16 @@ Feature: Orchestration inside one store — lanes that stay their own
     # it to main; the search read the registry and gave it to the
     # worktree. One rule now: the registry places the session first.
 
+  @D379
+  Scenario: a subagent's chapter in a worktree's session is its role's, never the worktree's own
+    Given the worktree "subproject"'s own live chapter summary, written through the tools
+    And a tester subagent the worktree's session spawned, which writes a newer live chapter summary through the tools
+    When the worktree's session calls status and a new session starts in the worktree
+    Then neither the status nor the packet lists the tester's chapter as the worktree's own, and both count it under "tester"
+    And the worktree's own chapter still leads both
+    # The gate-fix review, 2026-11-03, F2: the registry places the
+    # session's own agent's rows, never a helper's (R8).
+
   @D190
   Scenario: the session-start hook registers self and the server stamps rows from it
     Given a session starting in the worktree "feature-login" on the branch "login-form"

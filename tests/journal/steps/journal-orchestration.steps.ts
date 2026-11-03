@@ -356,6 +356,8 @@ export const orchestrationDefiner = (reg: Registry<OrchestrationWorld>): void =>
   preStampSteps(reg)
   // D379: one lane rule for every reader (its own section, below).
   oneLaneSteps(reg)
+  // D379: a helper's chapter in a placed session (its own section, below).
+  helperChapterSteps(reg)
   // ── D186: one hop deep, the rest on request ──
   reg.define(/^an entry A, an entry B that names A, and an entry C that names B$/, async (w) => {
     await openWorld(w)
@@ -2495,5 +2497,90 @@ function oneLaneSteps(reg: Registry<OrchestrationWorld>): void {
     const wt = await searchAs(w, w.laneSessions![lane]!, LIBRARY_CHAPTER_WORDS)
     expect(wt['scope']).toMatchObject({ lane })
     expect(hitIdsOf(wt), JSON.stringify(wt).slice(0, 2000)).toContain(lib.id)
+  })
+}
+
+// ── D379: a helper's chapter in a placed session (the gate-fix review, F2)
+//
+// The worktree's session registers through the real SessionStart hook in
+// the worktree (laneSession) and writes its own chapter through the real
+// insert tool; its tester subagent is registered by the real SubagentStart
+// hook under the worktree's session id, in the worktree, and writes its
+// chapter through the same tool, the call's real PostToolUse echo carrying
+// its agent fields, drained by the production drain. The session is placed
+// in the worktree, so only the stamp keeps the tester's chapter its role's.
+
+/** The tester's chapter as status and the packet must name its lane. */
+function testerLaneEntry(w: OrchestrationWorld): LaneEntry {
+  const t = w.entries!['tester']!
+  expect(rawMeta(w, t.id)['next_session']).toBe(true)
+  return { lane: 'tester', kind: 'chapter summary', age: `${ageText(createdAtOf(w, t.id), now())} old`, pointers: 1 }
+}
+
+/** The worktree lane the world keeps a session for. */
+function worktreeLaneOf(w: OrchestrationWorld): string {
+  return Object.keys(w.laneSessions!).find((k) => k.startsWith('worktree:'))!
+}
+
+function helperChapterSteps(reg: Registry<OrchestrationWorld>): void {
+  reg.define(/^the worktree "([^"]+)"'s own live chapter summary, written through the tools$/, async (w, name$) => {
+    await openGitWorld(w)
+    w.laneSessions = { main: w.sessionId! }
+    w.entries = {}
+    const lane = `worktree:${String(name$)}`
+    w.entries[lane] = await laneChapter(w, lane, 'plan: scaffold the subproject; next: its first test')
+  })
+
+  reg.define(/^a tester subagent the worktree's session spawned, which writes a newer live chapter summary through the tools$/, async (w) => {
+    const lane = worktreeLaneOf(w)
+    const session = w.laneSessions![lane]!
+    w.sessionId = session
+    w.testerId = `agent-${randomBytes(4).toString('hex')}`
+    runHook(w, 'subagent-start', { hook_event_name: 'SubagentStart', agent_id: w.testerId, agent_type: 'tester', cwd: checkoutDir(w, lane) })
+    // The live tester is registered under the worktree's session, the
+    // session itself placed in the worktree.
+    expect(rawAll(w, 'SELECT agent_type, worktree FROM session_registry WHERE session_id = ? AND agent_id = ?', session, w.testerId))
+      .toEqual([{ agent_type: 'tester', worktree: lane.slice('worktree:'.length) }])
+    const text = 'plan: the tester reworks the fixtures; next: rerun the suite'
+    const reply = await insertEchoed(w, { agentId: w.testerId, agentType: 'tester' }, text, { next_session: true })
+    expect(reply).toMatchObject({ writer: 'tester', writer_src: 'provisional' })
+    subagentStop(w, w.testerId, 'tester', 'fixtures reworked')
+    await drainStaging(w)
+    const id = reply['node_id'] as string
+    expect(rawMeta(w, id)).toMatchObject({ _writer: 'tester', _writer_src: 'echo', _writer_agent_id: w.testerId, _cc_session_id: session, next_session: true })
+    expect(sessionKeyOf(w, id)).toBe(session)
+    expect(createdAtOf(w, id)).toBeGreaterThanOrEqual(createdAtOf(w, w.entries![lane]!.id))
+    w.entries!['tester'] = { id, text }
+  })
+
+  reg.define(/^the worktree's session calls status and a new session starts in the worktree$/, async (w) => {
+    const lane = worktreeLaneOf(w)
+    w.statusReply = await statusOf(w, w.laneSessions![lane]!)
+    w.startPackets = { [lane]: startIn(w, lane) }
+  })
+
+  reg.define(/^neither the status nor the packet lists the tester's chapter as the worktree's own, and both count it under "tester"$/, (w) => {
+    const lane = worktreeLaneOf(w)
+    const tester = w.entries!['tester']!
+    const entry = testerLaneEntry(w)
+    expect(pointersOf(w.statusReply!).map((p) => p.node_id)).not.toContain(tester.id)
+    const block = blockOf(w.statusReply!)
+    expect(block.lane).toBe(lane)
+    expect(block).toMatchObject({ other_lanes: 1, other_lane_count: 1 })
+    expect(block.lanes).toEqual([entry])
+    expectNoneOf(JSON.stringify(w.statusReply), [tester])
+    const packet = w.startPackets![lane]!
+    expect(namedInLine(otherLanesLineOf(packet) ?? '')).toEqual([entry])
+    expectNoneOf(packet, [tester])
+  })
+
+  reg.define(/^the worktree's own chapter still leads both$/, (w) => {
+    const lane = worktreeLaneOf(w)
+    const own = w.entries![lane]!
+    const name = lane.slice('worktree:'.length)
+    expect(pointersOf(w.statusReply!).map((p) => [p.node_id, p.lane])).toEqual([[own.id, lane]])
+    const lines = w.startPackets![lane]!.split('\n')
+    expect(lines[0]).toBe(`This session runs in the worktree "${name}" on the branch "${name}-branch"; it re-orients on that worktree's own thread.`)
+    expect(lines[1]).toBe(`The worktree's own chapter summary, ${ageText(createdAtOf(w, own.id), now())} old (id ${own.id}): ${own.text}`)
   })
 }

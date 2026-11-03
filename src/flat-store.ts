@@ -46,7 +46,7 @@ import { stampEchoBoundaries } from './persistence/echo-index.js'
 import { roleWeightVector } from './persistence/fts.js'
 import { BOOKMARK_KIND, checkpointKindOf, placeChaptersAboveBookmarks, searchCheckpointKindOf, sessionChainWith } from './checkpoints.js'
 import { metadataFilterSql } from './persistence/metadata-filter.js'
-import { AMBIGUOUS_LANE, UNKNOWN_LANE, UNKNOWN_WRITER_LABEL, UNREGISTERED_SRC, RETIRED_ACROSS_KEY, SUPERSEDES_ACROSS_KEY, PRE_STAMP_HOW, isSessionOwnRow, laneLabelOf, laneOfRow, laneWriterOf, referencedBy, refIdsOf, summarizeLanes, type LaneSummary } from './references.js'
+import { AMBIGUOUS_LANE, UNKNOWN_LANE, UNKNOWN_WRITER_LABEL, UNREGISTERED_SRC, RETIRED_ACROSS_KEY, SUPERSEDES_ACROSS_KEY, PRE_STAMP_HOW, MAIN_LANE, isSessionOwnRow, isUnknownWriter, laneLabelOf, laneOfRow, laneWriterOf, referencedBy, refIdsOf, summarizeLanes, type LaneSummary } from './references.js'
 import { checkoutOfLane, isPlacedLane, laneRowsSql, placedLaneOf, placementsOf, type PlacedLane } from './persistence/lane-scope.js'
 import { resolveWriter, selfOf, selfWriterOf, agentWriterOf, stampMetadata, legTraceOf, hasMainCheckoutSession, registryHeldSession, MAIN_WRITER, STORE_WRITER, type WriterStamp, type GitSelf } from './persistence/session-registry.js'
 import {
@@ -631,8 +631,12 @@ export class FlatStore implements MemoryStore {
   }
 
   /** The lane's one-hop reach (laneReferencedIds) and its own live
-   *  chapter summaries: pointers of the lane's own sessions (never an
-   *  import, never a bookmark), the ones a scoped search keeps a seat for. */
+   *  chapter summaries, the ones a scoped search keeps a seat for: of the
+   *  pointers its search finds, the chapters (never a bookmark) that are
+   *  the lane's own as every reader reads a lane (D379, references.ts
+   *  laneOfRow), so a chapter the search finds but status gives another
+   *  lane (an `ambiguous` writer's, a role's, an import) is never seated
+   *  as the session's own (R12). The reach itself stays the scope's. */
   private laneReach(lane: PlacedLane): { ids: string[]; ownChapters: Set<string> } {
     this.ensureOpen()
     const checkout = checkoutOfLane(lane)
@@ -655,10 +659,12 @@ export class FlatStore implements MemoryStore {
     ).all(this.treeId, briefName) as Array<{ node_id: string; metadata_json: string | null }>
     const ids = new Set<string>()
     const ownChapters = new Set<string>()
+    const laneKey = lane === MAIN_WRITER ? MAIN_LANE : lane
+    const placed = placementsOf(this.db, pointers.map((r) => r.session_key))
     for (const r of pointers) {
       const meta = parseMeta(r.metadata_json)
       for (const ref of refIdsOf(meta)) ids.add(ref)
-      if (checkpointKindOf(meta) === 'chapter' && !(r.session_key ?? '').startsWith(HANDOFF_LANE_PREFIX)) ownChapters.add(r.node_id)
+      if (checkpointKindOf(meta) === 'chapter' && laneOfRow(meta, placed.get(r.session_key ?? '')) === laneKey) ownChapters.add(r.node_id)
     }
     for (const r of briefs) {
       ids.add(r.node_id)
@@ -1578,7 +1584,7 @@ export class FlatStore implements MemoryStore {
       // supersedes target another writer owns is left untouched; the new
       // entry carries the pointer instead, as a reference in its refs,
       // which the owning lane sees as "referenced by" at its next read.
-      const split = this.splitSupersedes(pointerSupersedes, writerLaneOf)
+      const split = this.splitSupersedes(pointerSupersedes, writerLaneOf, isUnknownWriter(meta))
       ownSupersedes = split.own
       // D378: what an unplaced writer retires across the pre-stamp boundary
       // is listed on the new entry; a dedup hit lands no entry to list it,
@@ -1785,7 +1791,7 @@ export class FlatStore implements MemoryStore {
    *  (or unknown here — applySupersedes reports those as misses), `foreign`
    *  are rows of this tree another writer owns, and `across` the pre-stamp
    *  chapters an unplaced writer retires (D378, isPreStampChapter). */
-  private splitSupersedes(ids: string[] | undefined, writerLaneOf: () => string): { own: string[] | undefined; foreign: string[]; across: string[] } {
+  private splitSupersedes(ids: string[] | undefined, writerLaneOf: () => string, stampedUnknown: boolean): { own: string[] | undefined; foreign: string[]; across: string[] } {
     if (!ids || ids.length === 0) return { own: ids, foreign: [], across: [] }
     const writer = writerLaneOf()
     const sel = this.db.prepare('SELECT metadata_json, session_key, read_only FROM nodes WHERE node_id = ? AND tree_id = ?')
@@ -1794,8 +1800,11 @@ export class FlatStore implements MemoryStore {
     const across: string[] = []
     // D378: the door is the undetermined writers' alone, and open only
     // while the registry holds no session placed in the main checkout.
-    // Read once per insert, at the write.
-    const doorOpen = writer === UNKNOWN_LANE && !hasMainCheckoutSession(this.db)
+    // Read once per insert, at the write. Only a row the store stamped
+    // `unregistered` opens it (the record says so of its writer): an
+    // unstamped row D379 reads as writer unknown, its session held but
+    // placed nowhere, retires none across, its targets references.
+    const doorOpen = writer === UNKNOWN_LANE && stampedUnknown && !hasMainCheckoutSession(this.db)
     const targets = [...new Set(ids)].map((id) => ({
       id, row: sel.get(id, this.treeId) as { metadata_json: string | null; session_key: string | null; read_only: number } | undefined,
     }))
@@ -1819,11 +1828,15 @@ export class FlatStore implements MemoryStore {
 
   /** A row's lane as every reader reads it (D379, references.ts
    *  laneOfRow): its session's placement read from the registry only when
-   *  the row is its session's own agent's. */
+   *  the placement can decide it, a row of the session's own agent's or
+   *  one whose stamp would give it to main. */
   private laneOf(meta: Record<string, unknown> | null): string {
-    if (!isSessionOwnRow(meta)) return laneWriterOf(meta)
+    const stamped = laneWriterOf(meta)
+    if (!isSessionOwnRow(meta) && stamped !== MAIN_LANE) return stamped
     const session = sessionOf(meta)
-    return laneOfRow(meta, session === NO_SESSION ? null : placementsOf(this.db, [session]).get(session))
+    // No session: one the registry never held (undefined), as the
+    // never-held cut reads a row with no session key.
+    return laneOfRow(meta, session === NO_SESSION ? undefined : placementsOf(this.db, [session]).get(session))
   }
 
   /** A pre-stamp chapter (D378): a live chapter summary, never a bookmark,
