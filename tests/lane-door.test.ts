@@ -104,6 +104,34 @@ describe('the pre-stamp door (D378)', () => {
     } finally { await done(w) }
   })
 
+  it('refuses a read-only pre-stamp chapter as the ordinary supersession does, the door open', async () => {
+    const w = mkWorld()
+    try {
+      await openWorld(w)
+      noMainRegistration(w)
+      const session = `cc-${randomBytes(6).toString('hex')}`
+      const ro = (await w.store!.insert('plan: the frozen release', {
+        metadata: { next_session: true, _cc_session_id: session, _cc_session_src: 'env' }, createdAt: now() - 86_400, readOnly: true,
+      })).nodeId
+      expect(rawAll(w, 'SELECT read_only FROM nodes WHERE node_id = ?', ro)).toEqual([{ read_only: 1 }])
+      expect(rawAll(w, 'SELECT 1 FROM session_registry WHERE session_id = ?', session)).toEqual([])
+      const before = rawAll(w, 'SELECT metadata_json, updated_at FROM nodes WHERE node_id = ?', ro)
+      await mcpOver(w, { ccSessionId: w.sessionId! })
+      const r = parseTool(await w.client!.callTool({
+        name: 'treecontext_insert', arguments: { content: 'plan: the thawed release', metadata: { next_session: true }, supersedes: [ro] },
+      }))
+      expect(r).toMatchObject({ writer_src: 'unregistered', superseded: [], supersede_misses: [{ nodeId: ro, reason: 'read_only' }] })
+      expect(r['retired_across']).toBeUndefined()
+      expect(rawAll(w, 'SELECT metadata_json, updated_at FROM nodes WHERE node_id = ?', ro)).toEqual(before)
+      expect(meta(w, ro)['next_session']).toBe(true)
+      expect(meta(w, ro)['_retired_across']).toBeUndefined()
+      expect(meta(w, r['node_id'] as string)['_supersedes_across']).toBeUndefined()
+      // The same refusal the store gives a read-only target through the library.
+      const lib = await w.store!.insert('plan: the library release', { metadata: { next_session: true }, supersedes: [ro] })
+      expect(lib.supersedeMisses).toEqual([{ nodeId: ro, reason: 'read_only' }])
+    } finally { await done(w) }
+  })
+
   it('leaves no across record on an unplaced writer\'s own-lane supersession while the door is open (D376)', async () => {
     const w = mkWorld()
     try {

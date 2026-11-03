@@ -336,3 +336,65 @@ The unit's bindings went through the same ladder. Findings and what was done:
 4. **Note, vacuous:** the ticket-door phantom row compared `noticed_at` to the next worker's `started_at`, moments one transaction stamps alike; dropped, `noticed_by` names the reader.
 5. **Note, over-assertion:** the door-line sentence shape, the full import-flag sentence, the D291 scenario's exact lane kinds, the empty hook stdout for "carries no brief", the 2.1.302 remedy wording. Left as they are: each pins a product sentence beyond the words; none lets a clause go.
 6. **Note, same-class defect:** `firstMomentLegName` read top-level stamps an imported row lacks; fixed with a unit test. The gate also found the file's head joining the door-line note into `first_moments`; it is `door_lines` now, as in the reply.
+
+## The main-lane build (D372–D378), 2026-11-03
+
+Collated by the final fix unit from the instrumentation lines of the
+build's five reviews (`docs/main-lane-self-2026-11-02/u1-review.md`,
+`u2-review.md`, `u3-review.md`, `u4-review.md`, `final-review.md`) and
+the fix unit's own probes. Same vocabulary as above, plus the review
+rungs `vacuous` (a Then that holds whatever the code does in its world)
+and `unlit` (a promise no test reaches). Every world is a real git
+repository with real worktrees, its sessions registered by the real
+SessionStart hook (`openGitWorld`), its store the one the production
+resolver derives; `tool` is the real MCP tool over a connection under the
+caller's Claude Code session id; `hook-out` here is the packet the
+SessionStart hook emitted.
+
+### journal-orchestration.feature and journal-workers.feature (20 scenarios, one outline of 4 rows; 0 open)
+
+| line | scenario | door (act; Given if different) | Then's evidence | rung | note |
+| ---- | -------- | ------------------------------ | --------------- | ---- | ---- |
+| o88 | a worktree's status lists its own lane's pointers and says what else exists | tool `treecontext_status`; Given tool inserts by the main and worktree sessions | tool-reply + file | — | counts one pointer of one lane: `other_lanes` and `other_lane_count` coincide here (the outline tells them apart) |
+| o97 | the main checkout's status is scoped to the main lane the same way | tool `treecontext_status`; Given tool, the older chapter by library with no stamp | tool-reply + file | — | as o88 for the two counts |
+| o107 | asking for every lane lists them flat, each pointer naming its lane | tool `treecontext_status` `scope: "all"` | tool-reply | — | absence of every block key asserted on the reply text |
+| o114 | the other lanes are counted and at most three named with `<lanes>` other lanes (4 rows) | tool `treecontext_status`, then hook SessionStart | tool-reply + hook-out + file | — | (final unit) the first worktree holds two live chapters, so `other_lanes` (pointers left out, D242) is lanes + 1 and `other_lane_count` is lanes: P15 (`other_lanes` := lane count) is red in rows 1, 3 and 5 at scenario level, where it was silent (final review F3) |
+| o128 | a restarted main checkout opens on its own thread and is told what else exists | hook SessionStart (startup, resume); Given hooks + tool | hook-out + tool-reply + file | — | the owner's incident walked end to end; packet, status and search agree. U2 left the walk's Thens unlit; bound in U3 |
+| o143 | a main checkout with only a bookmark is handed the bookmark, never a worktree's chapter | hook SessionStart; Given tool | hook-out + file | — | |
+| o151 | a main checkout alone in its store opens on its own thread and names no other lane | hook SessionStart; Given tool | hook-out + file | — | |
+| o158 | the orientation search is scoped to the session's own lane | tool `treecontext_query` per session; Given hooks capture + tool | tool-reply + file | — | |
+| o168 | a lane's search finds its helpers' reports and its imports, never a helper's trail | tool `treecontext_query`; Given hook SubagentStart/Stop + tool+echo trail, ticket door (`spawnWorker`) ×2, tool import | tool-reply + file | — | the orphan worker carries a run and key on its ticket for the key-lookup check (review-v4 fix 4) |
+| o181 | a worktree's conversation from an earlier release is the worktree's own | tool `treecontext_query`, `treecontext_export` `writer`; Given real hooks capture with no writer | tool-reply + file (byte for byte) | — | |
+| o189 | two hundred helpers do not displace the main checkout's own thread | hook SessionStart, tool status and query; Given 200 SubagentStart/Stop pairs through the real hooks | hook-out + tool-reply + file | — | the seat (D374) asserted at k ≥ 2 by unit tests; Q1, Q2 red |
+| o201 | a fresh start adopts a recovery snapshot only from its own lane | hook SessionStart + the production drain; Given hook PreCompact in each lane, real order | hook-out + file | — | U4's backdate replaced by the real order (U34-fix); Q9 (lane filter dropped) red at scenario level. The worker and subagent exclusion is unit-tier (Q8 red) |
+| o210 | a chapter whose writer could not be identified is set apart as writer unknown in every lane | tool status, hook SessionStart, per lane | tool-reply + hook-out + file | — | |
+| o220 | an unplaced writer's chapters still supersede one another | tool `treecontext_status` `scope: "all"`; Given tool inserts by an unregistered session | tool-reply + file | — | (final unit) the Given now writes both chapters before any session has run in the main checkout, so the pre-stamp door is open while the client supersedes its own; the main session starts after. P13 (the door's stamp test reads `_writer` only) is red at scenario level, where it was green (final review F2, vacuous) |
+| o228 | rows from before the store recorded writers stay the main lane's | tool status and query; then hook SessionStart in a worktree | tool-reply + hook-out + file | — | |
+| o235 | a client without hooks retires its chapter from before the upgrade, and the retirement says who, what, when and how | tool `treecontext_insert` by an unregistered session; Given library pre-stamp chapter, no main registration | tool-reply + file | — | the export Then asserts the record, not `referencedBy` (final review F5, optional); the handoff export's whole form is held generically by `run-import-rule.test.ts` over `WRITER_STAMP_KEYS` |
+| o246 | the boundary opens to no pointer that names a writer, whose session the registry holds, or that was imported | tool `treecontext_insert`; Given tool, library, import | tool-reply + file (as was, byte for byte) | — | P2–P5 red; P4b (liveness alone) green as disclosed, the handoff test still guarding |
+| o257 | the boundary opens for the writer-unknown lane alone | tool `treecontext_insert` by a worktree session, then by main | tool-reply + file | — | P7 red |
+| o265 | once a session has run in the main checkout, a client without hooks cannot retire the main checkout's chapter from before the upgrade | tool `treecontext_insert`; then hook SessionStart in main | tool-reply + hook-out + file | — | P1 (the incident guard) red |
+| w364 | a worker of the ticket door searches the whole store and sees every lane | ticket door (`spawnWorker`, standin-worker through its tools) | tool-reply (the worker's) + file | — | |
+
+(`o` is journal-orchestration.feature, `w` journal-workers.feature.)
+
+### Below the charter, and what the probes left
+
+- **The door and read_only (final unit, review F1, medium).** `retireAcross` retired a read-only pre-stamp chapter, which ordinary supersession refuses. `splitSupersedes` now routes a read-only target of the door to the ordinary retirement, whose reply is `supersede_misses` `{reason: "read_only"}` with nothing recorded across. `tests/lane-door.test.ts` drives it through the real insert tool; dropping the check is red.
+- **The recovery identity's staging fallback (final unit, review F8, unlit).** A snapshot claim staged before the claim carried `snapshot_id` is identified by its staged row. `tests/persistence/recovery-identity.test.ts` drains such a row twice (one row, `staging_id` set) and a second such claim (two rows); Q7 (drop `staging_id` from the identity) is red.
+- **Unit-tier only, by design:** the lane panel's kind and age on any order (I-kind, I-age, U2-F4), the packet's bookmark from the own lane (I-bookmark-any), the door's undo by the echo heal (P10, P11), the bookmark exclusion (P12), a fresh start whose registration did not land (P14), `writerOf` for an unplaced row (P16), the concurrent and ambiguous callers' whole-store search (Q3), an unplaced caller's search (Q4).
+- **Carried, charter text:** the packet of a start whose registration did not land says nothing about the checkout; D373's comment does not yet disclose it (final review F4). The skill text's "each reply … counts the other lanes" holds for status and the packet, not the search reply (final review F14); D374 promises the lane and how to widen only.
+
+| unit | bound | hollow | vacuous | narrowed | half-lit | unlit | probes run | silent |
+| ---- | ----- | ------ | ------- | -------- | -------- | ----- | ---------- | ------ |
+| U1 | 9 | 0 | 0 | 1 (references.test.ts) | — | 11 (under wip then) | 19 | 4 (R-6, R-7, R-8, U1-4 at scenario level) |
+| U2 | 17 | 0 | 0 | 0 | — | 8 | 33 | 4 |
+| U3 | 13 | 0 | 0 | 0 | 1 (D309 by name) | 2 | 32 | 1 full suite (U3-2), 1 targeted (U3-9b) |
+| U4 | 1 scenario + 4 units | 0 | 0 | 1 (secret-word startup) | — | 1 | 14 | 2 (P10, P1 without the backdate) |
+| U3b | 9 | 0 | 1 (the @D376 added Then) | 0 | 0 | 0 | 20 + 1 scratch | 1 at scenario level (P15), P4b as disclosed |
+| U34-fix | 9 | 0 | 0 | 0 | — | 1 (staging fallback) | 9 | 1 (Q7) |
+| final fixes | 2 scenario rebinds + 2 units | 0 | 0 (the @D376 Then cured) | 0 | 0 | 0 (staging fallback lit) | 4 | 0 (F1 probe, P13, P15, Q7 all red) |
+
+Each later unit cured what the one before left where it says so: U3 the
+U2 walk, U34-fix U3-2, U3-9b and U4's P1 and P10, U3b U2's I-kind, I-age
+and I-bookmark-any, the final unit U3b's P13 and P15 and U34-fix's Q7.

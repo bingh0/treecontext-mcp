@@ -921,15 +921,25 @@ export const orchestrationDefiner = (reg: Registry<OrchestrationWorld>): void =>
 
   reg.define(/^a client the server cannot place that wrote the chapter summary "([^"]+)" and then a chapter summary that supersedes it$/, async (w, text$) => {
     const text = String(text$)
-    await openGitWorld(w)
-    w.laneSessions = { main: w.sessionId! }
-    // The main checkout's own chapter, which the Then reads as still live.
-    w.entries = { main: await laneChapter(w, 'main', 'plan: rewrite the README\'s install section') }
+    // The client writes before any session has run in the main checkout,
+    // so the pre-stamp door (D378) is open while it supersedes its own:
+    // the Then about the boundary is read in a world where the door could
+    // have retired across, and did not, the targets being stamped rows.
+    await openGitWorld(w, { mainStart: false })
+    const mainSession = w.sessionId!
+    w.laneSessions = { main: mainSession }
+    expectNoMainRegistration(w)
     const first = await unplacedChapter(w, text)
     const reply = await insert(w, 'plan: the second draft, which replaces the first', { next_session: true }, [first.id])
+    expectNoMainRegistration(w)
     // One lane for supersession: the unplaced writer retired its own.
     expect(reply).toMatchObject({ superseded: [first.id] })
     expect(rawMeta(w, reply['node_id'] as string)).toMatchObject({ _writer_src: 'unregistered' })
+    // Then the main checkout's session starts and writes its own chapter,
+    // which the Then reads as still live.
+    w.sessionId = mainSession
+    sessionStart(w, w.repo)
+    w.entries = { main: await laneChapter(w, 'main', 'plan: rewrite the README\'s install section') }
     w.entries['first'] = first
     w.entries['second'] = { id: reply['node_id'] as string, text: 'plan: the second draft, which replaces the first' }
   })
@@ -1042,6 +1052,10 @@ export const orchestrationDefiner = (reg: Registry<OrchestrationWorld>): void =>
     w.entries = { main: await laneChapter(w, 'main', 'plan: rewrite the README\'s install section') }
     for (let i = 1; i <= Number(n$); i++) {
       const lane = `worktree:wt-${i}`
+      // The first worktree holds two live chapters, so that the lanes the
+      // status counts (D372's other_lane_count) and the pointers it left
+      // out (D242's other_lanes) are two different numbers in this world.
+      if (i === 1) w.entries[`${lane}#earlier`] = await laneChapter(w, lane, 'plan: the wt-1 worktree\'s earlier chapter, still live')
       w.entries[lane] = await laneChapter(w, lane, `plan: the wt-${i} worktree's own chapter, number ${i}`)
     }
   })
@@ -1107,14 +1121,19 @@ export const orchestrationDefiner = (reg: Registry<OrchestrationWorld>): void =>
   reg.define(/^the status and the packet each count (\d+) other lanes and name the (\d+) whose newest pointer is most recent, newest first$/, (w, n$, named$) => {
     const n = Number(n$)
     const named = Number(named$)
-    // The other lanes, newest first, as SQLite holds their chapters.
-    const others = Object.keys(w.entries!).filter((k) => k !== 'main')
-      .sort((a, b) => createdAtOf(w, w.entries![b]!.id) - createdAtOf(w, w.entries![a]!.id))
+    // The other lanes, by the newest of their chapters, newest first, as
+    // SQLite holds them.
+    const newestOf = (lane: string): number => Math.max(...Object.entries(w.entries!)
+      .filter(([k]) => laneOfEntry(k) === lane).map(([, e]) => createdAtOf(w, e.id)))
+    const others = [...new Set(Object.keys(w.entries!).map(laneOfEntry))].filter((l) => l !== 'main')
+      .sort((a, b) => newestOf(b) - newestOf(a))
     expect(others).toHaveLength(n)
     const block = blockOf(w.statusReply!)
     expect(block.lane).toBe('main')
     expect(block.other_lane_count).toBe(n)
     expect(block.other_lanes).toBe(leftOutOf(w, w.statusReply!))
+    // One lane holds two pointers: the lanes and the pointers are apart.
+    if (n > 0) expect(block.other_lanes).toBe(n + 1)
     expect((block.lanes ?? []).map((l) => l.lane)).toEqual(others.slice(0, named))
     for (const l of block.lanes ?? []) expect(l).toEqual(lanePanelEntry(w, l.lane))
     const packet = w.startPackets!['main']!
@@ -1865,6 +1884,8 @@ function createdAtOf(w: OrchestrationWorld, id: string): number {
 /** The lane a Given's named entry was written into, as the test knows it
  *  (never read back through the production lane key). */
 function laneOfEntry(key: string): string {
+  // A second entry of one lane is named `<lane>#<which>`.
+  if (key.includes('#')) return laneOfEntry(key.slice(0, key.indexOf('#')))
   if (key === 'main' || key === 'older' || key === 'bookmark') return 'main'
   if (key === 'unknown' || key === 'first' || key === 'second') return UNKNOWN_WRITER_LABEL
   return key

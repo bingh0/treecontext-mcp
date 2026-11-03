@@ -1777,7 +1777,7 @@ export class FlatStore implements MemoryStore {
    *  chapters an unplaced writer retires (D378, isPreStampChapter). */
   private splitSupersedes(ids: string[] | undefined, writer: string): { own: string[] | undefined; foreign: string[]; across: string[] } {
     if (!ids || ids.length === 0) return { own: ids, foreign: [], across: [] }
-    const sel = this.db.prepare('SELECT metadata_json, session_key FROM nodes WHERE node_id = ? AND tree_id = ?')
+    const sel = this.db.prepare('SELECT metadata_json, session_key, read_only FROM nodes WHERE node_id = ? AND tree_id = ?')
     const own: string[] = []
     const foreign: string[] = []
     const across: string[] = []
@@ -1786,12 +1786,15 @@ export class FlatStore implements MemoryStore {
     // Read once per insert, at the write.
     const doorOpen = writer === UNKNOWN_LANE && !hasMainCheckoutSession(this.db)
     for (const id of new Set(ids)) {
-      const row = sel.get(id, this.treeId) as { metadata_json: string | null; session_key: string | null } | undefined
+      const row = sel.get(id, this.treeId) as { metadata_json: string | null; session_key: string | null; read_only: number } | undefined
       // A writer the store could not tell apart (AMBIGUOUS_LANE) owns no
       // lane, its own earlier rows included: every target it names is
       // another's, recorded as a reference.
       const meta = row ? parseMeta(row.metadata_json) : null
-      if (row && doorOpen && this.isPreStampChapter(meta, row.session_key)) across.push(id)
+      // The door widens who may retire, never what can be: a read-only
+      // pre-stamp chapter goes to the ordinary retirement, which refuses
+      // it as `read_only` and leaves it live with nothing recorded across.
+      if (row && doorOpen && this.isPreStampChapter(meta, row.session_key)) (row.read_only ? own : across).push(id)
       else if (row && (writer === AMBIGUOUS_LANE || laneWriterOf(meta) !== writer)) foreign.push(id)
       else own.push(id)
     }

@@ -98,4 +98,34 @@ describe('the recovery row is the claim\'s, never its text\'s (D375, U4-F1)', ()
     expect(recoveryRows().map((r) => r.session_key)).toEqual(['main-2'])
     await s.close()
   })
+
+  it('a claim staged before the claim carried its snapshot\'s id is identified by its staged row (U34 F8)', async () => {
+    const s = await FlatStore.open({ database: openNodeSqlite(new DatabaseSync(dbPath)), retentionInterval: 1_000_000 })
+    start('main-2', null)
+    // The staged content an earlier release's session-start wrote: the
+    // queries and the original session, no snapshot_id.
+    const content = JSON.stringify({ queries: ['nothing matches this'], original_session_id: 'main-1' })
+    const at = Date.now() / 1000
+    s.store.insertStaging({ sessionId: 'main-2', role: 'snapshot', content, timestamp: at })
+    const stagedId = withRaw((db) => (db.prepare("SELECT id FROM staging WHERE role = 'snapshot'").get() as { id: number }).id)
+    await new IngestionLoop(s).ingestBatch()
+    // The drain wrote the row and died before it marked the staged row
+    // processed: the same staged row comes round again.
+    withRaw((db) => db.prepare('UPDATE staging SET processed = 0 WHERE id = ?').run(stagedId))
+    await new IngestionLoop(s).ingestBatch()
+    const once = recoveryRows()
+    expect(once).toHaveLength(1)
+    const m = JSON.parse(once[0]!.m) as Record<string, unknown>
+    expect(m).toMatchObject({ session_id: 'main-2', original_session_id: 'main-1', staging_id: stagedId })
+    expect(m['snapshot_id']).toBeUndefined()
+    expect(once[0]!.dedup_class).not.toBe('curated')
+    // A second such claim, staged as its own row, reads alike and keeps its own row.
+    s.store.insertStaging({ sessionId: 'main-2', role: 'snapshot', content, timestamp: at + 1 })
+    await new IngestionLoop(s).ingestBatch()
+    const rows = recoveryRows()
+    expect(rows).toHaveLength(2)
+    expect(rows[0]!.content).toBe(rows[1]!.content)
+    expect(rows.map((r) => (JSON.parse(r.m) as Record<string, unknown>)['staging_id'])).toEqual([stagedId, stagedId + 1])
+    await s.close()
+  })
 })

@@ -319,13 +319,19 @@ adds `_insert` and nothing that removes. Details in
   results (it may be given the last place of a page of two or more), not
   promised first. A caller the server cannot place, such as a client
   without hooks, is stamped `unregistered` and shows as "writer unknown":
-  a lane of its own, never main's. Such a client may retire its
-  pre-upgrade chapters only while no session has run in the main checkout;
-  each retirement is recorded on the entry (who, what, when, how). A
+  a lane of its own, never main's. While no session has run in the main
+  checkout, such a client may retire a pre-stamp chapter of main: a live
+  chapter summary naming no writer (no stamp, no `agent_type`) from a
+  session the registry never held, whoever wrote it; never a bookmark, an
+  import or a read-only entry. Each retirement is recorded on the entry
+  (who, what, when, how) and listed in the reply as `retired_across`. A
   headless worker started by `treecontext run` searches the whole store.
-  The recovery snapshot is claimed only in the lane it was written for;
-  adapters that register no session (Cursor, Codex, Gemini, opencode)
-  claim none.
+  The recovery snapshot is claimed only in the lane it was written for. A
+  client running the Claude Code hooks registers its sessions and claims
+  in its own lane, Codex CLI and Gemini CLI included once
+  `--experimental-capture` has copied the block; the adapters' own
+  scripts (Cursor, Codex, Gemini, opencode), unverified scaffolding,
+  register no session and claim none.
 - **A run as a unit.** When the work ran as legs under a run, `treecontext
   export handoffs/login-run.json --run login` writes that run: its
   skeleton, meaning the open and close, every brief, every checkpoint,
