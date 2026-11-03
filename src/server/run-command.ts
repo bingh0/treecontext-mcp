@@ -50,6 +50,13 @@ export interface RunArgs {
 
 export class RunUsageError extends Error {}
 
+/** `--help` or `-h` among run's own flags, before the `--` that starts the
+ *  worker's command; after it, the flag is the worker's. */
+export function wantsRunHelp(argv: string[]): boolean {
+  const own = argv.indexOf('--') === -1 ? argv : argv.slice(0, argv.indexOf('--'))
+  return own.includes('--help') || own.includes('-h')
+}
+
 /** Parse what follows `treecontext run`. */
 export function parseRunArgs(argv: string[]): RunArgs {
   const a: RunArgs = {
@@ -141,6 +148,10 @@ export async function runCommand(argv: string[], deps: {
   const err = deps.stderr ?? process.stderr
   const env = deps.env ?? process.env
   const cwd = deps.cwd ?? process.cwd()
+  if (wantsRunHelp(argv)) {
+    out.write(`usage: ${RUN_USAGE}\n`)
+    return 0
+  }
   let a: RunArgs
   try {
     a = parseRunArgs(argv)

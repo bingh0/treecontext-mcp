@@ -33,7 +33,7 @@ import { WORKER_AGENT_ID } from '../src/persistence/leg-registry.js'
 import { nodeTsArgs, CLI_TS, sandboxedSpawnEnv } from './helpers/cli-spawn.js'
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio'
 import { Client } from '@modelcontextprotocol/client'
-import { parseRunArgs, RunUsageError } from '../src/server/run-command.js'
+import { parseRunArgs, RunUsageError, RUN_USAGE, runCommand, wantsRunHelp } from '../src/server/run-command.js'
 import { TS_ROOT } from './journal/proc.js'
 
 let tmpDir: string
@@ -341,6 +341,20 @@ describe('parseRunArgs', () => {
     expect(() => parseRunArgs(['--run', 'r1', '--key', 'k', '--no-key', '--role', 'b', '--parent', 'p', '--', 'x'])).toThrow(/not both/)
     expect(() => parseRunArgs(['--ticket', '{}', '--run', 'r1', '--key', 'k', '--role', 'b', '--parent', 'p', '--', 'x'])).toThrow(/not both/)
     expect(parseRunArgs(['--', 'claude', '-p']).command).toEqual(['claude', '-p'])
+  })
+
+  it('--help or -h before -- prints the usage on stdout and exits 0; after -- it is the worker\'s', async () => {
+    expect([wantsRunHelp(['--help']), wantsRunHelp(['--run', 'r1', '-h']), wantsRunHelp(['--', 'claude', '--help']), wantsRunHelp(['--run', 'r1'])])
+      .toEqual([true, true, false, false])
+    let out = ''
+    let err = ''
+    const sink = (f: (s: string) => void) => ({ write: (s: string) => { f(s); return true } }) as unknown as NodeJS.WritableStream
+    const code = await runCommand(['--help'], {
+      dbPathFor: () => { throw new Error('help opens no store') },
+      stdout: sink((s) => { out += s }),
+      stderr: sink((s) => { err += s }),
+    })
+    expect([code, out, err]).toEqual([0, `usage: ${RUN_USAGE}\n`, ''])
   })
 })
 
