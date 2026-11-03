@@ -28,7 +28,8 @@ import { lockStore } from '../journal/run-world.js'
 import type { RunWorld } from '../journal/run-world.js'
 import { TS_ROOT, tsxArgv } from '../journal/proc.js'
 import { sandboxedSpawnEnv } from '../helpers/cli-spawn.js'
-import { HOOK_DB_TIMEOUT_MS, STOP_GUARD_TIMEOUT_MS } from '../../src/hooks/shared.js'
+import { HOOK_DB_TIMEOUT_MS, STOP_GUARD_TIMEOUT_MS, openHookDb, writeStaging } from '../../src/hooks/shared.js'
+import { writeCheckpointInterval } from '../../src/checkpoints.js'
 import { buildVscodeHooksConfig } from '../../src/server/installer.js'
 
 /** The rule: the smallest hook kill treecontext installs (VS Code's
@@ -58,7 +59,7 @@ type Hook = 'stop' | 'subagent-stop' | 'subagent-start' | 'post-tool-use' | 'use
  *  (and every hook source), else the sources under tsx. */
 function hookArgv(hook: Hook): { argv: string[]; via: 'dist' | 'tsx' } {
   const dist = join(TS_ROOT, 'dist', 'hooks', `${hook}.js`)
-  const newest = Math.max(...['shared', 'hook-store', hook].map((f) => statSync(join(TS_ROOT, 'src', 'hooks', `${f}.ts`)).mtimeMs))
+  const newest = Math.max(...['shared', 'hook-store', 'hook-deadline', hook].map((f) => statSync(join(TS_ROOT, 'src', 'hooks', `${f}.ts`)).mtimeMs))
   if (existsSync(dist) && statSync(dist).mtimeMs >= newest) return { argv: [dist], via: 'dist' }
   return { argv: tsxArgv(join(TS_ROOT, 'src', 'hooks', `${hook}.ts`)), via: 'tsx' }
 }
@@ -116,6 +117,35 @@ describe.skipIf(process.platform === 'win32')('the real hooks against a whole-lo
       if (process.env['HOOK_BUDGET_LOG']) appendFileSync(process.env['HOOK_BUDGET_LOG'], `${h.hook} (${locked.via}): baseline ${baseline.ms} ms, locked ${locked.ms} ms, added ${added} ms\n`)
       expect(locked.ms, `${h.hook} took ${locked.ms} ms against a locked store (${locked.via})`).toBeLessThan(RULE_MS)
       expect(added, `the lock added ${added} ms to ${h.hook}; its budgets are ${BUDGET_OF[h.hook]} ms`).toBeLessThanOrEqual(BUDGET_OF[h.hook] + JITTER_MS)
+    } finally { await done(w) }
+  }, 60_000)
+
+  // The Stop shape with three opens: a store that refuses writes but
+  // still reads (the guard reads it whole and finds a bookmark due), so
+  // the staging write waits its budget and fails, and the bookmark ask's
+  // mark is then written on a third connection. That open waits what is
+  // left of the hook's budget, never a fresh 7 s (review of f812992: a
+  // fresh one measured 14,074 ms).
+  it('stop with a bookmark due, against a store that refuses writes: under the rule, and the lock adds no more than its budgets', async () => {
+    const w = mkWorld()
+    try {
+      await openCaptureWorld(w)
+      await w.store!.close()
+      // A bookmark due at the next stop: one round per checkpoint, three
+      // developer turns staged since none.
+      const db = openHookDb(w.dbPath!)
+      try { writeCheckpointInterval(db, { rounds: 1, minutes: null }, 'test') } finally { db.close() }
+      for (let i = 0; i < 3; i++) writeStaging(w.dbPath!, { sessionId: w.sessionId!, role: 'user', content: `turn ${i}`, timestamp: Date.now() / 1000 - 100 + i })
+      const payload = (active: boolean): Record<string, unknown> => ({ hook_event_name: 'Stop', last_assistant_message: active ? 'the baseline turn' : 'the turn that ended', stop_hook_active: active })
+      // The baseline asks nothing (a stop the platform marks as continuing
+      // is never asked), so the locked stop's ask is still due.
+      const baseline = run(w, 'stop', payload(true))
+      await lockStore(w as unknown as RunWorld, 'writes')
+      const locked = run(w, 'stop', payload(false))
+      const added = locked.ms - baseline.ms
+      if (process.env['HOOK_BUDGET_LOG']) appendFileSync(process.env['HOOK_BUDGET_LOG'], `stop, bookmark due, writes refused (${locked.via}): baseline ${baseline.ms} ms, locked ${locked.ms} ms, added ${added} ms\n`)
+      expect(locked.ms, `stop took ${locked.ms} ms against a write-locked store (${locked.via})`).toBeLessThan(RULE_MS)
+      expect(added, `the lock added ${added} ms to stop; its budgets are ${BUDGET_OF.stop} ms`).toBeLessThanOrEqual(BUDGET_OF.stop + JITTER_MS)
     } finally { await done(w) }
   }, 60_000)
 })

@@ -317,34 +317,46 @@ export function invalidStopLine(leg: LegRegistration): string {
  */
 async function workerStop(input: Record<string, unknown>, dbPath: string, sessionId: string, w: WorkerAtStop, capped: string | null): Promise<void> {
   const ref: LegRef = { sessionId: w.leg.sessionId, agentId: w.leg.agentId }
-  if (capped) {
-    writeStaging(dbPath, {
-      sessionId, role: 'assistant', content: capped, timestamp: Date.now() / 1000, priority: 2,
-      indexLen: Math.min(activeIndexCap('assistant'), capped.length),
-    })
-  }
   // No wrapper watches a worker its own hook claimed (no lane in the
   // environment): its stop says how it ended when that is invalid
   // instructions, the spawner's line it would otherwise never get.
-  if ((w.leg.ticketAbsent.length > 0 || w.leg.ticketRaw !== null) && !process.env[WORKER_SESSION_ENV]) {
-    process.stdout.write(JSON.stringify({ systemMessage: invalidStopLine(w.leg) }) + '\n')
-    return
+  const invalid = (w.leg.ticketAbsent.length > 0 || w.leg.ticketRaw !== null) && !process.env[WORKER_SESSION_ENV]
+  const active = input['stop_hook_active'] === true
+  let owed = false
+  if (!invalid && !active) {
+    const refusal = storeRefusesWrites(dbPath)
+    const verdict = sendBackDecision({
+      exit: { code: 0, signal: null }, ticketValid: w.leg.ticketAbsent.length === 0 && w.leg.ticketRaw === null,
+      noKey: w.leg.key === null, role: w.leg.role, checkpointer: w.leg.checkpointer, canWrite: w.leg.canWrite,
+      sendBacks: w.leg.sendBacks, checkpointSinceStart: w.checkpointSinceStart, storeWritable: refusal === null,
+      capRefused: capRefusalOf(w.leg),
+    })
+    dbg('hook:stop', 'a worker\'s stop', { lane: ref.sessionId, sendBack: verdict.sendBack, why: verdict.why })
+    owed = verdict.sendBack
   }
-  if (input['stop_hook_active'] === true) return
-  const refusal = storeRefusesWrites(dbPath)
-  const verdict = sendBackDecision({
-    exit: { code: 0, signal: null }, ticketValid: w.leg.ticketAbsent.length === 0 && w.leg.ticketRaw === null,
-    noKey: w.leg.key === null, role: w.leg.role, checkpointer: w.leg.checkpointer, canWrite: w.leg.canWrite,
-    sendBacks: w.leg.sendBacks, checkpointSinceStart: w.checkpointSinceStart, storeWritable: refusal === null,
-    capRefused: capRefusalOf(w.leg),
-  })
-  dbg('hook:stop', 'a worker\'s stop', { lane: ref.sessionId, sendBack: verdict.sendBack, why: verdict.why })
-  if (!verdict.sendBack) return
+  // One write budget for the stop behind its guard: when a send-back is
+  // owed, the door's connection is opened first, and the turn's staging
+  // write below is made while it is open, so it waits what is left of it
+  // (openWriteDeadline), never a fresh 7 s on top; the door's writes then
+  // wait what is left of the hook's (hookStoreOn).
   let db: DatabaseSync | null = null
+  let openError: unknown = null
+  if (owed) {
+    try { db = openHookDb(dbPath) } catch (err) { openError = err }
+  }
   try {
-    // A second write open behind the guard and the staging write: it waits
-    // what is left of the hook's budget by the clock, never a fresh one.
-    db = openHookDb(dbPath, { deadlineAt: hookDeadlineLeft(HOOK_STARTED_AT) })
+    if (capped) {
+      writeStaging(dbPath, {
+        sessionId, role: 'assistant', content: capped, timestamp: Date.now() / 1000, priority: 2,
+        indexLen: Math.min(activeIndexCap('assistant'), capped.length),
+      })
+    }
+    if (invalid) {
+      process.stdout.write(JSON.stringify({ systemMessage: invalidStopLine(w.leg) }) + '\n')
+      return
+    }
+    if (!owed) return
+    if (db === null) throw openError
     const opened = await hookStoreOn(db, dbPath, sessionId, HOOK_STARTED_AT)
     if (!opened || 'refused' in opened) {
       if (opened) recordHookGap(dbPath, { hook: 'stop', sessionId, at: Date.now() / 1000, error: opened.refused, lost: 'The worker was owed its one send-back and was not sent back here; its wrapper may send it back at its exit.' })
@@ -424,7 +436,10 @@ export async function main(preParsed?: Record<string, unknown>): Promise<void> {
       // Nothing was captured this stop, so no write connection is open:
       // the ask still gets its mark, or the next stop would ask again.
       let db: DatabaseSync | null = null
-      try { db = openHookDb(dbPath); recordAsk(db) } catch (err) {
+      // A later phase behind the guard and a staging write that may have
+      // waited its whole budget: what is left of the hook's, never a fresh
+      // 7 s (a write-locked store measured 14 s here with one).
+      try { db = openHookDb(dbPath, { deadlineAt: hookDeadlineLeft(HOOK_STARTED_AT) }); recordAsk(db) } catch (err) {
         dbg('hook:stop', 'bookmark ask mark FAILED', { error: err instanceof Error ? err.message : String(err) })
       } finally { if (db) db.close() }
     }

@@ -11,13 +11,15 @@
  * tests/helpers/store-locker.cjs.
  */
 import { describe, it, expect } from 'vitest'
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { DatabaseSync } from 'node:sqlite'
-import { withHookDeadline, hookHandle, hookDeadlineOf, isHookBusy, HOOK_BUSY_SLICE_MS } from '../../src/hooks/hook-deadline.js'
-import { openHookDb, writeStaging, HOOK_DB_TIMEOUT_MS } from '../../src/hooks/shared.js'
+import { withHookDeadline, hookHandle, hookDeadlineOf, narrowHookDeadline, isHookBusy, HOOK_BUSY_SLICE_MS, HOOK_DEADLINE_FLOOR_MS, DEFERRED_BEGIN_REFUSED } from '../../src/hooks/hook-deadline.js'
+import { openHookDb, writeStaging, writeSnapshot, buildRehydrationPayload, HOOK_DB_TIMEOUT_MS } from '../../src/hooks/shared.js'
+import { registerSelf } from '../../src/persistence/session-registry.js'
+import { gitSelfOf } from '../../src/hooks/git-self.js'
 import { pragmaValue } from '../../src/persistence/node-sqlite.js'
 import { TS_ROOT } from '../journal/proc.js'
 
@@ -129,6 +131,16 @@ describe('withHookDeadline: the deadline is the clock, not SQLite\'s arithmetic'
     expect(log.filter((s) => s === 'ROLLBACK')).toHaveLength(1)
   })
 
+  it('a busy answer that comes back at once (no busy handler: a stale snapshot, a deadlock) waits out its slice, never spinning', () => {
+    const db = { isTransaction: false, exec: (): unknown => undefined }
+    let tries = 0
+    const t0 = Date.now()
+    expect(() => withHookDeadline(db, t0 + DEADLINE_MS, () => { tries++; throw busyError() })).toThrow(/locked/)
+    // One try a slice: a spinning loop makes thousands in the same time.
+    expect(tries, `${tries} tries in ${Date.now() - t0} ms`).toBeLessThanOrEqual(Math.ceil(DEADLINE_MS / HOOK_BUSY_SLICE_MS) + 2)
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(DEADLINE_MS - 20)
+  })
+
   it('never retries an error that is not busy, nor a unit inside a transaction it does not own', () => {
     const plain = { isTransaction: false, exec: (): unknown => undefined }
     let tries = 0
@@ -138,6 +150,100 @@ describe('withHookDeadline: the deadline is the clock, not SQLite\'s arithmetic'
     tries = 0
     expect(() => withHookDeadline(inside, Date.now() + DEADLINE_MS, () => { tries++; throw busyError() })).toThrow(/locked/)
     expect(tries).toBe(1)
+  })
+})
+
+describe('a hook connection\'s rules', () => {
+  it('refuses a deferred BEGIN, whose wait would fall inside the transaction, and takes an immediate one', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'tc-deadline-'))
+    try {
+      const db = openHookDb(join(dir, 'treecontext.db'))
+      try {
+        for (const sql of ['BEGIN', 'begin deferred', 'BEGIN TRANSACTION;', 'BEGIN DEFERRED TRANSACTION']) {
+          expect(() => db.exec(sql), sql).toThrow(DEFERRED_BEGIN_REFUSED)
+          expect(() => db.prepare(sql), sql).toThrow(DEFERRED_BEGIN_REFUSED)
+        }
+        expect(db.isTransaction).toBe(false)
+        db.exec('BEGIN IMMEDIATE')
+        expect(db.isTransaction).toBe(true)
+        db.exec('ROLLBACK')
+      } finally { db.close() }
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  it('a write open made while another is open waits what is left of it, never below the floor; once it is closed, a fresh budget', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'tc-deadline-'))
+    const dbPath = join(dir, 'treecontext.db')
+    try {
+      openHookDb(dbPath).close()
+      const first = openHookDb(dbPath, { deadlineAt: Date.now() + 2000 })
+      try {
+        const second = openHookDb(dbPath)
+        try {
+          const left = hookDeadlineOf(second)! - Date.now()
+          expect(left).toBeLessThanOrEqual(2000)
+          expect(left).toBeGreaterThan(1500)
+        } finally { second.close() }
+        // The first's budget spent: the next phase still gets the floor.
+        narrowHookDeadline(first, Date.now() - 1000)
+        const late = openHookDb(dbPath)
+        try {
+          const left = hookDeadlineOf(late)! - Date.now()
+          expect(left).toBeGreaterThan(HOOK_DEADLINE_FLOOR_MS - 20)
+          expect(left).toBeLessThanOrEqual(HOOK_DEADLINE_FLOOR_MS)
+        } finally { late.close() }
+      } finally { first.close() }
+      const alone = openHookDb(dbPath)
+      try {
+        expect(hookDeadlineOf(alone)! - Date.now()).toBeGreaterThan(HOOK_DB_TIMEOUT_MS - 500)
+      } finally { alone.close() }
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  it('a staging write behind a connection that is still open gives up at what is left of it, not a fresh 7 s', () => {
+    // The open connection holds the store's write lock itself, so the
+    // staging write's connection cannot write until it has given up.
+    const dir = mkdtempSync(join(tmpdir(), 'tc-deadline-'))
+    const dbPath = join(dir, 'treecontext.db')
+    try {
+      openHookDb(dbPath).close()
+      const holder = openHookDb(dbPath, { deadlineAt: Date.now() + 500 })
+      try {
+        holder.exec('BEGIN IMMEDIATE')
+        const t0 = Date.now()
+        writeStaging(dbPath, { sessionId: 's-behind', role: 'user', content: 'behind the door', timestamp: Date.now() / 1000 })
+        const took = Date.now() - t0
+        expect(took, `the staging write waited ${took} ms behind a connection with 500 ms left`).toBeLessThan(500 + HOOK_BUSY_SLICE_MS + 400)
+        holder.exec('ROLLBACK')
+      } finally { holder.close() }
+      // Dropped, and marked as such.
+      expect(readFileSync(join(dir, 'hook-gaps.jsonl'), 'utf8')).toMatch(/s-behind/)
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  it('session-start\'s snapshot claim is staged within what is left of the connection that read it', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'tc-deadline-'))
+    const dbPath = join(dir, 'treecontext.db')
+    try {
+      // Two sessions of one checkout; the first left a recovery snapshot.
+      const setup = openHookDb(dbPath)
+      try {
+        const where = gitSelfOf(dir)
+        registerSelf(setup, 's-before', where, Date.now() / 1000 - 60)
+        registerSelf(setup, 's-after', where, Date.now() / 1000)
+      } finally { setup.close() }
+      writeSnapshot(dbPath, 's-before', ['what was I doing'])
+      const db = openHookDb(dbPath, { deadlineAt: Date.now() + 500 })
+      try {
+        db.exec('BEGIN IMMEDIATE')
+        const t0 = Date.now()
+        const payload = buildRehydrationPayload(db, 's-after', 'startup', dbPath)
+        const took = Date.now() - t0
+        expect(payload).toMatch(/Prior session snapshot/)
+        expect(took, `the claim's staging write waited ${took} ms with 500 ms left`).toBeLessThan(500 + HOOK_BUSY_SLICE_MS + 400)
+        db.exec('ROLLBACK')
+      } finally { db.close() }
+    } finally { rmSync(dir, { recursive: true, force: true }) }
   })
 })
 
@@ -256,6 +362,32 @@ describe.skipIf(process.platform === 'win32')('a hook\'s wait on a real store an
       expect((db.prepare('SELECT COUNT(*) AS n FROM main.t').get() as { n: number }).n).toBe(1)
     } finally {
       db.close()
+      await gone(locker)
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }, 60_000)
+
+  it('a guard\'s read through the handle lands when the lock is released inside its 1 s', async () => {
+    // A rollback-journal store: an idle connection holds no lock on it, so
+    // the guard's statement can be prepared before the locker takes the
+    // store, and the read under test is the statement's own `get`.
+    const { dir, dbPath } = freshStore()
+    const conv = new DatabaseSync(dbPath)
+    conv.exec('PRAGMA journal_mode = DELETE')
+    conv.close()
+    const guard = openHookDb(dbPath, { readonly: true, timeoutMs: 60_000 })
+    const stmt = guard.prepare('SELECT COUNT(*) AS n FROM staging')
+    expect((stmt.get() as { n: number }).n).toBe(0)
+    const locker = await lockWhole(dbPath)
+    try {
+      killLater(locker.pid!, 500)
+      // The guard's own budget, 1 s from here.
+      narrowHookDeadline(guard, Date.now() + 1000)
+      const t0 = Date.now()
+      expect((stmt.get() as { n: number }).n).toBe(0)
+      expect(Date.now() - t0).toBeLessThan(1000 + HOOK_BUSY_SLICE_MS)
+    } finally {
+      guard.close()
       await gone(locker)
       rmSync(dir, { recursive: true, force: true })
     }

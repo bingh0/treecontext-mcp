@@ -15,9 +15,9 @@ import { ensureBaseSchema, runMigrations } from '../persistence/migrations.js'
 import { maxSupportedVersion } from '../persistence/migrations/index.js'
 import { hostname } from 'node:os'
 import { dbg, enableDebug } from '../debug.js'
-import { hookHandle, withHookDeadline, busySliceUntil, hookDeadlineOf, HOOK_BUSY_SLICE_MS } from './hook-deadline.js'
+import { hookHandle, withHookDeadline, busySliceUntil, openWriteDeadline, HOOK_BUSY_SLICE_MS, HOOK_DEADLINE_FLOOR_MS } from './hook-deadline.js'
 
-export { withHookDeadline, hookHandle, hookDeadlineOf, narrowHookDeadline, busySliceUntil, isHookBusy, HOOK_BUSY_SLICE_MS } from './hook-deadline.js'
+export { withHookDeadline, hookHandle, hookDeadlineOf, narrowHookDeadline, busySliceUntil, isHookBusy, openWriteDeadline, HOOK_BUSY_SLICE_MS, HOOK_DEADLINE_FLOOR_MS } from './hook-deadline.js'
 
 // Auto-enable debug in hook subprocesses when the env var is set.
 if (process.env.TREECONTEXT_DEBUG === '1') enableDebug()
@@ -59,16 +59,19 @@ export const HOOK_DB_TIMEOUT_MS = 7000
 export const HOOK_STARTED_AT = Date.now()
 
 /** What is left of a hook's write budget, `since` the moment it counts
- *  from (the hook's start by default), never below 100 ms. A second open
+ *  from (the hook's start by default), never below HOOK_DEADLINE_FLOOR_MS. A second open
  *  inside the hook (the wrapper's pragmas, the journal's open, a staging
  *  write after the door's) gets this, not a fresh budget on top of the
  *  first. */
 export function hookBudgetLeftMs(since: number = HOOK_STARTED_AT): number {
-  return Math.max(HOOK_DB_TIMEOUT_MS - (Date.now() - since), 100)
+  return Math.max(HOOK_DB_TIMEOUT_MS - (Date.now() - since), HOOK_DEADLINE_FLOOR_MS)
 }
 
-/** The absolute moment a second phase's waits end: what is left of the
- *  hook's budget (hookBudgetLeftMs), from now. */
+/** The absolute moment a later phase's waits end: what is left of the
+ *  hook's budget (hookBudgetLeftMs), from now. For a phase that follows an
+ *  earlier connection already closed (Stop's bookmark ask behind a failed
+ *  staging write); a phase opened while one is still open inherits it on
+ *  its own (openWriteDeadline). */
 export function hookDeadlineLeft(since: number = HOOK_STARTED_AT): number {
   return Date.now() + hookBudgetLeftMs(since)
 }
@@ -101,11 +104,16 @@ export const STOP_GUARD_TIMEOUT_MS = 1000
  *  statement after it, never a budget per statement: `HOOK_DB_TIMEOUT_MS`
  *  from the open by default; `timeoutMs` for callers with a budget of their
  *  own counted from the open (the Stop-shaped guard's 1 s, the /clear
- *  read's 1.5 s); `deadlineAt` for a second write open inside a hook, which
- *  waits what is left (hookDeadlineLeft), never a fresh budget. */
+ *  read's 1.5 s); `deadlineAt` for a later write phase whose earlier
+ *  connection is already closed (hookDeadlineLeft). A write open made while
+ *  this process holds another hook write connection never waits past what
+ *  is left of that one (openWriteDeadline), whatever it asked for: a
+ *  second phase never gets a fresh budget. */
 export function openHookDb(dbPath: string, opts?: { readonly?: boolean; timeoutMs?: number; deadlineAt?: number }): DatabaseType {
-  const deadlineAt = opts?.deadlineAt ?? Date.now() + (opts?.timeoutMs ?? HOOK_DB_TIMEOUT_MS)
   const readonly = opts?.readonly ?? false
+  const asked = opts?.deadlineAt ?? Date.now() + (opts?.timeoutMs ?? HOOK_DB_TIMEOUT_MS)
+  const inherited = readonly ? null : openWriteDeadline()
+  const deadlineAt = inherited === null ? asked : Math.min(asked, inherited)
   if (!readonly) {
     // The directory too (release review 2026-09-02, finding 1): the first
     // cut of the issue-#2 fix minted the schema and nothing else, and its
@@ -123,7 +131,7 @@ export function openHookDb(dbPath: string, opts?: { readonly?: boolean; timeoutM
   // the budget by the clock. The pragmas below (journal_mode = WAL can be
   // busy) run through the same loop.
   const raw = openRaw(dbPath, { timeoutMs: HOOK_BUSY_SLICE_MS, readOnly: readonly })
-  const db = hookHandle(raw, deadlineAt)
+  const db = hookHandle(raw, deadlineAt, { write: !readonly })
   try {
     if (!readonly) {
       setPragma(db, 'journal_mode = WAL')
@@ -136,7 +144,7 @@ export function openHookDb(dbPath: string, opts?: { readonly?: boolean; timeoutM
     }
   } catch (err) {
     // The handle this open made is its to close on the way out.
-    try { raw.close() } catch { /* already gone */ }
+    try { db.close() } catch { /* already gone */ }
     throw err
   }
   return db
@@ -277,15 +285,16 @@ export function resolveDbPath(cwd?: string): string {
  *  than opening the store a third time; its failure never undoes the row.
  *  The connection is a hook handle (openHookDb), so the open, the
  *  namespace read and the INSERT each wait by the clock against one
- *  deadline: HOOK_DB_TIMEOUT_MS from the open, or `deadlineAt` when the
- *  write is a second phase of a hook that already waited (a staging write
- *  behind the hooks door's, or behind session-start's reads), which then
- *  waits what is left, never a fresh budget. The INSERT is one autocommit
- *  statement, so the handle's retry of it never stages a row twice. */
-export function writeStaging(dbPath: string, entry: StagingEntry, andThen?: (db: DatabaseType) => void, opts?: { deadlineAt?: number }): void {
+ *  deadline: HOOK_DB_TIMEOUT_MS from the open, or, when the write is a
+ *  second phase of a hook whose write connection is still open (a staging
+ *  write behind the hooks door's, or behind session-start's reads), what
+ *  is left of that one, never a fresh budget (openWriteDeadline). The
+ *  INSERT is one autocommit statement, so the handle's retry of it never
+ *  stages a row twice. */
+export function writeStaging(dbPath: string, entry: StagingEntry, andThen?: (db: DatabaseType) => void): void {
   let db: DatabaseType | null = null
   try {
-    db = openHookDb(dbPath, opts?.deadlineAt !== undefined ? { deadlineAt: opts.deadlineAt } : undefined)
+    db = openHookDb(dbPath)
     // C1 capture attribution: stamp the namespace of the session this hook
     // belongs to — first by the session-keyed annotation the drain
     // publishes from echo evidence (§7.8; causal, pid-free, works where
@@ -596,9 +605,8 @@ export function buildRehydrationPayload(
       parts.push(`[Prior session snapshot #${snapshot.id} from session ${snapshot.originalSessionId}]`)
       parts.push(`Recovery queries: ${snapshot.queries.join(', ')}`)
 
-      // A second phase of this hook's wait: what is left of the reading
-      // connection's deadline, never a fresh budget.
-      const deadlineAt = hookDeadlineOf(db)
+      // A second phase of this hook's wait, opened while `db` is open: it
+      // waits what is left of db's deadline, never a fresh budget.
       writeStaging(dbPath, {
         sessionId,
         role: 'snapshot',
@@ -607,7 +615,7 @@ export function buildRehydrationPayload(
         content: JSON.stringify({ queries: snapshot.queries, original_session_id: snapshot.originalSessionId, snapshot_id: snapshot.id }),
         timestamp: Date.now() / 1000,
         priority: 0,
-      }, undefined, deadlineAt !== null ? { deadlineAt } : undefined)
+      })
     }
   }
 

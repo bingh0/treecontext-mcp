@@ -41,7 +41,7 @@
  * stop this hook cannot write goes to the gap ledger (gap-ledger.ts).
  */
 import type { DatabaseSync as DatabaseType } from 'node:sqlite'
-import { parseHookInput, resolveDbPath, writeStaging, openHookDb, isDirectInvocation, payloadWriter, storeRefusesWrites, blockOutput, STOP_GUARD_TIMEOUT_MS, HOOK_STARTED_AT, hookDeadlineOf } from './shared.js'
+import { parseHookInput, resolveDbPath, writeStaging, openHookDb, isDirectInvocation, payloadWriter, storeRefusesWrites, blockOutput, STOP_GUARD_TIMEOUT_MS, HOOK_STARTED_AT } from './shared.js'
 import { extractLastAssistantText, extractHandbackReport } from './stop.js'
 import { hookStoreOn, hookTreeOf } from './hook-store.js'
 import { recordHookGap } from './gap-ledger.js'
@@ -350,13 +350,12 @@ async function legStop(
         // What the subagent said at this stop is captured as its turn,
         // not as its return: it is not done.
         if (o.content) {
-          // Behind the door's writes: what is left of this connection's
-          // deadline, never a fresh budget.
-          const deadlineAt = hookDeadlineOf(db)
+          // Behind the door's writes, opened while `db` is open: what is
+          // left of its deadline, never a fresh budget (openWriteDeadline).
           writeStaging(dbPath, {
             sessionId: ref.sessionId, role: 'assistant', content: o.content, timestamp: o.at, priority: 1,
             indexLen: Math.min(activeIndexCap('assistant'), o.content.length), agentId: ref.agentId, ...(o.agentType ? { agentType: o.agentType } : {}),
-          }, undefined, deadlineAt !== null ? { deadlineAt } : undefined)
+          })
         }
         dbg('hook:subagent-stop', 'sent back once for the missing checkpoint', { run: leg.run, key: leg.key })
         process.stdout.write(blockOutput(message))

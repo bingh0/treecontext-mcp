@@ -31,9 +31,10 @@
  *    transaction a statement is never retried alone: it waits one slice
  *    and its busy error goes to the transaction's owner, which rolls back
  *    (FlatStore's door calls are each one immediate transaction, which
- *    takes its lock at BEGIN, so in WAL mode the wait happens there). A
- *    script of several statements is never retried whole either: the
- *    first may have committed. Every hook site (the open and its pragmas,
+ *    takes its lock at BEGIN, so in WAL mode the wait happens there; a
+ *    deferred BEGIN, whose wait would fall inside, is refused). A script
+ *    of several statements is never retried whole either: the first may
+ *    have committed. Every hook site (the open and its pragmas,
  *    the bootstrap, writeStaging, the guard reads, session-start's reads,
  *    the hooks door through FlatStore) runs on such a connection, so no
  *    site can be missed by a budget change again.
@@ -70,9 +71,42 @@ interface HandleState {
   raw: DatabaseSync
   deadlineAt: number
   busySet: number | null
+  /** A write connection (not a read-only guard): an open made while it is
+   *  open waits what is left of it (openWriteDeadline). */
+  write: boolean
 }
 
 const STATES = new WeakMap<object, HandleState>()
+
+/** The write handles open in this process right now. */
+const OPEN_WRITES = new Set<HandleState>()
+
+/** The least a later phase is ever given: hookBudgetLeftMs's floor, so a
+ *  phase behind an exhausted one still gets a few slices, not one 1 ms try. */
+export const HOOK_DEADLINE_FLOOR_MS = 100
+
+/**
+ * The deadline an open made while this process already holds a hook write
+ * connection waits on: what is left of the soonest such connection's
+ * deadline, never below HOOK_DEADLINE_FLOOR_MS from now; null when none is
+ * open. This is the "a second open waits what is left of the budget, never
+ * a fresh one" rule as one rule rather than a choice at each site: a
+ * staging write behind the hooks door's writes (subagent-stop.ts), behind
+ * session-start's reads (shared.ts buildRehydrationPayload), or inside a
+ * worker's stop (stop.ts) opens while that connection is open, and so
+ * inherits its deadline. A long-lived host (the opencode plugin) that opens
+ * one connection per event holds none between them, so each event's first
+ * open has its own budget.
+ */
+export function openWriteDeadline(): number | null {
+  let soonest: number | null = null
+  for (const s of OPEN_WRITES) {
+    // A connection closed under the handle (not through it) holds nothing.
+    if (!s.raw.isOpen) { OPEN_WRITES.delete(s); continue }
+    soonest = soonest === null ? s.deadlineAt : Math.min(soonest, s.deadlineAt)
+  }
+  return soonest === null ? null : Math.max(soonest, Date.now() + HOOK_DEADLINE_FLOOR_MS)
+}
 
 /** The busy_timeout for the next wait: a slice, never past the deadline,
  *  never 0 (which would turn SQLite's wait off rather than shorten it). */
@@ -147,6 +181,24 @@ export function hookDeadlineOf(db: object): number | null {
   return STATES.get(db)?.deadlineAt ?? null
 }
 
+/** A BEGIN that starts a DEFERRED transaction (BEGIN, BEGIN DEFERRED, with
+ *  or without TRANSACTION). */
+const DEFERRED_BEGIN = /^\s*BEGIN(\s+DEFERRED)?(\s+TRANSACTION)?\s*;?\s*$/i
+
+/** Why a hook handle refuses a deferred BEGIN. A deferred transaction takes
+ *  its locks at its first read or write, inside the transaction, where a
+ *  statement is never retried alone (one slice, then the busy error goes
+ *  to the transaction's owner); its read-then-write upgrade can also come
+ *  back busy at once (SQLITE_BUSY_SNAPSHOT). A hook's transactions are
+ *  IMMEDIATE (or EXCLUSIVE), whose wait is their BEGIN, run through the
+ *  deadline loop. */
+export const DEFERRED_BEGIN_REFUSED =
+  'a hook connection refuses a deferred BEGIN: its wait would fall inside the transaction, outside the deadline loop; use BEGIN IMMEDIATE'
+
+function refuseDeferredBegin(sql: string): void {
+  if (DEFERRED_BEGIN.test(sql)) throw new Error(DEFERRED_BEGIN_REFUSED)
+}
+
 /** Bring a hook handle's deadline forward to `deadlineAt` if that is
  *  sooner (a second phase that waits what is left of the hook's budget,
  *  never a fresh one); a no-op on any other connection. */
@@ -172,8 +224,9 @@ const BUSY_PRAGMA = /busy_timeout/i
  * statement that writes busy_timeout through it is run, and the handle
  * sets its slice again before the next one.
  */
-export function hookHandle(raw: DatabaseSync, deadlineAt: number): DatabaseSync {
-  const state: HandleState = { raw, deadlineAt, busySet: null }
+export function hookHandle(raw: DatabaseSync, deadlineAt: number, opts?: { write?: boolean }): DatabaseSync {
+  const state: HandleState = { raw, deadlineAt, busySet: null, write: opts?.write ?? false }
+  if (state.write) OPEN_WRITES.add(state)
   const guarded = <T>(fn: () => T): T => {
     if (raw.isTransaction) {
       setBusy(raw, state, busySliceUntil(state.deadlineAt))
@@ -208,14 +261,18 @@ export function hookHandle(raw: DatabaseSync, deadlineAt: number): DatabaseSync 
     get(target, key) {
       if (key === 'prepare') {
         // Preparing reads the schema, which a lock can hold up.
-        return (sql: string) => statement(guarded(() => target.prepare(sql)), sql)
+        return (sql: string) => { refuseDeferredBegin(sql); return statement(guarded(() => target.prepare(sql)), sql) }
       }
       if (key === 'exec') {
         return (sql: string) => {
+          refuseDeferredBegin(sql)
           try {
             return isSingleStatement(sql) ? guarded(() => target.exec(sql)) : once(() => target.exec(sql))
           } finally { afterBusyPragma(sql) }
         }
+      }
+      if (key === 'close') {
+        return () => { OPEN_WRITES.delete(state); target.close() }
       }
       const v = Reflect.get(target, key, target) as unknown
       return typeof v === 'function' ? (v as (...a: unknown[]) => unknown).bind(target) : v
