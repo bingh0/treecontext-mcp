@@ -31,6 +31,7 @@
 
 import { DatabaseSync, type StatementSync } from 'node:sqlite'
 import { chmodSync, existsSync, statSync } from 'node:fs'
+import { resolve } from 'node:path'
 import type { Database, Statement, RunResult } from './database.js'
 import { dbg, warn } from '../debug.js'
 
@@ -223,12 +224,18 @@ export class NodeSqliteDatabase implements Database {
   private closed = false
   private savepointDepth = 0
   readonly secureDelete: boolean
+  /** The path the caller opened, as spelled (made absolute), when the
+   *  opener had one: node:sqlite's location() resolves symlinks (macOS's
+   *  /var → /private/var), better-sqlite3's name kept the caller's
+   *  spelling, and the store's backups and paths are named from this. */
+  private readonly openedPath: string | undefined
 
   constructor(
     private readonly db: DatabaseSync,
-    opts?: { secureDelete?: boolean | undefined; readOnly?: boolean | undefined; timeoutMs?: number | undefined },
+    opts?: { secureDelete?: boolean | undefined; readOnly?: boolean | undefined; timeoutMs?: number | undefined; openedPath?: string | undefined },
   ) {
     this.secureDelete = opts?.secureDelete ?? false
+    this.openedPath = opts?.openedPath
     // busy_timeout FIRST, at the raw opener's wait (or the caller's), for
     // the pragmas below. A DatabaseSync the caller built with node:sqlite's
     // own default has a busy timeout of 0, and `journal_mode = WAL` (a lock,
@@ -337,7 +344,8 @@ export class NodeSqliteDatabase implements Database {
   get path(): string | undefined {
     // location() is null for an in-memory or temporary database.
     const loc = this.db.location()
-    return loc ? loc : undefined
+    if (!loc) return undefined
+    return this.openedPath ?? loc
   }
 }
 
@@ -357,7 +365,7 @@ export function openNodeSqlite(pathOrDb: string | DatabaseSync, opts: OpenNodeSq
     const raw = openRaw(pathOrDb, opts)
     let db: NodeSqliteDatabase
     try {
-      db = new NodeSqliteDatabase(raw, wrapOpts)
+      db = new NodeSqliteDatabase(raw, { ...wrapOpts, openedPath: resolve(pathOrDb) })
     } catch (err) {
       // The handle this call opened is this call's to close on the way out.
       try { raw.close() } catch { /* already gone */ }

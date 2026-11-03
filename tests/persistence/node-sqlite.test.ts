@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { DatabaseSync } from 'node:sqlite'
-import { mkdtempSync, rmSync, existsSync } from 'node:fs'
+import { mkdtempSync, rmSync, existsSync, realpathSync, symlinkSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import {
@@ -52,9 +52,17 @@ describe('node:sqlite adapter (D278)', () => {
 
   it('wraps an existing DatabaseSync and reports its path, none for :memory:', () => {
     const file = join(dir, 'w.db')
+    // A wrapped handle has only node:sqlite's location(), which resolves
+    // symlinks (macOS: /var → /private/var); a path the opener was given
+    // keeps the caller's spelling.
     const db = openNodeSqlite(new DatabaseSync(file))
-    expect(db.path).toBe(file)
+    expect(db.path).toBe(realpathSync(file))
     db.close()
+    const linked = join(dir, 'via-link')
+    symlinkSync(dir, linked)
+    const opened = openNodeSqlite(join(linked, 'w.db'))
+    expect(opened.path).toBe(join(linked, 'w.db'))
+    opened.close()
     const mem = openNodeSqlite(new DatabaseSync(':memory:'))
     expect(mem.path).toBeUndefined()
     mem.close()

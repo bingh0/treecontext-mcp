@@ -20,7 +20,9 @@ import { FlatStore } from '../../src/flat-store.js'
 const T0 = 1_700_000_000
 const auto = (session: string) => ({ source: 'auto-capture', role: 'tool', session_id: session })
 
-describe('archive writer fsyncs the archive directory', () => {
+// The order is read off /proc/self/fd, which only Linux has: elsewhere a
+// file's fsync cannot be told from the store's own, so the test runs on Linux.
+describe.skipIf(process.platform !== 'linux')('archive writer fsyncs the archive directory', () => {
   it.skipIf(process.platform === 'win32')('file, then its directory, both before the first row moves', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'tc-archdir-'))
     const dbPath = join(dir, 'a.db')
