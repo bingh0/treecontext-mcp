@@ -59,6 +59,12 @@ function oversleeper(okAt = Infinity): { db: { exec(sql: string): unknown; isTra
 
 describe('withHookDeadline: the deadline is the clock, not SQLite\'s arithmetic', () => {
   const DEADLINE_MS = 600
+  /** The scheduler's share, the same on every OS: the fake's own 2x sleep
+   *  is a real sleep and a loaded runner stretches it too (macOS CI
+   *  41694914909: 763 ms against a 750 ms bound). SQLite's arithmetic, the
+   *  regression these tests exist for (probe P1), takes ~2x the deadline
+   *  (~1200 ms) and still fails DEADLINE_MS + slice + this. */
+  const SCHEDULER_MS = 150
 
   it('against a busy wait that oversleeps 2x, it gives up by the deadline plus one slice\'s overrun', () => {
     const f = oversleeper()
@@ -69,8 +75,8 @@ describe('withHookDeadline: the deadline is the clock, not SQLite\'s arithmetic'
     expect(isHookBusy(thrown), String(thrown)).toBe(true)
     // At most one slice past the deadline (the last try's busy_timeout is
     // min(slice, what is left), and it oversleeps by as much again), with
-    // 50 ms for the scheduler.
-    expect(took, `gave up after ${took} ms against a ${DEADLINE_MS} ms deadline`).toBeLessThanOrEqual(DEADLINE_MS + HOOK_BUSY_SLICE_MS + 50)
+    // the scheduler's share.
+    expect(took, `gave up after ${took} ms against a ${DEADLINE_MS} ms deadline`).toBeLessThanOrEqual(DEADLINE_MS + HOOK_BUSY_SLICE_MS + SCHEDULER_MS)
     // And it kept trying until the deadline, never giving up at the first
     // busy answer.
     expect(took).toBeGreaterThanOrEqual(DEADLINE_MS - HOOK_BUSY_SLICE_MS)
@@ -92,7 +98,7 @@ describe('withHookDeadline: the deadline is the clock, not SQLite\'s arithmetic'
     try { handle.prepare('SELECT 1').get() } catch (err) { thrown = err }
     const took = Date.now() - t0
     expect(isHookBusy(thrown), String(thrown)).toBe(true)
-    expect(took).toBeLessThanOrEqual(DEADLINE_MS + HOOK_BUSY_SLICE_MS + 50)
+    expect(took).toBeLessThanOrEqual(DEADLINE_MS + HOOK_BUSY_SLICE_MS + SCHEDULER_MS)
     expect(took).toBeGreaterThanOrEqual(DEADLINE_MS - HOOK_BUSY_SLICE_MS)
     // A second statement after the deadline gets one short try, never a
     // fresh budget.
