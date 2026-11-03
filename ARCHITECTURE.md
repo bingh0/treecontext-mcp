@@ -195,7 +195,7 @@ Charter promises: `journal-capture.feature`; mechanics:
   query), **temporal filters and orderings**, **adaptive result
   counts** (score-distribution break detection, disclosed in the
   response), and **recency fusion** (reciprocal-rank fusion of the
-  BM25 ordering with capture-time ordering; serving default 0.5,
+  BM25 ordering with capture-time ordering; serving default 0.25,
   explicit 0 opts out).
 - **Conversation windows**: each hit can carry its same-session
   neighbors plus the nearest preceding user message — the fabric that
@@ -218,10 +218,21 @@ Charter promises: `journal-capture.feature`; mechanics:
   the newest from another lane when there is one — never the referrer
   in full, never its own referrers. `references.ts`.
 - **Lanes**: supersession retires only targets in the inserting
-  writer's own lane (an imported entry's `handoff:` session key, else
-  the store-stamped `_writer`, else `agent_type`, else the main lane;
-  an `ambiguous` stamp owns none). A target in another lane is left as
-  it was and becomes a reference instead.
+  writer's own lane. One rule reads a row's lane for every reader
+  (D379; `references.ts` `laneOfRow`, `persistence/lane-scope.ts`
+  `placementsOf`): an imported entry's lane is its `handoff:` session
+  key; a row of a session's own agent whose session the registry places
+  in a checkout is that checkout's (`main` or `worktree:<name>`),
+  whatever its stamp; otherwise the store-stamped `_writer`, else
+  `agent_type`, else the main lane (rows from before writers were
+  recorded). A helper's row is its role's; an `ambiguous` stamp owns
+  none; a row stamped `unregistered` is the lane of undetermined writers,
+  shown as "writer unknown" and never any checkout's own. An unplaced
+  writer retires a placed lane's pointer only through the pre-stamp door
+  (D378): a main chapter naming no writer, from a session the registry
+  never held, while no session has registered in the main checkout. A
+  target in another lane is left as it was and becomes a reference
+  instead.
 - **Handoff files** (`handoff.ts`): `treecontext_export` without a node
   id is a handoff — `form: "summaries"` by default (live chapter
   summaries and `subagent-summary` rows), or `"whole"`, which first
@@ -417,12 +428,29 @@ who is speaking. The store stamps the writer instead
   owns them; a restored bookmark stays retired when its lane already has
   a newer live one. Every act is listed in `_writer_heal_note`.
 - **Readers**: the /clear packet ignores rows naming a subagent's agent
-  id (`NOT_SUBAGENT`); a fresh start in a linked worktree opens with that
-  worktree's own newest chapter and the entry whose `brief_for` names it;
-  status in a worktree lists its own lane's pointers; a `provisional`
-  caller's search is scoped to its role's trail and the plan it was
-  spawned under. `scope: "all"` widens either. `treecontext_export` with
-  `writer` reads one writer's trail.
+  id (`NOT_SUBAGENT`); a `provisional` caller's search is scoped to its
+  role's trail and the plan it was spawned under. `treecontext_export`
+  with `writer` reads one writer's trail (for `main` or
+  `worktree:<name>`, the own agent's rows of every session the registry
+  places in that checkout).
+- **Lanes as checkouts (D372–D379)**: the main checkout is a lane like
+  any linked worktree. In either, a fresh start opens with the lane's own
+  newest chapter (or bookmark) and the entry whose `brief_for` names it
+  (`checkpoints.ts` `selfLines`), and counts the other lanes, naming at
+  most three, never their text (D373); status lists the lane's own
+  pointers and counts the others (`other_lane_count`, D372); the own
+  agent's default search is scoped to the lane, read from the registry
+  at query time (`QueryOptions.lane`, `lane-scope.ts`): its sessions'
+  rows minus helper trails, its helpers' reports by parent link, the
+  handoffs imported there, never an `unregistered` row, with the last
+  place of a relevance page kept for the lane's own matching chapter
+  (D374). A ticket-door worker, a caller that cannot be told apart and an
+  unplaced caller search the whole store, the reply's `scope` saying
+  which. The recovery snapshot is claimed only by a session of its own
+  lane, its row written in the claiming session (D375). `scope: "all"`
+  widens a search or the status. *Residual (D379)*: a session that runs
+  outside any git checkout registers as the main lane, which shuts the
+  D378 door and lets it claim main's recovery snapshots.
 
 *Known residuals*: until the echo drains (one ingestion tick, about five
 seconds) a row stamped wrongly at insert acts in the lane it was guessed

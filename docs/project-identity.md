@@ -1,13 +1,22 @@
 # Project identity: the journal must survive its own project's history (design note, 2026-08-16)
 
-> Status: **IMPLEMENTED 2026-08-21**, Phases 1–4, `6331ee5..e73552b`
-> — succession + worktree identity, the split detector, the doctor
-> self-audit surface, the fingerprint digest migration (024), and
-> `stores merge`, each phase adversarially reviewed with its findings
-> fixed before the next. What remains is Phase 5 (release packaging)
-> and the five real-store repairs, which are owner-gated. This note is
-> now the implemented design of record; §9.2 below is resolved by
-> migration 024. Ruled in for 0.1 by the owner on 2026-08-16
+> Status (2026-11-03): **the specification of store identity, every
+> phase done.** Phases 1–4 were implemented 2026-08-21
+> (`6331ee5..e73552b`): succession and worktree identity, the split
+> detector, the doctor self-audit surface, the fingerprint digest
+> migration (024), and `stores merge`, each phase adversarially reviewed
+> with its findings fixed before the next. Phase 5, the release gate,
+> led to `0.1.0-rc.1` and the closed beta; the public betas followed. The five
+> real-store repairs of Phase 4 were owner actions on the owner's own
+> stores and are not tracked here. The contract, which the tests cite
+> by section (`tests/steps/store-bindings.steps.ts`,
+> `tests/steps/stores-merge.steps.ts`, `features/design/store-bindings.feature`
+> and the identity unit tests), is §2, §3 (§3.1–§3.6), §4, §5
+> (§5.1–§5.3), §9.2 and §11a–§11c; the rest (§1, §6–§8, §10, §11, §12)
+> is the record of how it was reasoned and sequenced. §9.2 is resolved
+> by migration 024.
+>
+> Ruled in for 0.1 by the owner on 2026-08-16
 > (treecontext node `60432cf2`) off the defect report in node
 > `7e74a334`; part 3 (`stores merge`) carried the strict cycle of
 > ruling `232b4219` (design review §6 → implementation → adversarial

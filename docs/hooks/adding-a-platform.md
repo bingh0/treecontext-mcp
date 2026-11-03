@@ -33,7 +33,10 @@ capture at all (`src/hooks/vscode/normalize.ts` header).
    event if one exists, and subagent start/stop if the platform reports
    them (they register subagents so the store can stamp each row's
    writer; without them nothing is registered and every row reads as
-   the session's own agent's until its echo drains). Not every platform has a Stop equivalent; user
+   the session's own agent's until its echo drains). A session-start
+   that does not register the session's self leaves every row the agent
+   writes through the tools stamped `unregistered`, shown as "writer
+   unknown": a lane of its own, never any checkout's (D376). Not every platform has a Stop equivalent; user
    and tool capture stand alone (`src/hooks/README.md`).
 3. **Tests** in `tests/hooks/` exercising the documented payloads
    (`tests/hooks/copilot-adapter.test.ts` is the template).

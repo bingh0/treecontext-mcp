@@ -108,8 +108,9 @@ scenario, are in `docs/beta3-bindings-audit.md`.
   `leg-registration` row (the facts a claim under `_leg_registration`, read
   back as an imported leg)
 - `src/references.ts` — `metadata.refs` references and lanes: the lane key
-  supersession respects, the writer an entry is shown with, and
-  "referenced by" one hop deep
+  supersession respects (`laneOfRow`: the registry's placement of the
+  session first, the stamp only where it places none, D379), the writer
+  an entry is shown with, and "referenced by" one hop deep
 - `src/checkpoints.ts` — chapter summaries and bookmarks, the bookmark
   interval, the /clear session chain, the re-orientation packet, a fresh
   start's self lines for a worktree and the main checkout alike, and its
@@ -190,6 +191,23 @@ scenario, are in `docs/beta3-bindings-audit.md`.
 - `src/session-beacon.ts` — pid-keyed session identity; on a /clear the
   session-start hook reads the predecessor session from it before
   rewriting it
+- `src/persistence/recovery-snapshot.ts` — the recovery snapshot row the
+  drain writes after a compaction (D286), claimed only in its own lane
+  (D375)
+- `src/server/bindings.ts` — project identity → store name
+  (`~/.treecontext/bindings.json`, keyed by the git remote or the
+  project root; docs/project-identity.md)
+- `src/tools/stores.ts`, `src/tools/store-merge.ts` — `treecontext
+  stores` (list, rm, prune) and `stores merge`
+- `src/server/sidecar-blob.ts`, `src/server/ccr-pane.ts` — the sidecar
+  panes written beside the store (journal, threads, trail) and
+  `ccr wire`, which lists them in ccr's config
+- `src/server/store-audit.ts` — the self-audit queries doctor runs
+- `src/server/config.ts` — the TOML config loader (project
+  `treecontext.toml` over `~/.treecontext/config.toml`)
+- `src/server/agents.ts` — the agent registry install reads (detection,
+  config paths and formats, hooks)
+- `src/server/shielding.ts` — output shielding (`--shield-threshold`)
 
 ## Design decisions worth not re-litigating
 
@@ -314,6 +332,15 @@ node dist/server/cli.js doctor      # after a build
 - The curated unique index is partial: `dedup_class = 'curated'` outside
   handoff lanes (`CURATED_INDEX_WHERE`). Inside a handoff lane identity
   decides, not content; any rebuild must reuse the shared DDL
+- A pointer's lane is the registry's placement of its session first
+  (`placementsOf`, read once per call), the writer stamp only where the
+  registry places the session nowhere (D379, `laneOfRow`). Never decide a
+  lane from `_writer` alone: a library row with no stamp in a worktree's
+  session is the worktree's
+- A recovery snapshot is claimed only by a session of the lane it was
+  written for, and its row is written in the claiming session (D375,
+  `recovery-snapshot.ts`); a snapshot whose session the registry does not
+  hold is claimed by no one
 - A search by a session's own agent placed in a checkout is scoped to its
   lane (`QueryOptions.lane`, read from the registry, D374); the lane's
   one-hop reach is read once per search and shared by the hits and every

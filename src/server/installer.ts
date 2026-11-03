@@ -2319,15 +2319,15 @@ Two kinds:
 After a /clear, open your first reply with the re-orientation packet you
 received at session start, shown to the developer as is, in order.
 Handoff: export the chapter summaries to a file in the repository and
-commit it; the teammate pulls and imports it with \`treecontext_import\`,
-with the file's name as the label.
+commit it; the teammate pulls and imports it with \`treecontext_import\`
+and the file's path.
 When capture or recall looks wrong, run \`treecontext doctor\` before
 anything else. The long form is the treecontext-reference skill.
 
 ## Key Tools
 - \`treecontext_insert\` — record decisions, reasoning, plans
 - \`treecontext_query\` — recall context by topic (supports time_range, sort_by)
-- \`treecontext_export\` — fetch an entry by ID (omit the ID for the whole journal)
+- \`treecontext_export\` — fetch an entry by ID (omit the ID for a handoff of the chapter and subagent summaries)
 - \`treecontext_status\` — orientation panel with resume pointers
 
 Don't put project-scoped facts in global auto-memory — each entry is permanent

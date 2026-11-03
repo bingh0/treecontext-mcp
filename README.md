@@ -100,12 +100,13 @@ server from the older release keeps running against your store until
 its session ends, and the new release migrates the store the first time
 it opens it. From `0.1.0-beta.2` on, a server that finds its store
 migrated past it steps aside: it stops draining and tells the agent to
-restart the session. A `0.1.0-beta.1` server has no such step-aside: left
-running beside a store `0.1.0-beta.2` has migrated, it keeps draining,
-but without this release's re-indexing of treecontext's own echoes, so
-the echoes it drains are indexed with their results and stay that way
-until the next beta.2 server heals them. Quit first and none of it
-happens.
+restart the session, so a `0.1.0-beta.2` server left running beside a
+store `0.1.0-beta.3` has migrated stops draining until you restart it. A
+`0.1.0-beta.1` server has no such step-aside: left running beside a store
+`0.1.0-beta.2` migrated, it kept draining, but without beta.2's
+re-indexing of treecontext's own echoes, so the echoes it drained were
+indexed with their results until a beta.2 server healed them. Quit first
+and none of it happens.
 
 Install the new beta over the old one:
 
@@ -135,8 +136,11 @@ and any stale interpreter paths. Store migrations run automatically the
 next time the server opens your store and are additive — but per the
 beta caveat above, treat the journal as replaceable between beta
 releases anyway. The re-run also refreshes the installed reference skill
-text: until you re-run it, an installed skill from an earlier beta still
-says recency fusion is served at `0.5`.
+text (`doctor` says "skill outdated" until it does). Coming from
+`0.1.0-beta.2`, the re-run is also what writes `"idleCompaction": false`
+(§3), refreshes the skill's lane and key-lookup sections, and adds the
+worker variables (`env_vars`) to an existing Codex CLI entry; until you
+re-run it, Claude Code keeps summarising idle sessions.
 
 ## 3. Set up your agent
 
@@ -157,6 +161,13 @@ This detects your installed agents and wires treecontext into them. Add
 | `~/.claude/hooks/tc-*` | the hook wrapper scripts themselves (`.cmd` on Windows) |
 | `~/.claude/skills/treecontext-reference/SKILL.md` | the reference skill your agent loads on demand |
 | `~/.treecontext/config.toml` | treecontext's own settings |
+| `~/.treecontext/install-state.json` | install's record of the `idleCompaction` key it wrote and in which settings file, so uninstall removes only its own key |
+
+For another agent (`--agent codex`, and so on) install writes that
+client's MCP entry instead; Codex CLI's, in `~/.codex/config.toml`, also
+lists `env_vars = ["TREECONTEXT_TICKET", "TREECONTEXT_WORKER_SESSION"]`,
+so a `codex exec` worker's rows reach its lane (§5, "Running work as
+legs").
 
 On Windows, `~` means `%USERPROFILE%`. Existing config is merged, not
 overwritten — your other MCP servers and hooks are left alone, and a
@@ -242,7 +253,10 @@ Mostly you don't. Capture is automatic. Two things are worth knowing:
 - **The agent should write down the *why*.** Hooks capture what happened;
   decisions, rejected options and constraints only get recorded if the
   agent calls `treecontext_insert`. Prompting *"record that decision in
-  treecontext"* works and is a good habit.
+  treecontext"* works and is a good habit. The stop hook also asks it
+  for a short bookmark now and then; `treecontext config
+  checkpoint-interval "30 minutes"` sets how often, for this directory's
+  store (`"20 rounds or 45 minutes"` is the default, `"off"` stops it).
 - **Optional: a live journal pane in ccr.** treecontext writes small
   status panes beside each store that ccr's sidecar can display. Run
   `treecontext ccr wire` in your project and it names the pane in ccr's
@@ -317,7 +331,11 @@ adds `_insert` and nothing that removes. Details in
   named, never their text; `scope: "all"` widens a search or the status.
   After a restart your own chapter is among the orientation search's
   results (it may be given the last place of a page of two or more), not
-  promised first. A caller the server cannot place, such as a client
+  promised first. A row belongs to the checkout its session ran in,
+  stamped or not, rows a program writes through the library under that
+  session's id included; a program writing with no session writes into
+  main's lane, and a session run outside any git checkout counts as the
+  main checkout. A caller the server cannot place, such as a client
   without hooks, is stamped `unregistered` and shows as "writer unknown":
   a lane of its own, never main's. While no session has run in the main
   checkout, such a client may retire a pre-stamp chapter of main: a live
@@ -332,17 +350,114 @@ adds `_insert` and nothing that removes. Details in
   `--experimental-capture` has copied the block; the adapters' own
   scripts (Cursor, Codex, Gemini, opencode), unverified scaffolding,
   register no session and claim none.
-- **A run as a unit.** When the work ran as legs under a run, `treecontext
-  export handoffs/login-run.json --run login` writes that run: its
-  skeleton, meaning the open and close, every brief, every checkpoint,
-  each leg's first moment and summary, and the legs' registrations, with no
-  captured tool output. `--run login --whole --yes` adds every row of every
-  leg, after the same secrets warning. The agent does the same through the
-  export tool's `run` argument (`form: "whole"` behind the same
-  acknowledgement). Importing it lands the run in a lane of its own as a
-  review of what happened elsewhere, never a replay: an imported brief
-  steers no role and an imported checkpoint takes no number in your
-  sequence.
+
+### Running work as legs
+
+When a task is split across subagents or headless workers, treecontext
+can journal it as one unit, so each new worker starts from where the last
+one stopped.
+
+- A **run** is one piece of work, under a name you choose (`login`).
+- A **key** is one strand of work inside a run, handed from one worker
+  to the next (`parser`).
+- A **leg** is one subagent or headless worker doing part of a run under
+  a key.
+- A **checkpoint** is the state of a key's work as it now stands, written
+  by a leg so that the next leg starts from it. The store numbers each one
+  as it lands (1, 2, 3, …), and refuses one longer than 16000 characters
+  the first time.
+
+**Write a brief first.** The main agent writes it with `treecontext_insert`:
+
+```json
+{
+  "content": "Write the token parser for the login form. Checkpoint what is done and what is next.",
+  "metadata": { "kind": "brief", "run": "login", "key": "parser",
+                "brief_for": "parser-dev", "checkpointer": "parser-dev" }
+}
+```
+
+`brief_for` is the role the brief is for: a Claude Code subagent type, or
+the `--role` of a headless worker. `checkpointer` is the role that writes
+the key's checkpoint at the end. A brief stays in effect until a newer
+brief for the same role and key names it in `supersedes`, or until the run
+closes (`treecontext_insert` with metadata `kind: "run-close"`, `run` and
+`reason`). The run opens by itself when its first leg starts.
+
+**A subagent leg (Claude Code).** When a subagent starts, the SubagentStart
+hook looks for a brief in effect for its role. With none, no leg is made:
+the subagent runs exactly as before. With one, it is a leg of that brief's
+run and key, and it starts with the brief, the checkpoint(s) in effect,
+each one whole with its number, writer and time, and a line saying that a
+checkpoint is state, not history. (With two or more, its key stays open
+until its first write under one of them.) It writes its checkpoint with
+`treecontext_insert`, metadata `kind: "checkpoint"`, `run` and `key`; the
+store links it to the checkpoint the leg started from. When the leg
+stops, its report is kept as its summary row, and the Agent tool's result
+gains one line naming that row. A background launch
+(`run_in_background`) gets no such line: its return arrives as Claude
+Code's task notification. A leg named as the checkpointer that wrote under
+its key and stops without a new checkpoint is sent back once to write it,
+never twice.
+
+**A headless worker (`treecontext run`).** The ticket door spawns any
+command as a worker, with its run, role and key in its environment:
+
+```bash
+treecontext run --run login --role parser-dev --key parser \
+  --parent build-script --checkpointer parser-dev \
+  --prompt "Start with the tokenizer." \
+  -- claude -p --model sonnet --allowedTools mcp__treecontext__treecontext_insert
+```
+
+- `--run`, `--role` and `--parent` are required, and so is `--key` (or
+  `--no-key` for a one-off worker). `--parent` names who spawned it: a
+  session the store has registered is linked, and any other name is
+  recorded as declared. `--checkpointer` is optional when a brief names
+  one.
+- The worker's first message (the brief, the checkpoint(s) in effect,
+  then `--prompt`) goes to its stdin. A bare `claude -p` needs its prompt
+  before `--allowedTools`, because that flag takes several values; here
+  `treecontext run` sends the prompt on stdin, so nothing follows the
+  flag. `--message-arg` puts the message last among the worker's
+  arguments instead, so don't use it with a command that ends in
+  `--allowedTools`.
+- The worker writes its checkpoint through its own treecontext tools, as
+  a subagent does. Its stdout passes through unchanged. When it exits,
+  that output becomes its summary row, and one line on stderr, starting
+  `treecontext:`, says how it ended. The exit code is the worker's own.
+  A worker that owes a checkpoint and exits without one is run once more
+  to write it. `--timeout <seconds>` stops the worker and everything it
+  started.
+- Codex CLI (`-- codex exec`) and Antigravity CLI (`-- agy -p`) have been
+  run live this way (orchestration matrix, §6). Codex CLI passes the
+  worker's variables to treecontext only when its MCP entry lists them;
+  `treecontext install --agent codex` writes that line, and a
+  hand-written entry in `~/.codex/config.toml` needs it too:
+  `env_vars = ["TREECONTEXT_TICKET", "TREECONTEXT_WORKER_SESSION"]`. For
+  Antigravity CLI, add the server once with
+  `agy mcp add treecontext -- treecontext serve`.
+
+**Ask the store where a key stands.** `treecontext_query` with
+`key_lookup: { "run": "login", "key": "parser" }` returns, instead of
+search hits: the checkpoint(s) in effect, each whole with its number and
+writer; a flag in words when the writer is not the checkpointer the brief
+named, or the checkpoint was imported; a pointer to the summary row of the
+leg that wrote it; the run's facts (legs run, keyless legs, checkpoints
+under the key, the run's age, the latest sizes); and each leg, live or how
+it ended. The store judges none of it. A harness gets the same reply from
+the library, `FlatStore.lookupKeyReply({ run, key })`.
+
+**Export a run as a unit.** `treecontext export handoffs/login-run.json
+--run login` writes that run's skeleton: the open and close, every brief,
+every checkpoint, each leg's first moment and summary, and the legs'
+registrations, with no captured tool output. `--run login --whole --yes`
+adds every row of every leg, after the same secrets warning. The agent
+does the same with `treecontext_export` and `run` (`form: "whole"` with
+`secrets_acknowledged: true`). Importing the file puts the run in a lane
+of its own as a record of what happened elsewhere, never a replay: an
+imported brief steers no role, and an imported checkpoint takes no number
+in your sequence.
 
 ## 6. Platform support
 

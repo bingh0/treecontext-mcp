@@ -46,9 +46,10 @@ for the three-layer model.
   out; with two or more, its key is `ambiguous` and the candidates kept.
   A store it cannot write starts the leg cold: nothing emitted, the start
   recorded in the gap ledger (D314)
-- `subagent-stop.ts` — stages the subagent's report
-  (`last_assistant_message`, else the last assistant text of
-  `agent_transcript_path`) as kind `subagent-summary`, then retires the
+- `subagent-stop.ts` — stages the subagent's report (the `message` of
+  the newest `SubagentHandback` call in `agent_transcript_path` when it
+  made one, D371; else `last_assistant_message`; else the last assistant
+  text of that transcript) as kind `subagent-summary`, then retires the
   registration; an agent id nobody registered with no `agent_type` is the
   client's own internal agent (compaction, side calls), staged as kind
   `internal-summary` and stamped `_writer: "claude-code"` at the drain.

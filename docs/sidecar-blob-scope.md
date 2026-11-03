@@ -1,5 +1,9 @@
 # Sidecar blob — scope and build record (2026-08-04)
 
+> **Historical:** the build record of 2026-08-04. The pane set has grown
+> since: `trail` ships too (`sidecar-trail.json`, `ccr wire --pane trail`);
+> see [ccr-pane.md](ccr-pane.md) for the current panes.
+
 > **Built.** `src/server/sidecar-blob.ts` (the producer), `FlatStore.vitals()`
 > (the facts it stands on), the drain hook in `src/server/ingestion.ts`, the
 > wiring in `src/server/server.ts`, and `features/journal-sidecar.feature`

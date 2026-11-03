@@ -15,6 +15,7 @@ higher layers build on the base but never break it.
 │  UserPromptSubmit, PostToolUse, Stop,                │
 │  SubagentStart/Stop → staging + session registry     │
 │  Feeds the journal via the ingestion drain           │
+│  A leg's own rows: written directly (hooks door)     │
 ├─────────────────────────────────────────────────────┤
 │  Layer 1 — Universal MCP (always works)              │
 │  treecontext_insert, _query, _status, etc.           │
@@ -41,6 +42,10 @@ the same store:
   session and namespace; the store tells them apart by the `_writer` it
   stamps (from the hook payload, or from the session registry and the
   call's echo for a tool-written row), not by a separate namespace
+- **Checkout lanes** — the main checkout (`main`) and each linked git
+  worktree (`worktree:<name>`) is a lane, read from the session registry
+  where the session-start hook placed the session; the `_writer` stamp
+  decides only where the session is unplaced (D372–D379)
 - **Handoff lanes** — entries imported from a teammate's handoff file,
   each in a `handoff:<claimed session>` lane of its own
 
@@ -69,6 +74,11 @@ Passive activity capture via platform hook events. See
 - On Claude Code: subagent registration (`SubagentStart`/`SubagentStop`),
   each subagent's report captured as its summary, and every row stamped
   with its writer
+- On Claude Code: the hooks door, where a subagent whose role has a brief
+  in effect becomes a leg and the hooks write its own rows directly
+  (registration, run open, first moment, send-back, summary) in one
+  transaction (`src/hooks/hook-store.ts`); what they cannot write goes
+  to the gap ledger
 - Honest event timestamps, session-scoped dedup, conversation windows
 - Gap markers when capture drops something — the journal records its holes
 
@@ -124,7 +134,9 @@ and `src/hooks/README.md` for the verification bar.
 4. **No blocking compaction.** Never set `decision: "block"` on
    PreCompact — it causes hard failures in the reactive case
    (post-context-error). Let compaction proceed; `SessionStart:compact`
-   handles recovery. (The Stop hook's bookmark ask is the one
-   `decision: "block"` the hooks emit: on `Stop`, after the response is
+   handles recovery. (The hooks emit `decision: "block"` in three places
+   only: the Stop hook's bookmark ask, on `Stop`, after the response is
    captured, never twice in a row, and never when `stop_hook_active` is
-   set.)
+   set; and the one send-back of a leg that owes its key's checkpoint, on
+   `SubagentStop` for a subagent leg or on `Stop` for a `claude -p`
+   worker.)

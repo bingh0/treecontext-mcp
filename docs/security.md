@@ -15,7 +15,8 @@ Everything is local. There are **no network calls anywhere in the
 codebase** — no outbound calls (no model downloads, no update checks,
 no analytics endpoints) and, since 0.1, no inbound listener either: the
 HTTP transport was removed (see §4.2), so the server speaks stdio to a
-child-process pipe and nothing else. There is no embedding model and no
+child-process pipe and nothing else. (`treecontext run` does spawn a
+local worker process, see §4.4; that is no network either.) There is no embedding model and no
 LLM call: retrieval is lexical (SQLite FTS5 BM25), computed entirely
 in-process.
 
@@ -28,8 +29,11 @@ Data on disk, per store (`src/server/cli.ts`, `src/session-beacon.ts`,
 | `~/.treecontext/stores/<name>/sessions/pid-*.json` | session-identity beacons (session id, cwd, timestamps) |
 | `~/.treecontext/stores/<name>/archive/` | JSON session archives written by the retention valve before any deletion |
 | `~/.treecontext/stores/<name>/query-telemetry.jsonl` | **only if** you opt in — see §6 |
+| `~/.treecontext/stores/<name>/hook-gaps.jsonl` | the gap ledger: events a hook could not write while the store refused them (the hook, session, agent, moment, error and a bounded prefix of the payload's text; the drain turns each into a `[capture gap]` row and then removes the file). Falls back to the temp directory when the store's directory is unwritable (`src/hooks/gap-ledger.ts`) |
+| `~/.treecontext/stores/<name>/sidecar.json`, `sidecar-threads.json`, `sidecar-trail.json` | the sidecar panes, rewritten on each drain unless `serve --no-sidecar` (`src/server/sidecar-blob.ts`, [ccr-pane.md](ccr-pane.md)) |
 | `~/.treecontext/bindings.json` | project-directory → store-name bindings |
 | `~/.treecontext/config.toml` | configuration written by `treecontext install` |
+| `~/.treecontext/install-state.json` | which Claude Code settings file install wrote `idleCompaction` into, so uninstall removes only its own key (`src/server/idle-compaction.ts`) |
 | `~/.treecontext/shield/` | shielded oversize tool responses — **only if** shielding is enabled, see §3 |
 | `~/.treecontext/logs/` | debug logs (paths and event names, never message bodies), `0o700` |
 
@@ -86,8 +90,16 @@ journal:
   bounded preview of their output (it is re-derivable from the working
   tree); execution and external outputs (Bash, web, MCP tools) keep the
   full text up to the 256 KB safety cap.
-- `stop.ts` — the assistant's end-of-turn response, read from the
-  session transcript.
+- `stop.ts` — the assistant's end-of-turn response (the payload's
+  `last_assistant_message`, else the session transcript).
+- `subagent-stop.ts` — each subagent's report, kept as its summary.
+- The two doors of a leg (`subagent-start.ts` for a subagent, the ticket
+  door's `treecontext run` for a headless worker) write its first-moment
+  row: the run's brief, the
+  checkpoint(s) in effect and, for a worker, the spawner's prompt as
+  written. A prompt can carry whatever was pasted into it, secrets
+  included, and a run's export carries the first moments whole and says
+  so (D318).
 
 **Treat the journal as being as sensitive as the terminal it watched.**
 If a command printed a secret, a token, or customer data, that text is
@@ -189,6 +201,23 @@ and names its live holder for doctor, hook-attribution corroboration,
 and takeover. A holder that stops heartbeating (crash, SIGKILL) frees
 its roles within one TTL (≤ 90 s). Leftover pre-0.1 `.treecontext*.lock` files are
 removed at server start and carry no meaning.
+
+### 4.4 The ticket door
+
+`treecontext run` (and the library's `spawnWorker`, the same call)
+spawns a headless worker (`claude -p`, `codex exec`, `agy -p`) as a local
+child process (`src/ticket-door.ts`). It hands the worker two environment
+variables: `TREECONTEXT_TICKET`, one JSON object naming the run, key,
+role and parent, and `TREECONTEXT_WORKER_SESSION`, the session the door
+registered as the worker's lane (`src/ticket.ts`). The lane variable is
+never honoured alone: `serve` and the hooks stamp rows into that lane
+only through `trustedWorkerLane`, when a worker registration exists there
+and the ticket in the same environment is the one it was registered
+with. A process that inherited the variable with another ticket, or none,
+writes as itself. On POSIX the worker runs as its own process group and
+`--timeout` signals the whole group. The worker's stdout passes through
+byte for byte and is not captured as journal rows; at its exit the door
+writes the worker's output as its summary row.
 
 ## 5. Tool-access policies
 

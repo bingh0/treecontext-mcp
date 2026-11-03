@@ -43,7 +43,7 @@ const PROTOCOL_CLAUSES: Record<string, RegExp> = {
   "the chapter summary on the developer's word": /Chapter summary: when the developer says "checkpoint", insert a curated summary with metadata\.next_session=true and supersedes: \[the previous chapter's id\]/,
   'the suggestion to clear after a chapter': /supersedes: \[the previous chapter's id\]\. Then suggest that this is a good moment to \/clear\./,
   'the packet first after a clear': /After a \/clear, your first reply opens with the re-orientation packet you received at session start, shown to the developer as is, in order: chapter, bookmark, recent developer turns\./,
-  'the handoff steps': /Handoff: export the chapter summaries to a file in the repository and commit it; the teammate pulls and imports it with treecontext_import, with the file's name as the label\./,
+  'the handoff steps': /Handoff: export the chapter summaries to a file in the repository and commit it; the teammate pulls and imports it with treecontext_import and the file's path\./,
   'doctor first': /When capture or recall looks wrong, run `treecontext doctor` before anything else\./,
   'the long form': new RegExp(`Long form: load the ${SKILL_REFERENCE_NAME} skill on demand\\.`),
 }

@@ -16,12 +16,13 @@ the hook sources in `src/hooks/`.
 | `user-prompt-submit` | `UserPromptSubmit` | User message text, in full → staging (priority 1). Also refreshes the pid-keyed session beacon. |
 | `post-tool-use` | `PostToolUse` | Every tool call: name + input + output → staging (priority 1–3), with the payload's `agent_id`/`agent_type` when a subagent made the call |
 | `stop` | `Stop` | The assistant's final response of the turn (`last_assistant_message`; only a payload without it falls back to the last assistant text of `transcript_path`, which at Stop time still ends at the previous turn) → staging (priority 2). May then ask once for a bookmark (see [claude-code.md](claude-code.md)) |
-| `subagent-stop` | `SubagentStop` | The subagent's report (`last_assistant_message`, else the last assistant text of `agent_transcript_path`) → staging (priority 1) as kind `subagent-summary`, stamped with the subagent's agent fields |
+| `subagent-stop` | `SubagentStop` | The subagent's report (the `message` of the newest `SubagentHandback` call in `agent_transcript_path` when it made one, D371; else `last_assistant_message`; else the last assistant text of that transcript) → staging (priority 1) as kind `subagent-summary`, stamped with the subagent's agent fields. A leg's report is instead written directly as its summary row (the hooks door, below) |
 
-`subagent-start` (`SubagentStart`) captures nothing: it registers the
+`subagent-start` (`SubagentStart`) stages nothing: it registers the
 subagent in the store's `session_registry`, which `subagent-stop`
-retires. Both are Claude Code events; a platform without them still
-captures, but registers no subagent.
+retires. With a brief in effect for the subagent's role it is also the
+hooks door's start of a leg (below). Both are Claude Code events; a
+platform without them still captures, but registers no subagent.
 
 **No invocation is ever filtered out.** This is the capture charter
 (`src/hooks/README.md`, enforced by `tests/journal/`): read-only tools
@@ -75,6 +76,20 @@ Hook event (stdin JSON) → parseHookInput() → writeStaging() → staging tabl
 
 Hooks are fire-and-forget: one SQLite write, then exit 0. Every hook
 exits 0 even on error, so a broken hook can never break the agent.
+
+**The hooks door** is the one exception to staging. For a leg (a
+subagent whose role has a brief in effect), `subagent-start` and
+`subagent-stop` write the leg's own rows directly, through the library
+(`src/hooks/hook-store.ts`), in one transaction with the registration
+fact they belong to: the registration, the run's open, the first moment,
+the send-back, the summary row. A hook never runs a migration and never
+writes at another schema than its build's.
+
+**The gap ledger.** An event a hook could not write while the store
+refused it, a refused staging write included, is appended to
+`hook-gaps.jsonl` beside the store (else in the temp directory); the
+drain writes each record as a `[capture gap]` row at the moment it was
+dropped (`src/hooks/gap-ledger.ts`, D314).
 Duplicate captures (e.g. a re-fired Stop) are absorbed by the store's
 content-fingerprint dedup within a 300 s window plus the Stop hook's
 stale-recapture guard (`src/hooks/stop.ts`).

@@ -14,7 +14,9 @@ import {
  * AC2.1 golden pin, retargeted at the deletion phase (2026-07-25) and
  * re-pinned 2026-10-08 when D174 added the checkpoint protocol (and
  * again that day when the handoff step named the label, D218; and
- * 2026-10-11 when step 2 said what it recovers, D264): the
+ * 2026-10-11 when step 2 said what it recovers, D264; and 2026-11-03
+ * when the handoff step named the file's path, the import tool refusing
+ * a label beside a path): the
  * served instruction set is INSTRUCTIONS_BRIEF_LEXICAL — brief by the
  * t10 activation evidence (verbose SUPPRESSED activation and blew the
  * 2KB cap). Changing these bytes is a deliberate act: update this pin
@@ -48,8 +50,8 @@ const GOLDEN_LEXICAL: string = [
   'received at session start, shown to the developer as is, in order:',
   'chapter, bookmark, recent developer turns.',
   'Handoff: export the chapter summaries to a file in the repository and',
-  'commit it; the teammate pulls and imports it with treecontext_import,',
-  'with the file\'s name as the label.',
+  'commit it; the teammate pulls and imports it with treecontext_import',
+  'and the file\'s path.',
   'When capture or recall looks wrong, run `treecontext doctor` before',
   'anything else.',
   'Long form: load the treecontext-reference skill on demand.',

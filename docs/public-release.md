@@ -1,5 +1,8 @@
 # Public release plan — treecontext-mcp
 
+> **Historical:** the 2026-08-15 release plan and checklist, kept as a
+> record. Paths and files it names may have moved or gone since.
+
 Ruled 2026-08-15: the public name is **`treecontext-mcp`** (the npm
 reservation `treecontext-mcp@0.0.0` has been held since 2026-08-07;
 `treecontext` is unreserved on npm and stays that way). This document

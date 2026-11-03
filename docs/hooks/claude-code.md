@@ -39,8 +39,8 @@ treecontext install
 That is the whole setup. The installer (`src/server/installer.ts`):
 
 - writes wrapper scripts to `~/.claude/hooks/tc-*` (`.cmd` on Windows)
-  that prefer an interpreter `install` verified can load the native
-  binding, falling back to runtime resolution (PATH → nvm/fnm → the
+  that prefer the interpreter `install` verified (one proven to meet the
+  Node floor and run this package), falling back to runtime resolution (PATH → nvm/fnm → the
   install-time interpreter) if that one ever disappears, and dispatch
   `treecontext hook <event>`;
 - registers all seven events in `~/.claude/settings.json`, merging with
@@ -81,10 +81,16 @@ are found (`PACKAGE_DIRS`, `posixModuleGlobs`).
   skipped — the capture charter forbids it). Repo-reading tools keep a
   bounded output preview; execution/external tools keep full input and
   output up to the safety cap. Priorities: Edit/Write/NotebookEdit = 1,
-  Bash = 2, others = 3.
-- **`stop`** — captures the assistant's final response of the turn by
-  reading the last assistant text block from `transcript_path`
-  (`src/hooks/stop.ts`). Duplicate fires are deduped. Its second duty,
+  Bash = 2, others = 3. On the Agent tool's result, when the subagent it
+  spawned was a leg, it adds one line beside the result as
+  `additionalContext`: the leg's return, its summary row with writer, run
+  and key (D284, D285, D330). A background launch (`status:
+  "async_launched"`) carries no pointer: its return is the platform's
+  task notification (D369).
+- **`stop`** — captures the assistant's final response of the turn: the
+  payload's `last_assistant_message`, and only for a payload without it
+  the last assistant text block of `transcript_path`
+  (`src/hooks/stop.ts`, D249). Duplicate fires are deduped. Its second duty,
   after the capture: when the session's newest checkpoint (chapter
   summary or bookmark) or the previous ask is older than the store's
   checkpoint interval (default 20 rounds or 45 minutes, whichever comes
@@ -94,17 +100,37 @@ are found (`PACKAGE_DIRS`, `posixModuleGlobs`).
   bookmark (`metadata.kind = "bookmark"`). It never asks when
   `stop_hook_active` is set, records each ask so it does not ask twice
   in one interval, and when the store cannot take the write it reports
-  that once per session in a `systemMessage` and lets the agent stop.
+  that once per session in a `systemMessage` and lets the agent stop. A
+  `claude -p` worker's session is never asked for a bookmark: its stop is
+  its leg's, sent back once (`decision: "block"`) when it owes its key's
+  checkpoint (D295).
 
 ### Subagents
 
 - **`subagent-start`** — registers the subagent (`agent_id`,
   `agent_type`) in the store's `session_registry` under the parent's
-  session id, inheriting where the session runs. Emits nothing.
-- **`subagent-stop`** — stages the subagent's `last_assistant_message`
-  (or, absent that, the last assistant text of `agent_transcript_path`)
-  as an assistant row of kind `subagent-summary`, stamped with the
-  subagent as its writer, then retires the registration.
+  session id, inheriting where the session runs. With no brief in effect
+  for its role that is all, and it emits nothing. With one, it is the
+  hooks door (D284, D305): the subagent becomes a leg of that brief's run
+  and key, its run is opened, and its first moment (the brief, the
+  checkpoint(s) in effect, treecontext's own lines) is written as the
+  first row of its lane and emitted as `additionalContext`, cut at the
+  client's 10,000-character cap.
+- **`subagent-stop`** — takes the subagent's report from where the client
+  put it (D371): the `message` of the newest `SubagentHandback` call in
+  `agent_transcript_path` when it made one, else the payload's
+  `last_assistant_message`, else the last assistant text of that
+  transcript. It stages the report as an assistant row of kind
+  `subagent-summary`, stamped with the subagent as its writer, then
+  retires the registration. A leg that owes its key's checkpoint is
+  instead sent back once (`decision: "block"`); otherwise its report is
+  written as the leg's summary row, stamped with run and key, and the
+  leg retired.
+
+The hooks door writes a leg's own rows directly, through the library
+(`src/hooks/hook-store.ts`), in one transaction with the registration;
+what it cannot write goes to the gap ledger (D314).
+[src/hooks/README.md](../../src/hooks/README.md) has the full rules.
 
 The server reads that registry to stamp the writer of every row written
 through the tools; `post-tool-use` also stages the payload's `agent_id`
@@ -126,7 +152,10 @@ its role. See ARCHITECTURE.md §8.
   under the session (and, on a clear, under its predecessor). It emits a
   `systemMessage` naming the store it journals into (or that the session
   is not being journaled, and why) and a source-appropriate payload as
-  `additionalContext` (`src/hooks/session-start.ts`). The static
+  `additionalContext` (`src/hooks/session-start.ts`). A leg left live is
+  retired as `cut` (D328). A `claude -p` child holding a worker's ticket
+  (`TREECONTEXT_TICKET`) is a worker, never a self: no beacon, no self
+  row, no packet (D295). The static
   orientation reminder (`tc-session-reminder`) runs before it on all
   four matchers.
 
@@ -137,17 +166,27 @@ its role. See ARCHITECTURE.md §8.
 
 | Source | Budget | Content |
 |---|---|---|
-| `startup` | 5000 chars | Snapshot claim from a prior session + recent staging activity |
+| `startup` | 5000 chars | Snapshot claim from a prior session of the same lane + recent staging activity |
 | `clear` | 3000 chars (`PACKET_BUDGET_CHARS`) | The re-orientation packet (below), not the rehydration payload |
 | `compact` | 2000 chars | Preserves the active thread the compaction summary may have collapsed |
 | `resume` | 500 chars | Pointer only — snapshot ID and a nudge to call `treecontext_query` |
 | unknown | 3000 chars | Continuation — recent messages and tool activity |
 
-On a fresh start (any source but `clear`) in a linked git worktree, the
-payload opens with the worktree's own lines (`worktreeSelfLines`,
-`src/checkpoints.ts`): its newest live chapter summary written in that
-worktree's lane (`_writer` `worktree:<name>`), whatever its session id,
-and the newest entry whose `brief_for` names the worktree.
+A fresh session claims a recovery snapshot only when the session that
+left it ran in the same lane (the main checkout, or the same worktree);
+a snapshot left by another lane is left for that lane, and one whose
+session the registry does not hold is claimed by no one (D375).
+
+On a fresh start (any source but `clear`), in a linked git worktree or
+the main checkout alike, the payload opens with the lane's own lines
+(`selfLines`, `src/checkpoints.ts`; D373): where the session runs; the
+lane's newest live chapter summary (or, with none, its live bookmark),
+whatever session wrote it; the newest entry whose `brief_for` names the
+worktree (or `main`); and the other lanes holding live pointers, counted
+and at most three named, never their text. A row's lane is the
+registry's placement of its session first, the `_writer` stamp only
+where the session is unplaced (D379). When those lines are shown, the
+payload no longer ends with the "No prior context available" fallback.
 
 ### The /clear packet
 

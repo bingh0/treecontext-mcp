@@ -1,5 +1,8 @@
 # 0.1 Release Charter
 
+> **Historical:** the 0.1 rc-era charter, superseded by the feature
+> charter in `features/` (`features/DOCKET.md`).
+
 **Status: RATIFIED 2026-08-12** at the visionary cold-read. Drafted
 2026-08-11 from project memory and repo state (main @ 53a8c83); cold-read
 corrections applied as the dated edits in-line, including four items

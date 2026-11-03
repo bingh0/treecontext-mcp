@@ -1426,10 +1426,12 @@ export function createServer(
         + 'were omitted. Ignored with path.',
       ),
       writer: z.string().min(1).optional().describe(
-        "Instead of a handoff: one writer's trail on its own, oldest first — every entry the "
-        + 'store stamped with that writer: a subagent role such as "tester", one subagent\'s '
-        + 'agent id, "main" (the main checkout\'s own lane, older unstamped rows included) or '
-        + '"worktree:<name>". Capped like an inline export; the reply states omitted.',
+        "Instead of a handoff: one writer's trail on its own, oldest first. A subagent role such "
+        + 'as "tester" or one subagent\'s agent id: the entries stamped with it (and older ones '
+        + 'claiming it with no stamp). "main" or '
+        + '"worktree:<name>": the own agent\'s entries of every session that ran in that checkout, '
+        + 'stamped or not (for "main" also the older entries naming no writer). Capped like an '
+        + 'inline export; the reply states omitted.',
       ),
       }),
     },

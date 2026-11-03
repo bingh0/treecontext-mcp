@@ -647,11 +647,9 @@ Serve options:
   --store <name>       Store name (default: auto-derived from project)
   --namespace <name>   Namespace within the store (default: project).
   --capture            Enable conversation capture ingestion loop.
-                       Multi-agent workflows use distinct namespaces
-                       per agent sharing one store.
   --no-sidecar         Do not write the sidecar panes (sidecar.json,
-                       sidecar-threads.json) beside the store on each
-                       drain. Written by default; only the server that
+                       sidecar-threads.json, sidecar-trail.json) beside
+                       the store on each drain. Written by default; only the server that
                        owns the drain writes them.
   --project-dir <dir>  Project directory for auto-store resolution
   --lexical            Force the lexical FTS5 bm25 backend explicitly (also
@@ -678,9 +676,10 @@ Install options:
   --force              Overwrite existing config even if already valid
   --npx                Unavailable during the beta (install globally instead)
   --experimental-capture
-                       Also install capture hooks for agents whose adapter
-                       is unverified (Copilot/VS Code). MCP tools always
-                       install; this opts into unproven capture.
+                       Also copy the Claude Code hooks into a client that
+                       copies them into its own configuration (Codex CLI,
+                       Gemini CLI); requires --agent. MCP tools always
+                       install; this opts into unverified capture.
 
 Uninstall options:
   --agent <name>       Uninstall for a specific agent only (repeatable)
