@@ -224,8 +224,11 @@ Charter promises: `journal-capture.feature`; mechanics:
   key; a row of a session's own agent whose session the registry places
   in a checkout is that checkout's (`main` or `worktree:<name>`),
   whatever its stamp; otherwise the store-stamped `_writer`, else
-  `agent_type`, else the main lane (rows from before writers were
-  recorded). A helper's row is its role's; an `ambiguous` stamp owns
+  `agent_type`, else the main lane for a row whose session the registry
+  never held (rows from before writers were recorded), and "writer
+  unknown" for one whose session it holds but places in no checkout. The
+  search's own-chapter seat reads this lane too. A helper's row is its
+  role's; an `ambiguous` stamp owns
   none; a row stamped `unregistered` is the lane of undetermined writers,
   shown as "writer unknown" and never any checkout's own. An unplaced
   writer retires a placed lane's pointer only through the pre-stamp door

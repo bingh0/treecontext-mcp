@@ -29,3 +29,12 @@ copies here.
   adjudications A (the own chapter's seat) and B (a worker's trail found by
   asking for the whole store) are entered as D374 clauses in the charter
   commit that follows them.
+- `fable-gate.md`: the Fable gate over add7004..d9daa16 (2026-11-03), PASS
+  WITH FIXES. Its finding #1 (status and the packet read a pointer's lane
+  from its stamp, the search from the registry) was fixed before the
+  release on the owner's word, as D379.
+- `gate-fix-review.md`: the failure-ladder review of the D379 fix
+  (5c5c7a7), its findings fixed in 79e468c, and the re-check of 79e468c.
+- `docs-drift.md`: the documentation drift review at 5c5c7a7 (38 rows),
+  applied in the docs commit that follows, with the README's "Running
+  work as legs" section added on the owner's word.

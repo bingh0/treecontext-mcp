@@ -334,8 +334,9 @@ adds `_insert` and nothing that removes. Details in
   promised first. A row belongs to the checkout its session ran in,
   stamped or not, rows a program writes through the library under that
   session's id included; a program writing with no session writes into
-  main's lane, and a session run outside any git checkout counts as the
-  main checkout. A caller the server cannot place, such as a client
+  main's lane, an unstamped row under a session that ran in no checkout
+  (a headless worker's) shows as "writer unknown", and a session run
+  outside any git checkout counts as the main checkout. A caller the server cannot place, such as a client
   without hooks, is stamped `unregistered` and shows as "writer unknown":
   a lane of its own, never main's. While no session has run in the main
   checkout, such a client may retire a pre-stamp chapter of main: a live

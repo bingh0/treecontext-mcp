@@ -109,7 +109,8 @@ scenario, are in `docs/beta3-bindings-audit.md`.
   back as an imported leg)
 - `src/references.ts` — `metadata.refs` references and lanes: the lane key
   supersession respects (`laneOfRow`: the registry's placement of the
-  session first, the stamp only where it places none, D379), the writer
+  session first; a row with no stamp is main's only where the registry
+  never held its session, D379), the writer
   an entry is shown with, and "referenced by" one hop deep
 - `src/checkpoints.ts` — chapter summaries and bookmarks, the bookmark
   interval, the /clear session chain, the re-orientation packet, a fresh
@@ -334,9 +335,13 @@ node dist/server/cli.js doctor      # after a build
   decides, not content; any rebuild must reuse the shared DDL
 - A pointer's lane is the registry's placement of its session first
   (`placementsOf`, read once per call), the writer stamp only where the
-  registry places the session nowhere (D379, `laneOfRow`). Never decide a
-  lane from `_writer` alone: a library row with no stamp in a worktree's
-  session is the worktree's
+  registry places the session nowhere (D379, `laneOfRow`). A row with no
+  stamp is main's only when the registry never held its session (the
+  pre-stamp era); one whose session it holds but places in no checkout
+  (a ticket-door worker's) is "writer unknown", never main's. Never decide
+  a lane from `_writer` alone: a library row with no stamp in a worktree's
+  session is the worktree's. The search's own-chapter seat reads the same
+  lane; the search's scope does not
 - A recovery snapshot is claimed only by a session of the lane it was
   written for, and its row is written in the claiming session (D375,
   `recovery-snapshot.ts`); a snapshot whose session the registry does not
