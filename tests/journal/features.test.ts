@@ -190,6 +190,85 @@ runFeatures(join(HERE, '../../features'), {
       feature: 'journal-workers',
       scenarios: [
         'a <worker> worker under a <parent> parent writes into its own lane with its role as writer',
+        // The headless build (2026-11-07), unit 5 (the ticket door): a
+        // failed or silent worker's summary row (D384, amending D288; the
+        // @D288 scenario's step reworded) and no client-session variable
+        // handed to a worker (D389). Unbound until unit 5.
+        'a worker is retired at exit and its last output is the summary row the pointer names',
+        'a worker that <ends> leaves a summary row that says why',
+        'a long error stream is kept as its end',
+        "a worker that failed, was run once more and failed again leaves its last run's reason",
+        "a worker started through the <spawner> from inside a Claude Code session carries none of that session's variables",
+      ],
+    },
+    // The headless build (2026-11-07, D381-D390; fence: Sanctioned changes,
+    // "The headless build"): scenarios added to bound files and five bound
+    // scenarios reworded, unbound until the unit of the draft's build plan
+    // that owns each (unit 1 convergence and capture mode, unit 2 tool
+    // approvals and doctor's Codex rows, unit 3 Antigravity CLI, unit 4
+    // orientation, unit 6 documentation). Scenario-scoped so the rest of
+    // each file keeps gating. The reworded scenarios' old step definitions
+    // were deleted with no consumer left; their units rebind them.
+    {
+      feature: 'journal-install',
+      scenarios: [
+        // Unit 1: D385 (a reinstall converges what install owns), D386
+        // (capture mode only where capture hooks are installed; the
+        // Antigravity CLI row waits on unit 3).
+        'a forced reinstall rewrites only the agent it names',
+        "a reinstall converges <agent>'s entry and keeps what the developer added",
+        'the server runs in capture mode for <agent> only where its capture hooks are installed',
+        // Unit 2: D381 and D390 (the four tools approved per tool in Codex
+        // and Claude Code; the install message, `config tool-approvals`,
+        // `--no-tool-approvals`; Antigravity CLI's rows wait on unit 3).
+        'install lets a headless Codex worker use the tools that read and write, and leaves the four that remove or bring in rows asking',
+        'install never writes the approval the developer set for <tool> to <value>',
+        'a Codex that cannot read per-tool approvals gets none, and is told why',
+        'install says what it approved, what still asks, and the way back',
+        'turning tool approvals off and on again in <client> touches only what install wrote',
+        'an install told not to approve writes no approval, and a later install keeps it that way',
+        "Claude Code's grant sits beside the developer's own rules and leaves with uninstall",
+        // Unit 3: D383 (Antigravity CLI as a tools-only client; the
+        // @D51 uninstall scenario reworded for the permission rules).
+        'uninstall removes everything install wrote and nothing else',
+        'install wires Antigravity CLI for the tools and lets a headless agy worker use the four that read and write',
+        'a directory Gemini CLI and Antigravity CLI share is not read as both',
+        'a permission rule the developer wrote for Antigravity CLI survives install and uninstall',
+      ],
+    },
+    {
+      feature: 'journal-agent-surface',
+      scenarios: [
+        // Unit 4: D382 (a worker skips orientation; the @D8 scenario
+        // gained one Then).
+        'every channel teaches the same session-start protocol',
+        "a worker's own server tells it to begin from its first message",
+        'a lane named in the environment without its ticket gets the ordinary handshake',
+        'the instruction block tells a worker to skip the session-start routine, in one line',
+        'the first message the ticket door composes for <case> opens with the line the block names',
+      ],
+    },
+    {
+      feature: 'journal-clients',
+      scenarios: [
+        // Unit 3: D383 (the D161 outline gained an Antigravity CLI row;
+        // its other rows stay bound and are held open with it by title)
+        // and D387's Antigravity CLI row.
+        'doctor reports <client> as a client that <mode>',
+        "doctor's row for Antigravity CLI says whether a headless agy worker can use the tools, when <state>",
+        // Unit 2: D387 (Codex's headless readiness and the Linux sandbox
+        // row) and D390 (the off state; Antigravity CLI's row waits on
+        // unit 3).
+        "doctor's row for Codex CLI says whether a headless worker can use the tools, when its entry <state>",
+        "the command doctor's Codex row names makes its headless workers ready",
+        "on Linux, doctor runs Codex's own sandbox check, which <result>",
+        'doctor shows no sandbox row where it does not apply',
+        "doctor's row for <client> shows tool approvals turned off as the developer's choice",
+        // Unit 6: D388 (the README's headless-workers section and the
+        // matrices' permission modes), bound once the dogfood has run.
+        'a cell verified live says under which permissions its run was made',
+        "the README's headless-workers section carries the steps for <worker>",
+        'the README says what a worker may do, that it skips orientation, and how a failed run reads',
       ],
     },
     // The main checkout's own lane (D372-D376, D378, 2026-11-02) left this

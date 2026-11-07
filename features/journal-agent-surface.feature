@@ -20,12 +20,13 @@ Feature: Journal agent surface — the parts the agent reads are product
   them as working until each earns a live-payload pass — the
   never-advertise rule below, applied to platforms.
 
-  @D8
+  @D8 @D382
   Scenario: every channel teaches the same session-start protocol
     Given a configured install
     When the handshake instructions, the session-start hook reminder, the AGENTS.md block, and the reference skill are read side by side
     Then each names status, then export, then query, in that order, before any other journal tool
     And each carries the gate phrase making orientation precede the user's request
+    And the handshake and the AGENTS.md block each say that a session whose first message opens with treecontext's line naming it a worker skips that protocol
 
   @D39
   Scenario: the lexical backend never advertises machinery it lacks
@@ -156,3 +157,40 @@ Feature: Journal agent surface — the parts the agent reads are product
     When it reads the handshake instructions
     Then the agent reads the whole checkpoint protocol in under 2500 characters of handshake text
     And the agent reads where the protocol's long form can be loaded on demand
+
+  # The headless build (D382, 2026-11-07): a worker of the ticket door
+  # begins from its first message, which already holds its brief and the
+  # checkpoint in effect, and pays for no orientation routine.
+
+  @D382
+  Scenario: a worker's own server tells it to begin from its first message
+    Given a worker the ticket door started, with its ticket and its lane in its environment
+    When the worker's own treecontext server sends its handshake
+    Then the instructions say the worker's first message holds its brief and the checkpoint in effect, and to begin there
+    And the instructions name no session-start routine of status, export and query
+    And the checkpoint protocol and the availability marker are still there, in under 2500 characters
+
+  @D382
+  Scenario: a lane named in the environment without its ticket gets the ordinary handshake
+    Given a treecontext server started with a worker lane in its environment that the ticket beside it does not describe
+    When the server sends its handshake
+    Then the instructions carry the session-start routine as every other session's do
+
+  @D382
+  Scenario: the instruction block tells a worker to skip the session-start routine, in one line
+    Given install has written its instruction block for Codex CLI and for the clients that read GEMINI.md
+    When an agent reads the block
+    Then the agent reads one line saying that a session whose first message opens with treecontext's line naming it a worker of a run, or saying its instructions were invalid, skips the session-start routine
+    And the block's session-start steps are otherwise as before
+
+  @D382 @D298
+  Scenario Outline: the first message the ticket door composes for <case> opens with the line the block names
+    Given <case>
+    When the ticket door starts the worker
+    Then the worker's first message opens with the line the instruction block names
+
+    Examples:
+      | case                                                        |
+      | a worker with a key and a brief in effect                   |
+      | a one-off worker whose ticket says it has no key            |
+      | a worker whose ticket is truncated after the role "builder" |

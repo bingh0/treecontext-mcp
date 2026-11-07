@@ -13,7 +13,9 @@ Feature: Workers — a headless worker on any CLI, through the ticket door
 
   Rulings D288, D291, D292, D293, D294, D295, D297, D298, D303, D307,
   D313, D315, D316, D317, D329, D332, D335, D340, D341, D342 of the beta.3 interview, 2026-10-30 to
-  2026-10-31; D372 and D374 of 2026-11-02 (a worker's status and search). The leg contract the worker fulfils is journal-legs; the
+  2026-10-31; D372 and D374 of 2026-11-02 (a worker's status and search);
+  D384 and D389 of 2026-11-07 (a failed worker's summary row; no
+  client-session variable handed to a worker). The leg contract the worker fulfils is journal-legs; the
   run it belongs to is journal-runs. A worker here is bound through a
   stand-in headless process launched through the real door; what the
   model inside a real worker chooses to do is out of reach, so every
@@ -33,12 +35,12 @@ Feature: Workers — a headless worker on any CLI, through the ticket door
       | Codex       | `claude -p`  |
       | Antigravity | `agy -p`     |
 
-  @D288
+  @D288 @D384
   Scenario: a worker is retired at exit and its last output is the summary row the pointer names
     Given a `codex exec` worker with the role "builder" under the run "r1" and the key "login-form", whose ticket names the reviewer as the one who will checkpoint
-    When the worker prints "submit wired; 12 tests pass" as its last output and exits
+    When the worker prints "submit wired; 12 tests pass" as its last output, writes "warning: cache cold" to its error stream, and exits with code 0
     Then the worker's registration reads retired
-    And the spawner is handed one line pointing at a summary row reading "submit wired; 12 tests pass" with the writer "builder"
+    And the spawner is handed one line pointing at a summary row reading "submit wired; 12 tests pass" with the writer "builder", and nothing from its error stream
 
   @D294 @D297 @D317
   Scenario: a worker's registration carries every field its ticket declared and the facts the door read
@@ -367,3 +369,43 @@ Feature: Workers — a headless worker on any CLI, through the ticket door
     When the worker searches through its tools and calls status
     Then its search covers the whole store, the reply saying a worker searches as its harness feeds it
     And its status lists both chapters flat, the block naming it a worker, never calling it unplaced
+
+  @D384
+  Scenario Outline: a worker that <ends> leaves a summary row that says why
+    Given a `codex exec` worker with the role "builder" under the run "r1" and the key "login-form", whose ticket names the reviewer as the one who will checkpoint
+    When the worker prints <output> to its output, writes "error: model gpt-x not found" to its error stream, and exits with code <code>
+    Then the summary row the spawner's line points at reads <output>, then treecontext's line naming the exit code <code> and the end of its error stream, "error: model gpt-x not found"
+    And the spawner received the error stream as the worker wrote it, and the output byte for byte
+
+    Examples:
+      | ends                                  | output       | code |
+      | fails having printed nothing          | nothing      | 1    |
+      | fails after printing part of its work | "half wired" | 2    |
+      | exits cleanly having printed nothing  | nothing      | 0    |
+
+  @D384
+  Scenario: a long error stream is kept as its end
+    Given a `codex exec` worker under the run "r1", whose ticket names the reviewer as the one who will checkpoint
+    When the worker writes 50000 characters to its error stream, the last line "fatal: out of quota", and exits with code 1
+    Then the summary row holds the last 2000 characters of the error stream, ending "fatal: out of quota", and says the earlier part was left out
+    And the spawner received all 50000 characters
+
+  @D384 @D292
+  Scenario: a worker that failed, was run once more and failed again leaves its last run's reason
+    Given a `codex exec` worker started by the wrapper under the key "login-form", naming itself as checkpointer
+    When its first run writes "error: rate limited" to its error stream and exits with code 1, and its second run writes "error: auth expired" and exits with code 1, neither writing a checkpoint
+    Then the summary row names the exit code 1 and "error: auth expired"
+
+  @D389
+  Scenario Outline: a worker started through the <spawner> from inside a Claude Code session carries none of that session's variables
+    Given a spawner whose environment holds Claude Code's session variables CLAUDECODE, CLAUDE_CODE_SESSION_ID, CLAUDE_CODE_CHILD_SESSION, CLAUDE_PID, CLAUDE_CODE_MESSAGING_TOKEN and CLAUDE_CODE_MESSAGING_SOCKET, and the settings CLAUDE_CONFIG_DIR and CLAUDE_CODE_USE_BEDROCK
+    When the ticket door starts a `codex exec` worker through the <spawner>
+    Then the worker's environment holds none of the six session variables
+    And it holds CLAUDE_CONFIG_DIR and CLAUDE_CODE_USE_BEDROCK as the spawner had them
+    And it holds the ticket and the worker's lane the door set
+
+    Examples:
+      | spawner                                        |
+      | `treecontext run` wrapper                      |
+      | library call, in the process's own environment |
+      | library call, with an environment it passes    |

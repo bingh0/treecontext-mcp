@@ -333,13 +333,19 @@ re-decided, and the previous text is in git history.
   to a notification. Reopens if the client grows a hook on the task
   notification, or if the owner asks for late delivery at the parent's
   next hook. (D369 amends D285, 2026-11-01)
-- **Antigravity CLI as an agent entry** — stays out of the agent table
-  with the other archived-build platforms (D109); it returns only as a row
-  of the orchestration matrix, documented-only or verified live cell by
-  cell, its workers reaching the tools by a line the user adds (`agy mcp
-  add`). Reopens as an ordinary agent entry when a hooks adapter earns its
-  live-payload pass, or when the owner asks install to write its MCP
-  configuration. (D370, 2026-11-01)
+- **Antigravity CLI's capture and its subagent roles** — Antigravity CLI
+  is an agent entry for the tools since D383: install writes its MCP
+  entry, four allow rules and the instruction block it shares with
+  Gemini CLI, and doctor gives it a row. What stays out: install writes
+  no agy hooks and nothing of an agy session is captured, since no
+  adapter has earned a live-payload pass and its PostToolUse payload
+  carries no tool output; a main agy session registers no self and
+  spawns no registered worker but through `treecontext run`; subagent
+  legs through the hooks door and the pointer on a subagent's return are
+  not possible, agy having no SubagentStart, SubagentStop or return
+  event. Its headless workers are journaled through their tools, the
+  ticket door's rows and their summary. Reopens when a hooks adapter
+  earns its live-payload pass. (D370 amended by D383, 2026-11-07)
 
 ## Roads not taken
 
@@ -662,6 +668,27 @@ re-decided, and the previous text is in git history.
   to build; treecontext shows the facts (leg count, checkpoints, run age,
   sizes, each live leg's start and last write) and judges none of them.
   (D292, D301, D302, D312, 2026-10-31)
+- Declined alternative, One approval for the whole treecontext server in
+  a client — Codex's default approval, agy's `mcp(treecontext/*)` or a
+  wildcard in Claude Code's allow list would let a worker clear, delete,
+  import and merge unasked; the four tools that read and write are
+  approved one by one in all three clients, and the other four go on
+  asking, refused in a headless run. (D381, D383, D390, 2026-11-07)
+- Declined alternative, A worker flag to skip orientation — the server
+  reads the ticket it already trusts, and the instruction block names
+  the worker's first line, so no client needs a flag. (D382, 2026-11-07)
+- Declined alternative, Asking at install whether to approve the tools —
+  install often runs with `-y`, from scripts or by agents, where nobody
+  can answer; install approves, says so in one message, and names the
+  way back. (D390, 2026-11-07)
+- Declined alternative, An installed dispatcher skill — install's
+  approvals and the ticket door make most of its work unnecessary; the
+  README carries a short example to copy instead. (D388, 2026-11-07)
+- Declined alternative, Leaving a worker's environment by a prefix rule —
+  stripping every `CLAUDE_CODE_` variable would also strip the client's
+  own configuration (`CLAUDE_CODE_USE_BEDROCK`) and break a `claude -p`
+  worker; the door names each session variable it leaves out, client by
+  client. (D389, 2026-11-07)
 
 ## Sanctioned changes
 
@@ -744,6 +771,23 @@ re-decided, and the previous text is in git history.
   journal-install, journal-reorientation and journal-storage; changes no
   existing scenario text and no verdict. Bound scenarios touched: none.
   (D282, 2026-10-29)
+- **The headless build** — rewords five bound scenarios:
+  journal-install "a forced reinstall rewrites only the agent it names"
+  (the canonical registration is what install owns; the developer's
+  pinned store survives) and "uninstall removes everything install
+  wrote and nothing else" (adds the permission rules install added);
+  journal-agent-surface "every channel teaches the same session-start
+  protocol" (adds the worker's line); journal-workers "a worker is
+  retired at exit and its last output is the summary row the pointer
+  names" (adds the error stream, and nothing from it on a clean exit);
+  journal-clients "doctor reports <client> as a client that <mode>"
+  (adds an Antigravity CLI row) (direction: rewords). It adds, to bound
+  files, new scenarios beside the existing ones: journal-install (D381,
+  D383, D385, D386, D390), journal-agent-surface (D382), journal-workers
+  (D384, D389), journal-clients (D387, D388, D390). The new and reworded
+  scenarios enter the suite through scenario-scoped wip entries until
+  their units bind them. (D382, D383, D384, D385, D389, D390,
+  2026-11-07)
 
 ---
 

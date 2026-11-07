@@ -516,38 +516,9 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
     expect(tcCli(w, ['install', '--yes']).status).toBe(0)
   })
 
-  reg.define(/^both agents' entries have since been hand-edited to a different absolute command$/, (w: InstallWorld) => {
-    // An absolute command that exists is exactly the shape a plain
-    // reinstall SKIPS (convergence repairs only drift) — so the restore
-    // below is --force's doing, not convergence's.
-    // Displace the entry with the hand edit and return a snapshot of
-    // the CANONICAL entry it displaced — the restore assertion compares
-    // against what install originally wrote, not the vandalism. (The
-    // old helper was named `edit` and returned the pre-edit entry; a
-    // mutator whose return value describes what it destroyed read as a
-    // bug — E-review PLAUSIBLE nit, fixed at the pass-2 cleanup batch.)
-    const displaceEntry = (path: string): string => {
-      const cfg = JSON.parse(readFileSync(path, 'utf8')) as Record<string, Record<string, unknown>>
-      const canonical = cfg['mcpServers']!['treecontext'] as Record<string, unknown>
-      cfg['mcpServers']!['treecontext'] = { ...canonical, command: process.execPath, args: [] }
-      writeFileSync(path, JSON.stringify(cfg, null, 2))
-      return JSON.stringify(canonical)
-    }
-    w.iCanonicalEntry = displaceEntry(join(w.ihome!, '.claude.json'))
-    displaceEntry(join(w.ihome!, '.cursor', 'mcp.json'))
-    w.iCursorBytes = readFileSync(join(w.ihome!, '.cursor', 'mcp.json'), 'utf8')
-  })
-
   reg.define(/^install runs again with force naming only the first agent$/, (w: InstallWorld) => {
     w.irun = tcCli(w, ['install', '--yes', '--force', '--agent', 'claude'])
     expect(w.irun.status).toBe(0)
-  })
-
-  reg.define(/^the named agent's entry is restored to the canonical registration$/, (w: InstallWorld) => {
-    const cfg = JSON.parse(readFileSync(join(w.ihome!, '.claude.json'), 'utf8')) as Record<string, Record<string, unknown>>
-    const entry = cfg['mcpServers']!['treecontext'] as Record<string, unknown>
-    expect(entry['command'], 'the hand-edit survived a forced reinstall').not.toBe(process.execPath)
-    expect(JSON.stringify(entry)).toBe(w.iCanonicalEntry!)
   })
 
   reg.define(/^the other agent's hand-edited configuration is byte-for-byte untouched$/, (w: InstallWorld) => {
@@ -1041,19 +1012,6 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
   reg.define(/^uninstall runs$/, (w: InstallWorld) => {
     w.irun = tcCli(w, ['uninstall', '--yes'])
     expect(w.irun.status).toBe(0)
-  })
-
-  reg.define(/^every treecontext MCP entry, hook, script, and skill is gone from every agent$/, (w: InstallWorld) => {
-    const cfg = JSON.parse(readFileSync(join(w.ihome!, '.claude.json'), 'utf8')) as Record<string, Record<string, unknown>>
-    expect(cfg['mcpServers']?.['treecontext']).toBeUndefined()
-    const settings = join(w.ihome!, '.claude', 'settings.json')
-    // step-lint: allow unearned-absence -- guarded: the Given of this scenario asserts, after its install, that settings.json matches /tc-/, the MCP entry exists, tc- hook scripts exist and the skill exists — a before/after pair in this same world
-    if (existsSync(settings)) expect(readFileSync(settings, 'utf8')).not.toMatch(/tc-/)
-    const hooksDir = join(w.ihome!, '.claude', 'hooks')
-    if (existsSync(hooksDir)) {
-      expect(readdirSync(hooksDir).filter(f => f.startsWith('tc-'))).toEqual([])
-    }
-    expect(existsSync(join(w.ihome!, '.claude', 'skills', 'treecontext-reference'))).toBe(false)
   })
 
   reg.define(/^the foreign configuration is intact$/, (w: InstallWorld) => {

@@ -134,12 +134,13 @@ Feature: Journal install — setup is auditable, reversible, and honest
     # past the fault must not launder a partial install into `install &&
     # next-step` success — the run ends INSTALL_PARTIAL, non-zero.
 
-  @D51
+  @D51 @D385
   Scenario: a forced reinstall rewrites only the agent it names
     Given a machine where install has wired two agents
-    And both agents' entries have since been hand-edited to a different absolute command
+    And both agents' entries have since been hand-edited to a different absolute command, and the first given a pinned store
     When install runs again with force naming only the first agent
-    Then the named agent's entry is restored to the canonical registration
+    Then the named agent's entry carries the command and arguments this build writes
+    And the pinned store the developer added to the named agent's entry is still there
     And the other agent's hand-edited configuration is byte-for-byte untouched
     # --force is consent to overwrite even a VALID entry — without it, an
     # absolute command that exists is skipped, and convergence repairs
@@ -298,11 +299,11 @@ Feature: Journal install — setup is auditable, reversible, and honest
     # it as `node dist/server/cli.js`. That is a fact worth one line in
     # the report rather than a surprise filed as an install bug.
 
-  @D51
+  @D51 @D383
   Scenario: uninstall removes everything install wrote and nothing else
     Given a machine with treecontext installed alongside foreign servers and hooks
     When uninstall runs
-    Then every treecontext MCP entry, hook, script, and skill is gone from every agent
+    Then every treecontext MCP entry, permission rule install added, hook, script, and skill is gone from every agent
     And the foreign configuration is intact
     And the journal stores are untouched
     # The journals outlive the tool: uninstall reverses the wiring, never
@@ -326,6 +327,131 @@ Feature: Journal install — setup is auditable, reversible, and honest
     When init runs in that project
     Then the block is replaced by the current one without duplication
     And the rest of the file survives untouched
+
+  # The headless build (D381, D383, D385, D386, D390, 2026-11-07): Codex CLI
+  # and Antigravity CLI workers just work after install, the four tools that
+  # read and write are approved in all three clients and the four that
+  # remove or bring in rows keep asking, and a reinstall converges what
+  # install owns and keeps what the developer added.
+
+  @D385 @D51
+  Scenario Outline: a reinstall converges <agent>'s entry and keeps what the developer added
+    Given a <agent> entry written by an earlier build, <stale>, to which the developer has added <additions>
+    When install runs again without force
+    Then the entry carries the command and arguments this build writes for <agent>
+    And <additions> read as the developer left them
+
+    Examples:
+      | agent       | stale                                       | additions                                                                             |
+      | Codex CLI   | lacking the worker variables                | a pinned store, `--instructions none`, a default approval and a list of enabled tools |
+      | Codex CLI   | starting the server in capture mode         | a pinned store and a policy flag                                                      |
+      | Claude Code | naming an interpreter that no longer exists | a pinned store and an environment block                                               |
+
+  @D386
+  Scenario Outline: the server runs in capture mode for <agent> only where its capture hooks are installed
+    Given <agent> is installed
+    When install runs <how>
+    Then the server that <agent>'s entry starts runs <mode>
+    And doctor's row for <agent> reads its mode as correct
+
+    Examples:
+      | agent           | how                                         | mode            |
+      | Claude Code     | as usual                                    | in capture mode |
+      | Codex CLI       | without the experimental flag               | without capture |
+      | Codex CLI       | with the experimental flag naming Codex CLI | in capture mode |
+      | Antigravity CLI | as usual                                    | without capture |
+
+  @D381 @D390
+  Scenario: install lets a headless Codex worker use the tools that read and write, and leaves the four that remove or bring in rows asking
+    Given Codex CLI is installed at a version that reads per-tool approvals
+    When install runs
+    Then Codex's own reading of its configuration shows the treecontext server with status, query, export and insert approved
+    And it shows clear, delete, import and merge with no approval install wrote
+    And Codex reads its whole configuration without refusing it
+
+  @D381 @D385
+  Scenario Outline: install never writes the approval the developer set for <tool> to <value>
+    Given a Codex CLI whose treecontext entry carries the developer's approval for <tool> set to <value>
+    When install runs
+    Then the approval for <tool> still reads <value>
+    And install says nothing about having written it
+
+    Examples:
+      | tool               | value   |
+      | treecontext_insert | prompt  |
+      | treecontext_delete | approve |
+
+  @D381
+  Scenario: a Codex that cannot read per-tool approvals gets none, and is told why
+    Given a Codex CLI whose version reads older than the first that reads per-tool approvals
+    When the developer runs install and then doctor
+    Then Codex's configuration carries no per-tool approval
+    And the developer sees install say in one line that Codex's headless workers need a newer Codex for the tools, naming the version
+    And the developer sees doctor's row for Codex CLI say the same
+    # Conditional (D381): kept only if the dogfood shows an older Codex
+    # refusing the keys; dropped, by a dated docket line, if the oldest
+    # Codex at hand reads them.
+
+  @D383 @D390
+  Scenario: install wires Antigravity CLI for the tools and lets a headless agy worker use the four that read and write
+    Given a machine with Antigravity CLI installed
+    When install runs
+    Then Antigravity CLI's own listing of its MCP servers reports the treecontext server
+    And its permission settings allow status, query, export and insert of the treecontext server, and no other treecontext tool
+    And no hook of Antigravity CLI's is written
+    And the instruction block Antigravity CLI reads is present once
+
+  @D383 @D51
+  Scenario: a directory Gemini CLI and Antigravity CLI share is not read as both
+    Given a machine with Antigravity CLI installed and no Gemini CLI
+    When install runs
+    Then no Gemini CLI configuration is written
+    And Antigravity CLI is wired for the tools
+
+  @D383 @D51
+  Scenario: a permission rule the developer wrote for Antigravity CLI survives install and uninstall
+    Given Antigravity CLI's permission settings holding the developer's allow rule for another server and ask rule for treecontext_insert
+    When install runs and then uninstall runs
+    Then after install the developer's two rules read as they were
+    And after uninstall the rules install added are gone and the developer's two remain
+
+  @D390
+  Scenario: install says what it approved, what still asks, and the way back
+    Given a machine with Claude Code, Codex CLI and Antigravity CLI installed
+    When install runs
+    Then the developer sees one message naming status, query, export and insert as approved in each of the three, and where
+    And the message names clear, delete, import and merge as still asking
+    And the message names `treecontext config tool-approvals off` and `install --no-tool-approvals` as the way back
+
+  @D390
+  Scenario Outline: turning tool approvals off and on again in <client> touches only what install wrote
+    Given <client> wired by install, with the developer's own rule <rule> beside install's grants
+    When the developer runs `treecontext config tool-approvals off`
+    Then the developer sees it say that headless workers will now be refused the four tools, and how to turn them back on
+    And <client>'s own view shows none of the four approved by install, and the developer's rule as it was
+    When the developer runs `treecontext config tool-approvals on`
+    Then <client>'s own view shows the four approved again, and the developer's rule as it was
+
+    Examples:
+      | client          | rule                                            |
+      | Claude Code     | an ask rule for treecontext_insert              |
+      | Codex CLI       | an approval set to prompt for treecontext_query |
+      | Antigravity CLI | a deny rule for treecontext_export              |
+
+  @D390
+  Scenario: an install told not to approve writes no approval, and a later install keeps it that way
+    Given a machine with Claude Code, Codex CLI and Antigravity CLI installed
+    When install runs with `--no-tool-approvals`
+    And install runs again without it
+    Then none of the three carries an approval install wrote for a treecontext tool
+    And the developer sees the second install say that tool approvals are off by the developer's choice, and how to turn them on
+
+  @D390 @D51
+  Scenario: Claude Code's grant sits beside the developer's own rules and leaves with uninstall
+    Given Claude Code's settings holding the developer's allow rule for another server's tool and deny rule for treecontext_delete
+    When install runs and then uninstall runs
+    Then after install the settings allow the four treecontext tools, and the developer's two rules read as they were
+    And after uninstall the four rules install added are gone and the developer's two remain
 
   # The beta.3 subagent interview (D290, D304, 2026-10-30 to 2026-10-31):
   # idle compaction destroys the prompt-cache economics the journal exists

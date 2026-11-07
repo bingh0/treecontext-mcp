@@ -629,12 +629,6 @@ export function ticketDoorSteps(define: (re: RegExp, fn: (w: WorkersWorld, ...ca
     w.facts!['spec'] = { spawner: 'wrapper', prompt: 'wire the submit button', ticket: ticketFields(w, { run, key, role, checkpointer: 'reviewer' }), plan: { first: {} } } satisfies WorkerSpec
   })
 
-  define(/^the worker prints "([^"]+)" as its last output and exits$/, async (w, text) => {
-    const spec = specOf(w)
-    spec.plan.first.print = text
-    await runWorker(w, spec)
-  })
-
   define(/^the worker's registration reads retired$/, (w) => {
     const r = rawRegistration(w, w.legs!['worker']!)
     expect([r['kind'], r['door'], r['ended']]).toEqual(['worker', 'ticket', 'retired'])
