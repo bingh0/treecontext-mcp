@@ -14,7 +14,10 @@
  * The worker's stdout passes through to this command's stdout as it
  * arrives, byte for byte with nothing inserted, every run's in order
  * (D307: a worker's last output is never lost from its spawner); its
- * stderr passes through to this command's stderr; the boundary is the one
+ * stderr passes through to this command's stderr as written (D384: the
+ * door keeps only its end, for the summary row of a run that failed or
+ * printed nothing); the worker gets none of this command's client-session
+ * variables (D389); the boundary is the one
  * line the door hands its spawner, on stderr after it, starting
  * `treecontext:`. The exit code is the worker's last run's own, or 128
  * plus the number of the signal that ended it; when no worker was
@@ -194,15 +197,22 @@ export async function runCommand(argv: string[], deps: {
     // lane: no hook saw this spawn, so no hook's identity is claimed.
     const parentId = readTicket(ticket).ticket.parent.id
     const spawner = a.spawner !== null ? { sessionId: a.spawner } : { role: parentId !== '' ? parentId : 'spawner' }
+    let lastErrByte: number | null = null
     const result = await spawnWorker({
       store: dbPath, ticket, prompt, command: a.command[0]!, args: a.command.slice(1), cwd, env,
       deliver: a.messageArg ? 'argv' : 'stdin', checkTicket: a.checkTicket,
       ...(a.timeoutSecs !== null ? { timeoutMs: a.timeoutSecs * 1000 } : {}),
       spawner,
       onStdout: (c) => { out.write(c) },
+      // D307, D384: the worker's stderr as it wrote it; the door keeps its
+      // end for the summary row of a failed or silent run.
+      onStderr: (c) => { if (c.length > 0) lastErrByte = c[c.length - 1]!; err.write(c) },
       signal: abort.signal,
     })
-    err.write(`${result.line}\n`)
+    // The door's line is a line of its own: after a stream that did not end
+    // its last line, the line break is the door's, the worker's bytes as
+    // written before it.
+    err.write(`${lastErrByte !== null && lastErrByte !== 0x0a ? '\n' : ''}${result.line}\n`)
     return result.exitCode
   } finally {
     for (const s of signals) process.off(s, forward)

@@ -23,7 +23,9 @@ import {
 } from '../src/first-moment.js'
 import {
   sendBackDecision, spawnWorker, claimTicket, NOT_STARTED_EXIT, TICKET_REFUSED_EXIT, TIMEOUT_GRACE_MS, STDOUT_DRAIN_MS, type SendBackInput,
+  reapedGroupIsOurs, StreamTail, summaryOf,
 } from '../src/ticket-door.js'
+import { workerEnvironment, CLIENT_SESSION_VARIABLE_NAMES } from '../src/client-session-env.js'
 import { hostProbe } from '../src/persistence/process-probe.js'
 import { registerSelf } from '../src/persistence/session-registry.js'
 import { NO_SESSION } from '../src/dedup-identity.js'
@@ -390,6 +392,102 @@ describe('the cut reaches the whole worker', () => {
       expect(raw<{ ended: string }>('SELECT ended FROM session_registry WHERE session_id = ?', r.sessionId)[0]!.ended).toBe('cut')
     } finally { await s.close() }
   }, 30_000)
+})
+
+describe('the group is signalled after its leader is reaped only while its number is ours', () => {
+  // A worker whose child ignores SIGTERM: the timeout's SIGTERM ends the
+  // leader, the child lives on in the group, and the door's SIGKILL after
+  // the leader's reap is what ends it. The child writes its own pid first.
+  const stubborn = (pidFile: string): { command: string; args: string[] } => ({
+    command: 'sh',
+    args: ['-c', `(trap "" TERM; exec sh -c 'echo $$ > "${pidFile}"; exec sleep 777') </dev/null >/dev/null 2>&1 & cat >/dev/null; wait`],
+  })
+  const alive = (pid: number): boolean => {
+    try { process.kill(pid, 0); return true } catch (err) { return (err as NodeJS.ErrnoException).code === 'EPERM' }
+  }
+  const waitGone = async (pid: number): Promise<boolean> => {
+    for (let i = 0; i < 40; i++) { if (!alive(pid)) return true; await new Promise((r) => setTimeout(r, 50)) }
+    return false
+  }
+
+  it.skipIf(process.platform === 'win32')('with no process holding the number, the survivor is killed with the group (D292)', async () => {
+    const s = await open()
+    const pidFile = join(tmpDir, 'child.pid')
+    try {
+      const r = await spawnWorker({ store: s, ticket: { run: 'r1', key: 'k', role: 'builder', checkpointer: 'builder', parent: { id: 'p1' } }, timeoutMs: 1500, ...stubborn(pidFile) })
+      expect([r.ended, r.runs[0]!.exit.signal]).toEqual(['cut', 'SIGTERM'])
+      const child = Number(readFileSync(pidFile, 'utf8').trim())
+      expect(await waitGone(child)).toBe(true)
+    } finally { await s.close() }
+  }, 30_000)
+
+  it.skipIf(process.platform === 'win32')('with a process holding the number, a stranger that reused it, nothing is signalled by it', async () => {
+    const s = await open()
+    const pidFile = join(tmpDir, 'child.pid')
+    let child = 0
+    try {
+      // The OS stand-in: every number reads as held, as the leader's number
+      // reads once a stranger has reused it. The leader is reaped by then,
+      // so the holder can only be a stranger.
+      const probe = { ...hostProbe, exists: (): boolean => true }
+      const r = await spawnWorker({
+        store: s, ticket: { run: 'r1', key: 'k', role: 'builder', checkpointer: 'builder', parent: { id: 'p1' } }, timeoutMs: 1500, probe, ...stubborn(pidFile),
+      })
+      expect([r.ended, r.runs[0]!.exit.signal]).toEqual(['cut', 'SIGTERM'])
+      child = Number(readFileSync(pidFile, 'utf8').trim())
+      // No SIGKILL went to the number: the survivor of the SIGTERM lives.
+      await new Promise((res) => setTimeout(res, 300))
+      expect(alive(child)).toBe(true)
+    } finally {
+      if (child > 0) { try { process.kill(child, 'SIGKILL') } catch { /* gone */ } }
+      await s.close()
+    }
+  }, 30_000)
+
+  it('reads the number as ours only when the host says no process holds it', () => {
+    const says = (v: boolean | null) => ({ ...hostProbe, exists: (): boolean | null => v })
+    const groups = process.platform !== 'win32'
+    expect([reapedGroupIsOurs(4242, says(false)), reapedGroupIsOurs(4242, says(true)), reapedGroupIsOurs(4242, says(null)), reapedGroupIsOurs(undefined, says(false))])
+      .toEqual([groups, false, false, false])
+  })
+})
+
+describe('the end of the error stream (D384)', () => {
+  it('keeps the last characters as code points across split chunks, and counts them all', () => {
+    const t = new StreamTail(5)
+    const bytes = Buffer.from('abc😀défgh😀')
+    // Every split point, a four-byte character among them, cut mid-way.
+    for (const b of bytes) t.push(Buffer.from([b]))
+    t.end()
+    expect([t.text(), t.total]).toEqual(['éfgh😀', 10])
+    const whole = new StreamTail(2000)
+    whole.push(Buffer.from('error: x\n'))
+    whole.end()
+    expect([whole.text(), whole.total]).toEqual(['error: x\n', 9])
+  })
+
+  it('a clean exit with output is its output alone; a failed or silent one adds treecontext\'s line', () => {
+    const rec = (output: string, code: number, tail: string, total = tail.length) => ({ output, exit: { code, signal: null }, errorTail: tail, errorChars: total })
+    expect(summaryOf(rec('done\n', 0, 'warning: cold\n'))).toBe('done')
+    expect(summaryOf(rec('', 0, ''))).toBe('treecontext: the worker exited with code 0 having printed nothing, and wrote nothing to its error stream.')
+    expect(summaryOf(rec('half', 2, 'boom\n'))).toBe('half\n\ntreecontext: the worker exited with code 2; its error stream, all 5 characters of it:\nboom\n')
+    expect(summaryOf(rec('', 1, 'x'.repeat(2000), 50000)))
+      .toBe(`treecontext: the worker exited with code 1 having printed nothing; the last 2000 of the 50000 characters it wrote to its error stream, the earlier part was left out:\n${'x'.repeat(2000)}`)
+  })
+})
+
+describe('the worker\'s environment (D389)', () => {
+  it('leaves out every named session variable, keeps the rest, sets the door\'s own, and changes nothing of the spawner\'s', () => {
+    const spawner = {
+      CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 's', CLAUDE_CODE_CHILD_SESSION: '1', CLAUDE_PID: '9', CLAUDE_CODE_MESSAGING_TOKEN: 't', CLAUDE_CODE_MESSAGING_SOCKET: '/s',
+      CLAUDE_CONFIG_DIR: '/c', CLAUDE_CODE_USE_BEDROCK: '1', CLAUDE_CODE_USE_VERTEX: '1', PATH: '/bin', [TICKET_ENV]: 'old',
+    }
+    const before = { ...spawner }
+    const env = workerEnvironment(spawner, { [TICKET_ENV]: 'new', [WORKER_SESSION_ENV]: 'lane' })
+    expect(CLIENT_SESSION_VARIABLE_NAMES).toEqual(['CLAUDECODE', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_CHILD_SESSION', 'CLAUDE_PID', 'CLAUDE_CODE_MESSAGING_TOKEN', 'CLAUDE_CODE_MESSAGING_SOCKET'])
+    expect(env).toEqual({ CLAUDE_CONFIG_DIR: '/c', CLAUDE_CODE_USE_BEDROCK: '1', CLAUDE_CODE_USE_VERTEX: '1', PATH: '/bin', [TICKET_ENV]: 'new', [WORKER_SESSION_ENV]: 'lane' })
+    expect(spawner).toEqual(before)
+  })
 })
 
 describe('the lane variable is honoured only for its own ticket', () => {

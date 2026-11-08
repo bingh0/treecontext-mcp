@@ -166,6 +166,9 @@ scenario, are in `docs/beta3-bindings-audit.md`.
   environment (`TREECONTEXT_TICKET`, one JSON object) and the lane the
   door named (`TREECONTEXT_WORKER_SESSION`): minting, and the one reader
   every door uses, whole, damaged, blank-keyed, keyless or silent
+- `src/client-session-env.ts` — the client-session variables the ticket
+  door never hands a worker (D389): a named list per client, each name
+  with the evidence it was seen, never a prefix
 - `src/first-moment.ts` — a leg's first moment for both doors: what it is
   composed from (brief, checkpoint(s) in effect, flags, the predecessor a
   recovery leg recovers), the first message, treecontext's own lines

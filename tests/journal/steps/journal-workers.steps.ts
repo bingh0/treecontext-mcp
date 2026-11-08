@@ -125,6 +125,8 @@ export const workersDefiner = (reg: Registry<WorkersWorld>): void => {
   ticketDoorSteps(define)
   claudeChildSteps(define)
   workerLaneSteps(define)
+  failedRunSteps(define)
+  sessionVariableSteps(define)
 
   // ── D294: the parent as declared, or as a hook registered it ──
 
@@ -630,9 +632,12 @@ export function ticketDoorSteps(define: (re: RegExp, fn: (w: WorkersWorld, ...ca
   })
 
   define(/^the worker's registration reads retired$/, (w) => {
-    const r = rawRegistration(w, w.legs!['worker']!)
-    expect([r['kind'], r['door'], r['ended']]).toEqual(['worker', 'ticket', 'retired'])
-    expect(r['stopped_at']).not.toBeNull()
+    // A run through both spawners (D384's bindings) has a leg of each.
+    for (const name of w.facts!['both-spawners'] ? ['worker', 'worker:library'] : ['worker']) {
+      const r = rawRegistration(w, w.legs![name]!)
+      expect([r['kind'], r['door'], r['ended']], name).toEqual(['worker', 'ticket', 'retired'])
+      expect(r['stopped_at']).not.toBeNull()
+    }
   })
 
   define(/^the spawner is handed (?:one line pointing at|a pointer to) (?:a|the) summary row reading "([^"]+)"(?: with the writer "([^"]+)")?$/, (w, text, writer) => {
@@ -1937,5 +1942,288 @@ export function workerLaneSteps(define: (re: RegExp, fn: (w: WorkersWorld, ...ca
     expect(scope!['listed']).toBe("every lane's resume pointers, flat, each naming its lane")
     expect(scope!['worker']).toContain('this session is a worker of the ticket door (builder)')
     for (const k of ['unplaced', 'lane', 'left_out', 'other_lanes', 'other_lane_count']) expect(scope![k], k).toBeUndefined()
+  })
+}
+
+// ── D384, D288: a failed or silent worker's summary row says why ──
+//
+// The worker is the hook-less stand-in (../standins.ts, its `stderr` plan
+// word), launched through the real door by both spawners in turn: the
+// `treecontext run` wrapper, a real subprocess whose own stdout and stderr
+// bytes are the spawner's side, and the library's spawnWorker, whose
+// handed-on chunks are. Each run is a leg of its own in the one store. The
+// summary row is read with SQL, its content decoded and its kind read,
+// from the id the spawner's line names; treecontext's line is checked by
+// its parts here, never by calling the code that composes it.
+
+/** The two spawners every D384 run goes through, the wrapper first. */
+const FAILED_RUN_SPAWNERS = [['wrapper', 'worker'], ['library', 'worker:library']] as const
+
+async function runThroughBothSpawners(w: WorkersWorld, spec: WorkerSpec): Promise<void> {
+  for (const [spawner, name] of FAILED_RUN_SPAWNERS) await runWorker(w, { ...spec, spawner }, name)
+  w.facts!['both-spawners'] = true
+}
+
+/** Each outcome of the run, by spawner, with the leg's name. */
+function bothOutcomes(w: WorkersWorld): Array<[Spawner, Outcome, string]> {
+  expect(w.facts!['both-spawners'], 'the run went through both spawners').toBe(true)
+  return FAILED_RUN_SPAWNERS.map(([spawner, name]) => {
+    const o = outOf(w, name)
+    expect(o.spawner).toBe(spawner)
+    return [spawner, o, name]
+  })
+}
+
+/** The summary row the spawner's line points at, read with SQL. */
+function summaryRowOf(w: WorkersWorld, o: Outcome): { content: string; kind: unknown; writer: unknown; session: string } {
+  const id = /the summary row ([0-9a-f]{32})/.exec(o.line)?.[1]
+  expect(id, `a summary row named in: ${o.line}`).toBeTruthy()
+  const row = rawOne<{ c: Buffer | string; m: string; session_key: string }>(w, 'SELECT content AS c, metadata_json AS m, session_key FROM nodes WHERE node_id = ?', id)
+  expect(row, `the row ${id} in the store`).toBeTruthy()
+  const m = JSON.parse(row!.m) as Record<string, unknown>
+  return { content: decodeContent(row!.c), kind: m['kind'], writer: m['_writer'], session: row!.session_key }
+}
+
+/** treecontext's line, split into its first line and what follows it. */
+function treecontextLine(text: string): { head: string; body: string } {
+  expect(text.startsWith('treecontext: '), `treecontext's line opens with its name:\n${text.slice(0, 300)}`).toBe(true)
+  const nl = text.indexOf('\n')
+  return nl === -1 ? { head: text, body: '' } : { head: text.slice(0, nl), body: text.slice(nl + 1) }
+}
+
+/** The spawner's side. The wrapper's own stderr is its own diagnostic
+ *  lines (each `[treecontext] …`, before the worker starts), then the
+ *  worker's stream as written, then the door's one line on a line of its
+ *  own; the library's handed-on chunks are the worker's stream alone.
+ *  Stdout is the worker's, byte for byte, through either. */
+function spawnerReceived(spawner: Spawner, o: Outcome, stderr: string, stdout: string): void {
+  expect(o.stdout, `${spawner}: the output byte for byte`).toBe(stdout)
+  if (spawner === 'library') {
+    expect(o.stderr, 'the library: the error stream as written').toBe(stderr)
+    return
+  }
+  const tail = `${stderr}${stderr === '' || stderr.endsWith('\n') ? '' : '\n'}${o.line}\n`
+  expect(o.line).toMatch(/^treecontext: /)
+  expect(o.stderr.endsWith(tail), `the wrapper: the error stream as written, then the door's line:\n${o.stderr.slice(-600)}`).toBe(true)
+  const own = o.stderr.slice(0, o.stderr.length - tail.length)
+  for (const l of own.split('\n').filter((x) => x !== '')) expect(l, 'only the wrapper\'s own diagnostic lines before the worker\'s stream').toMatch(/^\[treecontext\] /)
+}
+
+export function failedRunSteps(define: (re: RegExp, fn: (w: WorkersWorld, ...caps: string[]) => void | Promise<void>) => void): void {
+  // D288, amended by D384: a clean exit after printing keeps its output alone.
+  define(/^the worker prints "([^"]+)" as its last output, writes "([^"]+)" to its error stream, and exits with code (\d+)$/, async (w, printed, err, code) => {
+    w.facts!['printed'] = printed
+    w.facts!['stderr'] = `${err}\n`
+    await runThroughBothSpawners(w, { ...specOf(w), plan: { first: { print: printed, stderr: `${err}\n`, exit: Number(code) } } })
+  })
+
+  define(/^the spawner is handed one line pointing at a summary row reading "([^"]+)" with the writer "([^"]+)", and nothing from its error stream$/, (w, text, writer) => {
+    for (const [spawner, o] of bothOutcomes(w)) {
+      expect(o.line, `${spawner}: one line`).toMatch(/^treecontext: [^\n]+\.$/)
+      expect(o.line).toContain(`writer "${writer}"`)
+      const row = summaryRowOf(w, o)
+      expect([row.content, row.kind, row.writer, row.session], spawner).toEqual([text, SUBAGENT_SUMMARY_KIND, writer, o.sessionId])
+      spawnerReceived(spawner, o, String(w.facts!['stderr']), text)
+    }
+  })
+
+  // D384's outline: a failed or silent run.
+  define(/^the worker prints (nothing|"[^"]+") to its output, writes "([^"]+)" to its error stream, and exits with code (\d+)$/, async (w, output, err, code) => {
+    const printed = output === 'nothing' ? '' : output.slice(1, -1)
+    w.facts!['printed'] = printed
+    w.facts!['stderr'] = `${err}\n`
+    await runThroughBothSpawners(w, { ...specOf(w), plan: { first: { ...(printed !== '' ? { print: printed } : {}), stderr: `${err}\n`, exit: Number(code) } } })
+  })
+
+  define(/^the summary row the spawner's line points at reads (nothing|"[^"]+"), then treecontext's line naming the exit code (\d+) and the end of its error stream, "([^"]+)"$/, (w, output, code, err) => {
+    const printed = output === 'nothing' ? '' : output.slice(1, -1)
+    for (const [spawner, o] of bothOutcomes(w)) {
+      const row = summaryRowOf(w, o)
+      expect([row.kind, row.writer, row.session], spawner).toEqual([SUBAGENT_SUMMARY_KIND, 'builder', o.sessionId])
+      let rest = row.content
+      if (printed !== '') {
+        expect(rest.startsWith(`${printed}\n\n`), `${spawner}: the output first:\n${rest}`).toBe(true)
+        rest = rest.slice(printed.length + 2)
+      }
+      const { head, body } = treecontextLine(rest)
+      expect(head, spawner).toMatch(new RegExp(`\\bexited with code ${code}\\b`))
+      expect(head.includes('printed nothing'), spawner).toBe(printed === '')
+      // step-lint: allow unearned-absence -- the long-stream step ("a long error stream is kept as its end") asserts this same needle present in the same line's head, and the cut-marker mutation turns it red
+      expect(head).not.toContain('the earlier part was left out')
+      // The stream whole, as the worker wrote it, and nothing after it.
+      expect(body, spawner).toBe(`${err}\n`)
+      // The spawner's line and exit code name the same exit.
+      expect(o.line).toContain(`exited with code ${code}`)
+      expect(o.exitCode).toBe(Number(code))
+    }
+  })
+
+  define(/^the spawner received the error stream as the worker wrote it, and the output byte for byte$/, (w) => {
+    for (const [spawner, o] of bothOutcomes(w)) spawnerReceived(spawner, o, String(w.facts!['stderr']), String(w.facts!['printed']))
+  })
+
+  // A long stream: its end, marked as cut.
+  define(new RegExp(`^an? ${WORKER_CLI} worker under the run "([^"]+)", whose ticket names the reviewer as the one who will checkpoint$`), async (w, _cli, run) => {
+    await openRunWorld(w)
+    w.facts!['spec'] = { spawner: 'wrapper', prompt: 'wire the submit button', ticket: ticketFields(w, { run, checkpointer: 'reviewer' }), plan: { first: {} } } satisfies WorkerSpec
+  })
+
+  define(/^the worker writes (\d+) characters to its error stream, the last line "([^"]+)", and exits with code (\d+)$/, async (w, n, last, code) => {
+    // Numbered lines, each with a character UTF-8 writes in two bytes, so
+    // characters and bytes differ; the stream ends on its last line.
+    const total = Number(n)
+    let filler = ''
+    for (let i = 1; filler.length < total; i++) filler += `stderr line ${String(i).padStart(5, '0')}: réessai of the request\n`
+    const stream = `${filler.slice(0, total - last.length - 1)}\n${last}`
+    expect(stream.length).toBe(total)
+    w.facts!['stderr'] = stream
+    w.facts!['printed'] = ''
+    await runThroughBothSpawners(w, { ...specOf(w), plan: { first: { stderr: stream, exit: Number(code) } } })
+  })
+
+  define(/^the summary row holds the last (\d+) characters of the error stream, ending "([^"]+)", and says the earlier part was left out$/, (w, n, last) => {
+    const stream = String(w.facts!['stderr'])
+    for (const [spawner, o] of bothOutcomes(w)) {
+      const row = summaryRowOf(w, o)
+      expect(row.kind).toBe(SUBAGENT_SUMMARY_KIND)
+      const { head, body } = treecontextLine(row.content)
+      expect(head, spawner).toContain('the earlier part was left out')
+      expect(head).toMatch(/\bexited with code 1\b/)
+      // Exactly the stream's last characters: none fewer, none more.
+      expect(body.length, spawner).toBe(Number(n))
+      expect(body).toBe(stream.slice(-Number(n)))
+      expect(body.endsWith(last)).toBe(true)
+    }
+  })
+
+  define(/^the spawner received all (\d+) characters$/, (w, n) => {
+    const stream = String(w.facts!['stderr'])
+    expect(stream.length).toBe(Number(n))
+    for (const [spawner, o] of bothOutcomes(w)) spawnerReceived(spawner, o, stream, '')
+  })
+
+  // Failed, run once more, failed again: the last run's reason.
+  define(new RegExp(`^an? ${WORKER_CLI} worker started by the wrapper under the key "([^"]+)", naming itself as checkpointer$`), async (w, _cli, key) => {
+    await openRunWorld(w)
+    w.facts!['spec'] = {
+      spawner: 'wrapper', prompt: 'wire the submit button',
+      ticket: ticketFields(w, { key, checkpointer: 'builder' }), plan: { first: {} },
+    } satisfies WorkerSpec
+  })
+
+  define(/^its first run writes "([^"]+)" to its error stream and exits with code (\d+), and its second run writes "([^"]+)" and exits with code (\d+), neither writing a checkpoint$/, async (w, e1, c1, e2, c2) => {
+    w.facts!['stderr'] = `${e1}\n${e2}\n`
+    w.facts!['first-error'] = e1
+    await runThroughBothSpawners(w, { ...specOf(w), plan: { first: { stderr: `${e1}\n`, exit: Number(c1) }, rerun: { stderr: `${e2}\n`, exit: Number(c2) } } })
+  })
+
+  define(/^the summary row names the exit code (\d+) and "([^"]+)"$/, (w, code, err) => {
+    for (const [spawner, o, name] of bothOutcomes(w)) {
+      // Two runs, the second the send-back's, as the worker recorded them.
+      expect(o.log.map((r) => r.rerun), spawner).toEqual([false, true])
+      expect(rawRegistration(w, w.legs![name]!)['send_backs']).toBe(1)
+      const row = summaryRowOf(w, o)
+      expect(row.kind).toBe(SUBAGENT_SUMMARY_KIND)
+      const { head, body } = treecontextLine(row.content)
+      expect(head, spawner).toMatch(new RegExp(`\\bexited with code ${code}\\b`))
+      expect(body, spawner).toBe(`${err}\n`)
+      expect(row.content).not.toContain(String(w.facts!['first-error']))
+      // Both runs' streams reached the spawner, in order.
+      spawnerReceived(spawner, o, String(w.facts!['stderr']), '')
+    }
+  })
+}
+
+// ── D389: no client-session variable handed to a worker ──
+//
+// The spawner's environment holds Claude Code's session variables and
+// two of its settings, with values made here (a token this run alone
+// knows). The worker is the stand-in, launched through the real door by
+// the spawner the row names: the `treecontext run` wrapper as a real
+// subprocess with that environment; the library call given no
+// environment, this process's own then holding it (put there for the call
+// and restored after); or the library call given it. The stand-in writes
+// its whole environment to a file (its `envTo` plan word) and prints none
+// of it.
+
+const SPAWNER_ROWS: Record<string, { spawner: Spawner; own?: boolean }> = {
+  '`treecontext run` wrapper': { spawner: 'wrapper' },
+  "library call, in the process's own environment": { spawner: 'library', own: true },
+  'library call, with an environment it passes': { spawner: 'library' },
+}
+
+const nameList = (text: string): string[] => text.split(/, | and /).map((s) => s.trim()).filter((s) => s !== '')
+
+export function sessionVariableSteps(define: (re: RegExp, fn: (w: WorkersWorld, ...caps: string[]) => void | Promise<void>) => void): void {
+  define(/^a spawner whose environment holds Claude Code's session variables (.+), and the settings (.+)$/, async (w, sessionText, settingsText) => {
+    await openRunWorld(w)
+    const session = nameList(sessionText)
+    const settings = nameList(settingsText)
+    expect(session).toHaveLength(6)
+    expect(settings).toEqual(['CLAUDE_CONFIG_DIR', 'CLAUDE_CODE_USE_BEDROCK'])
+    const token = `tok-${randomUUID()}`
+    const values: Record<string, string> = {
+      CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: randomUUID(), CLAUDE_CODE_CHILD_SESSION: '1', CLAUDE_PID: String(process.pid),
+      CLAUDE_CODE_MESSAGING_TOKEN: token, CLAUDE_CODE_MESSAGING_SOCKET: join(w.home!, 'cc-messaging.sock'),
+      CLAUDE_CONFIG_DIR: join(w.home!, 'claude-config'), CLAUDE_CODE_USE_BEDROCK: '1',
+    }
+    for (const name of [...session, ...settings]) expect(values[name], name).toBeDefined()
+    w.facts!['session-vars'] = session
+    w.facts!['settings-vars'] = settings
+    w.facts!['spawner-env'] = values
+    w.facts!['token'] = token
+  })
+
+  define(new RegExp(`^the ticket door starts an? ${WORKER_CLI} worker through the (.+)$`), async (w, _cli, row) => {
+    const how = SPAWNER_ROWS[row]
+    expect(how, `a spawner row: ${row}`).toBeDefined()
+    const envFile = join(w.home!, `worker-env-${randomUUID().slice(0, 8)}.json`)
+    w.facts!['env-file'] = envFile
+    const ticket = ticketFields(w, { checkpointer: 'reviewer' })
+    w.facts!['ticket'] = ticket
+    await runWorker(w, {
+      spawner: how!.spawner, prompt: 'wire the submit button', ticket,
+      plan: { first: { envTo: envFile, print: 'environment written' } },
+      spawnerEnv: w.facts!['spawner-env'] as Record<string, string>, ...(how!.own ? { libraryOwnEnv: true } : {}),
+    })
+    expect(outOf(w).exitCode).toBe(0)
+  })
+
+  const workerEnv = (w: WorkersWorld): Record<string, string> => {
+    const file = String(w.facts!['env-file'])
+    expect(existsSync(file), 'the worker wrote its environment').toBe(true)
+    return JSON.parse(readFileSync(file, 'utf8')) as Record<string, string>
+  }
+
+  define(/^the worker's environment holds none of the six session variables$/, (w) => {
+    const env = workerEnv(w)
+    const session = w.facts!['session-vars'] as string[]
+    expect(session).toHaveLength(6)
+    for (const name of session) expect(env[name], name).toBeUndefined()
+    // Nor does the token reach the worker under another name, or the
+    // store: no row holds it.
+    const token = String(w.facts!['token'])
+    expect(Object.values(env)).not.toContain(token)
+    const rows = rawAll<{ c: Buffer | string; m: string }>(w, 'SELECT content AS c, metadata_json AS m FROM nodes')
+    expect(rows.length).toBeGreaterThan(0)
+    for (const r of rows) expect(`${decodeContent(r.c)}${r.m}`).not.toContain(token)
+  })
+
+  define(/^it holds CLAUDE_CONFIG_DIR and CLAUDE_CODE_USE_BEDROCK as the spawner had them$/, (w) => {
+    const env = workerEnv(w)
+    const had = w.facts!['spawner-env'] as Record<string, string>
+    for (const name of w.facts!['settings-vars'] as string[]) expect([name, env[name]]).toEqual([name, had[name]])
+  })
+
+  define(/^it holds the ticket and the worker's lane the door set$/, (w) => {
+    const env = workerEnv(w)
+    const o = outOf(w)
+    const t = w.facts!['ticket'] as TicketFields
+    const read = readTicket(env['TREECONTEXT_TICKET'] ?? '')
+    expect(read.valid).toBe(true)
+    expect([read.ticket.run, read.ticket.key, read.ticket.role, read.ticket.checkpointer]).toEqual([t.run, t.key, t.role, t.checkpointer])
+    expect(o.sessionId).toBeTruthy()
+    expect(env['TREECONTEXT_WORKER_SESSION']).toBe(o.sessionId)
+    expect(rawOne(w, "SELECT kind, door FROM session_registry WHERE session_id = ? AND agent_id = 'worker'", o.sessionId)).toMatchObject({ kind: 'worker', door: 'ticket' })
   })
 }

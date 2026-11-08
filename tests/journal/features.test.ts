@@ -190,15 +190,8 @@ runFeatures(join(HERE, '../../features'), {
       feature: 'journal-workers',
       scenarios: [
         'a <worker> worker under a <parent> parent writes into its own lane with its role as writer',
-        // The headless build (2026-11-07), unit 5 (the ticket door): a
-        // failed or silent worker's summary row (D384, amending D288; the
-        // @D288 scenario's step reworded) and no client-session variable
-        // handed to a worker (D389). Unbound until unit 5.
-        'a worker is retired at exit and its last output is the summary row the pointer names',
-        'a worker that <ends> leaves a summary row that says why',
-        'a long error stream is kept as its end',
-        "a worker that failed, was run once more and failed again leaves its last run's reason",
-        "a worker started through the <spawner> from inside a Claude Code session carries none of that session's variables",
+        // The headless build's unit 5 (D384, D389) bound its five scenarios
+        // on 2026-11-08, through both spawners, and they left this list.
       ],
     },
     // The headless build (2026-11-07, D381-D390; fence: Sanctioned changes,

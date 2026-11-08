@@ -65,6 +65,10 @@ const record = {
   firstMessage: claim.firstMessage,
 }
 raw.close()
+// D389: its whole environment, to a file and never to its output, so a
+// session token the door failed to leave out could never become its
+// summary row.
+if (step.envTo !== undefined) writeFileSync(step.envTo, JSON.stringify(process.env), { mode: 0o600 })
 const label = step.label ?? (rerun ? 'second run' : 'first run')
 const at = (): Record<string, number> => (step.at !== undefined ? { createdAt: step.at } : {})
 const reads: { query?: Record<string, unknown>; status?: Record<string, unknown> } = {}
@@ -138,6 +142,7 @@ if (step.waitFor !== undefined) {
   const deadline = Date.now() + 60_000
   while (!existsSync(step.waitFor) && Date.now() < deadline) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20)
 }
+if (step.stderr !== undefined) await new Promise<void>((resolve) => { process.stderr.write(step.stderr!, () => resolve()) })
 if (step.print !== undefined) process.stdout.write(step.print)
 if (step.exit === 'hang') {
   setInterval(() => { /* until a signal ends it */ }, 1 << 30)

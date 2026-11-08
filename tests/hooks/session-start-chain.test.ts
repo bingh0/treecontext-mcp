@@ -60,3 +60,33 @@ describe('session-start on /clear follows the session chain (D216)', () => {
     expect(packet.split('\n').some((l) => l.startsWith('No chapter summary'))).toBe(false)
   })
 })
+
+describe('a /clear stops the self of the session it continues (F2)', () => {
+  it('the predecessor\'s self gets its stop at the clear\'s moment; the new self has none; a resume opens it again', async () => {
+    const w = await world()
+    const self = (id: string): { stopped_at: number | null; started_at: number } | undefined => {
+      const db = new DatabaseSync(w.dbPath!, { readOnly: true })
+      try {
+        return db.prepare("SELECT stopped_at, started_at FROM session_registry WHERE session_id = ? AND agent_id = ''").get(id) as { stopped_at: number | null; started_at: number } | undefined
+      } finally { db.close() }
+    }
+    runHook(w, 'session-start', { hook_event_name: 'SessionStart', source: 'startup', transcript_path: join(w.proj!, 't.jsonl') })
+    expect(self(w.root)?.stopped_at).toBeNull()
+    writeSessionBeacon(w.dbPath!, process.pid, w.root, w.proj!, { rewrite: true })
+    const before = Date.now() / 1000
+    const next = `cc-${randomBytes(6).toString('hex')}`
+    clearAs(w, next)
+    const after = Date.now() / 1000
+    const stopped = self(w.root)!.stopped_at
+    expect(stopped).not.toBeNull()
+    expect(stopped!).toBeGreaterThanOrEqual(before - 1)
+    expect(stopped!).toBeLessThanOrEqual(after + 1)
+    // The clear's own session is registered, open, at the same moment.
+    expect(self(next)).toMatchObject({ stopped_at: null })
+    expect(self(next)!.started_at).toBe(stopped)
+    // A later resume of the continued session registers it open again.
+    w.sessionId = w.root
+    runHook(w, 'session-start', { hook_event_name: 'SessionStart', source: 'resume', transcript_path: join(w.proj!, 't.jsonl') })
+    expect(self(w.root)?.stopped_at).toBeNull()
+  })
+})

@@ -43,13 +43,15 @@ import { spawn } from 'node:child_process'
 import { mkdirSync } from 'node:fs'
 import { constants as osConstants } from 'node:os'
 import { dirname } from 'node:path'
+import { StringDecoder } from 'node:string_decoder'
 import { FlatStore } from './flat-store.js'
 import { openNodeSqlite, DEFAULT_RAW_TIMEOUT_MS } from './persistence/node-sqlite.js'
 import { hostProbe, type ProcessProbe } from './persistence/process-probe.js'
 import { WORKER_AGENT_ID, legWriterOf, legOwnsKey, capRefusalOf, type LegRef, type LegRegistration, type WorkerProcess } from './persistence/leg-registry.js'
 import { gitSelfOf } from './hooks/git-self.js'
-import { composeSendBackMessage, owesCheckpoint } from './first-moment.js'
-import { CHECKPOINT_CAP_CHARS } from './runs.js'
+import { composeSendBackMessage, owesCheckpoint, failedRunLine, ERROR_STREAM_TAIL_CHARS } from './first-moment.js'
+import { CHECKPOINT_CAP_CHARS, charactersOf } from './runs.js'
+import { workerEnvironment } from './client-session-env.js'
 import {
   TICKET_ENV, WORKER_SESSION_ENV, mintTicket, readTicket, declaresDoor, ticketTextIn,
   type TicketFields, type TicketReading,
@@ -157,7 +159,8 @@ export interface SpawnWorkerOptions {
   args?: string[]
   cwd?: string
   /** The environment the worker inherits (default this process's); the
-   *  door adds the ticket and the worker's lane. */
+   *  door leaves out the spawner's client-session variables (D389,
+   *  client-session-env.ts) and adds the ticket and the worker's lane. */
   env?: NodeJS.ProcessEnv
   /** How the first message reaches the worker: on its stdin (the default,
    *  which `claude -p` and `codex exec` read their prompt from when none
@@ -174,8 +177,12 @@ export interface SpawnWorkerOptions {
   /** Each chunk of the worker's stdout as it arrives (the wrapper passes
    *  it through); all of it is in the result either way. */
   onStdout?: (chunk: Buffer) => void
-  /** The worker's stderr: passed through (default), piped away, or
-   *  dropped. */
+  /** Each chunk of the worker's stderr as it arrives, as the worker wrote
+   *  it (the wrapper passes it through); without it, the chunks go to this
+   *  process's stderr. The door keeps the stream's end either way (D384). */
+  onStderr?: (chunk: Buffer) => void
+  /** The worker's stderr handed to the spawner (default), or not handed
+   *  on at all. The door reads it in both cases. */
   stderr?: 'inherit' | 'ignore'
   /** Aborted, the worker is signalled (SIGTERM): the wrapper passes a
    *  signal it receives on to its worker, whose exit by signal is a cut
@@ -197,6 +204,11 @@ export interface WorkerRunRecord {
   input: { stdin: string | null; argv: string[] }
   /** What it printed on stdout, whole. */
   output: string
+  /** D384: the end of what it wrote to stderr (at most
+   *  ERROR_STREAM_TAIL_CHARS characters), and how many characters it
+   *  wrote in all. The rest of the stream was handed on, never kept. */
+  errorTail: string
+  errorChars: number
   spawnError?: string
 }
 
@@ -275,23 +287,82 @@ function signalWorker(child: ReturnType<typeof spawn>, sig: NodeJS.Signals): voi
   } catch { /* gone */ }
 }
 
-function launch(o: SpawnWorkerOptions, message: string, env: NodeJS.ProcessEnv): Launched {
+/**
+ * Whether the group a reaped leader led may still be signalled by its
+ * number. Once the leader is reaped its number is free, except that the
+ * operating system (Linux, macOS, the BSDs) gives out no number that is
+ * still the id of a live group or session. So while a member of the
+ * worker's group lives, the number is pinned to that group and no other
+ * process can hold it. A process found holding the number now is one that
+ * reused it after every member of the group was gone: nothing of the
+ * worker is left to signal, and a signal by that number would reach a
+ * stranger. The door signals only when no process holds the number; a
+ * host that cannot say (null) is not signalled either.
+ */
+export function reapedGroupIsOurs(pid: number | undefined, probe: ProcessProbe): boolean {
+  if (!GROUPS || pid === undefined) return false
+  return probe.exists(pid) === false
+}
+
+/**
+ * D384: the end of a stream as it passes, at most `chars` characters
+ * (code points), and how many characters went by in all. It holds a few
+ * times `chars` at most, so the whole stream is never kept.
+ */
+export class StreamTail {
+  private readonly decoder = new StringDecoder('utf8')
+  private kept = ''
+  /** Characters seen in all. */
+  total = 0
+  constructor(private readonly chars: number) {}
+  push(chunk: Buffer): void { this.add(this.decoder.write(chunk)) }
+  end(): void { this.add(this.decoder.end()) }
+  /** The last `chars` characters seen. */
+  text(): string { return lastCharacters(this.kept, this.chars) }
+  private add(text: string): void {
+    if (text === '') return
+    this.total += charactersOf(text)
+    this.kept += text
+    if (this.kept.length > this.chars * 8) this.kept = lastCharacters(this.kept, this.chars)
+  }
+}
+
+/** The last `n` characters (code points) of a text, a surrogate pair never
+ *  split. */
+function lastCharacters(text: string, n: number): string {
+  let i = text.length
+  for (let count = 0; i > 0 && count < n; count++) {
+    i--
+    const c = text.charCodeAt(i)
+    if (c >= 0xdc00 && c <= 0xdfff && i > 0) {
+      const h = text.charCodeAt(i - 1)
+      if (h >= 0xd800 && h <= 0xdbff) i--
+    }
+  }
+  return text.slice(i)
+}
+
+function launch(o: SpawnWorkerOptions, message: string, env: NodeJS.ProcessEnv, probe: ProcessProbe): Launched {
   const deliver = o.deliver ?? 'stdin'
   const argv = deliver === 'argv' ? [...(o.args ?? []), message] : [...(o.args ?? [])]
   const record: WorkerRunRecord = {
     pid: null, start: null, token: null, exit: { code: null, signal: null },
-    input: { stdin: deliver === 'stdin' ? message : null, argv }, output: '',
+    input: { stdin: deliver === 'stdin' ? message : null, argv }, output: '', errorTail: '', errorChars: 0,
   }
   const done = new Promise<void>((resolve) => {
     let child: ReturnType<typeof spawn>
     try {
-      child = spawn(o.command, argv, { cwd: o.cwd, env, stdio: ['pipe', 'pipe', o.stderr ?? 'inherit'], detached: GROUPS })
+      child = spawn(o.command, argv, { cwd: o.cwd, env, stdio: ['pipe', 'pipe', 'pipe'], detached: GROUPS })
     } catch (err) {
       record.spawnError = errText(err)
       resolve()
       return
     }
     const chunks: Buffer[] = []
+    // D384: the error stream is handed on as the worker writes it (D307),
+    // and only its end is kept, for the summary row.
+    const tail = new StreamTail(ERROR_STREAM_TAIL_CHARS)
+    const handOn = o.stderr === 'ignore' ? null : (o.onStderr ?? ((c: Buffer): void => { process.stderr.write(c) }))
     let timer: NodeJS.Timeout | null = null
     let killer: NodeJS.Timeout | null = null
     let signalled = false
@@ -302,7 +373,11 @@ function launch(o: SpawnWorkerOptions, message: string, env: NodeJS.ProcessEnv):
       if (settled) return
       settled = true
       record.output = Buffer.concat(chunks).toString('utf8')
+      tail.end()
+      record.errorTail = tail.text()
+      record.errorChars = tail.total
       try { child.stdout!.destroy() } catch { /* closed */ }
+      try { child.stderr!.destroy() } catch { /* closed */ }
       resolve()
     }
     child.on('error', (err) => {
@@ -310,6 +385,7 @@ function launch(o: SpawnWorkerOptions, message: string, env: NodeJS.ProcessEnv):
     })
     if (child.pid !== undefined) record.pid = child.pid
     child.stdout!.on('data', (c: Buffer) => { chunks.push(c); o.onStdout?.(c) })
+    child.stderr!.on('data', (c: Buffer) => { if (!settled) tail.push(c); handOn?.(c) })
     child.stdin!.on('error', () => { /* a worker that never reads its stdin closes it early */ })
     child.stdin!.end(deliver === 'stdin' ? message : '')
     const cut = (): void => {
@@ -330,8 +406,10 @@ function launch(o: SpawnWorkerOptions, message: string, env: NodeJS.ProcessEnv):
       if (killer) clearTimeout(killer)
       record.exit = { code, signal }
       // A worker the door signalled is cut whole: what is left of its group
-      // goes with it, so nothing it started outlives the cut.
-      if (signalled) signalWorker(child, 'SIGKILL')
+      // goes with it, so nothing it started outlives the cut. The leader is
+      // reaped by now, so the group is signalled by its number only while
+      // that number can be no one else's (reapedGroupIsOurs).
+      if (signalled && reapedGroupIsOurs(child.pid, probe)) signalWorker(child, 'SIGKILL')
       // The output already in the pipe is read; a grandchild still holding
       // the pipe keeps nobody waiting past the drain.
       if (!settled) drain = setTimeout(settle, STDOUT_DRAIN_MS)
@@ -420,7 +498,9 @@ export async function spawnWorker(o: SpawnWorkerOptions): Promise<WorkerRunResul
       return empty({ ticket: reading, line: refusedStartLine(where, err) })
     }
     const ref: LegRef = { sessionId: started.leg.sessionId, agentId: WORKER_AGENT_ID }
-    const env: NodeJS.ProcessEnv = { ...(o.env ?? process.env), [TICKET_ENV]: raw, [WORKER_SESSION_ENV]: ref.sessionId }
+    // D389: none of the spawner's client-session variables, whether the
+    // spawner passed its environment or the worker inherits this process's.
+    const env = workerEnvironment(o.env ?? process.env, { [TICKET_ENV]: raw, [WORKER_SESSION_ENV]: ref.sessionId })
     const result: WorkerRunResult = empty({
       started: true, ended: 'retired', sessionId: ref.sessionId, leg: ref, ticket: reading,
       firstMessage: started.firstMessage, firstMomentId: started.firstMomentId, exitCode: 0,
@@ -435,7 +515,7 @@ export async function spawnWorker(o: SpawnWorkerOptions): Promise<WorkerRunResul
     let message = started.firstMessage
     const t = reading.ticket
     for (;;) {
-      const run = launch(o, message, env)
+      const run = launch(o, message, env, probe)
       result.runs.push(run.record)
       // D297, D317, D335: the process it runs as, read while it exists.
       if (run.record.pid !== null) recordProcess(run.record.pid)
@@ -521,7 +601,7 @@ export async function spawnWorker(o: SpawnWorkerOptions): Promise<WorkerRunResul
         if (how === 'cut') {
           await store.retireWorker(ref, { output: '', how: 'cut', summary: false, at: clock() })
         } else {
-          const r = await store.retireWorker(ref, { output: rec.output.replace(/\s+$/, ''), how, summary: true, at: clock() })
+          const r = await store.retireWorker(ref, { output: summaryOf(rec), how, summary: true, at: clock() })
           result.summaryId = r.summaryId
         }
         result.ended = how
@@ -539,6 +619,21 @@ export async function spawnWorker(o: SpawnWorkerOptions): Promise<WorkerRunResul
   } finally {
     if (owns) await store!.close()
   }
+}
+
+/**
+ * D288, D384: a worker's summary row, from its last run. A run that exited
+ * with code 0 after printing something leaves its output alone. A run that
+ * exited with another code, or printed nothing, leaves its output, if any,
+ * then treecontext's line naming the exit code and the end of its error
+ * stream.
+ */
+export function summaryOf(rec: Pick<WorkerRunRecord, 'output' | 'exit' | 'errorTail' | 'errorChars'>): string {
+  const output = rec.output.replace(/\s+$/, '')
+  const code = rec.exit.code ?? 0
+  if (code === 0 && output !== '') return output
+  const line = failedRunLine({ code, printedNothing: output === '', tail: rec.errorTail, total: rec.errorChars })
+  return output === '' ? line : `${output}\n\n${line}`
 }
 
 /** D285, D288, D292, D303, D316: the one line the spawner is handed at

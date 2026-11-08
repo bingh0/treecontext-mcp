@@ -113,9 +113,12 @@
  * worker's or a client's server that inherited the lane with a ticket of
  * its own, or with no worker variables, would be started; it calls no
  * tool), `at` (the rows' moment),
- * `waitFor` (a file it waits for after writing `<file>.ready`), `print`
- * (its last output), `exit` (a code, or `'hang'`). The run that opens on
- * the door's send-back message follows `rerun`.
+ * `waitFor` (a file it waits for after writing `<file>.ready`), `envTo`
+ * (D389: a file it writes its whole environment to, as JSON, once it
+ * has claimed its leg and before it writes anything; never printed, so no
+ * variable of it can reach a summary row), `stderr` (D384: text written to its error stream, before `print`),
+ * `print` (its last output), `exit` (a code, or `'hang'`). The run that
+ * opens on the door's send-back message follows `rerun`.
  *
  * standin-claude-p (STANDIN_CLAUDE_PLAN, `ClaudePPlan`): `tools` (Bash
  * calls, each a PostToolUse), `toolText` (their output, `{i}` the call's
@@ -287,6 +290,10 @@ export const STANDIN_CLAUDE_P = join(TS_ROOT, 'tests', 'helpers', 'standin-claud
 export interface WorkerStep {
   notes?: number; label?: string; texts?: string[]; checkpoint?: string; checkpoints?: string[]; invalidRow?: boolean; print?: string
   exit?: number | 'hang'; waitFor?: string; at?: number; viaTools?: boolean
+  /** D384: text written to its error stream before `print`. */
+  stderr?: string
+  /** D389: a file its whole environment is written to, as JSON. */
+  envTo?: string
   /** Reads through its own tools after its writes (the real serve). */
   reads?: { query?: Record<string, unknown>; status?: Record<string, unknown> }
   /** Handshake reads (D382): a real serve per entry, its `initialize`
@@ -353,6 +360,15 @@ export interface WorkerSpec {
   /** The worker is a `claude -p` child (the stand-in that fires the real
    *  hooks), on this plan, instead of the hook-less stand-in. */
   claudeP?: ClaudePPlan
+  /** D389: variables the spawner's own environment holds beside the
+   *  sandbox's (a client session's, say): the wrapper's process
+   *  environment, or the environment the library call is given. */
+  spawnerEnv?: Record<string, string>
+  /** D389: the library call given no environment, so the worker inherits
+   *  this process's own; the spawner's environment (the sandbox's and
+   *  `spawnerEnv`) is put in this process's for the call and restored
+   *  after it. */
+  libraryOwnEnv?: boolean
 }
 
 export interface Outcome {
@@ -402,31 +418,40 @@ export async function runWorker(w: RunWorld, spec: WorkerSpec, name = 'worker', 
   const cwd = spec.cwd ?? w.proj!
   const t0 = Date.now()
   let out: Omit<Outcome, 'log' | 'sessionId' | 'logPath' | 'elapsedMs'>
+  const spawnerEnv = { ...sandbox, ...spec.spawnerEnv }
   if (spec.spawner === 'library') {
-    const p = spawnWorker({
-      store: w.store!, ticket: spec.ticket, prompt: spec.prompt, command: process.execPath, args: nodeTsArgs(script), cwd,
-      env: sandbox, ...(spec.timeoutSecs ? { timeoutMs: spec.timeoutSecs * 1000 } : {}),
-      ...(spec.checkTicket ? { checkTicket: true, spawner: { sessionId: w.sessionId! } } : {}),
-      ...(spec.clock ? { clock: spec.clock } : {}),
-    })
-    await during?.()
-    const result = await p
-    out = { spawner: 'library', stdout: result.output, stderr: '', line: result.line, exitCode: result.exitCode, result }
+    // The library spawner's side of the error stream: each chunk as the
+    // door hands it on (D307, D384).
+    const errChunks: Buffer[] = []
+    const restore = spec.libraryOwnEnv ? swapProcessEnv(spawnerEnv) : null
+    let result: WorkerRunResult
+    try {
+      const p = spawnWorker({
+        store: w.store!, ticket: spec.ticket, prompt: spec.prompt, command: process.execPath, args: nodeTsArgs(script), cwd,
+        ...(spec.libraryOwnEnv ? {} : { env: spawnerEnv }), ...(spec.timeoutSecs ? { timeoutMs: spec.timeoutSecs * 1000 } : {}),
+        ...(spec.checkTicket ? { checkTicket: true, spawner: { sessionId: w.sessionId! } } : {}),
+        ...(spec.clock ? { clock: spec.clock } : {}),
+        onStderr: (c) => { errChunks.push(c) },
+      })
+      await during?.()
+      result = await p
+    } finally { restore?.() }
+    out = { spawner: 'library', stdout: result.output, stderr: Buffer.concat(errChunks).toString('utf8'), line: result.line, exitCode: result.exitCode, result }
   } else {
     const raw = typeof spec.ticket === 'string' ? spec.ticket : mintTicket(spec.ticket)
     let args: string[]
-    let env: NodeJS.ProcessEnv = sandbox
+    let env: NodeJS.ProcessEnv = spawnerEnv
     if (spec.spawner === 'none') {
       // No door at all: the worker holds its ticket and claims it itself.
       args = nodeTsArgs(script)
-      env = { ...sandbox, [TICKET_ENV]: raw }
+      env = { ...spawnerEnv, [TICKET_ENV]: raw }
     } else {
       const promptFile = join(w.home!, `prompt-${standinRuns}.txt`)
       writeFileSync(promptFile, spec.prompt)
       // Fields are minted by the wrapper's flags; a ticket given as text
       // sits in the wrapper's environment, where its spawner put it.
       const ticketArgs = typeof spec.ticket === 'string' ? [] : ticketFlags(spec.ticket)
-      if (typeof spec.ticket === 'string') env = { ...sandbox, [TICKET_ENV]: spec.ticket }
+      if (typeof spec.ticket === 'string') env = { ...spawnerEnv, [TICKET_ENV]: spec.ticket }
       args = nodeTsArgs(CLI_TS, [
         'run', ...ticketArgs, '--prompt-file', promptFile,
         ...(spec.timeoutSecs ? ['--timeout', String(spec.timeoutSecs)] : []),
@@ -436,13 +461,17 @@ export async function runWorker(w: RunWorld, spec: WorkerSpec, name = 'worker', 
     }
     const child = spawn(process.execPath, args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] })
     w.defer(() => { try { child.kill('SIGKILL') } catch { /* gone */ } })
-    let stdout = ''
-    let stderr = ''
-    child.stdout!.on('data', (c: Buffer) => { stdout += c.toString() })
-    child.stderr!.on('data', (c: Buffer) => { stderr += c.toString() })
+    // The wrapper's own bytes, decoded once whole, so a character split
+    // across two chunks is read as the spawner's terminal would show it.
+    const outBytes: Buffer[] = []
+    const errBytes: Buffer[] = []
+    child.stdout!.on('data', (c: Buffer) => { outBytes.push(c) })
+    child.stderr!.on('data', (c: Buffer) => { errBytes.push(c) })
     const exited = new Promise<number | null>((resolve) => child.once('close', (code) => resolve(code)))
     await during?.()
     const exitCode = await exited
+    const stdout = Buffer.concat(outBytes).toString('utf8')
+    const stderr = Buffer.concat(errBytes).toString('utf8')
     const line = stderr.split('\n').filter((l) => l.startsWith(DOOR_LINE_PREFIX)).at(-1) ?? ''
     out = { spawner: spec.spawner, stdout, stderr, line, exitCode, result: null }
   }
@@ -463,6 +492,18 @@ export async function runWorker(w: RunWorld, spec: WorkerSpec, name = 'worker', 
   w.facts![`out:${name}`] = full
   if (sessionId) w.legs![name] = { sessionId, agentId: WORKER_AGENT_ID }
   return full
+}
+
+/** This process's environment replaced by `env` until the returned
+ *  function restores it, key by key. */
+function swapProcessEnv(env: NodeJS.ProcessEnv): () => void {
+  const saved = { ...process.env }
+  for (const k of Object.keys(process.env)) if (!(k in env)) delete process.env[k]
+  for (const [k, v] of Object.entries(env)) if (v !== undefined) process.env[k] = v
+  return () => {
+    for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k]
+    for (const [k, v] of Object.entries(saved)) if (v !== undefined) process.env[k] = v
+  }
 }
 
 // ── The client a version check reads ───────────────────────────────────

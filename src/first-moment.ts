@@ -82,6 +82,26 @@ export function overCapWords(m: { size: number; cap: number; second?: boolean })
     : `accepted over the ${m.cap}-character cap on its second write`
 }
 
+/** D384: how many characters of a worker's error stream its summary row
+ *  keeps when the worker failed or printed nothing: the last ones. */
+export const ERROR_STREAM_TAIL_CHARS = 2000
+
+/**
+ * D384: treecontext's own line in the summary row of a worker that exited
+ * on its own with a non-zero code, or having printed nothing. It names the
+ * exit code and holds the end of the error stream: the whole stream when
+ * it is at most ERROR_STREAM_TAIL_CHARS characters, else its last
+ * characters, saying that the earlier part was left out; or the words that
+ * the stream was empty. Characters are code points (charactersOf).
+ */
+export function failedRunLine(o: { code: number; printedNothing: boolean; tail: string; total: number }): string {
+  const head = `treecontext: the worker exited with code ${o.code}${o.printedNothing ? ' having printed nothing' : ''}`
+  if (o.total === 0) return `${head}, and wrote nothing to its error stream.`
+  const kept = charactersOf(o.tail)
+  if (kept >= o.total) return `${head}; its error stream, all ${o.total} characters of it:\n${o.tail}`
+  return `${head}; the last ${kept} of the ${o.total} characters it wrote to its error stream, the earlier part was left out:\n${o.tail}`
+}
+
 // ── Moments ────────────────────────────────────────────────────────
 
 /** A row's moment as a first message states it. */
