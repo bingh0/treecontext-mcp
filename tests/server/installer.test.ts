@@ -1831,9 +1831,9 @@ describe('idempotent install + uninstall cycle', () => {
 })
 
 describe('agent registry', () => {
-  it('has exactly the six live agents (archived five deleted 2026-08-12)', () => {
+  it('has exactly the seven live agents (archived five deleted 2026-08-12; Antigravity CLI added by D383)', () => {
     expect(AGENTS.map(a => a.slug).sort()).toEqual(
-      ['claude', 'codex', 'cursor', 'gemini', 'opencode', 'vscode'])
+      ['agy', 'claude', 'codex', 'cursor', 'gemini', 'opencode', 'vscode'])
   })
 
   it('all slugs are unique', () => {

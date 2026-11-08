@@ -101,7 +101,9 @@ scenario, are in `docs/beta3-bindings-audit.md`.
   what install does about the key, and doctor's row for it
 - `src/server/tool-approvals.ts` — the one approval rule (D381, D390): the
   four tools install approves and the four that keep asking, Claude Code's
-  `permissions.allow` merge and Codex's per-tool approvals, each beside the
+  and Antigravity CLI's `permissions.allow` merges (one shape, two rule
+  dialects: `mcp__treecontext__<tool>`, `mcp(treecontext/<tool>)`) and
+  Codex's per-tool approvals, each beside the
   developer's own rules and never over them, the record of what install
   wrote and of an off the developer chose, and every echo, message and
   doctor clause read from what the client's files decide now, tool by tool
@@ -224,7 +226,10 @@ scenario, are in `docs/beta3-bindings-audit.md`.
 - `src/server/config.ts` — the TOML config loader (project
   `treecontext.toml` over `~/.treecontext/config.toml`)
 - `src/server/agents.ts` — the agent registry install reads (detection,
-  config paths and formats, hooks)
+  config paths and formats, hooks); Antigravity CLI (`agy`, D383) is a
+  tools-only entry, detected by its command or `~/.gemini/antigravity-cli`,
+  and `~/.gemini` alone stops counting as Gemini CLI where agy's own
+  directories are in it (`geminiCliPresent`)
 - `src/server/shielding.ts` — output shielding (`--shield-threshold`)
 
 ## Design decisions worth not re-litigating

@@ -73,7 +73,9 @@ export interface InstallWorld extends World {
   /** D290 README scenario: the README's install section. */
   iInstallSection?: string
   /** D385/D386 scenarios: the client the scenario's row names. */
-  iClient?: 'Claude Code' | 'Codex CLI'
+  iClient?: 'Claude Code' | 'Codex CLI' | 'Antigravity CLI'
+  /** D383 scenarios: a directory holding the real `agy`, first on the CLI's PATH. */
+  iAgyBin?: string
   /** D385 scenarios: the arguments the developer added to the entry, in their order. */
   iDeveloperArgs?: string[]
   /** D385 scenarios: the developer's own keys in the entry, as they wrote them. */
@@ -109,10 +111,74 @@ export function tcCli(w: InstallWorld, args: string[], opts: { cwd?: string } = 
   // directory of its own; it goes first on the child's PATH and nowhere else.
   // A stand-in `codex` goes first beside it, and a scenario on a machine
   // without Codex CLI gets a PATH that holds none.
+  // The real `agy` goes first from a directory of its own where a scenario
+  // installs Antigravity CLI; the machine's own is hidden from every child
+  // (sandboxedSpawnEnv), so no other world sees it (D383).
   const base = w.iPathWithoutCodex ?? process.env['PATH'] ?? ''
-  const path = pathWithFakeClaude(w, w.iCodexBin ? `${w.iCodexBin}${delimiter}${base}` : base)
-  const env = w.iClaudeBin || w.iCodexBin || w.iPathWithoutCodex ? { PATH: path } : undefined
+  const withAgy = w.iAgyBin ? `${w.iAgyBin}${delimiter}${base}` : base
+  const path = pathWithFakeClaude(w, w.iCodexBin ? `${w.iCodexBin}${delimiter}${withAgy}` : withAgy)
+  const env = w.iClaudeBin || w.iCodexBin || w.iPathWithoutCodex || w.iAgyBin ? { PATH: path } : undefined
   return spawnCli(args, { home: w.ihome!, cwd: opts.cwd ?? TS_ROOT, ...(env ? { env } : {}) })
+}
+
+/** The machine's real `agy`, resolved on this process's PATH; a missing one fails loudly, as a missing `codex` does. */
+export function realAgy(): string {
+  const names = process.platform === 'win32' ? ['agy.exe', 'agy.cmd', 'agy'] : ['agy']
+  const found = (process.env['PATH'] ?? '').split(delimiter).filter(Boolean)
+    .flatMap(d => names.map(n => join(d, n)))
+    .find(p => { try { return statSync(p).isFile() } catch { return false } })
+  if (!found) {
+    throw new Error(
+      'Antigravity CLI (`agy`) is not on PATH — the scenarios that read Antigravity CLI\'s own listing of its MCP servers '
+      + 'cannot be verified without it. Install it (`agy mcp list` makes no model call), or move them to the wip register with a reason.',
+    )
+  }
+  return found
+}
+
+/**
+ * Antigravity CLI installed in the world: the real `agy` on the CLI's PATH
+ * from a directory of its own, so install detects it by its command, as on
+ * a machine where agy was installed and has its own directory or not yet.
+ */
+export function putAgyOnPath(w: InstallWorld): void {
+  if (w.iAgyBin) return
+  w.iAgyBin = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-agy-bin-')))
+  w.defer(() => rmSync(w.iAgyBin!, { recursive: true, force: true }))
+  symlinkSync(realAgy(), join(w.iAgyBin, process.platform === 'win32' ? 'agy.exe' : 'agy'))
+}
+
+/**
+ * Antigravity CLI's OWN cli against the redirected HOME — the other side
+ * for agy: it reads `~/.gemini/config/mcp_config.json` under HOME (checked
+ * 2026-11-08, agy 1.5.3: an `agy mcp list` under a temporary HOME lists that
+ * HOME's servers and writes nothing), and `agy mcp list` calls no model.
+ */
+export function agyCli(w: InstallWorld, args: string[]): CliRun {
+  const r = spawnSync(realAgy(), args, { env: sandboxedSpawnEnv(w.ihome!), cwd: w.iproj ?? w.ihome!, encoding: 'utf8', timeout: 120_000 })
+  const stdout = r.stdout ?? ''
+  const stderr = r.stderr ?? ''
+  return { status: r.status, stdout, stderr, out: `${stdout}\n${stderr}` }
+}
+
+/** One server as `agy mcp list` prints it. */
+export interface AgyListed { name: string; type: string; status: string; command: string }
+
+/** Antigravity CLI's own listing of its MCP servers, parsed from its table. */
+export function agyMcpList(w: InstallWorld): { servers: AgyListed[]; run: CliRun } {
+  const run = agyCli(w, ['mcp', 'list'])
+  expect(run.status, `agy could not list its MCP servers:\n${run.out}`).toBe(0)
+  const lines = run.stdout.split('\n').filter(l => l.trim() !== '')
+  // agy's own words for an empty configuration (1.5.3).
+  if (lines.length === 1 && lines[0]!.trim() === 'No MCP servers configured.') return { servers: [], run }
+  const head = lines.findIndex(l => /^NAME\s+TYPE\s+STATUS\s+COMMAND\/URL/.test(l))
+  expect(head, `agy printed no server table:\n${run.out}`).toBeGreaterThanOrEqual(0)
+  const servers = lines.slice(head + 1).map((l) => {
+    const m = /^(\S+)\s+(\S+)\s+(\S+)\s+(.*)$/.exec(l)
+    expect(m, `a row of agy's table did not read as name, type, status and command: ${l}`).not.toBeNull()
+    return { name: m![1]!, type: m![2]!, status: m![3]!, command: m![4]!.trim() }
+  })
+  return { servers, run }
 }
 
 /** A stand-in `codex` (./standins.ts) on the CLI's PATH, answering by its plan; called again, it replaces the plan. */

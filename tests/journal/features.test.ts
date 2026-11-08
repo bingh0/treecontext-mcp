@@ -181,8 +181,8 @@ runFeatures(join(HERE, '../../features'), {
     // Both halves bind, and the file has no open scenario.
     // journal-workers left the whole-feature register 2026-11-01 (unit 4).
     // The parent outline's Antigravity row is unbound: this build writes no
-    // hooks for Antigravity (an archived-build platform, MCP config only),
-    // so no hook of its can register a parent, and standing it in with
+    // hooks for Antigravity CLI (a tools-only client since D383, its hooks
+    // fenced), so no hook of its can register a parent, and standing it in with
     // another CLI's hook would bind the row against something it does not
     // name. Its Claude Code and Codex rows bind; the outline is held open
     // here by its title until the owner rules on the Antigravity row.
@@ -209,33 +209,12 @@ runFeatures(join(HERE, '../../features'), {
     // orientation, unit 6 documentation). Scenario-scoped so the rest of
     // each file keeps gating. The reworded scenarios' old step definitions
     // were deleted with no consumer left; their units rebind them.
-    {
-      feature: 'journal-install',
-      scenarios: [
-        // Unit 1 bound D385 and D386 (2026-11-07). The D386 outline's
-        // Antigravity CLI row waits on unit 3 (D383): this build has no
-        // agent entry for Antigravity CLI, so "Antigravity CLI is
-        // installed" is left unbound and the outline, whose other rows
-        // bind and run, is held open here by its title.
-        'the server runs in capture mode for <agent> only where its capture hooks are installed',
-        // Unit 2 bound D381 and D390 for Codex CLI and Claude Code
-        // (2026-11-08), the version floor at 0.166.0, the oldest Codex shown
-        // to read per-tool approvals. Held open: the install
-        // message and the `--no-tool-approvals` scenario, whose Given names
-        // Antigravity CLI installed, which this build has no agent entry
-        // for (unit 3, D383); and the off-and-on outline, whose Antigravity
-        // CLI row waits on unit 3 and whose other rows bind and run.
-        'install says what it approved, what still asks, and the way back',
-        'turning tool approvals off and on again in <client> touches only what install wrote',
-        'an install told not to approve writes no approval, and a later install keeps it that way',
-        // Unit 3: D383 (Antigravity CLI as a tools-only client; the
-        // @D51 uninstall scenario reworded for the permission rules).
-        'uninstall removes everything install wrote and nothing else',
-        'install wires Antigravity CLI for the tools and lets a headless agy worker use the four that read and write',
-        'a directory Gemini CLI and Antigravity CLI share is not read as both',
-        'a permission rule the developer wrote for Antigravity CLI survives install and uninstall',
-      ],
-    },
+    // journal-install left the register 2026-11-08 with unit 3 (D383):
+    // unit 1 bound D385 and D386, unit 2 D381 and D390 for Codex CLI and
+    // Claude Code, and unit 3 Antigravity CLI, the rows of the D386 and
+    // off-and-on outlines that named it, the install message and the
+    // `--no-tool-approvals` scenario whose Given names it, and the @D51
+    // uninstall scenario reworded for the permission rules.
     {
       feature: 'journal-agent-surface',
       scenarios: [
@@ -251,16 +230,10 @@ runFeatures(join(HERE, '../../features'), {
     {
       feature: 'journal-clients',
       scenarios: [
-        // Unit 3: D383 (the D161 outline gained an Antigravity CLI row;
-        // its other rows stay bound and are held open with it by title)
-        // and D387's Antigravity CLI row.
-        'doctor reports <client> as a client that <mode>',
-        "doctor's row for Antigravity CLI says whether a headless agy worker can use the tools, when <state>",
-        // Unit 2 bound D387's Codex rows and D390's off state for Claude
-        // Code and Codex CLI (2026-11-08). The off-state outline's
-        // Antigravity CLI row waits on unit 3 (D383), and the outline,
-        // whose other rows bind and run, is held open here by its title.
-        "doctor's row for <client> shows tool approvals turned off as the developer's choice",
+        // Unit 3 bound D383's row of the D161 outline, D387's Antigravity
+        // CLI row and the off-state outline's Antigravity CLI row
+        // (2026-11-08); unit 2 bound D387's Codex rows and D390's off state
+        // for Claude Code and Codex CLI.
         // Unit 6: D388 (the README's headless-workers section and the
         // matrices' permission modes), bound once the dogfood has run.
         'a cell verified live says under which permissions its run was made',

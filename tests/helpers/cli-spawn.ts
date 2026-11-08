@@ -17,6 +17,9 @@
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { createRequire } from 'node:module'
+import { existsSync, mkdtempSync, readdirSync, rmSync, symlinkSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { delimiter, join } from 'node:path'
 import { sandboxedEnv } from './home.js'
 
 /** The tsx loader spelling every child here boots under — module-private,
@@ -77,8 +80,60 @@ export const LEAK_KEYS = [
   'CODEX_HOME',
 ]
 
+/**
+ * Commands whose presence on PATH install reads as a client being installed
+ * (D383: Antigravity CLI by `agy`, Gemini CLI by `gemini`). The machine
+ * running the suite may have them; a sandboxed child must not see them, or
+ * every install world on that machine wires a client its scenario never
+ * named — the PATH twin of CLAUDE_CONFIG_DIR. A scenario that means one of
+ * them to be installed puts it on the child's PATH from a directory of its
+ * own, which this leaves alone.
+ */
+export const DETECTED_CLIENT_COMMANDS = ['agy', 'gemini'] as const
+
+const mirrors = new Map<string, string | null>()
+let mirrorRoot: string | null = null
+
+/** A directory of the machine's PATH holding a detected client, mirrored without it (null on Windows: left out). */
+function mirrorWithoutClients(dir: string): string | null {
+  const cached = mirrors.get(dir)
+  if (cached !== undefined) return cached
+  let mirror: string | null = null
+  if (process.platform !== 'win32') {
+    if (!mirrorRoot) {
+      mirrorRoot = mkdtempSync(join(tmpdir(), 'tc-path-mirror-'))
+      const root = mirrorRoot
+      process.once('exit', () => { try { rmSync(root, { recursive: true, force: true }) } catch { /* best effort */ } })
+    }
+    mirror = mkdtempSync(join(mirrorRoot, 'd-'))
+    for (const name of readdirSync(dir)) {
+      if ((DETECTED_CLIENT_COMMANDS as readonly string[]).includes(name)) continue
+      try { symlinkSync(join(dir, name), join(mirror, name)) } catch { /* a name that cannot be linked is not a command we need */ }
+    }
+  }
+  mirrors.set(dir, mirror)
+  return mirror
+}
+
+function holdsClient(dir: string): boolean {
+  const exts = process.platform === 'win32' ? ['.exe', '.cmd', '.bat', '.ps1', ''] : ['']
+  return DETECTED_CLIENT_COMMANDS.some(c => exts.some(e => existsSync(join(dir, `${c}${e}`))))
+}
+
+/** A PATH whose directories from this machine's own PATH show no detected client command. */
+export function pathHidingMachineClients(path: string | undefined): string | undefined {
+  if (path === undefined) return undefined
+  const ambient = new Set((process.env['PATH'] ?? '').split(delimiter).filter(Boolean))
+  return path.split(delimiter).flatMap((d) => {
+    if (!d || !ambient.has(d) || !holdsClient(d)) return [d]
+    const m = mirrorWithoutClients(d)
+    return m ? [m] : []
+  }).join(delimiter)
+}
+
 /** Child-process env: home sandboxed, every leak key scrubbed, overrides
- *  applied last (an override is a deliberate re-add, so it wins). */
+ *  applied last (an override is a deliberate re-add, so it wins), and the
+ *  machine's own detected client commands hidden from PATH. */
 export function sandboxedSpawnEnv(
   home: string,
   overrides: Record<string, string | undefined> = {},
@@ -86,6 +141,8 @@ export function sandboxedSpawnEnv(
   const env: Record<string, string | undefined> = sandboxedEnv(home)
   for (const k of LEAK_KEYS) delete env[k]
   Object.assign(env, overrides)
+  const pathKey = Object.keys(env).find(k => k.toUpperCase() === 'PATH') ?? 'PATH'
+  env[pathKey] = pathHidingMachineClients(env[pathKey])
   return env
 }
 

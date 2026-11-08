@@ -9,10 +9,10 @@ import { nodeTsArgs, sandboxedSpawnEnv } from '../../helpers/cli-spawn.js'
 import { parseToolResult } from '../../helpers/mcp-result.js'
 import { DatabaseSync } from 'node:sqlite'
 import { launcherCliPath } from '../../../src/server/installer.js'
-import { getAgent, getHookSettingsPath } from '../../../src/server/agents.js'
+import { agyHooksPath, getAgent, getHookSettingsPath } from '../../../src/server/agents.js'
 import { decodeContent } from '../../../src/persistence/content-codec.js'
 import { TS_ROOT } from '../proc.js'
-import { type InstallWorld, tcCli, openInstallWorld, agentConfigPath, mcpLauncherIn, setFakeCodex, pathWithoutCodex } from '../install-harness.js'
+import { type InstallWorld, tcCli, openInstallWorld, agentConfigPath, mcpLauncherIn, setFakeCodex, pathWithoutCodex, putAgyOnPath, agyMcpList } from '../install-harness.js'
 import { CODEX_APPROVALS_FLOOR } from '../../../src/server/codex-client.js'
 import { parse as parseToml, stringify as stringifyToml } from 'smol-toml'
 
@@ -71,8 +71,8 @@ interface DoctorClause {
   fix: string | null
 }
 
-/** The six clients ruled to stand (D104); the matrix carries one row each. */
-const DOCUMENTED_CLIENTS = ['Claude Code', 'Codex CLI', 'Gemini CLI', 'VS Code', 'Cursor', 'OpenCode']
+/** The six clients ruled to stand (D104), and Antigravity CLI since D383; the matrix carries one row each. */
+const DOCUMENTED_CLIENTS = ['Claude Code', 'Codex CLI', 'Gemini CLI', 'VS Code', 'Cursor', 'OpenCode', 'Antigravity CLI']
 const STATUSES = ['verified live', 'documented only']
 
 /** A markdown cell as read: emphasis and code ticks are presentation. */
@@ -169,6 +169,7 @@ function ownedHookCommands(path: string): string[] {
  */
 const CLIENT_SLUG: Record<string, string> = {
   'Codex CLI': 'codex', 'Gemini CLI': 'gemini', 'VS Code': 'vscode', 'Cursor': 'cursor', 'OpenCode': 'opencode',
+  'Antigravity CLI': 'agy',
 }
 const MODE_FAMILY: Record<string, RegExp[]> = {
   'Codex CLI': [/copies the hooks into its own configuration/],
@@ -176,6 +177,7 @@ const MODE_FAMILY: Record<string, RegExp[]> = {
   'VS Code': [/reads the Claude settings file\b.*\bwhen\b/, /chat\.useClaudeHooks/],
   'Cursor': [/reads the Claude settings file\b.*\bby default\b/],
   'OpenCode': [/no shell hooks/, /tools are its whole surface/],
+  'Antigravity CLI': [/keeps its own hook configuration, which install leaves alone/, /tools are its whole surface/, /nothing is captured/],
 }
 
 /**
@@ -197,6 +199,8 @@ function clientDir(slug: string, home: string): string {
 
 /** The client's own hook configuration file, where it has one. */
 function clientHookFile(slug: string, home: string): string | null {
+  // Antigravity CLI's own hooks, which install never writes (D383).
+  if (slug === 'agy') return reroot(agyHooksPath(), home)
   const real = getHookSettingsPath(getAgent(slug)!)
   return real ? reroot(real, home) : null
 }
@@ -312,7 +316,7 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
       // binding by the ruling's own design (D153: documented, not tested).
       expect(r.docs, `${r.client}: no date or release of the documentation checked`)
         .toMatch(/\b\d{4}-\d{2}-\d{2}\b|\brelease \d/)
-      expect(r.mode, `${r.client}: no mode`).toMatch(/reads the Claude settings file|copies the hooks into its own|no shell hooks/)
+      expect(r.mode, `${r.client}: no mode`).toMatch(/reads the Claude settings file|copies the hooks into its own|no shell hooks|keeps its own hook configuration/)
       // One status: the cell is exactly one of the two, never both, never a
       // test result the row does not have.
       expect(STATUSES, `${r.client}: status "${r.status}" is not one status`).toContain(r.status)
@@ -340,7 +344,7 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
     // this table only).
     const compatRows = parseMatrix(w.readme!)
     expect(compatRows).toHaveLength(DOCUMENTED_CLIENTS.length)
-    for (const r of compatRows) expect(DOCUMENTED_CLIENTS.some(c => r.client.startsWith(c)), `a compatibility row outside the six: ${r.client}`).toBe(true)
+    for (const r of compatRows) expect(DOCUMENTED_CLIENTS.some(c => r.client.startsWith(c)), `a compatibility row outside the documented clients: ${r.client}`).toBe(true)
     expect(m.rows.map(r => r.client)).toEqual(['Claude Code', 'Codex CLI', 'Antigravity CLI'])
     // One column per role: each names a role of the beta.3 cut, and the
     // six roles the ruling names are all there.
@@ -501,12 +505,22 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
   // Claude Code block written by the real installer, VS Code's own
   // settings.json in the JSON-with-comments form VS Code writes, then a
   // tools-only install and doctor read off its own stdout.
-  const CLIENT_RE = '(Codex CLI|Gemini CLI|VS Code|Cursor|OpenCode)'
+  const CLIENT_RE = '(Codex CLI|Gemini CLI|VS Code|Cursor|OpenCode|Antigravity CLI)'
+  /** Antigravity CLI's own hook configuration, a hook of the developer's in it (D383: install leaves it alone). */
+  const AGY_DEVELOPER_HOOKS = JSON.stringify({ hooks: { PreToolUse: [{ matcher: 'command', hooks: [{ type: 'command', command: '/usr/local/bin/audit-tool' }] }] } }, null, 2) + '\n'
   reg.define(new RegExp(`^${CLIENT_RE} is installed and its hook configuration holds no treecontext hooks$`), async (w: ClientsWorld, ...captures) => {
     const [client] = captures as string[]
     w.clientName = client!
     await openInstallWorld(w, [])
     mkdirSync(clientDir(CLIENT_SLUG[client!]!, w.ihome!), { recursive: true })
+    if (client === 'Antigravity CLI') {
+      // The real `agy` on the CLI's PATH, and its own hook file holding a
+      // hook of the developer's and none of treecontext's.
+      putAgyOnPath(w)
+      const hooks = clientHookFile('agy', w.ihome!)!
+      mkdirSync(join(hooks, '..'), { recursive: true })
+      writeFileSync(hooks, AGY_DEVELOPER_HOOKS)
+    }
     expect(treecontextHookMentions(clientHookFile(CLIENT_SLUG[client!]!, w.ihome!))).toEqual([])
   })
   reg.define(/^the Claude Code hooks block is installed and VS Code's Claude-hooks setting is off$/, (w: ClientsWorld) => {
@@ -531,8 +545,12 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
     w.irun = tcCli(w, ['install', '--yes'])
     expect(w.irun.status, w.irun.out).toBe(0)
     expect(w.irun.out, `install did not detect ${w.clientName}`).toMatch(new RegExp(`Detected agents:.*${w.clientName}`))
-    // Said in so many words for every client with hooks to skip.
-    if (w.clientName !== 'OpenCode') {
+    // Said in so many words for every client with hooks to skip; agy's
+    // hooks are its own, and install says it leaves them alone (D383).
+    if (w.clientName === 'Antigravity CLI') {
+      expect(w.irun.out).toContain(`hooks: none — Antigravity CLI keeps its own hook configuration (${clientHookFile('agy', w.ihome!)}), which install leaves alone; the MCP tools are its whole surface`)
+      expect(readFileSync(clientHookFile('agy', w.ihome!)!, 'utf8'), "install touched agy's own hook file").toBe(AGY_DEVELOPER_HOOKS)
+    } else if (w.clientName !== 'OpenCode') {
       expect(w.irun.out).toContain(`hooks: skipped — automatic capture is unverified on ${w.clientName}`)
     }
     // The client's own hook configuration still holds nothing of ours: the
@@ -579,6 +597,7 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
       'VS Code': new RegExp(`^chat\\.useClaudeHooks is off in ${vscodeSettings(w.ihome!).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} and the Claude Code hooks block is installed$`),
       'Cursor': /^the Claude Code hooks block is installed — Cursor reads it \(capture unverified\)$/,
       'OpenCode': /^no hooks to install — MCP tools only \(nothing is captured\)$/,
+      'Antigravity CLI': new RegExp(`^no treecontext hooks in ${home}[\\\\/]\\.gemini[\\\\/]config[\\\\/]hooks\\.json — MCP tools only \\(nothing is captured\\)$`),
     }
     expect(c.state).toMatch(expected[w.clientName!]!)
     // Tools only is the correct state without the opt-in, so the row is not
@@ -719,7 +738,7 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
   // warning row's fix line is that remedy.
   const codexFile = (w: ClientsWorld): string => agentConfigPath('codex', w.ihome!)
   /** Doctor's row for a client, its status, its headless or approvals clause and that clause's remedy, and its fix line. */
-  const approvalRow = (w: ClientsWorld, client: 'Claude Code' | 'Codex CLI', fresh = true): ApprovalRowRead => {
+  const approvalRow = (w: ClientsWorld, client: 'Claude Code' | 'Codex CLI' | 'Antigravity CLI', fresh = true): ApprovalRowRead => {
     if (fresh || w.doctorOut === undefined) {
       const run = tcCli(w, ['doctor'])
       expect(run.status, run.out).toBe(0)
@@ -730,7 +749,7 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
     const i = lines.findIndex(l => new RegExp(`^\\[(ok|warn|err)\\]\\s+${client}:`).test(l))
     expect(i, `doctor printed no ${client} row:\n${out}`).toBeGreaterThanOrEqual(0)
     const row = lines[i]!
-    const label = client === 'Codex CLI' ? 'headless workers' : 'tool approvals'
+    const label = client === 'Claude Code' ? 'tool approvals' : 'headless workers'
     const m = new RegExp(`${label}: (.+?); remedy: (.+?)(?:, the client .*)?$`).exec(row)
     expect(m, `doctor's ${client} row says nothing about headless workers:\n${row}`).not.toBeNull()
     const fix = /^\s+fix: (.+)$/.exec(lines[i + 1] ?? '')?.[1] ?? null
@@ -922,17 +941,18 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
   })
 
   // ── the off state, a choice (D390, D387) ────────────────────────────
-  reg.define(/^(Claude Code|Codex CLI) wired by install, and tool approvals turned off with `treecontext config tool-approvals off`$/, async (w: ClientsWorld, ...captures) => {
+  reg.define(/^(Claude Code|Codex CLI|Antigravity CLI) wired by install, and tool approvals turned off with `treecontext config tool-approvals off`$/, async (w: ClientsWorld, ...captures) => {
     const [client] = captures as string[]
     w.clientName = client!
     await openInstallWorld(w, client === 'Codex CLI' ? ['.claude', '.codex'] : ['.claude'])
+    if (client === 'Antigravity CLI') putAgyOnPath(w)
     expect(tcCli(w, ['install', '--yes']).status).toBe(0)
     const off = tcCli(w, ['config', 'tool-approvals', 'off'])
     expect(off.status, off.out).toBe(0)
   })
-  reg.define(/^the developer sees doctor's row for (Claude Code|Codex CLI) say tool approvals are off by the developer's choice and that headless workers will be refused the four tools$/, (w: ClientsWorld, ...captures) => {
+  reg.define(/^the developer sees doctor's row for (Claude Code|Codex CLI|Antigravity CLI) say tool approvals are off by the developer's choice and that headless workers will be refused the four tools$/, (w: ClientsWorld, ...captures) => {
     const [client] = captures as string[]
-    const r = approvalRow(w, client as 'Claude Code' | 'Codex CLI', false)
+    const r = approvalRow(w, client as 'Claude Code' | 'Codex CLI' | 'Antigravity CLI', false)
     w.approval = r
     expect(r.clause).toMatch(/\boff by your choice \(treecontext config tool-approvals off or install --no-tool-approvals\), so headless workers will be refused status, query, export and insert\b/)
   })
@@ -948,10 +968,104 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
     expect(r.remedy).toBe('treecontext config tool-approvals on')
     // Run as printed, the approvals are back and the row reads ready.
     runNamedCommand(w, r.remedy)
-    const after = approvalRow(w, w.clientName as 'Claude Code' | 'Codex CLI')
+    const after = approvalRow(w, w.clientName as 'Claude Code' | 'Codex CLI' | 'Antigravity CLI')
     expect(after.status, after.row).toBe('ok')
     // step-lint: allow unearned-absence -- the Then before this one in the same scenario asserts "off by your choice" present in this clause before the remedy ran
     expect(after.clause).not.toMatch(/off by your choice/)
-    expect(after.clause).toMatch(w.clientName === 'Codex CLI' ? /^can use the tools — / : /^status, query, export and insert allowed in /)
+    expect(after.clause).toMatch(w.clientName === 'Codex CLI' ? /^can use the tools — / : w.clientName === 'Antigravity CLI' ? /^an `agy -p` worker can use status, query, export and insert, status, query, export and insert allowed in / : /^status, query, export and insert allowed in /)
+  })
+
+  // ── doctor's row for Antigravity CLI (D387, D383) ───────────────────
+  //
+  // A real install and a real doctor under a redirected HOME with the real
+  // `agy` on the CLI's PATH; the written files are edited the way the Given
+  // says, and agy's own `agy mcp list` confirms the MCP half of each state
+  // from the other side. agy prints no permission rules, so the rule half is
+  // the file agy reads, ~/.gemini/antigravity-cli/settings.json, edited as a
+  // developer edits it. Each row's status is read with its words.
+  const agySettingsFile = (w: ClientsWorld): string => join(w.ihome!, '.gemini', 'antigravity-cli', 'settings.json')
+  const editAgySettings = (w: ClientsWorld, edit: (perms: Record<string, unknown[]>) => void): void => {
+    const data = JSON.parse(readFileSync(agySettingsFile(w), 'utf8')) as Record<string, unknown>
+    const perms = (data['permissions'] ?? {}) as Record<string, unknown[]>
+    edit(perms)
+    data['permissions'] = perms
+    writeFileSync(agySettingsFile(w), JSON.stringify(data, null, 2) + '\n')
+  }
+  const AGY_INSERT = 'mcp(treecontext/treecontext_insert)'
+  const AGY_STATES: Record<string, (w: ClientsWorld) => void> = {
+    'install has wired it': (w) => {
+      expect(agyMcpList(w).servers.find(s => s.name === 'treecontext')?.status).toBe('enabled')
+    },
+    'its MCP configuration holds no treecontext server': (w) => {
+      const path = agentConfigPath('agy', w.ihome!)
+      const data = JSON.parse(readFileSync(path, 'utf8')) as { mcpServers: Record<string, unknown> }
+      delete data.mcpServers['treecontext']
+      data.mcpServers['github'] = { command: 'github-mcp' }
+      writeFileSync(path, JSON.stringify(data, null, 2) + '\n')
+      // agy itself now lists no treecontext server.
+      expect(agyMcpList(w).servers.map(s => s.name)).toEqual(['github'])
+    },
+    'the allow rule for treecontext_insert is missing': (w) => editAgySettings(w, (p) => {
+      p['allow'] = (p['allow'] ?? []).filter(r => r !== AGY_INSERT)
+    }),
+    "the developer's ask rule stands over treecontext_insert": (w) => editAgySettings(w, (p) => { p['ask'] = [AGY_INSERT] }),
+  }
+  reg.define(/^Antigravity CLI is installed and (install has wired it|its MCP configuration holds no treecontext server|the allow rule for treecontext_insert is missing|the developer's ask rule stands over treecontext_insert)$/, async (w: ClientsWorld, ...captures) => {
+    const [state] = captures as string[]
+    w.clientName = 'Antigravity CLI'
+    await openInstallWorld(w, [])
+    putAgyOnPath(w)
+    const run = tcCli(w, ['install', '--yes'])
+    expect(run.status, run.out).toBe(0)
+    expect(run.out).toMatch(/^Detected agents: .*Antigravity CLI/m)
+    AGY_STATES[state!]!(w)
+  })
+  reg.define(/^the developer sees doctor's row for Antigravity CLI (read that the tools are its whole surface and headless workers can use the four tools|warn that agy has no treecontext tools|warn that an `agy -p` worker would be refused treecontext_insert|warn that an `agy -p` worker would be refused treecontext_insert, naming the developer's rule and its file)$/, (w: ClientsWorld, ...captures) => {
+    const [say] = captures as string[]
+    // `the developer runs doctor` read the D161 halves; this reads the headless clause of the same report.
+    const r = approvalRow(w, 'Antigravity CLI', false)
+    w.approval = r
+    const file = agySettingsFile(w).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    switch (say) {
+      case 'read that the tools are its whole surface and headless workers can use the four tools':
+        expect(r.status, r.row).toBe('ok')
+        expect(w.clause!.mode).toMatch(/so the tools are its whole surface/)
+        expect(r.clause).toMatch(new RegExp(`^an \`agy -p\` worker can use status, query, export and insert, status, query, export and insert allowed in ${file}$`))
+        break
+      case 'warn that agy has no treecontext tools':
+        expect(r.status, r.row).toBe('warn')
+        expect(r.clause).toBe(`agy has no treecontext tools — ${agentConfigPath('agy', w.ihome!)} holds no treecontext server`)
+        break
+      case 'warn that an `agy -p` worker would be refused treecontext_insert':
+        expect(r.status, r.row).toBe('warn')
+        expect(r.clause).toMatch(new RegExp(`^an \`agy -p\` worker would be refused treecontext_insert — insert is not allowed in ${file}$`))
+        break
+      default:
+        expect(r.status, r.row).toBe('warn')
+        expect(r.clause).toMatch(new RegExp(`^an \`agy -p\` worker would be refused treecontext_insert — insert refused by your ask rule mcp\\(treecontext/treecontext_insert\\) in ${file}$`))
+    }
+  })
+  reg.define(/^the row names (`treecontext install --agent agy`|that rule, the developer's to change) as the remedy$/, (w: ClientsWorld, ...captures) => {
+    const [remedy] = captures as string[]
+    const r = w.approval!
+    if (remedy === '`treecontext install --agent agy`') {
+      expect(r.remedy).toBe('treecontext install --agent agy')
+      expect(r.fix).toBe('treecontext install --agent agy')
+      // The remedy does what it says: run as printed, the row reads ready,
+      // and agy lists the server again.
+      runNamedCommand(w, r.fix!)
+      const after = approvalRow(w, 'Antigravity CLI')
+      expect(after.status, after.row).toBe('ok')
+      expect(after.clause).toMatch(/^an `agy -p` worker can use status, query, export and insert, /)
+      expect(agyMcpList(w).servers.find(s => s.name === 'treecontext')?.status).toBe('enabled')
+      return
+    }
+    // The developer's rule, named with its file: install leaves it, so a
+    // plain install changes nothing about it.
+    const line = `your ask rule ${AGY_INSERT} in ${agySettingsFile(w)}, yours to change (install leaves it)`
+    expect(r.remedy).toBe(line)
+    expect(r.fix).toBe(line)
+    runNamedCommand(w, 'treecontext install --agent agy')
+    expect(approvalRow(w, 'Antigravity CLI').clause).toBe(r.clause)
   })
 }

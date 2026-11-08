@@ -15,9 +15,13 @@ import { readInstallState, updateInstallState, type InstallState, type ToolAppro
 // tool-approvals on`.
 //
 // The clients: Claude Code, whose grant is `mcp__treecontext__<tool>` in
-// `permissions.allow` of its settings.json, and Codex CLI, whose grant is
-// `tools.<tool>.approval_mode = "approve"` in its treecontext entry. Unit 3
-// adds Antigravity CLI's allow rules here, through the same record.
+// `permissions.allow` of its settings.json; Codex CLI, whose grant is
+// `tools.<tool>.approval_mode = "approve"` in its treecontext entry; and
+// Antigravity CLI (D383), whose grant is `mcp(treecontext/<tool>)` in
+// `permissions.allow` of `~/.gemini/antigravity-cli/settings.json`, ranked
+// as agy ranks its rules, deny over ask over allow. Claude Code and agy
+// share one shape, an allow list beside ask and deny lists, and differ
+// only in how a rule names a tool (a RuleDialect).
 
 /** The four tools a headless worker is approved for: they read and write the journal. */
 export const APPROVED_TOOLS = ['treecontext_status', 'treecontext_query', 'treecontext_export', 'treecontext_insert'] as const
@@ -25,9 +29,9 @@ export const APPROVED_TOOLS = ['treecontext_status', 'treecontext_query', 'treec
 export const ASKING_TOOLS = ['treecontext_clear', 'treecontext_delete', 'treecontext_import', 'treecontext_merge_from_agent'] as const
 
 /** The clients install writes approvals for, by slug. */
-export const APPROVAL_CLIENTS = ['claude', 'codex'] as const
+export const APPROVAL_CLIENTS = ['claude', 'codex', 'agy'] as const
 export type ApprovalClient = typeof APPROVAL_CLIENTS[number]
-export const APPROVAL_CLIENT_NAMES: Readonly<Record<ApprovalClient, string>> = { claude: 'Claude Code', codex: 'Codex CLI' }
+export const APPROVAL_CLIENT_NAMES: Readonly<Record<ApprovalClient, string>> = { claude: 'Claude Code', codex: 'Codex CLI', agy: 'Antigravity CLI' }
 
 export function isApprovalClient(slug: string): slug is ApprovalClient {
   return (APPROVAL_CLIENTS as readonly string[]).includes(slug)
@@ -128,7 +132,13 @@ export function recordWrittenApprovals(slug: ApprovalClient, file: string, items
   })
 }
 
-// ── Claude Code: `permissions.allow` in settings.json ──────────────────
+// ── Allow lists: Claude Code's settings.json and agy's ─────────────────
+
+/** How a client's permission rules name a tool: the rule install writes, and whether a rule covers a tool. */
+export interface RuleDialect {
+  rule(tool: string): string
+  covers(rule: string, tool: string): boolean
+}
 
 /** Claude Code's permission rule for one treecontext tool. */
 export function claudeRule(tool: string): string {
@@ -142,15 +152,47 @@ function claudeRuleCovers(rule: string, tool: string): boolean {
   return rule === claudeRule(tool) || CLAUDE_SERVER_RULES.has(rule)
 }
 
+export const CLAUDE_DIALECT: RuleDialect = { rule: claudeRule, covers: claudeRuleCovers }
+
+/** Antigravity CLI's permission rule for one treecontext tool (D383). */
+export function agyRule(tool: string): string {
+  return `mcp(treecontext/${tool})`
+}
+
+/** A target part of an agy rule, `*` matching anything, read against a name. */
+function agyPartMatches(pattern: string, name: string): boolean {
+  if (!pattern.includes('*')) return pattern === name
+  const re = new RegExp(`^${pattern.split('*').map(p => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*')}$`)
+  return re.test(name)
+}
+
+/**
+ * Whether an agy rule decides a treecontext tool: `mcp(treecontext/<tool>)`,
+ * `mcp(treecontext/*)` and `mcp(*)` as agy's documentation gives them, and
+ * any `*` pattern in the server or tool part read the same way, so a rule
+ * of the developer's that would cover the tool is never written beside.
+ */
+export function agyRuleCovers(rule: string, tool: string): boolean {
+  const m = /^\s*mcp\s*\(\s*(.*?)\s*\)\s*$/.exec(rule)
+  if (!m) return false
+  const target = m[1]!
+  if (target === '*') return true
+  const slash = target.indexOf('/')
+  if (slash < 0) return agyPartMatches(target, 'treecontext')
+  return agyPartMatches(target.slice(0, slash), 'treecontext') && agyPartMatches(target.slice(slash + 1), tool)
+}
+
+export const AGY_DIALECT: RuleDialect = { rule: agyRule, covers: agyRuleCovers }
+
 /** A rule of the developer's that decides a tool, and the list it is in. */
 export interface DeveloperRule { list: 'allow' | 'ask' | 'deny'; rule: string }
 
 /**
  * The developer's rule that governs a tool in a settings object, read the
- * way Claude Code ranks them: deny over ask over allow. Rules install wrote
- * (`ours`) are not the developer's.
+ * way Claude Code and agy rank them: deny over ask over allow. Rules install
+ * wrote (`ours`) are not the developer's.
  */
-export function claudeGoverningRule(data: Record<string, unknown>, tool: string, ours: ReadonlySet<string>): DeveloperRule | null {
+export function governingRule(data: Record<string, unknown>, tool: string, ours: ReadonlySet<string>, dialect: RuleDialect): DeveloperRule | null {
   const perms = data['permissions']
   if (!isObject(perms)) return null
   for (const list of ['deny', 'ask', 'allow'] as const) {
@@ -159,10 +201,15 @@ export function claudeGoverningRule(data: Record<string, unknown>, tool: string,
     for (const r of rules) {
       if (typeof r !== 'string') continue
       if (list === 'allow' && ours.has(r)) continue
-      if (claudeRuleCovers(r, tool)) return { list, rule: r }
+      if (dialect.covers(r, tool)) return { list, rule: r }
     }
   }
   return null
+}
+
+/** Claude Code's governing rule (governingRule in Claude Code's dialect). */
+export function claudeGoverningRule(data: Record<string, unknown>, tool: string, ours: ReadonlySet<string>): DeveloperRule | null {
+  return governingRule(data, tool, ours, CLAUDE_DIALECT)
 }
 
 export interface ClaudeApprovalMerge {
@@ -176,16 +223,17 @@ export interface ClaudeApprovalMerge {
   created: string[]
   /** The four tools each held by a rule of the developer's, left alone. */
   developer: Array<{ tool: string; rule: DeveloperRule }>
-  /** `permissions` or `permissions.allow` is not what Claude Code reads, so nothing was added. */
+  /** `permissions` or `permissions.allow` is not what the client reads, so nothing was added. */
   unwritable?: string
 }
 
 /**
- * Add Claude Code's allow rule for each of the four tools where no rule of
+ * Add the client's allow rule for each of the four tools where no rule of
  * the developer's (allow, ask or deny, for the tool or the whole server)
  * decides it, and nothing else. `recorded` is what install wrote before.
+ * Every other key of the file stays as it is.
  */
-export function withClaudeApprovals(data: Record<string, unknown>, recorded: WrittenApprovals | undefined): ClaudeApprovalMerge {
+export function withAllowRules(data: Record<string, unknown>, recorded: WrittenApprovals | undefined, dialect: RuleDialect): ClaudeApprovalMerge {
   const oursBefore = new Set(recorded?.items ?? [])
   const created = new Set(recorded?.created ?? [])
   const perms = data['permissions']
@@ -202,9 +250,9 @@ export function withClaudeApprovals(data: Record<string, unknown>, recorded: Wri
   const added: string[] = []
   const developer: ClaudeApprovalMerge['developer'] = []
   for (const tool of APPROVED_TOOLS) {
-    const theirs = claudeGoverningRule(data, tool, new Set(ours))
+    const theirs = governingRule(data, tool, new Set(ours), dialect)
     if (theirs) { developer.push({ tool, rule: theirs }); continue }
-    const rule = claudeRule(tool)
+    const rule = dialect.rule(tool)
     if (ours.includes(rule)) continue
     added.push(rule)
   }
@@ -217,10 +265,16 @@ export function withClaudeApprovals(data: Record<string, unknown>, recorded: Wri
   return { data: { ...data, permissions: nextPerms }, added, ours: [...ours, ...added], created: [...created], developer }
 }
 
+/** Claude Code's four allow rules merged into its settings (withAllowRules in Claude Code's dialect). */
+export function withClaudeApprovals(data: Record<string, unknown>, recorded: WrittenApprovals | undefined): ClaudeApprovalMerge {
+  return withAllowRules(data, recorded, CLAUDE_DIALECT)
+}
+
 /**
  * Take install's rules back out of a settings object: each rule the record
  * names, from `permissions.allow`, and the containers install created when
- * they are left empty. Every other rule and key stays as it is.
+ * they are left empty. Every other rule and key stays as it is. A rule the
+ * developer moved to another list is no longer install's to take.
  */
 export function withoutClaudeApprovals(data: Record<string, unknown>, recorded: WrittenApprovals): { data: Record<string, unknown> | null; removed: string[] } {
   const perms = data['permissions']
@@ -238,6 +292,9 @@ export function withoutClaudeApprovals(data: Record<string, unknown>, recorded: 
   else next['permissions'] = nextPerms
   return { data: next, removed }
 }
+
+/** The same take-back for agy's settings: the record decides, the shape is the same. */
+export const withoutAllowRules = withoutClaudeApprovals
 
 // ── Codex CLI: per-tool approvals in the treecontext entry ─────────────
 
@@ -364,11 +421,21 @@ export type ToolDecision =
 /** Each of the eight tools, and what decides it. */
 export type ClientView = Record<string, ToolDecision>
 
-/** One settings file Claude Code reads, as read: its data (null when it cannot be read) and what install recorded writing there. */
+/** One settings file a client reads, as read: its data (null when it cannot be read) and what install recorded writing there. */
 export interface ClaudeSettingsSource { file: string; data: Record<string, unknown> | null; recorded?: WrittenApprovals }
 
-/** Claude Code's view across its settings files: deny anywhere over ask anywhere over allow (theirs, then install's). */
+/** Claude Code's view across its settings files (allowListView in Claude Code's dialect). */
 export function claudeView(sources: readonly ClaudeSettingsSource[]): ClientView {
+  return allowListView(sources, CLAUDE_DIALECT)
+}
+
+/** Antigravity CLI's view across its global settings and the project file that applies (allowListView in agy's dialect). */
+export function agyView(sources: readonly ClaudeSettingsSource[]): ClientView {
+  return allowListView(sources, AGY_DIALECT)
+}
+
+/** A client's view across its settings files: deny anywhere over ask anywhere over allow (theirs, then install's). */
+export function allowListView(sources: readonly ClaudeSettingsSource[], dialect: RuleDialect): ClientView {
   const view: ClientView = {}
   for (const tool of ALL_TOOLS) {
     const found: Record<'deny' | 'ask' | 'allow' | 'ours', { rule: string; file: string } | undefined> = { deny: undefined, ask: undefined, allow: undefined, ours: undefined }
@@ -380,7 +447,7 @@ export function claudeView(sources: readonly ClaudeSettingsSource[]): ClientView
         const rules = perms[list]
         if (!Array.isArray(rules)) continue
         for (const r of rules) {
-          if (typeof r !== 'string' || !claudeRuleCovers(r, tool)) continue
+          if (typeof r !== 'string' || !dialect.covers(r, tool)) continue
           const slot = list === 'allow' && ours.has(r) ? 'ours' : list
           found[slot] ??= { rule: r, file: src.file }
         }
@@ -608,4 +675,61 @@ export function codexHeadlessClause(args: {
   }
   const remedy = installFixes ? install : `${w.refusingRules.join(' and ')}, yours to change (install leaves it)`
   return { text: `${label}: ${problems.join('; ')}${alsoWords}${canAlso}${note}`, warn: true, remedy, fix: remedy }
+}
+
+// ── Antigravity CLI's row (D383, D387, D390) ───────────────────────────
+
+/** What agy's MCP configuration holds for treecontext, as doctor read it. */
+export type AgyEntryState =
+  | { state: 'present'; disabled: boolean }
+  | { state: 'absent' }
+  | { state: 'unreadable' }
+
+/**
+ * Antigravity CLI's headless clause: its MCP entry, the four allow rules
+ * across its global settings and the project file that applies here, and
+ * any ask or deny rule of the developer's over one of them, named with its
+ * file. An off the developer chose is a state, not a failure (D390).
+ */
+export function agyHeadlessClause(args: {
+  mcpPath: string; entry: AgyEntryState; view: ClientView; settingsFile: string
+  choice: ApprovalsChoice; unreadable: readonly string[]; unplaced: readonly string[]
+}): ApprovalClause {
+  const { mcpPath, entry, view, settingsFile, choice } = args
+  const label = 'headless workers'
+  const install = 'treecontext install --agent agy'
+  if (entry.state === 'absent') {
+    return { text: `${label}: agy has no treecontext tools — ${mcpPath} holds no treecontext server`, warn: true, remedy: install, fix: install }
+  }
+  if (entry.state === 'unreadable') {
+    const remedy = `fix ${mcpPath} so it parses as JSON, then ${install}`
+    return { text: `${label}: agy has no treecontext tools — ${mcpPath} does not parse, and agy refuses it`, warn: true, remedy, fix: remedy }
+  }
+  if (entry.disabled) {
+    const remedy = `your "disabled": true on the treecontext server in ${mcpPath}, yours to change (install leaves it): agy mcp enable treecontext`
+    return { text: `${label}: agy has no treecontext tools — the treecontext server is turned off ("disabled": true) in ${mcpPath}`, warn: true, remedy, fix: remedy }
+  }
+  const notes: string[] = []
+  if (args.unreadable.length > 0) notes.push(`${andList(args.unreadable)} could not be read as settings`)
+  if (args.unplaced.length > 0) notes.push(`${andList(args.unplaced)} ${args.unplaced.length === 1 ? 'holds' : 'hold'} permission rules for a project doctor cannot place, which agy may apply here`)
+  const tail = notes.length > 0 ? `; ${notes.join('; ')}` : ''
+  const w = viewWords(view)
+  if (choice.state === 'unknown') {
+    return { text: `${label}: tool approvals are ${unknownWords(choice.backup)}${tail}`, warn: true, remedy: TOOL_APPROVALS_ON_COMMAND, fix: TOOL_APPROVALS_ON_COMMAND }
+  }
+  if (choice.state === 'off') {
+    return { text: `${label}: tool approvals are ${offWords(w, "agy's default preset asks before each and an `agy -p` worker cannot be asked")}${tail}`, warn: false, remedy: TOOL_APPROVALS_ON_COMMAND }
+  }
+  if (w.refused.length === 0) {
+    const where = w.byInstall.length > 0 ? `, ${toolWords(w.byInstall)} allowed in ${settingsFile}` : ''
+    const theirs = w.developer.length > 0 ? `; ${w.developer.join('; ')}` : ''
+    const extra = ASKING_TOOLS.filter(t => view[t]!.by === 'developer' && (view[t] as { approves: boolean }).approves)
+    const canAlso = extra.length > 0 ? `, so a headless worker can also ${toolWords(extra)}` : ''
+    return { text: `${label}: an \`agy -p\` worker can use ${toolWords(APPROVED_TOOLS)}${where}${theirs}${canAlso}${tail}`, warn: notes.length > 0, remedy: NOTHING }
+  }
+  const why: string[] = []
+  if (w.unapproved.length > 0) why.push(`${toolWords(w.unapproved)} ${w.unapproved.length === 1 ? 'is' : 'are'} not allowed in ${settingsFile}`)
+  why.push(...w.developer.filter(d => / refused by /.test(d)))
+  const remedy = w.unapproved.length > 0 ? install : `${w.refusingRules.join(' and ')}, yours to change (install leaves it)`
+  return { text: `${label}: an \`agy -p\` worker would be refused ${andList(w.refused)} — ${why.join('; ')}${tail}`, warn: true, remedy, fix: remedy }
 }

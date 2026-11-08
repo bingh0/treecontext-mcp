@@ -6,9 +6,9 @@
  * instruction files should be installed.
  */
 
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -40,6 +40,8 @@ export interface AgentDefinition {
   configFormat: ConfigFormat
   /** Directories to check for detection (platform-keyed). */
   detectDirs: Partial<Record<Platform, string[]>>
+  /** Commands whose presence on PATH also means the agent is installed. */
+  detectCommands?: string[]
   /** MCP config file path (platform-keyed). */
   configPath: Partial<Record<Platform, string>>
   hooks?: HookDef
@@ -80,6 +82,31 @@ export function claudeLegacyMcpPath(): string {
   return join(home(), '.claude', '.mcp.json')
 }
 
+/** Antigravity CLI's own directory under `~/.gemini`, where its settings live. */
+export function agyDir(): string {
+  return join(home(), '.gemini', 'antigravity-cli')
+}
+
+/** The file Antigravity CLI reads its MCP servers from (`agy mcp add` writes it). */
+export function agyMcpConfigPath(): string {
+  return join(home(), '.gemini', 'config', 'mcp_config.json')
+}
+
+/** Antigravity CLI's global settings, whose `permissions` hold its allow, ask and deny rules. */
+export function agySettingsPath(): string {
+  return join(agyDir(), 'settings.json')
+}
+
+/** Where Antigravity CLI keeps its projects, each a JSON file of its own. */
+export function agyProjectsDir(): string {
+  return join(home(), '.gemini', 'config', 'projects')
+}
+
+/** Antigravity CLI's global hook configuration, which install leaves alone. */
+export function agyHooksPath(): string {
+  return join(home(), '.gemini', 'config', 'hooks.json')
+}
+
 // ── Agent definitions ──────────────────────────────────────────────
 
 export const AGENTS: AgentDefinition[] = [
@@ -112,6 +139,9 @@ export const AGENTS: AgentDefinition[] = [
     name: 'Gemini CLI',
     slug: 'gemini',
     configFormat: 'json-mcpServers',
+    // `~/.gemini` alone is Gemini CLI's only where Antigravity CLI has not
+    // made it its own too (geminiCliPresent, D383).
+    detectCommands: ['gemini'],
     detectDirs: {
       linux: [join(home(), '.gemini')],
       darwin: [join(home(), '.gemini')],
@@ -222,6 +252,37 @@ export const AGENTS: AgentDefinition[] = [
     },
   },
 
+  // Antigravity CLI (D383): a tools-only client. Its MCP entry is in
+  // `~/.gemini/config/mcp_config.json`, its permission rules in
+  // `~/.gemini/antigravity-cli/settings.json` (tool-approvals.ts), and its
+  // instruction block is the `~/.gemini/GEMINI.md` it shares with Gemini
+  // CLI. Install writes no hooks of its (fenced: its hooks stay its own).
+  // The slug is the command's; the archived Antigravity IDE keeps the
+  // `antigravity` slug in the uninstall sweep below.
+  {
+    name: 'Antigravity CLI',
+    slug: 'agy',
+    configFormat: 'json-mcpServers',
+    detectCommands: ['agy'],
+    detectDirs: {
+      linux: [agyDir()],
+      darwin: [agyDir()],
+      win32: [agyDir()],
+    },
+    configPath: {
+      linux: agyMcpConfigPath(),
+      darwin: agyMcpConfigPath(),
+      win32: agyMcpConfigPath(),
+    },
+    instructions: {
+      path: {
+        linux: join(home(), '.gemini', 'GEMINI.md'),
+        darwin: join(home(), '.gemini', 'GEMINI.md'),
+        win32: join(home(), '.gemini', 'GEMINI.md'),
+      },
+    },
+  },
+
   {
     name: 'OpenCode',
     slug: 'opencode',
@@ -245,7 +306,7 @@ export const AGENTS: AgentDefinition[] = [
     },
   },
 
-  // Archived-build platforms (windsurf, antigravity, jetbrains, qwen,
+  // Archived-build platforms (windsurf, the Antigravity IDE, jetbrains, qwen,
   // openclaw) were removed at the 0.1 charter cold-read (2026-08-12):
   // their adapter builds were retired with the tree era, no tester ever
   // ran one, and an MCP stub with no capture story reads as a promise
@@ -298,11 +359,58 @@ export function legacyMcpConfigs(platform?: Platform): Array<{ slug: string; pat
 
 // ── Detection ──────────────────────────────────────────────────────
 
+/** Whether a command resolves on PATH, read from the directories themselves (no shell is run). */
+export function commandOnPath(name: string, platform: Platform = process.platform as Platform): boolean {
+  const dirs = (process.env['PATH'] ?? '').split(delimiter).filter(Boolean)
+  const exts = platform === 'win32'
+    ? ['', ...(process.env['PATHEXT'] ?? '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean).map(e => e.toLowerCase())]
+    : ['']
+  for (const d of dirs) {
+    for (const e of exts) {
+      try {
+        const st = statSync(join(d, `${name}${e}`))
+        if (st.isFile() && (platform === 'win32' || (st.mode & 0o111) !== 0)) return true
+      } catch { /* not here */ }
+    }
+  }
+  return false
+}
+
+/**
+ * Whether Gemini CLI is installed (D383). Antigravity CLI keeps its own
+ * directories inside `~/.gemini` (`antigravity-cli`, `config`), so where
+ * one of them is there, the `~/.gemini` directory proves nothing about
+ * Gemini CLI: only its command on PATH, its credentials, or a
+ * `settings.json` holding a setting of Gemini CLI's own (anything but the
+ * MCP servers and hooks an install writes, or a server other than
+ * treecontext) does. Where neither of agy's directories is there, the
+ * directory is Gemini CLI's, as before.
+ */
+export function geminiCliPresent(platform: Platform = process.platform as Platform): boolean {
+  if (commandOnPath('gemini', platform)) return true
+  const dir = join(home(), '.gemini')
+  if (!existsSync(dir)) return false
+  const agyThere = existsSync(agyDir()) || existsSync(join(dir, 'config'))
+  if (!agyThere) return true
+  if (['oauth_creds.json', 'google_accounts.json'].some(f => existsSync(join(dir, f)))) return true
+  try {
+    const data = JSON.parse(readFileSync(join(dir, 'settings.json'), 'utf8')) as unknown
+    if (!data || typeof data !== 'object' || Array.isArray(data)) return false
+    const rec = data as Record<string, unknown>
+    if (Object.keys(rec).some(k => k !== 'mcpServers' && k !== 'hooks')) return true
+    const servers = rec['mcpServers']
+    return !!servers && typeof servers === 'object' && Object.keys(servers).some(k => k !== 'treecontext')
+  } catch {
+    return false
+  }
+}
+
 export function detectAgents(platform?: Platform): AgentDefinition[] {
   const p = platform ?? process.platform as Platform
   return AGENTS.filter(agent => {
+    if (agent.slug === 'gemini') return geminiCliPresent(p)
     const dirs = agent.detectDirs[p] ?? agent.detectDirs.linux ?? []
-    return dirs.some(d => existsSync(d))
+    return dirs.some(d => existsSync(d)) || (agent.detectCommands ?? []).some(c => commandOnPath(c, p))
   })
 }
 

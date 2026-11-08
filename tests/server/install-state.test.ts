@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
 import { afterEach, describe, expect, test } from 'vitest'
 import { removeIfHolding, writeAtomic } from '../../src/server/install-state.js'
+import { sandboxedEnv } from '../helpers/home.js'
 
 // The install record's two corners (D361, D390): a crash's leftover
 // temporary file, and a stale lock two waiters both judge stale.
@@ -46,7 +47,7 @@ describe('taking over a stale lock', () => {
     const code = `import { updateInstallState } from ${JSON.stringify(mod)}
 for (let i = 0; i < 5; i++) updateInstallState(s => { const w = (s.toolApprovals ??= {}).written ??= {}; const c = (w.n ??= { f: { items: [], at: '' } }); c.f.items.push('x') })`
     const run = (): Promise<number | null> => new Promise((res) => {
-      const c = spawn(process.execPath, ['--input-type=module', '-e', code], { env: { ...process.env, HOME: d, USERPROFILE: d }, stdio: 'ignore' })
+      const c = spawn(process.execPath, ['--input-type=module', '-e', code], { env: sandboxedEnv(d), stdio: 'ignore' })
       c.on('close', res)
     })
     const codes = await Promise.all(Array.from({ length: 6 }, run))

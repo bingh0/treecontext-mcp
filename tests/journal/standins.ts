@@ -42,10 +42,11 @@
  *  |                                        | `sandbox -- true` exactly; it runs nothing in a sandbox,    |
  *  |                                        | reads no configuration, calls no model and answers no other |
  *  |                                        | subcommand or sandbox command (exit 2, saying so)           |
- *  | `startEntryAsClient`                   | a client (Claude Code, Codex CLI, Cursor) starting the MCP  |
- *  |                                        | server its treecontext entry names: the command and args    |
- *  |                                        | the client read, spawned as written, so the real launcher   |
- *  |                                        | runs this build compiled (journal-install, D386)            |
+ *  | `startEntryAsClient`                   | a client (Claude Code, Codex CLI, Antigravity CLI, Cursor)  |
+ *  |                                        | starting the MCP server its treecontext entry names: the    |
+ *  |                                        | command and args the client read, spawned as written, so    |
+ *  |                                        | the real launcher runs this build compiled (journal-        |
+ *  |                                        | install, D386, D383)                                        |
  *  | `preCompact`                           | Claude Code compacting a session's context: it fires the    |
  *  |                                        | real PreCompact hook, then SessionStart with source         |
  *  |                                        | `compact` under the same session, in that order (D375)      |
@@ -503,10 +504,10 @@ export function writeFakeCodex(dir: string, plan: FakeCodexPlan): void {
 }
 
 /**
- * A client starting the server its treecontext entry names, as Claude Code
- * and Codex CLI do at a session's start: the command and the arguments the
- * client itself read from its configuration (journal-install's
- * `clientEntry`), spawned as they are, with stdin held open as a client
+ * A client starting the server its treecontext entry names, as Claude Code,
+ * Codex CLI and Antigravity CLI do at a session's start: the command and the
+ * arguments the client itself read from its configuration (journal-install's
+ * `clientEntry`, or agy's own `agy mcp list`), spawned as they are, with stdin held open as a client
  * holds it. It may do nothing else: it writes no configuration and reads no
  * row.
  *

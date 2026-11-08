@@ -8,13 +8,13 @@ import { spawnCli, spawnNodeTs } from '../../helpers/cli-spawn.js'
 import { seedOrphanSidecar, storesDirIn } from '../../helpers/store-fixtures.js'
 import { writeVerdict } from '../../../src/persistence/backup-verdict.js'
 import { TS_ROOT } from '../proc.js'
-import { claudeSessionStartUnwired } from '../../../src/server/installer.js'
+import { claudeSessionStartUnwired, MARKER_START } from '../../../src/server/installer.js'
 import { DatabaseSync } from 'node:sqlite'
 import { openNodeSqlite } from '../../../src/persistence/node-sqlite.js'
 import { FlatStore } from '../../../src/flat-store.js'
 import { LeaseClient, DRAIN_LEASE_TTL_SECS } from '../../../src/persistence/leases.js'
 import { MAX_INGEST_ATTEMPTS } from '../../../src/persistence/capture-constants.js'
-import { type InstallWorld, pathWithFakeClaude, setClaudeVersion, tcCli, agentCli, codexCli, codexConfigRead, setFakeCodex, openInstallWorld, treeOf, pathsMentioned, installedCommands, interpreterRunsPackage, isBatchBody, toPosix, mcpLauncherIn, agentConfigPath, fakeGlobalInstall, clientEntry } from '../install-harness.js'
+import { type InstallWorld, pathWithFakeClaude, setClaudeVersion, tcCli, agentCli, codexCli, codexConfigRead, setFakeCodex, openInstallWorld, treeOf, pathsMentioned, installedCommands, interpreterRunsPackage, isBatchBody, toPosix, mcpLauncherIn, agentConfigPath, fakeGlobalInstall, clientEntry, putAgyOnPath, agyMcpList, type ClientEntry } from '../install-harness.js'
 import { CODEX_APPROVALS_FLOOR } from '../../../src/server/codex-client.js'
 import { startEntryAsClient } from '../standins.js'
 import { parse as parseToml, stringify as stringifyToml } from 'smol-toml'
@@ -1035,12 +1035,26 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
   })
 
   // ── uninstall ───────────────────────────────────────────────────────
+  // Every agent install writes permission rules into (D383, D390): Claude
+  // Code, Codex CLI and Antigravity CLI, each beside a foreign server and a
+  // rule of the developer's. Codex's and agy's entries are read through
+  // their own listings; the rules through the files the clients read, since
+  // Claude Code and agy print none.
+  const FOREIGN_AGY = { trustedWorkspaces: ['/srv/work'], permissions: { allow: ['mcp(github/*)'], deny: ['command(sudo)'] } }
   reg.define(/^a machine with treecontext installed alongside foreign servers and hooks$/, async (w: InstallWorld) => {
-    await openInstallWorld(w, ['.claude'])
+    await openInstallWorld(w, ['.claude', '.codex'])
+    putAgyOnPath(w)
     writeFileSync(join(w.ihome!, '.claude.json'), JSON.stringify({
       mcpServers: { 'foreign-server': { command: 'someone-elses-tool' } },
     }))
-    expect(tcCli(w, ['install', '--yes']).status).toBe(0)
+    writeFileSync(settingsFile(w), JSON.stringify({ permissions: { allow: ['mcp__github__get_issue'] } }, null, 2) + '\n')
+    writeFileSync(codexConfigFile(w), '[mcp_servers.foreign]\ncommand = "someone-elses-tool"\n')
+    mkdirSync(join(w.ihome!, '.gemini', 'config'), { recursive: true })
+    writeFileSync(join(w.ihome!, '.gemini', 'config', 'mcp_config.json'), JSON.stringify({ mcpServers: { 'foreign-server': { command: 'someone-elses-tool' } } }, null, 2) + '\n')
+    mkdirSync(dirname(agySettingsFile(w)), { recursive: true })
+    writeFileSync(agySettingsFile(w), JSON.stringify(FOREIGN_AGY, null, 2) + '\n')
+    const install = tcCli(w, ['install', '--yes'])
+    expect(install.status, install.out).toBe(0)
     // The positive half of the uninstall Then's absences: every entry it
     // proves gone is proven present here first, in this same world.
     const installed = JSON.parse(readFileSync(join(w.ihome!, '.claude.json'), 'utf8')) as Record<string, Record<string, unknown>>
@@ -1048,6 +1062,12 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
     expect(readFileSync(join(w.ihome!, '.claude', 'settings.json'), 'utf8'), 'install wrote no hook command').toMatch(/tc-/)
     expect(readdirSync(join(w.ihome!, '.claude', 'hooks')).filter(f => f.startsWith('tc-')).length, 'install wrote no hook script').toBeGreaterThan(0)
     expect(existsSync(join(w.ihome!, '.claude', 'skills', 'treecontext-reference')), 'install wrote no skill').toBe(true)
+    expect(claudePermissions(w)['allow'], 'install wrote no Claude Code rule').toEqual(['mcp__github__get_issue', ...FOUR.map(t => `mcp__treecontext__${t}`)])
+    expect(codexCli(w, ['mcp', 'list']).stdout, 'Codex lists no treecontext server').toMatch(/^treecontext\s/m)
+    expect(Object.keys((await codexToolsSeen(w)).tools).sort(), 'install wrote no Codex approval').toEqual([...FOUR].sort())
+    expect(agyMcpList(w).servers.map(s => s.name).sort(), 'agy lists no treecontext server').toEqual(['foreign-server', 'treecontext'])
+    expect(agyPermissions(w)['allow'], 'install wrote no agy rule').toEqual(['mcp(github/*)', ...FOUR.map(t => `mcp(treecontext/${t})`)])
+    expect(readFileSync(join(w.ihome!, '.gemini', 'GEMINI.md'), 'utf8'), 'install wrote no instruction block for agy').toContain(MARKER_START)
     // A store with a row in it — uninstall must not touch the record.
     const storeDir = join(storesDirIn(w.ihome!), 'keepme')
     mkdirSync(storeDir, { recursive: true })
@@ -1059,9 +1079,47 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
     expect(w.irun.status).toBe(0)
   })
 
+  reg.define(/^every treecontext MCP entry, permission rule install added, hook, script, and skill is gone from every agent$/, (w: InstallWorld) => {
+    // Claude Code: its entry, hooks, scripts, skill, and the four rules.
+    const cfg = JSON.parse(readFileSync(join(w.ihome!, '.claude.json'), 'utf8')) as Record<string, Record<string, unknown>>
+    expect(cfg['mcpServers']?.['treecontext']).toBeUndefined()
+    const settings = readFileSync(settingsFile(w), 'utf8')
+    // step-lint: allow unearned-absence -- guarded: the Given of this scenario asserts, after its install, that settings.json matches /tc-/ and holds the four rules, the MCP entry exists, tc- hook scripts exist and the skill exists — a before/after pair in this same world
+    expect(settings).not.toMatch(/tc-|mcp__treecontext__/)
+    const hooksDir = join(w.ihome!, '.claude', 'hooks')
+    if (existsSync(hooksDir)) {
+      expect(readdirSync(hooksDir).filter(f => f.startsWith('tc-'))).toEqual([])
+    }
+    expect(existsSync(join(w.ihome!, '.claude', 'skills', 'treecontext-reference'))).toBe(false)
+    // Codex CLI: its own listing names no treecontext server, so no approval is left.
+    const codexList = codexCli(w, ['mcp', 'list'])
+    expect(codexList.status, codexList.out).toBe(0)
+    // step-lint: allow unearned-absence -- guarded: the Given asserts Codex's own listing names treecontext after install, in this same world
+    expect(codexList.stdout).not.toMatch(/^treecontext\s/m)
+    // step-lint: allow unearned-absence -- guarded: the Given asserts Codex reads the four approvals after install
+    expect(readFileSync(codexConfigFile(w), 'utf8')).not.toMatch(/treecontext/)
+    // Antigravity CLI: its own listing, its rules, and the block it reads.
+    expect(agyMcpList(w).servers.map(s => s.name)).toEqual(['foreign-server'])
+    // step-lint: allow unearned-absence -- guarded: the Given asserts the four agy rules present after install
+    expect(JSON.stringify(agyPermissions(w))).not.toMatch(/treecontext/)
+    const gemini = join(w.ihome!, '.gemini', 'GEMINI.md')
+    if (existsSync(gemini)) expect(readFileSync(gemini, 'utf8')).not.toContain(MARKER_START)
+    // And install's record names nothing it wrote any more.
+    expect(installRecord(w).toolApprovals?.written ?? {}).toEqual({})
+  })
+
   reg.define(/^the foreign configuration is intact$/, (w: InstallWorld) => {
     const cfg = JSON.parse(readFileSync(join(w.ihome!, '.claude.json'), 'utf8')) as Record<string, Record<string, unknown>>
     expect(cfg['mcpServers']?.['foreign-server']).toEqual({ command: 'someone-elses-tool' })
+    if (w.iAgyBin) {
+      // The developer's own rules in Claude Code and agy, the foreign
+      // servers of Codex and agy as each client lists them, and agy's other keys.
+      expect(claudePermissions(w)).toEqual({ allow: ['mcp__github__get_issue'] })
+      expect(codexCli(w, ['mcp', 'list']).stdout).toMatch(/^foreign\s+someone-elses-tool/m)
+      const foreign = agyMcpList(w).servers.find(s => s.name === 'foreign-server')
+      expect(foreign, 'agy no longer lists the foreign server').toEqual({ name: 'foreign-server', type: 'stdio', status: 'enabled', command: 'someone-elses-tool' })
+      expect(agySettings(w)).toEqual(FOREIGN_AGY)
+    }
   })
 
   reg.define(/^the journal stores are untouched$/, (w: InstallWorld) => {
@@ -1567,7 +1625,7 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
   reg.define(/^(a pinned store.*) read as the developer left them$/, (w: InstallWorld, additions: unknown) => {
     const row = Object.values(EARLIER).find(r => r.additions === String(additions))
     expect(row, `no row adds ${String(additions)}`).toBeDefined()
-    const seen = clientEntry(w, w.iClient!)
+    const seen = clientEntry(w, w.iClient as 'Claude Code' | 'Codex CLI')
     const items = (a: string[]): string[] => a.flatMap((t, i) => (t.startsWith('--') && a[i + 1] !== undefined && !a[i + 1]!.startsWith('--') ? [`${t} ${a[i + 1]}`] : []))
     for (const pair of items(row!.args)) {
       expect(items(seen.args), `the reinstall lost the developer's ${pair}:\n${seen.printed}`).toContain(pair)
@@ -1596,12 +1654,22 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
   // The other side is the server itself: the entry's command and arguments,
   // as the client reads them, started as the client starts them
   // (startEntryAsClient), and the `Mode:` line that server writes. Then
-  // doctor's row for the client, off doctor's own stdout. The Antigravity
-  // CLI row waits on unit 3 (D383): this build has no agent entry for it,
-  // so its Given is left unbound and the outline is held open by title.
-  reg.define(/^(Claude Code|Codex CLI) is installed$/, async (w: InstallWorld, agent: unknown) => {
-    w.iClient = agent as 'Claude Code' | 'Codex CLI'
+  // doctor's row for the client, off doctor's own stdout. Antigravity CLI
+  // (D383) is the real `agy` on the CLI's PATH, and the entry it starts is
+  // the one its own `agy mcp list` prints.
+  /** The treecontext entry as Antigravity CLI itself lists it: `agy mcp list`'s command column, split as agy splits it. */
+  const agyEntry = (w: InstallWorld): ClientEntry => {
+    const { servers, run } = agyMcpList(w)
+    const row = servers.find(s => s.name === 'treecontext')
+    expect(row, `agy lists no treecontext server:\n${run.out}`).toBeDefined()
+    expect(row!.status, `agy lists the treecontext server ${row!.status}`).toBe('enabled')
+    const [command, ...args] = row!.command.split(/\s+/)
+    return { command: command!, args, envNames: [], printed: run.stdout }
+  }
+  reg.define(/^(Claude Code|Codex CLI|Antigravity CLI) is installed$/, async (w: InstallWorld, agent: unknown) => {
+    w.iClient = agent as 'Claude Code' | 'Codex CLI' | 'Antigravity CLI'
     await openInstallWorld(w, w.iClient === 'Codex CLI' ? ['.claude', '.codex'] : ['.claude'])
+    if (w.iClient === 'Antigravity CLI') putAgyOnPath(w)
     w.iproj = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-install-proj-')))
     w.defer(() => rmSync(w.iproj!, { recursive: true, force: true }))
   })
@@ -1614,15 +1682,15 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
     expect(w.irun.status, w.irun.out).toBe(0)
   })
 
-  reg.define(/^the server that (Claude Code|Codex CLI)'s entry starts runs (in capture mode|without capture)$/, async (w: InstallWorld, agent: unknown, mode: unknown) => {
-    const seen = clientEntry(w, agent as 'Claude Code' | 'Codex CLI')
+  reg.define(/^the server that (Claude Code|Codex CLI|Antigravity CLI)'s entry starts runs (in capture mode|without capture)$/, async (w: InstallWorld, agent: unknown, mode: unknown) => {
+    const seen = agent === 'Antigravity CLI' ? agyEntry(w) : clientEntry(w, agent as 'Claude Code' | 'Codex CLI')
     expect(seen.command, seen.printed).toBe(mcpLauncherIn(w.ihome!))
     w.iServerMode = await startEntryAsClient(w.ihome!, seen, w.iproj!)
     expect(w.iServerMode, `the server ${String(agent)}'s entry starts (args: ${seen.args.join(' ')})`)
       .toBe(mode === 'in capture mode' ? 'conversation-indexer' : 'standard')
   })
 
-  reg.define(/^doctor's row for (Claude Code|Codex CLI) reads its mode as correct$/, (w: InstallWorld, agent: unknown) => {
+  reg.define(/^doctor's row for (Claude Code|Codex CLI|Antigravity CLI) reads its mode as correct$/, (w: InstallWorld, agent: unknown) => {
     const doctor = tcCli(w, ['doctor'])
     const lines = doctor.stdout.split('\n')
     const i = lines.findIndex(l => new RegExp(`^\\[\\w+\\]\\s+${String(agent)}:`).test(l))
@@ -1654,7 +1722,11 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
   // /permissions, so its view is read from the settings file it reads,
   // ~/.claude/settings.json, and the binding says so at each read; that the
   // client honours the rules is the dogfood's (D390, unit 2). Antigravity
-  // CLI's rows wait on unit 3: this build has no agent entry for it.
+  // CLI (D383) is read the same way: agy prints no permission rules (it has
+  // no command that lists them outside its interactive /permissions), so
+  // its rules are read from the settings file it reads,
+  // ~/.gemini/antigravity-cli/settings.json, and the binding says so at each
+  // read; its MCP entry is read from its own `agy mcp list`.
   const codexToolsSeen = async (w: InstallWorld): Promise<{ tools: Record<string, { approval_mode?: unknown }>; entry: Record<string, unknown>; origins: Record<string, { name?: { type?: string; file?: string } }> }> => {
     const read = await codexConfigRead(w)
     expect(read.error, `Codex refused its configuration:\n${read.raw}`).toBeUndefined()
@@ -1669,6 +1741,12 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
   /** Claude Code's permission rules, read from the settings file it reads (it prints none of its own). */
   const claudePermissions = (w: InstallWorld): Record<string, unknown[]> =>
     ((settingsOnDisk(w)['permissions'] ?? {}) as Record<string, unknown[]>)
+  const agySettingsFile = (w: InstallWorld): string => join(w.ihome!, '.gemini', 'antigravity-cli', 'settings.json')
+  const agySettings = (w: InstallWorld): Record<string, unknown> =>
+    existsSync(agySettingsFile(w)) ? JSON.parse(readFileSync(agySettingsFile(w), 'utf8')) as Record<string, unknown> : {}
+  /** agy's permission rules, read from the settings file it reads (it prints none of its own). */
+  const agyPermissions = (w: InstallWorld): Record<string, unknown[]> =>
+    ((agySettings(w)['permissions'] ?? {}) as Record<string, unknown[]>)
   const installRecord = (w: InstallWorld): { toolApprovals?: { written?: Record<string, Record<string, { items: string[] }>>; off?: Record<string, unknown> } } => {
     const p = join(w.ihome!, '.treecontext', 'install-state.json')
     return existsSync(p) ? JSON.parse(readFileSync(p, 'utf8')) as ReturnType<typeof installRecord> : {}
@@ -1803,15 +1881,28 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
   })
 
   // ── off and on again, per client (D390) ─────────────────────────────
-  const DEV_RULE: Record<string, { client: 'Claude Code' | 'Codex CLI'; tool: string }> = {
+  const DEV_RULE: Record<string, { client: 'Claude Code' | 'Codex CLI' | 'Antigravity CLI'; tool: string }> = {
     'an ask rule for treecontext_insert': { client: 'Claude Code', tool: 'treecontext_insert' },
     'an approval set to prompt for treecontext_query': { client: 'Codex CLI', tool: 'treecontext_query' },
+    'a deny rule for treecontext_export': { client: 'Antigravity CLI', tool: 'treecontext_export' },
   }
   /** The client's view of the four and of the developer's rule. */
   const viewOf = async (w: InstallWorld): Promise<{ approvedByInstall: string[]; developerRule: string; grantForRuled: boolean }> => {
     // Install's grants are what its record names and the client's file
     // still holds.
     const recorded = (slug: string): string[] => Object.values(installRecord(w).toolApprovals?.written?.[slug] ?? {}).flatMap(f => f.items)
+    if (w.iClient === 'Antigravity CLI') {
+      // agy prints no permission rules: the settings file it reads is read.
+      const perms = agyPermissions(w)
+      const allow = (perms['allow'] ?? []) as string[]
+      const ours = recorded('agy')
+      const { tool } = Object.values(DEV_RULE).find(r => r.client === 'Antigravity CLI')!
+      return {
+        approvedByInstall: FOUR.filter(t => allow.includes(`mcp(treecontext/${t})`) && ours.includes(`mcp(treecontext/${t})`)),
+        developerRule: JSON.stringify(perms['deny'] ?? null),
+        grantForRuled: allow.includes(`mcp(treecontext/${tool})`) || ours.includes(`mcp(treecontext/${tool})`),
+      }
+    }
     if (w.iClient === 'Claude Code') {
       // Claude Code prints no permission rules: its settings file is read.
       const perms = claudePermissions(w)
@@ -1835,18 +1926,24 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
     }
   }
 
-  reg.define(/^(Claude Code|Codex CLI) wired by install, with the developer's own rule (an ask rule for treecontext_insert|an approval set to prompt for treecontext_query) beside install's grants$/, async (w: InstallWorld, client: unknown, rule: unknown) => {
+  reg.define(/^(Claude Code|Codex CLI|Antigravity CLI) wired by install, with the developer's own rule (an ask rule for treecontext_insert|an approval set to prompt for treecontext_query|a deny rule for treecontext_export) beside install's grants$/, async (w: InstallWorld, client: unknown, rule: unknown) => {
     const row = DEV_RULE[String(rule)]!
     expect(row.client).toBe(client)
     w.iClient = row.client
     await openInstallWorld(w, w.iClient === 'Codex CLI' ? ['.claude', '.codex'] : ['.claude'])
+    if (w.iClient === 'Antigravity CLI') putAgyOnPath(w)
     w.iproj = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-install-proj-')))
     w.defer(() => rmSync(w.iproj!, { recursive: true, force: true }))
     const install = tcCli(w, ['install', '--yes'])
     expect(install.status, install.out).toBe(0)
     // Install's grants, then the developer's rule beside them, written the
     // way the developer writes it, in the client's own file.
-    if (w.iClient === 'Claude Code') {
+    if (w.iClient === 'Antigravity CLI') {
+      const settings = agySettings(w)
+      const perms = (settings['permissions'] ?? {}) as Record<string, unknown>
+      expect(perms['allow'], 'install wrote no grant').toEqual(FOUR.map(t => `mcp(treecontext/${t})`))
+      writeFileSync(agySettingsFile(w), JSON.stringify({ ...settings, permissions: { ...perms, deny: [`mcp(treecontext/${row.tool})`] } }, null, 2) + '\n')
+    } else if (w.iClient === 'Claude Code') {
       const settings = settingsOnDisk(w)
       const perms = (settings['permissions'] ?? {}) as Record<string, unknown>
       expect(perms['allow'], 'install wrote no grant').toEqual(FOUR.map(t => `mcp__treecontext__${t}`))
@@ -1861,7 +1958,7 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
     }
     const view = await viewOf(w)
     w.iDeveloperBefore = view.developerRule
-    expect(w.iDeveloperBefore).toMatch(w.iClient === 'Claude Code' ? /mcp__treecontext__treecontext_insert/ : /"approval_mode":"prompt"/)
+    expect(w.iDeveloperBefore).toMatch(w.iClient === 'Claude Code' ? /mcp__treecontext__treecontext_insert/ : w.iClient === 'Antigravity CLI' ? /mcp\(treecontext\/treecontext_export\)/ : /"approval_mode":"prompt"/)
     w.iAfterInstall = JSON.stringify(view.approvedByInstall)
     expect(view.approvedByInstall.length, 'install approved none of the four').toBeGreaterThan(0)
   })
@@ -1878,14 +1975,14 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
     expect(out).toMatch(/to turn them back on: treecontext config tool-approvals on$/m)
   })
 
-  reg.define(/^(Claude Code|Codex CLI)'s own view shows none of the four approved by install, and the developer's rule as it was$/, async (w: InstallWorld, client: unknown) => {
+  reg.define(/^(Claude Code|Codex CLI|Antigravity CLI)'s own view shows none of the four approved by install, and the developer's rule as it was$/, async (w: InstallWorld, client: unknown) => {
     expect(client).toBe(w.iClient)
     const view = await viewOf(w)
     expect(view.approvedByInstall, `${String(client)} still approves`).toEqual([])
     expect(view.developerRule, "the developer's rule").toBe(w.iDeveloperBefore)
   })
 
-  reg.define(/^(Claude Code|Codex CLI)'s own view shows install's grants back for each of the four that no rule of the developer's decides, and the developer's rule as it was$/, async (w: InstallWorld, client: unknown) => {
+  reg.define(/^(Claude Code|Codex CLI|Antigravity CLI)'s own view shows install's grants back for each of the four that no rule of the developer's decides, and the developer's rule as it was$/, async (w: InstallWorld, client: unknown) => {
     expect(client).toBe(w.iClient)
     // Install's grants are back for each of the four no rule of the
     // developer's decides, and for none other: install adds no grant beside
@@ -1901,6 +1998,7 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
   // ── Claude Code's grant beside the developer's rules (D390, D51) ────
   reg.define(/^Claude Code's settings holding the developer's allow rule for another server's tool and deny rule for treecontext_delete$/, async (w: InstallWorld) => {
     await openInstallWorld(w, ['.claude'])
+    w.iClient = 'Claude Code'
     const theirs = { model: 'opus', permissions: { allow: ['mcp__github__get_issue'], deny: ['mcp__treecontext__treecontext_delete'] } }
     writeFileSync(settingsFile(w), JSON.stringify(theirs, null, 2) + '\n')
     w.iDeveloperBefore = JSON.stringify(theirs.permissions)
@@ -1909,8 +2007,9 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
   reg.define(/^install runs and then uninstall runs$/, (w: InstallWorld) => {
     const install = tcCli(w, ['install', '--yes'])
     expect(install.status, install.out).toBe(0)
-    // Claude Code prints no permission rules: the file it reads is read.
-    w.iAfterInstall = JSON.stringify(claudePermissions(w))
+    // Neither Claude Code nor agy prints its permission rules: the file it
+    // reads is read.
+    w.iAfterInstall = JSON.stringify(w.iClient === 'Antigravity CLI' ? agyPermissions(w) : claudePermissions(w))
     const uninstall = tcCli(w, ['uninstall', '--yes'])
     expect(uninstall.status, uninstall.out).toBe(0)
     w.irun = uninstall
@@ -1927,5 +2026,222 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
     expect(JSON.stringify(claudePermissions(w))).toBe(w.iDeveloperBefore)
     expect(settingsOnDisk(w)['model']).toBe('opus')
     expect(w.irun!.stdout).toMatch(/tool approvals install wrote \(.*\) removed from /)
+  })
+
+  // ── Antigravity CLI, a tools-only client (D383, D390) ───────────────
+  //
+  // A real install under a redirected HOME with the real `agy` on the CLI's
+  // PATH (putAgyOnPath; the machine's own is hidden from every child). The
+  // other side for the MCP entry is agy's own `agy mcp list`, which reads
+  // the redirected HOME and calls no model. agy has no command that prints
+  // its permission rules outside its interactive /permissions, so the rules
+  // are read from the file it reads, ~/.gemini/antigravity-cli/settings.json;
+  // that `agy -p` honours them is the paid dogfood's (unit 3), as for
+  // Claude Code (unit 2).
+  const agyRule = (t: string): string => `mcp(treecontext/${t})`
+  /** agy's own directories under ~/.gemini, as agy leaves them, with a settings key of its own. */
+  const seedAgyHome = (w: InstallWorld, settings: Record<string, unknown> = { trustedWorkspaces: ['/srv/work'] }): void => {
+    mkdirSync(join(w.ihome!, '.gemini', 'config', 'projects'), { recursive: true })
+    mkdirSync(dirname(agySettingsFile(w)), { recursive: true })
+    writeFileSync(agySettingsFile(w), JSON.stringify(settings, null, 2) + '\n')
+  }
+  /** Every rule in agy's settings that names a treecontext tool or the whole server, in any list. */
+  const agyTreecontextRules = (w: InstallWorld): string[] => {
+    const perms = agyPermissions(w)
+    return ['allow', 'ask', 'deny'].flatMap(l => ((perms[l] ?? []) as unknown[]).map(String))
+      .filter(r => /treecontext|^mcp\(\*\)$/.test(r))
+  }
+  /** The four files agy reads global rules from (D383). */
+  const agyRuleFiles = (w: InstallWorld): string[] => [
+    join(w.ihome!, '.gemini', 'GEMINI.md'), join(w.ihome!, '.gemini', 'AGENTS.md'),
+    join(w.ihome!, '.gemini', 'config', 'GEMINI.md'), join(w.ihome!, '.gemini', 'config', 'AGENTS.md'),
+  ]
+
+  reg.define(/^a machine with Antigravity CLI installed$/, async (w: InstallWorld) => {
+    await openInstallWorld(w, [])
+    putAgyOnPath(w)
+    seedAgyHome(w)
+    w.iClient = 'Antigravity CLI'
+  })
+
+  reg.define(/^Antigravity CLI's own listing of its MCP servers reports the treecontext server$/, (w: InstallWorld) => {
+    expect(w.irun!.status, w.irun!.out).toBe(0)
+    expect(w.irun!.stdout).toMatch(/^Detected agents: .*Antigravity CLI/m)
+    const seen = agyEntry(w)
+    // The server this build writes for a tools-only client: the launcher,
+    // `serve` over stdio, no capture (D386).
+    expect(seen.command).toBe(mcpLauncherIn(w.ihome!))
+    expect(seen.args.slice(0, 4)).toEqual(['serve', '--transport', 'stdio', '--no-capture'])
+  })
+
+  reg.define(/^its permission settings allow status, query, export and insert of the treecontext server, and no other treecontext tool$/, (w: InstallWorld) => {
+    // agy prints no permission rules: the file it reads is read.
+    const perms = agyPermissions(w)
+    expect(perms['allow'], 'the four allow rules').toEqual(FOUR.map(agyRule))
+    // No rule for the four that keep asking, and none for the whole server.
+    expect(agyTreecontextRules(w).sort()).toEqual(FOUR.map(agyRule).sort())
+    for (const t of ASKING) expect(JSON.stringify(perms)).not.toContain(t)
+    // agy's own key, which install does not know, stays as agy left it.
+    expect(agySettings(w)['trustedWorkspaces']).toEqual(['/srv/work'])
+    // And install's record names exactly the four, in that file.
+    expect(installRecord(w).toolApprovals?.written?.['agy']?.[agySettingsFile(w)]?.items).toEqual(FOUR.map(agyRule))
+  })
+
+  reg.define(/^no hook of Antigravity CLI's is written$/, (w: InstallWorld) => {
+    // The needle fires: install did write under ~/.gemini for agy.
+    expect(existsSync(join(w.ihome!, '.gemini', 'config', 'mcp_config.json')), 'install wrote nothing for agy').toBe(true)
+    // agy's global hook file, its workspace hook file, Gemini CLI's settings
+    // (whose hooks agy does not read but a copy would land in), and no
+    // treecontext wrapper for agy among the hook scripts.
+    expect(existsSync(join(w.ihome!, '.gemini', 'config', 'hooks.json')), 'install wrote agy hooks').toBe(false)
+    expect(existsSync(join(TS_ROOT, '.agents', 'hooks.json')), 'install wrote workspace hooks').toBe(false)
+    expect(existsSync(join(w.ihome!, '.gemini', 'settings.json')), 'install wrote a Gemini settings file').toBe(false)
+    expect(Object.keys(agySettings(w)).sort(), "agy's settings hold a key install was not asked to write").toEqual(['permissions', 'trustedWorkspaces'])
+    const hooksDir = join(w.ihome!, '.claude', 'hooks')
+    expect(existsSync(hooksDir) ? readdirSync(hooksDir).filter(f => /agy|antigravity/.test(f)) : []).toEqual([])
+    expect(w.irun!.stdout).toContain(`hooks: none — Antigravity CLI keeps its own hook configuration (${join(w.ihome!, '.gemini', 'config', 'hooks.json')}), which install leaves alone`)
+  })
+
+  reg.define(/^the instruction block Antigravity CLI reads is present once$/, (w: InstallWorld) => {
+    const blocks = agyRuleFiles(w).flatMap(f => existsSync(f) ? readFileSync(f, 'utf8').split(MARKER_START).length - 1 : 0)
+    expect(blocks.reduce((a, b) => a + b, 0), `treecontext blocks across ${agyRuleFiles(w).join(', ')}`).toBe(1)
+    expect(blocks[0], 'the block is not in ~/.gemini/GEMINI.md').toBe(1)
+  })
+
+  reg.define(/^a machine with Antigravity CLI installed and no Gemini CLI$/, async (w: InstallWorld) => {
+    await openInstallWorld(w, [])
+    putAgyOnPath(w)
+    seedAgyHome(w)
+    // The directory the two share is there, agy's own; the machine's
+    // `gemini`, if it has one, is hidden from the CLI (sandboxedSpawnEnv).
+    expect(existsSync(join(w.ihome!, '.gemini')), 'no ~/.gemini').toBe(true)
+    expect(existsSync(join(w.ihome!, '.gemini', 'settings.json'))).toBe(false)
+  })
+
+  reg.define(/^no Gemini CLI configuration is written$/, (w: InstallWorld) => {
+    expect(w.irun!.status, w.irun!.out).toBe(0)
+    // The needle fires: install detected and wired agy in this run.
+    expect(w.irun!.stdout).toMatch(/^Detected agents: .*Antigravity CLI/m)
+    // step-lint: allow unearned-absence -- guarded: the line above proves the same run detected the agent beside it, and the D161 Gemini row's world (a ~/.gemini that is Gemini CLI's) writes settings.json
+    expect(w.irun!.stdout).not.toMatch(/Gemini CLI/)
+    expect(existsSync(join(w.ihome!, '.gemini', 'settings.json')), 'install wrote Gemini CLI configuration').toBe(false)
+    const doctor = tcCli(w, ['doctor'])
+    expect(doctor.stdout).toMatch(/^\[\w+\]\s+Antigravity CLI:/m)
+    // step-lint: allow unearned-absence -- the line above proves the same row shape fires for the client beside it in this doctor run, and the D161 outline's Gemini CLI row reads doctor's Gemini CLI row in a world whose ~/.gemini is Gemini CLI's
+    expect(doctor.stdout).not.toMatch(/^\[\w+\]\s+Gemini CLI:/m)
+  })
+
+  reg.define(/^Antigravity CLI is wired for the tools$/, (w: InstallWorld) => {
+    const seen = agyEntry(w)
+    expect(seen.command).toBe(mcpLauncherIn(w.ihome!))
+    // agy prints no permission rules: the file it reads is read.
+    expect(agyPermissions(w)['allow']).toEqual(FOUR.map(agyRule))
+  })
+
+  reg.define(/^Antigravity CLI's permission settings holding the developer's allow rule for another server and ask rule for treecontext_insert$/, async (w: InstallWorld) => {
+    await openInstallWorld(w, [])
+    putAgyOnPath(w)
+    const theirs = { trustedWorkspaces: ['/srv/work'], permissions: { allow: ['mcp(github/*)'], ask: [agyRule('treecontext_insert')] } }
+    seedAgyHome(w, theirs)
+    w.iClient = 'Antigravity CLI'
+    w.iDeveloperBefore = JSON.stringify(theirs.permissions)
+    w.iSettingsBefore = JSON.stringify(theirs)
+  })
+
+  reg.define(/^after install the developer's two rules read as they were$/, (w: InstallWorld) => {
+    const before = JSON.parse(w.iDeveloperBefore!) as { allow: string[]; ask: string[] }
+    const after = JSON.parse(w.iAfterInstall!) as { allow: string[]; ask: string[]; deny?: unknown }
+    // The developer's allow rule where it was, install's beside it, and none
+    // for insert, which the developer's ask rule decides.
+    expect(after.allow).toEqual([...before.allow, ...FOUR.filter(t => t !== 'treecontext_insert').map(agyRule)])
+    expect(after.ask).toEqual(before.ask)
+    expect(after.deny).toBeUndefined()
+  })
+
+  reg.define(/^after uninstall the rules install added are gone and the developer's two remain$/, (w: InstallWorld) => {
+    expect(JSON.stringify(agyPermissions(w))).toBe(w.iDeveloperBefore)
+    expect(JSON.stringify(agySettings(w))).toBe(w.iSettingsBefore)
+    expect(w.irun!.stdout).toMatch(/Antigravity CLI: tool approvals install wrote \(.*\) removed from /)
+    expect(agyMcpList(w).servers.map(s => s.name)).toEqual([])
+  })
+
+  // ── the install message, and an install told not to approve (D390) ──
+  reg.define(/^a machine with Claude Code, Codex CLI and Antigravity CLI installed$/, async (w: InstallWorld) => {
+    await openInstallWorld(w, ['.claude', '.codex'])
+    putAgyOnPath(w)
+    seedAgyHome(w)
+  })
+
+  const THREE = ['Claude Code', 'Codex CLI', 'Antigravity CLI'] as const
+  const messageOf = (out: string): string[] => {
+    const lines = out.split('\n')
+    const heads = lines.flatMap((l, i) => l === 'Tool approvals:' ? [i] : [])
+    expect(heads, `install printed ${heads.length} approvals messages:\n${out}`).toHaveLength(1)
+    const body: string[] = []
+    for (const l of lines.slice(heads[0]! + 1)) { if (!l.startsWith('  ')) break; body.push(l) }
+    return body
+  }
+  const messageLine = (body: string[], client: string): string => {
+    const found = body.filter(l => l.startsWith(`  ${client}: `))
+    expect(found, `the message's lines for ${client}:\n${body.join('\n')}`).toHaveLength(1)
+    return found[0]!
+  }
+
+  reg.define(/^the developer sees one message naming status, query, export and insert as approved in each of the three, and where$/, async (w: InstallWorld) => {
+    expect(w.irun!.status, w.irun!.out).toBe(0)
+    const body = messageOf(w.irun!.stdout)
+    const where: Record<string, string> = {
+      'Claude Code': `permissions.allow in ${settingsFile(w)}`,
+      'Codex CLI': `mcp_servers.treecontext.tools in ${codexConfigFile(w)}`,
+      'Antigravity CLI': `permissions.allow in ${agySettingsFile(w)}`,
+    }
+    for (const c of THREE) {
+      expect(messageLine(body, c)).toMatch(new RegExp(`^  ${c}: status, query, export and insert approved by install \\(${where[c]!.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\);`))
+    }
+    // What the message says is what the clients read: Codex by its own
+    // reading, Claude Code and agy from the files they read (they print no rules).
+    expect(claudePermissions(w)['allow']).toEqual(FOUR.map(t => `mcp__treecontext__${t}`))
+    const codex = await codexToolsSeen(w)
+    for (const t of FOUR) expect(codex.tools[t]?.approval_mode).toBe('approve')
+    expect(agyPermissions(w)['allow']).toEqual(FOUR.map(agyRule))
+  })
+
+  reg.define(/^the message names clear, delete, import and merge as still asking$/, (w: InstallWorld) => {
+    const body = messageOf(w.irun!.stdout)
+    for (const c of THREE) expect(messageLine(body, c)).toMatch(/; still asking: clear, delete, import and merge$/)
+  })
+
+  reg.define(/^the message names `treecontext config tool-approvals off` and `install --no-tool-approvals` as the way back$/, (w: InstallWorld) => {
+    const body = messageOf(w.irun!.stdout)
+    expect(body).toContain('  the way back: treecontext config tool-approvals off, or treecontext install --no-tool-approvals')
+  })
+
+  reg.define(/^install runs with `--no-tool-approvals`$/, (w: InstallWorld) => {
+    w.iInstallRun = tcCli(w, ['install', '--yes', '--no-tool-approvals'])
+    expect(w.iInstallRun.status, w.iInstallRun.out).toBe(0)
+  })
+
+  reg.define(/^install runs again without it$/, (w: InstallWorld) => {
+    w.irun = tcCli(w, ['install', '--yes'])
+    expect(w.irun.status, w.irun.out).toBe(0)
+  })
+
+  reg.define(/^none of the three carries an approval install wrote for a treecontext tool$/, async (w: InstallWorld) => {
+    // The needle fires: each of the three is wired, as its own listing or
+    // file shows, so an approval would have had somewhere to go.
+    expect(codexCli(w, ['mcp', 'list']).stdout).toMatch(/^treecontext\s/m)
+    expect(agyEntry(w).command).toBe(mcpLauncherIn(w.ihome!))
+    expect(JSON.parse(readFileSync(join(w.ihome!, '.claude.json'), 'utf8')).mcpServers.treecontext).toBeDefined()
+    // step-lint: allow unearned-absence -- guarded: the install message scenario of this file asserts the same three files carry the four approvals after a plain install of the same three clients
+    expect(JSON.stringify(claudePermissions(w))).not.toMatch(/mcp__treecontext/)
+    expect((await codexToolsSeen(w)).tools).toEqual({})
+    expect(agyTreecontextRules(w)).toEqual([])
+    expect(installRecord(w).toolApprovals?.written ?? {}).toEqual({})
+  })
+
+  reg.define(/^the developer sees the second install say that tool approvals are off by the developer's choice, and how to turn them on$/, (w: InstallWorld) => {
+    const body = messageOf(w.irun!.stdout)
+    for (const c of THREE) expect(messageLine(body, c)).toMatch(/^  [^:]+: off by your choice — none approved by install;/)
+    expect(body).toContain('  tool approvals are off by your choice for Claude Code, Codex CLI and Antigravity CLI; to turn them on: treecontext config tool-approvals on')
   })
 }

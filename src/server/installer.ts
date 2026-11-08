@@ -31,8 +31,9 @@ import { leaseHolders } from '../persistence/leases.js'
 import {
   APPROVED_TOOLS, APPROVAL_CLIENT_NAMES, CODEX_APPROVE, NO_TOOL_APPROVALS_FLAG, TOOL_APPROVALS_OFF_COMMAND,
   TOOL_APPROVALS_ON_COMMAND, andList, approvalsChoice, claudeApprovalClause, claudeView, clientStateWords, codexHeadlessClause,
-  codexView, isApprovalClient, recordApprovalsChoice, recordWrittenApprovals, toolWords, viewWords, withClaudeApprovals, withCodexApprovals,
-  withoutClaudeApprovals, withoutCodexApprovals, writtenApprovals, type ApprovalClause, type ApprovalClient, type ClaudeSettingsSource, type ClientView, type CodexApprovalSupport, type ApprovalsChoice,
+  codexView, isApprovalClient, recordApprovalsChoice, recordWrittenApprovals, toolWords, viewWords, withAllowRules, withCodexApprovals,
+  withoutAllowRules, withoutCodexApprovals, writtenApprovals, agyView, agyHeadlessClause, CLAUDE_DIALECT, AGY_DIALECT, APPROVAL_CLIENTS,
+  type AgyEntryState, type ApprovalClause, type ApprovalClient, type ClaudeSettingsSource, type ClientView, type CodexApprovalSupport, type ApprovalsChoice,
 } from './tool-approvals.js'
 import {
   CODEX_APPROVALS_FLOOR, codexApprovalSupport, codexOriginFile, readCodexConfig, readCodexVersion, runCodexSandboxCheck, sandboxRow,
@@ -42,6 +43,7 @@ import {
   type AgentDefinition, type Platform,
   AGENTS, detectAgents, getAgent, getConfigPath,
   getHookSettingsPath, getInstructionsPath, claudeLegacyMcpPath, legacyMcpConfigs,
+  agySettingsPath, agyProjectsDir, agyHooksPath, agyMcpConfigPath,
 } from './agents.js'
 import {
   SKILL_REFERENCE_NAME, SKILL_REFERENCE_DESCRIPTION, SKILL_REFERENCE_BODY,
@@ -626,10 +628,16 @@ function ensureDir(filePath: string): void {
   }
 }
 
-function atomicWrite(filePath: string, content: string, mode: number = 0o644): void {
+function atomicWrite(filePath: string, content: string, mode?: number): void {
   ensureDir(filePath)
+  // A file that is already there keeps its own permissions (Antigravity CLI
+  // and Claude Code keep theirs owner-only): a rewrite never loosens them.
+  let keep = 0o644
+  if (mode === undefined) {
+    try { keep = statSync(filePath).mode & 0o777 } catch { /* a new file */ }
+  }
   const tmp = `${filePath}.tmp.${process.pid}`
-  writeFileSync(tmp, content, { mode })
+  writeFileSync(tmp, content, { mode: mode ?? keep })
   // On Windows, renameSync fails if the destination exists. Remove it
   // first for cross-platform atomic-ish write semantics.
   try { unlinkSync(filePath) } catch { /* may not exist yet */ }
@@ -3052,9 +3060,76 @@ function codexUserEntry(path: string): Record<string, unknown> | null {
   }
 }
 
-/** What a client's files decide now: Claude Code's for `cwd`, Codex's user file. */
+/** Every path a JSON value names: strings that are absolute paths or file URIs, anywhere inside it. */
+function pathsIn(value: unknown, out: string[] = []): string[] {
+  if (typeof value === 'string') {
+    const p = value.startsWith('file://') ? (() => { try { return fileURLToPath(value) } catch { return null } })() : value
+    if (p && isAbsolute(p)) out.push(p)
+  } else if (Array.isArray(value)) {
+    for (const v of value) pathsIn(v, out)
+  } else if (value && typeof value === 'object') {
+    for (const v of Object.values(value)) pathsIn(v, out)
+  }
+  return out
+}
+
+/** Whether `dir` is `root` or lies under it. */
+function within(dir: string, root: string): boolean {
+  const r = resolve(root)
+  const d = resolve(dir)
+  return d === r || d.startsWith(r.endsWith(sep) ? r : r + sep)
+}
+
+/**
+ * Every settings file Antigravity CLI reads permission rules from for a
+ * session in `cwd` (D383, D387): the global `settings.json` (with install's
+ * record), and each project file under `~/.gemini/config/projects/` that
+ * carries `permissions` and names `cwd` or a directory above it, since agy
+ * ranks a project's rules over the global ones. agy documents no shape for
+ * a project file, so one that carries rules but names no directory doctor
+ * can match is `unplaced`, and the row says agy may apply its rules here.
+ * Install writes only the global file.
+ */
+export function agySettingsSources(cwd: string): { sources: ClaudeSettingsSource[]; unreadable: string[]; unplaced: string[]; settingsFile: string } {
+  const settingsFile = agySettingsPath()
+  const sources: ClaudeSettingsSource[] = []
+  const unreadable: string[] = []
+  const unplaced: string[] = []
+  const recorded = writtenApprovals('agy')
+  const projects: string[] = []
+  try {
+    for (const f of readdirSync(agyProjectsDir()).sort()) if (f.endsWith('.json')) projects.push(join(agyProjectsDir(), f))
+  } catch { /* no projects directory */ }
+  for (const file of projects) {
+    const read = readSettingsObject(file)
+    if (read.state !== 'ok') { if (read.state === 'unreadable') unreadable.push(file); continue }
+    if (read.data['permissions'] === undefined) continue
+    const { permissions: _p, ...rest } = read.data
+    const paths = pathsIn(rest)
+    if (paths.length === 0) { unplaced.push(file); continue }
+    if (paths.some(root => within(cwd, root))) sources.push({ file, data: read.data })
+  }
+  const read = readSettingsObject(settingsFile)
+  if (read.state === 'unreadable') unreadable.push(settingsFile)
+  else if (read.state === 'ok') sources.push({ file: settingsFile, data: read.data, ...(recorded[settingsFile] ? { recorded: recorded[settingsFile] } : {}) })
+  return { sources, unreadable, unplaced, settingsFile }
+}
+
+/** What agy's MCP configuration holds for treecontext. */
+export function agyEntryState(path: string = agyMcpConfigPath()): AgyEntryState {
+  if (!existsSync(path)) return { state: 'absent' }
+  let data: unknown
+  try { data = JSON.parse(readFileSync(path, 'utf8')) } catch { return { state: 'unreadable' } }
+  const servers = data && typeof data === 'object' && !Array.isArray(data) ? (data as Record<string, unknown>)['mcpServers'] : undefined
+  const e = servers && typeof servers === 'object' && !Array.isArray(servers) ? (servers as Record<string, unknown>)['treecontext'] : undefined
+  if (!e || typeof e !== 'object' || Array.isArray(e)) return { state: 'absent' }
+  return { state: 'present', disabled: (e as Record<string, unknown>)['disabled'] === true }
+}
+
+/** What a client's files decide now: Claude Code's and agy's for `cwd`, Codex's user file. */
 function currentView(slug: ApprovalClient, platform: Platform, codexPath: string | null): ClientView | null {
   if (slug === 'claude') return claudeView(claudeSettingsSources(platform, process.cwd()).sources)
+  if (slug === 'agy') return agyView(agySettingsSources(process.cwd()).sources)
   const entry = codexPath ? codexUserEntry(codexPath) : null
   return entry && codexPath ? codexView(entry, writtenApprovals('codex')[codexPath]?.items ?? [], codexPath) : null
 }
@@ -3070,37 +3145,51 @@ export interface ApprovalFileOutcome {
   problem?: string
 }
 
-/** Merge Claude Code's four allow rules into one settings file, and record them. */
-export function writeClaudeApprovals(file: string, dryRun: boolean): ApprovalFileOutcome {
+/**
+ * Merge a client's four allow rules into one settings file, and record
+ * them: Claude Code's `mcp__treecontext__<tool>` or agy's
+ * `mcp(treecontext/<tool>)`. Every other key the file holds stays.
+ */
+export function writeAllowRules(slug: 'claude' | 'agy', file: string, dryRun: boolean): ApprovalFileOutcome {
   const read = readSettingsObject(file)
   if (read.state === 'unreadable') {
     return { file, added: [], removed: [], ours: [], problem: `${file} could not be read as a settings object, so no rule was added` }
   }
-  const recorded = writtenApprovals('claude')[file]
-  const merge = withClaudeApprovals(read.state === 'ok' ? read.data : {}, recorded)
+  const recorded = writtenApprovals(slug)[file]
+  const merge = withAllowRules(read.state === 'ok' ? read.data : {}, recorded, slug === 'agy' ? AGY_DIALECT : CLAUDE_DIALECT)
   if (merge.data && !dryRun) atomicWrite(file, JSON.stringify(merge.data, null, 2) + '\n')
-  if (!dryRun && !merge.unwritable) recordWrittenApprovals('claude', file, merge.ours, merge.created)
+  if (!dryRun && !merge.unwritable) recordWrittenApprovals(slug, file, merge.ours, merge.created)
   return {
     file, added: merge.added, removed: [], ours: merge.ours,
     ...(merge.unwritable ? { problem: `${merge.unwritable} in ${file}, so no rule was added` } : {}),
   }
 }
 
-/** Take Claude Code's rules install wrote back out of one settings file, by the record. */
-export function removeClaudeApprovals(file: string, dryRun: boolean): ApprovalFileOutcome {
-  const recorded = writtenApprovals('claude')[file]
+/** Take the allow rules install wrote back out of one settings file, by the record. */
+export function removeAllowRules(slug: 'claude' | 'agy', file: string, dryRun: boolean): ApprovalFileOutcome {
+  const recorded = writtenApprovals(slug)[file]
   const none: ApprovalFileOutcome = { file, added: [], removed: [], ours: [] }
   if (!recorded) return none
   const read = readSettingsObject(file)
   if (read.state === 'unreadable') return { ...none, ours: recorded.items, problem: `${file} cannot be read now, so install's rules there were left for a later run` }
   if (read.state === 'ok') {
-    const taken = withoutClaudeApprovals(read.data, recorded)
+    const taken = withoutAllowRules(read.data, recorded)
     if (taken.data && !dryRun) atomicWrite(file, JSON.stringify(taken.data, null, 2) + '\n')
-    if (!dryRun) recordWrittenApprovals('claude', file, [])
+    if (!dryRun) recordWrittenApprovals(slug, file, [])
     return { ...none, removed: taken.removed }
   }
-  if (!dryRun) recordWrittenApprovals('claude', file, [])
+  if (!dryRun) recordWrittenApprovals(slug, file, [])
   return none
+}
+
+/** Merge Claude Code's four allow rules into one settings file, and record them. */
+export function writeClaudeApprovals(file: string, dryRun: boolean): ApprovalFileOutcome {
+  return writeAllowRules('claude', file, dryRun)
+}
+
+/** Take Claude Code's rules install wrote back out of one settings file, by the record. */
+export function removeClaudeApprovals(file: string, dryRun: boolean): ApprovalFileOutcome {
+  return removeAllowRules('claude', file, dryRun)
 }
 
 /** Codex's approvals in its config file's treecontext entry, rewritten alone (the config command): null when there is no entry. */
@@ -3176,7 +3265,7 @@ export interface ApprovalSummary {
 
 /** Where a client's grant lives, in the developer's words. */
 function grantWhere(slug: ApprovalClient, files: readonly string[]): string {
-  return slug === 'claude'
+  return slug === 'claude' || slug === 'agy'
     ? `permissions.allow in ${files.join(' and ')}`
     : `mcp_servers.treecontext.tools in ${files.join(' and ')}`
 }
@@ -3222,6 +3311,26 @@ function inForceLine(name: string, view: ClientView, off: boolean): string {
     : `headless workers are refused ${toolWords(w.refused)} in ${name}${asking}`
 }
 
+/** Whether an agent's MCP configuration carries a treecontext entry. */
+function hasTreecontextEntry(agent: AgentDefinition, platform: Platform): boolean {
+  const path = getConfigPath(agent, platform)
+  if (!path || !existsSync(path)) return false
+  try {
+    const data = agent.configFormat === 'toml-codex'
+      ? parseToml(readFileSync(path, 'utf8')) as Record<string, unknown>
+      : JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>
+    const servers = data[configRootKey(agent)]
+    return !!servers && typeof servers === 'object' && 'treecontext' in (servers as Record<string, unknown>)
+  } catch {
+    return false
+  }
+}
+
+/** Whether agy's MCP configuration carries a treecontext entry (install wired it). */
+function agyWired(): boolean {
+  return agyEntryState().state === 'present'
+}
+
 /** Whether Claude Code carries a treecontext entry (install wired it). */
 function claudeWired(platform: Platform): boolean {
   const claude = getAgent('claude')
@@ -3245,13 +3354,13 @@ export async function configToolApprovals(on: boolean, only: string[] | null): P
     throw new Error(`config tool-approvals: ${unknown.join(', ')} ${unknown.length === 1 ? 'is' : 'are'} not a client install approves tools in — the clients are ${andList(Object.keys(APPROVAL_CLIENT_NAMES))}`)
   }
   repairInstallState()
-  const scope: ApprovalClient[] = only && only.length > 0 ? [...new Set(only.filter(isApprovalClient))] : ['claude', 'codex']
+  const scope: ApprovalClient[] = only && only.length > 0 ? [...new Set(only.filter(isApprovalClient))] : [...APPROVAL_CLIENTS]
   const names = andList(scope.map(s => APPROVAL_CLIENT_NAMES[s]))
   const lines: string[] = [`tool approvals: ${on ? 'on' : 'off'} for ${names}`]
   const tail: string[] = []
   const codex = getAgent('codex')
   const codexPath = codex ? getConfigPath(codex, platform) : null
-  const where = (slug: ApprovalClient): string => grantWhere(slug, slug === 'claude' ? claudeApprovalFiles(platform) : [codexPath ?? '~/.codex/config.toml'])
+  const where = (slug: ApprovalClient): string => grantWhere(slug, slug === 'claude' ? claudeApprovalFiles(platform) : slug === 'agy' ? [agySettingsPath()] : [codexPath ?? '~/.codex/config.toml'])
 
   if (!on) {
     recordApprovalsChoice(scope, 'off', 'config')
@@ -3259,8 +3368,8 @@ export async function configToolApprovals(on: boolean, only: string[] | null): P
       const name = APPROVAL_CLIENT_NAMES[slug]
       const taken: string[] = []
       for (const [file, rec] of Object.entries(writtenApprovals(slug))) {
-        if (slug === 'claude') {
-          const o = removeClaudeApprovals(file, false)
+        if (slug === 'claude' || slug === 'agy') {
+          const o = removeAllowRules(slug, file, false)
           if (o.removed.length > 0) taken.push(`took back install's ${andList(o.removed)} from ${file}`)
           if (o.problem) taken.push(o.problem)
         } else {
@@ -3271,7 +3380,8 @@ export async function configToolApprovals(on: boolean, only: string[] | null): P
           if (removed.length > 0) taken.push(`took back install's approval of ${andList(removed)} from ${file}${r?.detail ? ` (${r.detail})` : ''}`)
         }
       }
-      const view = currentView(slug, platform, codexPath)
+      // An agy that install never wired has no view to echo: its off is recorded for a later install.
+      const view = slug === 'agy' && !agyWired() ? null : currentView(slug, platform, codexPath)
       lines.push(`  ${name}: ${taken.length > 0 ? taken.join('; ') : 'nothing of install\'s to take back by its record'}${view ? `; now ${clientStateWords(view, where(slug))}` : ''}`)
       if (view) tail.push(inForceLine(name, view, true))
     }
@@ -3284,10 +3394,11 @@ export async function configToolApprovals(on: boolean, only: string[] | null): P
   recordApprovalsChoice(scope, 'on', 'config')
   for (const slug of scope) {
     const name = APPROVAL_CLIENT_NAMES[slug]
-    if (slug === 'claude') {
-      if (!claudeWired(platform)) { lines.push(`  ${name}: not wired — treecontext install --agent claude wires it with its approvals`); continue }
+    if (slug === 'claude' || slug === 'agy') {
+      if (slug === 'claude' ? !claudeWired(platform) : !agyWired()) { lines.push(`  ${name}: not wired — treecontext install --agent ${slug} wires it with its approvals`); continue }
       const said: string[] = []
-      for (const o of claudeApprovalFiles(platform).map(f => writeClaudeApprovals(f, false))) {
+      const files = slug === 'claude' ? claudeApprovalFiles(platform) : [agySettingsPath()]
+      for (const o of files.map(f => writeAllowRules(slug, f, false))) {
         if (o.added.length > 0) said.push(`approved ${andList(o.added)} in ${o.file}`)
         if (o.problem) said.push(o.problem)
       }
@@ -3402,6 +3513,8 @@ export async function install(opts: InstallOptions): Promise<AgentInstallResult[
   }
 
   let ccsMcpSynced = false
+  /** Instruction files this run has written, and for which agent. */
+  const instructionsWritten = new Map<string, string>()
   // One agent's broken configuration must not decide whether the agents
   // beside it get wired. Before this was isolated, a single unwritable
   // directory aborted the whole run at whatever point it was reached, so
@@ -3620,17 +3733,27 @@ export async function install(opts: InstallOptions): Promise<AgentInstallResult[
       // The unverified plugin adapter is not advertised (D30); this is what
       // doctor's OpenCode row says too.
       console.log(`  hooks: none — OpenCode offers no shell hooks; the MCP tools are its whole surface`)
+    } else if (agent.slug === 'agy') {
+      // Its hooks stay its own (D383, fenced): no adapter has earned a
+      // live-payload pass, so install writes none, and says so.
+      console.log(`  hooks: none — Antigravity CLI keeps its own hook configuration (${agyHooksPath()}), which install leaves alone; the MCP tools are its whole surface`)
     } else {
       console.log(`  hooks: not supported by ${agent.name}`)
       console.log(`         conversation indexer unavailable — agent uses standard mode (manual treecontext_insert/query)`)
     }
 
-    // Instructions
+    // Instructions. Gemini CLI and Antigravity CLI read the same
+    // `~/.gemini/GEMINI.md` (D383): the block is written there once, by the
+    // first of them, and the second says where.
     if (agent.instructions) {
       const instrPath = getInstructionsPath(agent, platform)
-      if (instrPath) {
+      const earlier = instrPath ? instructionsWritten.get(resolve(instrPath)) : undefined
+      if (instrPath && earlier) {
+        console.log(`  instructions: ${instrPath} [shared with ${earlier} — written once, above]`)
+      } else if (instrPath) {
         const instrResult = upsertInstructions(instrPath, opts.force, opts.dryRun)
         agentResult.actions.push(instrResult)
+        instructionsWritten.set(resolve(instrPath), agent.name)
         console.log(`  instructions: ${instrPath} [${instrResult.status}]`)
       }
     }
@@ -3656,6 +3779,28 @@ export async function install(opts: InstallOptions): Promise<AgentInstallResult[
           if (o.ours.length > 0 || o.removed.length > 0) approvalsRecorded = true
         }
         approvalSummaries.push({ slug: 'claude', state: off ? 'off' : 'on', where, view: currentView('claude', platform, null), ...dryNote(outcomes.flatMap(o => o.added)) })
+      }
+    }
+
+    // Antigravity CLI's grant (D383, D390): its four allow rules,
+    // `mcp(treecontext/<tool>)`, merged into the permissions of its global
+    // settings beside the developer's own rules and every other key there;
+    // taken back under an off.
+    if (agent.slug === 'agy') {
+      const choice = choiceOf('agy')
+      const file = agySettingsPath()
+      const where = grantWhere('agy', [file])
+      if (choice.state === 'unknown') {
+        approvalSummaries.push({ slug: 'agy', state: 'unknown', where, view: currentView('agy', platform, null), note: unknownChoiceNote(choice.backup) })
+      } else {
+        const off = choice.state === 'off'
+        const o = off ? removeAllowRules('agy', file, opts.dryRun) : writeAllowRules('agy', file, opts.dryRun)
+        if (!off || o.removed.length > 0 || o.problem) console.log(approvalsLine(o, opts.dryRun, 'permissions.allow'))
+        if (o.added.length > 0 || o.removed.length > 0) {
+          agentResult.actions.push({ type: 'hook-settings', path: o.file, status: opts.dryRun ? 'dry-run' : 'updated', detail: o.added.length > 0 ? `allowed ${andList(o.added)}` : `removed ${andList(o.removed)}` })
+        }
+        if (o.ours.length > 0 || o.removed.length > 0) approvalsRecorded = true
+        approvalSummaries.push({ slug: 'agy', state: off ? 'off' : 'on', where, view: currentView('agy', platform, null), ...dryNote(o.added) })
       }
     }
 
@@ -3751,9 +3896,12 @@ export async function uninstall(opts: {
       })
       .filter((a): a is AgentDefinition => a !== undefined)
   } else {
+    // An agent whose entry is gone may still hold rules install wrote in
+    // another of its files (Antigravity CLI's settings): its record names
+    // them, so the agent is still uninstalled.
     agents = AGENTS.filter(a => {
       const path = getConfigPath(a, platform)
-      return path && existsSync(path)
+      return (path && existsSync(path)) || (isApprovalClient(a.slug) && Object.keys(writtenApprovals(a.slug)).length > 0)
     })
   }
   // A run that names no agent is a FULL uninstall, and a full uninstall owns
@@ -3879,10 +4027,16 @@ export async function uninstall(opts: {
       }
     }
 
-    // Remove instructions
+    // Remove instructions. A file another agent shares (Gemini CLI's and
+    // Antigravity CLI's `~/.gemini/GEMINI.md`, D383) keeps its block while
+    // that agent, outside this uninstall, is still wired.
     if (agent.instructions && !opts.hooksOnly) {
       const instrPath = getInstructionsPath(agent, platform)
-      if (instrPath) {
+      const sharer = instrPath ? AGENTS.find(o => o.slug !== agent.slug && !agents.includes(o)
+        && getInstructionsPath(o, platform) === instrPath && hasTreecontextEntry(o, platform)) : undefined
+      if (instrPath && sharer) {
+        console.log(`${agent.name}: instructions kept in ${instrPath} — ${sharer.name} reads the same block and is still wired`)
+      } else if (instrPath) {
         const instrResult = removeInstructions(instrPath, opts.dryRun)
         if (instrResult) {
           agentResult.actions.push(instrResult)
@@ -3891,11 +4045,12 @@ export async function uninstall(opts: {
       }
     }
 
-    // Claude Code's grant (D390): the rules install wrote, by its record,
-    // and nothing else; the developer's own rules stay.
-    if (agent.slug === 'claude' && !opts.hooksOnly) {
-      for (const file of Object.keys(writtenApprovals('claude'))) {
-        const o = removeClaudeApprovals(file, opts.dryRun)
+    // Claude Code's and Antigravity CLI's grants (D383, D390): the rules
+    // install wrote, by its record, and nothing else; the developer's own
+    // rules, and every other key of the file, stay.
+    if ((agent.slug === 'claude' || agent.slug === 'agy') && !opts.hooksOnly) {
+      for (const file of Object.keys(writtenApprovals(agent.slug))) {
+        const o = removeAllowRules(agent.slug, file, opts.dryRun)
         if (o.removed.length > 0) {
           agentResult.actions.push({ type: 'hook-settings', path: file, status: opts.dryRun ? 'dry-run' : 'updated', detail: `removed ${andList(o.removed)}` })
           console.log(`${agent.name}: tool approvals install wrote (${andList(o.removed)}) removed from ${file}`)
@@ -4552,6 +4707,7 @@ export const CLIENT_HOOK_MODES: Readonly<Record<string, string>> = {
   vscode: 'reads the Claude settings file when its Claude-hooks setting is on (chat.useClaudeHooks, off by default; read as-is, matcher values ignored; also reads .github/hooks/*.json)',
   cursor: 'reads the Claude settings file by default (as-is, through its Include Third-Party configs setting)',
   opencode: 'offers no shell hooks, so the tools are its whole surface (the MCP tools; JS/TS plugins are not hooks)',
+  agy: 'keeps its own hook configuration, which install leaves alone, so the tools are its whole surface (~/.gemini/config/hooks.json, workspace .agents/hooks.json; no adapter, nothing is captured)',
 }
 
 /** A client row's hook clause: the three halves D161 asks for, and its grade. */
@@ -4784,6 +4940,33 @@ function clientHookReportBase(agent: AgentDefinition, platform: Platform): Clien
 
   if (agent.slug === 'opencode') {
     return { mode, state: 'no hooks to install — MCP tools only (nothing is captured)', remedy: 'nothing to do', warn: false, hooksPresent: false }
+  }
+
+  if (agent.slug === 'agy') {
+    // Its hooks are its own (D383): install writes none, and a treecontext
+    // hook someone wrote there by hand is named, since no adapter reads
+    // what it stages and nothing it captures is verified.
+    const path = agyHooksPath()
+    let ours: string[] = []
+    let unreadable = false
+    if (existsSync(path)) {
+      try {
+        ours = collectCommandStrings(JSON.parse(readFileSync(path, 'utf8'))).filter(c => TC_COMMAND_HINT_RE.test(c))
+      } catch { unreadable = true }
+    }
+    if (ours.length > 0) {
+      return {
+        mode,
+        state: `${ours.length} treecontext hook command${ours.length === 1 ? '' : 's'} in ${path}, which install does not write and no adapter reads (nothing they stage is verified)`,
+        remedy: `remove them from ${path}; install writes no Antigravity CLI hooks`,
+        warn: true, fix: `remove the treecontext hooks from ${path}`, hooksPresent: false,
+      }
+    }
+    return {
+      mode,
+      state: `no treecontext hooks in ${path}${unreadable ? ' (it does not parse as JSON)' : ''} — MCP tools only (nothing is captured)`,
+      remedy: 'nothing to do', warn: false, hooksPresent: false,
+    }
   }
 
   const block = claudeHooksBlockState(platform)
@@ -6573,6 +6756,16 @@ export async function doctor(): Promise<DiagnosticResult[]> {
         support, floor: CODEX_APPROVALS_FLOOR, ...(note ? { note } : {}), ...(refused ? { refused } : {}),
       })
     }
+    if (agent.slug === 'agy') {
+      // Antigravity CLI (D383, D387): its MCP entry, the four allow rules in
+      // the settings it reads for this directory, and any ask or deny rule
+      // of the developer's over one of them, named with its file.
+      const { sources, unreadable, unplaced, settingsFile } = agySettingsSources(process.cwd())
+      approval = agyHeadlessClause({
+        mcpPath: configPath, entry: agyEntryState(configPath), view: agyView(sources), settingsFile,
+        choice: approvalsChoice('agy'), unreadable, unplaced,
+      })
+    }
     if (approval) parts.push(`${approval.text}; remedy: ${approval.remedy}`)
     // The client clause is graded on its own terms: its state words (a copy
     // whose scripts are "missing") must not trip the MCP grader above, and
@@ -6585,7 +6778,13 @@ export async function doctor(): Promise<DiagnosticResult[]> {
     // the flagged install that rewrites a copy converges them with it.
     const copyWarn = client?.warn === true && COPYING_CLIENTS.has(agent.slug)
     const flag = copyWarn ? ' --experimental-capture' : ''
-    const fix = installNeeded
+    // An agy row whose one finding is the missing entry names the plain
+    // install its headless clause names: install writes the entry (D383).
+    const agyEntryOnly = agent.slug === 'agy' && installNeeded && !interpreterProblem && !channelProblem
+      && parts.filter(p => /not configured|missing|error|outdated/.test(p) && !p.startsWith('headless workers:')).every(p => p === 'MCP not configured')
+    const fix = agyEntryOnly
+      ? approval?.fix
+      : installNeeded
       ? `treecontext install --force --agent ${agent.slug}${flag}`
       : hasModeProblem
         ? `treecontext install --agent ${agent.slug}${flag}`
