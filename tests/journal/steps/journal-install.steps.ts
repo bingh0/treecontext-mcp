@@ -14,7 +14,9 @@ import { openNodeSqlite } from '../../../src/persistence/node-sqlite.js'
 import { FlatStore } from '../../../src/flat-store.js'
 import { LeaseClient, DRAIN_LEASE_TTL_SECS } from '../../../src/persistence/leases.js'
 import { MAX_INGEST_ATTEMPTS } from '../../../src/persistence/capture-constants.js'
-import { type InstallWorld, pathWithFakeClaude, setClaudeVersion, tcCli, agentCli, openInstallWorld, treeOf, pathsMentioned, installedCommands, interpreterRunsPackage, isBatchBody, toPosix, mcpLauncherIn, agentConfigPath, fakeGlobalInstall } from '../install-harness.js'
+import { type InstallWorld, pathWithFakeClaude, setClaudeVersion, tcCli, agentCli, openInstallWorld, treeOf, pathsMentioned, installedCommands, interpreterRunsPackage, isBatchBody, toPosix, mcpLauncherIn, agentConfigPath, fakeGlobalInstall, clientEntry } from '../install-harness.js'
+import { startEntryAsClient } from '../standins.js'
+import { parse as parseToml, stringify as stringifyToml } from 'smol-toml'
 
 export const installDefiner = (reg: Registry<InstallWorld>): void => {
   // ── install wires only the agents that are present ──────────────────
@@ -516,9 +518,51 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
     expect(tcCli(w, ['install', '--yes']).status).toBe(0)
   })
 
+  reg.define(/^both agents' entries have since been hand-edited to a different absolute command, and the first given a pinned store$/, (w: InstallWorld) => {
+    // An absolute command that exists is exactly the shape a plain
+    // reinstall keeps as the developer's (convergence repairs only a
+    // command that no longer starts a server), so the rewrite below is
+    // --force's doing. The canonical entry is what this build wrote before
+    // the edit: the oracle for "the command and arguments this build writes".
+    const claudePath = join(w.ihome!, '.claude.json')
+    const cfg = JSON.parse(readFileSync(claudePath, 'utf8')) as Record<string, Record<string, Record<string, unknown>>>
+    const canonical = cfg['mcpServers']!['treecontext']!
+    w.iCanonicalEntry = JSON.stringify(canonical)
+    w.iDeveloperArgs = ['--store', 'pinned-store']
+    cfg['mcpServers']!['treecontext'] = { ...canonical, command: process.execPath, args: [...(canonical['args'] as string[]), ...w.iDeveloperArgs] }
+    writeFileSync(claudePath, JSON.stringify(cfg, null, 2))
+    const cursorPath = join(w.ihome!, '.cursor', 'mcp.json')
+    const cursor = JSON.parse(readFileSync(cursorPath, 'utf8')) as Record<string, Record<string, Record<string, unknown>>>
+    cursor['mcpServers']!['treecontext'] = { ...cursor['mcpServers']!['treecontext']!, command: process.execPath }
+    writeFileSync(cursorPath, JSON.stringify(cursor, null, 2))
+    w.iCursorBytes = readFileSync(cursorPath, 'utf8')
+    // The edit is what Claude Code itself now reads, or the rewrite proves nothing.
+    expect(clientEntry(w, 'Claude Code').command).toBe(process.execPath)
+  })
+
   reg.define(/^install runs again with force naming only the first agent$/, (w: InstallWorld) => {
     w.irun = tcCli(w, ['install', '--yes', '--force', '--agent', 'claude'])
     expect(w.irun.status).toBe(0)
+  })
+
+  reg.define(/^the named agent's entry carries the command and arguments this build writes$/, (w: InstallWorld) => {
+    // Claude Code's own reading (`claude mcp get`) is the other side: the
+    // launcher this build wrote under the sandbox home, and this build's
+    // arguments followed by the developer's.
+    const canonical = JSON.parse(w.iCanonicalEntry!) as { command: string; args: string[] }
+    expect(canonical.command).toBe(mcpLauncherIn(w.ihome!))
+    const seen = clientEntry(w, 'Claude Code')
+    expect(seen.command, `the hand-edited command survived a forced reinstall:\n${seen.printed}`).toBe(canonical.command)
+    expect(seen.args).toEqual([...canonical.args, ...w.iDeveloperArgs!])
+  })
+
+  reg.define(/^the pinned store the developer added to the named agent's entry is still there$/, (w: InstallWorld) => {
+    const seen = clientEntry(w, 'Claude Code')
+    const at = seen.args.indexOf('--store')
+    expect(at, `the forced reinstall dropped the developer's pinned store:\n${seen.printed}`).toBeGreaterThanOrEqual(0)
+    expect(seen.args[at + 1]).toBe('pinned-store')
+    // Named in the install output, too, as kept.
+    expect(w.irun!.stdout).toMatch(/\.claude\.json \[updated — kept your --store pinned-store\]/)
   })
 
   reg.define(/^the other agent's hand-edited configuration is byte-for-byte untouched$/, (w: InstallWorld) => {
@@ -1418,5 +1462,182 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
     expect(p, 'it gives no reason').toMatch(/prompt cache/i)
     expect(p, 'it does not name the /config row').toMatch(/`\/config`/)
     expect(p, 'it does not name the settings line').toContain('"idleCompaction": true')
+  })
+  // ── a reinstall converges what install owns (D385) ──────────────────
+  //
+  // A real install into a sandbox home, then the entry rewritten in an
+  // earlier build's shape with the developer's additions, then a real
+  // reinstall. The other side is the client's own reading of its
+  // configuration: `codex mcp get treecontext` (with and without --json:
+  // the JSON form prints the forwarded variables and the enabled tools, the
+  // plain form the default approval) and `claude mcp get treecontext` (its
+  // command, arguments and environment block). Every addition in the table
+  // is printed by the client itself, so nothing here rests on a read-back
+  // of our own file. The command each client prints is the launcher under
+  // the sandbox home, which proves it read the sandbox's file.
+  const EARLIER: Record<string, { stale: string; additions: string; args: string[]; keys: Record<string, unknown> }> = {
+    'Codex CLI|lacking the worker variables': {
+      stale: 'no env_vars',
+      additions: 'a pinned store, `--instructions none`, a default approval and a list of enabled tools',
+      args: ['--store', 'pinned-store', '--instructions', 'none'],
+      keys: { default_tools_approval_mode: 'approve', enabled_tools: ['treecontext_status', 'treecontext_query', 'treecontext_export', 'treecontext_insert'] },
+    },
+    'Codex CLI|starting the server in capture mode': {
+      stale: '--capture --debug',
+      additions: 'a pinned store and a policy flag',
+      args: ['--store', 'pinned-store', '--policy', 'contributor'],
+      keys: {},
+    },
+    'Claude Code|naming an interpreter that no longer exists': {
+      stale: 'a version-stamped node that is gone',
+      additions: 'a pinned store and an environment block',
+      args: ['--store', 'pinned-store'],
+      keys: { env: { TREECONTEXT_DEV_NOTE: 'kept-by-the-developer' } },
+    },
+  }
+
+  reg.define(/^a (Claude Code|Codex CLI) entry written by an earlier build, (lacking the worker variables|starting the server in capture mode|naming an interpreter that no longer exists), to which the developer has added (.+)$/,
+    async (w: InstallWorld, agent: unknown, stale: unknown, additions: unknown) => {
+      const row = EARLIER[`${String(agent)}|${String(stale)}`]
+      expect(row, `no earlier-build shape for ${String(agent)}, ${String(stale)}`).toBeDefined()
+      expect(String(additions)).toBe(row!.additions)
+      w.iClient = agent as 'Claude Code' | 'Codex CLI'
+      await openInstallWorld(w, w.iClient === 'Codex CLI' ? ['.claude', '.codex'] : ['.claude'])
+      w.iproj = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-install-proj-')))
+      w.defer(() => rmSync(w.iproj!, { recursive: true, force: true }))
+      // This build's own entry first: it is the oracle for what this build
+      // writes, and the launcher an earlier build would have left exists.
+      expect(tcCli(w, ['install', '--yes']).status).toBe(0)
+      w.iDeveloperArgs = row!.args
+      w.iDeveloperKeys = row!.keys
+      if (w.iClient === 'Codex CLI') {
+        const path = agentConfigPath('codex', w.ihome!)
+        const toml = parseToml(readFileSync(path, 'utf8')) as Record<string, Record<string, Record<string, unknown>>>
+        const canonical = toml['mcp_servers']!['treecontext']!
+        w.iCanonicalEntry = JSON.stringify(canonical)
+        // The shape the beta.2 and beta.3 builds wrote: the server in
+        // capture mode for every client, with or without the variables.
+        const earlier: Record<string, unknown> = {
+          command: canonical['command'],
+          args: ['serve', '--transport', 'stdio', '--capture', '--debug', '--lexical', ...row!.args],
+          ...(stale === 'lacking the worker variables' ? {} : { env_vars: canonical['env_vars'] }),
+          ...row!.keys,
+        }
+        toml['mcp_servers']!['treecontext'] = earlier
+        writeFileSync(path, stringifyToml(toml) + '\n')
+      } else {
+        const path = join(w.ihome!, '.claude.json')
+        const cfg = JSON.parse(readFileSync(path, 'utf8')) as Record<string, Record<string, Record<string, unknown>>>
+        const canonical = cfg['mcpServers']!['treecontext']!
+        w.iCanonicalEntry = JSON.stringify(canonical)
+        // The pre-launcher shape: a version-stamped interpreter and the
+        // package's module under it, both since removed by a node upgrade.
+        const gone = join(w.ihome!, '.nvm', 'versions', 'node', 'v22.0.0')
+        cfg['mcpServers']!['treecontext'] = {
+          command: join(gone, 'bin', 'node'),
+          args: [join(gone, 'lib', 'node_modules', 'treecontext-mcp', 'dist', 'server', 'cli.js'), 'serve', '--transport', 'stdio', '--capture', '--debug', '--lexical', ...row!.args],
+          ...row!.keys,
+        }
+        writeFileSync(path, JSON.stringify(cfg, null, 2))
+      }
+      // The client reads the earlier shape before the reinstall, or the
+      // scenario starts from something it never saw.
+      const before = clientEntry(w, w.iClient)
+      expect(before.args.slice(-row!.args.length)).toEqual(row!.args)
+      if (stale === 'lacking the worker variables') expect(before.envNames).toEqual([])
+      if (stale === 'starting the server in capture mode') expect(before.args).toContain('--capture')
+      if (stale === 'naming an interpreter that no longer exists') expect(existsSync(before.command)).toBe(false)
+    })
+
+  reg.define(/^the entry carries the command and arguments this build writes for (Claude Code|Codex CLI)$/, (w: InstallWorld, agent: unknown) => {
+    const canonical = JSON.parse(w.iCanonicalEntry!) as { command: string; args: string[]; env_vars?: string[] }
+    const seen = clientEntry(w, agent as 'Claude Code' | 'Codex CLI')
+    expect(seen.command, seen.printed).toBe(mcpLauncherIn(w.ihome!))
+    expect(seen.command).toBe(canonical.command)
+    // This build's arguments, then the developer's: the stale capture and
+    // debug flags of a Codex entry are gone, nothing is doubled.
+    expect(seen.args, seen.printed).toEqual([...canonical.args, ...w.iDeveloperArgs!])
+    if (agent === 'Codex CLI') {
+      expect(canonical.env_vars, 'this build writes the worker variables for Codex').toEqual(['TREECONTEXT_TICKET', 'TREECONTEXT_WORKER_SESSION'])
+      expect(seen.envNames, seen.printed).toEqual(expect.arrayContaining(canonical.env_vars!))
+    }
+  })
+
+  reg.define(/^(a pinned store.*) read as the developer left them$/, (w: InstallWorld, additions: unknown) => {
+    const row = Object.values(EARLIER).find(r => r.additions === String(additions))
+    expect(row, `no row adds ${String(additions)}`).toBeDefined()
+    const seen = clientEntry(w, w.iClient!)
+    const items = (a: string[]): string[] => a.flatMap((t, i) => (t.startsWith('--') && a[i + 1] !== undefined && !a[i + 1]!.startsWith('--') ? [`${t} ${a[i + 1]}`] : []))
+    for (const pair of items(row!.args)) {
+      expect(items(seen.args), `the reinstall lost the developer's ${pair}:\n${seen.printed}`).toContain(pair)
+    }
+    const keys = row!.keys
+    if ('default_tools_approval_mode' in keys) {
+      expect(seen.printed, 'Codex no longer reads the default approval').toMatch(new RegExp(`^\\s*default_tools_approval_mode: ${String(keys['default_tools_approval_mode'])}$`, 'm'))
+    }
+    if ('enabled_tools' in keys) {
+      expect(seen.json?.['enabled_tools'], 'Codex no longer reads the enabled tools').toEqual(keys['enabled_tools'])
+    }
+    if ('env' in keys) {
+      for (const [k, v] of Object.entries(keys['env'] as Record<string, string>)) {
+        expect(seen.printed, `Claude Code no longer reads ${k} in the environment block`).toContain(`${k}=${v}`)
+      }
+    }
+    // Install said so: the entry is reported updated, keeping each addition.
+    const line = w.irun!.stdout.split('\n').find(l => /^\s+mcp: .*\[updated — kept your /.test(l))
+    expect(line, `install did not report the developer's additions as kept:\n${w.irun!.stdout}`).toBeDefined()
+    for (const pair of items(row!.args)) expect(line).toContain(pair)
+    for (const k of Object.keys(keys)) expect(line).toContain(k)
+  })
+
+  // ── capture mode only where the capture hooks are installed (D386) ──
+  //
+  // The other side is the server itself: the entry's command and arguments,
+  // as the client reads them, started as the client starts them
+  // (startEntryAsClient), and the `Mode:` line that server writes. Then
+  // doctor's row for the client, off doctor's own stdout. The Antigravity
+  // CLI row waits on unit 3 (D383): this build has no agent entry for it,
+  // so its Given is left unbound and the outline is held open by title.
+  reg.define(/^(Claude Code|Codex CLI) is installed$/, async (w: InstallWorld, agent: unknown) => {
+    w.iClient = agent as 'Claude Code' | 'Codex CLI'
+    await openInstallWorld(w, w.iClient === 'Codex CLI' ? ['.claude', '.codex'] : ['.claude'])
+    w.iproj = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-install-proj-')))
+    w.defer(() => rmSync(w.iproj!, { recursive: true, force: true }))
+  })
+
+  reg.define(/^install runs (as usual|without the experimental flag|with the experimental flag naming Codex CLI)$/, (w: InstallWorld, how: unknown) => {
+    const args = how === 'with the experimental flag naming Codex CLI'
+      ? ['install', '--yes', '--agent', 'codex', '--experimental-capture']
+      : ['install', '--yes']
+    w.irun = tcCli(w, args)
+    expect(w.irun.status, w.irun.out).toBe(0)
+  })
+
+  reg.define(/^the server that (Claude Code|Codex CLI)'s entry starts runs (in capture mode|without capture)$/, async (w: InstallWorld, agent: unknown, mode: unknown) => {
+    const seen = clientEntry(w, agent as 'Claude Code' | 'Codex CLI')
+    expect(seen.command, seen.printed).toBe(mcpLauncherIn(w.ihome!))
+    w.iServerMode = await startEntryAsClient(w.ihome!, seen, w.iproj!)
+    expect(w.iServerMode, `the server ${String(agent)}'s entry starts (args: ${seen.args.join(' ')})`)
+      .toBe(mode === 'in capture mode' ? 'conversation-indexer' : 'standard')
+  })
+
+  reg.define(/^doctor's row for (Claude Code|Codex CLI) reads its mode as correct$/, (w: InstallWorld, agent: unknown) => {
+    const doctor = tcCli(w, ['doctor'])
+    const lines = doctor.stdout.split('\n')
+    const i = lines.findIndex(l => new RegExp(`^\\[\\w+\\]\\s+${String(agent)}:`).test(l))
+    expect(i, `doctor printed no ${String(agent)} row:\n${doctor.stdout}`).toBeGreaterThanOrEqual(0)
+    const row = lines[i]!
+    // The mode doctor names is the one the server ran in, and the clause
+    // ends there: a mode that disagrees with the hooks carries its finding
+    // inside the clause, before the comma, and the row warns.
+    const clause = agent === 'Claude Code'
+      ? 'mode: capture'
+      : w.iServerMode === 'conversation-indexer'
+        ? 'server mode: capture (this client: experimental hooks, unverified)'
+        : 'server mode: standard (no auto-capture) (this client: tools only)'
+    expect(row, row).toContain(`: MCP configured, ${clause}, `)
+    expect(row, `doctor warns on ${String(agent)}'s row:\n${row}\n${lines[i + 1] ?? ''}`).toMatch(/^\[ok\]/)
+    const indexer = lines.find(l => /Conversation indexer:/.test(l))
+    expect(indexer, doctor.stdout).toMatch(/^\[ok\]/)
   })
 }

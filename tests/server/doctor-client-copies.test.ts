@@ -111,7 +111,7 @@ describe('doctor and install on a copying client, end to end', () => {
 
   it("a client's row says the capture mode is the server's, and Claude Code's row is unchanged", () => {
     const r = ok(['doctor']).stdout
-    expect(r).toMatch(/^\[ok\]\s+Codex CLI: MCP configured, server mode: capture \(this client: tools only\),/m)
+    expect(r).toMatch(/^\[ok\]\s+Codex CLI: MCP configured, server mode: standard \(no auto-capture\) \(this client: tools only\),/m)
     expect(r).toMatch(/^\[ok\]\s+Claude Code: MCP configured, mode: capture,/m)
     ok(['install', '--agent', 'codex', '--experimental-capture'])
     expect(ok(['doctor']).stdout).toMatch(/Codex CLI: MCP configured, server mode: capture \(this client: experimental hooks, unverified\),/)

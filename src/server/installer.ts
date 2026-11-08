@@ -532,8 +532,22 @@ exec "$TC_NODE" "$TC_CLI" "$@"
 `
 }
 
-export function mcpCommand(useNpx: boolean, lexical = false): { command: string; args: string[] } {
-  const serveArgs = ['serve', '--transport', 'stdio', '--capture', '--debug']
+/**
+ * The command and arguments install writes for the server.
+ *
+ * `capture` is whether the agent's capture hooks are installed (D386): the
+ * server starts in capture mode, and with the debug flag, only for Claude
+ * Code and for a copying client opted in by name under the experimental
+ * flag. Every other entry starts it without capture: a capture-mode line on
+ * a client nothing captures is the promise D29 forbids. That entry says
+ * `--no-capture` rather than leaving the flag out, because the global
+ * config install writes (installGlobalConfig) sets `capture = true`, and a
+ * server started with no capture flag reads it and captures. Debug logs
+ * stay on by the server's own default, so an entry without `--debug` loses
+ * nothing doctor's log row reads.
+ */
+export function mcpCommand(useNpx: boolean, lexical = false, capture = true): { command: string; args: string[] } {
+  const serveArgs = ['serve', '--transport', 'stdio', ...(capture ? ['--capture', '--debug'] : ['--no-capture'])]
   // Lexical FlatStore backend (FTS5 bm25, no embedder/ONNX). When set, the
   // served store bypasses the embedder + tree path (cli.ts serve --lexical).
   if (lexical) serveArgs.push('--lexical')
@@ -558,8 +572,11 @@ export function mcpCommand(useNpx: boolean, lexical = false): { command: string;
  *  MCP server must receive for the worker's tool rows to land in its lane. */
 export const WORKER_ENV_VARS: readonly string[] = [TICKET_ENV, WORKER_SESSION_ENV]
 
-export function buildMcpEntry(agent: AgentDefinition, useNpx: boolean, lexical = false): Record<string, unknown> {
-  const { command, args } = mcpCommand(useNpx, lexical)
+export function buildMcpEntry(
+  agent: AgentDefinition, useNpx: boolean, lexical = false,
+  capture: boolean = CAPTURE_PLATFORMS.has(agent.slug),
+): Record<string, unknown> {
+  const { command, args } = mcpCommand(useNpx, lexical, capture)
   switch (agent.configFormat) {
     case 'json-servers':
       return { type: 'stdio', command, args }
@@ -630,6 +647,184 @@ function readJsonSafe(path: string, backup = false): Record<string, unknown> {
   }
 }
 
+// ── Convergence: what install owns in an entry (D385) ──────────────
+
+/**
+ * The serve flags install owns (D385, D386): the capture and debug flags it
+ * writes where the agent's capture hooks are installed, and the backend
+ * flag. Their opposites are owned too, since install decides that question.
+ * `--no-debug` is not here: debug is on by the server's own default, and a
+ * developer who turned it off keeps it off.
+ */
+const OWNED_SERVE_FLAGS: ReadonlySet<string> = new Set([
+  '--capture', '--no-capture', '--debug', '--lexical', '--no-lexical',
+])
+/** Owned serve flags that take a value (the transport). */
+const OWNED_SERVE_VALUE_FLAGS: ReadonlySet<string> = new Set(['--transport'])
+
+interface SplitArgs {
+  /** What runs before `serve`: a script path or npx's package, part of the command. */
+  prefix: string[]
+  hasServe: boolean
+  /** The owned tokens after `serve`, in their order. */
+  owned: string[]
+  /** Everything else after `serve`: the developer's, in their order. */
+  developer: string[]
+}
+
+function splitServeArgs(args: readonly string[], extraOwned: ReadonlySet<string> = new Set()): SplitArgs {
+  const at = args.indexOf('serve')
+  let prefix: string[]
+  let rest: string[]
+  if (at >= 0) {
+    prefix = args.slice(0, at)
+    rest = args.slice(at + 1)
+  } else {
+    // No `serve`: what leads up to the first flag belongs with the command.
+    let j = 0
+    while (j < args.length && !args[j]!.startsWith('-')) j++
+    prefix = args.slice(0, j)
+    rest = args.slice(j)
+  }
+  const owned: string[] = []
+  const developer: string[] = []
+  for (let i = 0; i < rest.length; i++) {
+    const t = rest[i]!
+    if (OWNED_SERVE_VALUE_FLAGS.has(t)) {
+      owned.push(t)
+      if (i + 1 < rest.length) owned.push(rest[++i]!)
+    } else if (OWNED_SERVE_FLAGS.has(t) || extraOwned.has(t)) {
+      owned.push(t)
+    } else {
+      developer.push(t)
+    }
+  }
+  return { prefix, hasServe: at >= 0, owned, developer }
+}
+
+/** A developer's arguments as they read: a flag with its value, one item each. */
+function argItems(tokens: readonly string[]): string[] {
+  const items: string[] = []
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i]!
+    const next = tokens[i + 1]
+    if (t.startsWith('-') && next !== undefined && !next.startsWith('-')) {
+      items.push(`${t} ${next}`)
+      i++
+    } else {
+      items.push(t)
+    }
+  }
+  return items
+}
+
+/** An entry's command and its arguments, whichever shape the client keeps them in. */
+function entryCommand(entry: Record<string, unknown>): { command: string | undefined; args: string[]; array: boolean } {
+  if (Array.isArray(entry.command)) {
+    const parts = (entry.command as unknown[]).map(String)
+    return { command: parts[0], args: parts.slice(1), array: true }
+  }
+  const command = typeof entry.command === 'string' ? entry.command : undefined
+  const args = Array.isArray(entry.args) ? (entry.args as unknown[]).map(String) : []
+  return { command, args, array: false }
+}
+
+/**
+ * Whether an existing entry's command still starts a server: a bare
+ * interpreter name (PATH-dependent, breaks GUI-launched agents), a name
+ * nothing resolves, and an absolute path that no longer exists are not.
+ */
+function commandNeedsRepair(command: string | undefined): boolean {
+  if (!command) return true
+  if (command === 'node' || command === 'treecontext') return true
+  if (command !== 'npx' && !isAbsolute(command) && !isCommandAvailable(command)) return true
+  if (isAbsolute(command) && !existsSync(command)) return true
+  return false
+}
+
+export interface ConvergedEntry {
+  entry: Record<string, unknown>
+  /** False when the existing entry already says what install would write. */
+  changed: boolean
+  /** The developer's additions kept, as the install output names them. */
+  kept: string[]
+}
+
+/**
+ * Converge an existing treecontext entry on the one install would write,
+ * changing only what install owns (D385): the command (when it no longer
+ * starts a server, or under force), its own arguments (`serve`, the
+ * transport, the capture and debug flags per D386, the backend flag), the
+ * keys the desired entry carries (a `type`), and Codex's `env_vars`, whose
+ * names are unioned in. Every other key and argument stays as the developer
+ * left it, force or not: force is consent to rewrite what install owns even
+ * when it is valid, never consent to remove the developer's additions.
+ */
+export function convergeMcpEntry(
+  existing: Record<string, unknown>, desired: Record<string, unknown>, force: boolean,
+): ConvergedEntry {
+  const have = entryCommand(existing)
+  const want = entryCommand(desired)
+  const wantSplit = splitServeArgs(want.args)
+  // Whatever the desired entry writes after `serve` is install's, so it is
+  // never also kept as the developer's (a second copy of it).
+  const written = [...wantSplit.owned, ...wantSplit.developer]
+  const extraOwned = new Set(written.filter(t => t.startsWith('-')))
+  const haveSplit = splitServeArgs(have.args, extraOwned)
+
+  const replaceCommand = force || commandNeedsRepair(have.command)
+  const command = replaceCommand ? want.command : have.command
+  const prefix = replaceCommand ? wantSplit.prefix : haveSplit.prefix
+  const args = [
+    ...prefix,
+    ...(wantSplit.hasServe ? ['serve'] : []),
+    ...written,
+    ...haveSplit.developer,
+  ]
+
+  const kept: string[] = argItems(haveSplit.developer)
+  const entry: Record<string, unknown> = { ...existing }
+  for (const [key, value] of Object.entries(desired)) {
+    if (key === 'command') {
+      entry.command = want.array ? [command, ...args] : command
+    } else if (key === 'args') {
+      entry.args = args
+    } else if (key === 'env_vars' && Array.isArray(value)) {
+      const names = Array.isArray(existing.env_vars) ? (existing.env_vars as unknown[]).map(String) : []
+      const extra = names.filter(n => !(value as unknown[]).includes(n))
+      if (extra.length > 0) kept.push(`env_vars ${extra.join(' ')}`)
+      entry.env_vars = [...names, ...(value as unknown[]).map(String).filter(n => !names.includes(n))]
+    } else {
+      entry[key] = value
+    }
+  }
+  for (const key of Object.keys(existing)) {
+    if (!(key in desired)) kept.push(key)
+  }
+
+  // The same entry in another order is the same entry: compare what each
+  // side means, so an equivalent entry is left byte for byte as it is.
+  const meaning = (e: Record<string, unknown>): string => {
+    const c = entryCommand(e)
+    const sp = splitServeArgs(c.args, extraOwned)
+    const rest = Object.fromEntries(Object.entries(e)
+      .filter(([k]) => k !== 'command' && k !== 'args')
+      .sort(([a], [b]) => a.localeCompare(b)))
+    return JSON.stringify({
+      command: c.command, prefix: sp.prefix, serve: sp.hasServe,
+      owned: [...sp.owned].sort(), developer: sp.developer, rest,
+    })
+  }
+  const changed = meaning(entry) !== meaning(existing)
+  return { entry: changed ? entry : existing, changed, kept }
+}
+
+/** The install output's words for an entry install converged. */
+function keptDetail(kept: readonly string[], dryRun: boolean): string | undefined {
+  if (kept.length === 0) return undefined
+  return `${dryRun ? 'would keep' : 'kept'} your ${kept.join(', ')}`
+}
+
 export function upsertJsonMcp(
   path: string, rootKey: string, entry: Record<string, unknown>,
   force: boolean, dryRun: boolean,
@@ -637,48 +832,28 @@ export function upsertJsonMcp(
   const data = readJsonSafe(path, true)
   const servers = (data[rootKey] ?? {}) as Record<string, unknown>
 
-  if (servers.treecontext && !force) {
-    const existing = servers.treecontext as Record<string, unknown>
-    // opencode uses a command array; everything else a command string
-    const existingCmd = typeof existing.command === 'string'
-      ? existing.command
-      : Array.isArray(existing.command) ? String((existing.command as unknown[])[0] ?? '') : undefined
-    const existingArgs = Array.isArray(existing.command)
-      ? (existing.command as string[])
-      : (existing.args ?? []) as string[]
-
-    // Bare interpreter names are PATH-dependent and break GUI-launched
-    // agents (launchd PATH on macOS) — upgrade them to absolute paths.
-    const bareLegacyCmd = existingCmd === 'node' || existingCmd === 'treecontext'
-    const unresolvableCmd = existingCmd
-      && existingCmd !== 'node' && existingCmd !== 'npx'
-      && !isAbsolute(existingCmd)
-      && !isCommandAvailable(existingCmd)
-    const staleInterpreter = existingCmd && isAbsolute(existingCmd) && !existsSync(existingCmd)
-    const missingCapture = !existingArgs.includes('--capture')
-    // Converge the backend flag: if the desired entry and the existing one
-    // disagree on --lexical, update (even without --force). Otherwise a plain
-    // `install` can neither add the default lexical flag to an old config nor
-    // honor an explicit --no-lexical — the flag isn't part of the skip check.
-    const desiredArgs = Array.isArray(entry.command)
-      ? (entry.command as string[])
-      : (entry.args ?? []) as string[]
-    const lexicalMismatch = desiredArgs.includes('--lexical') !== existingArgs.includes('--lexical')
-
-    if (!bareLegacyCmd && !unresolvableCmd && !staleInterpreter && !missingCapture && !lexicalMismatch) {
+  const existing = servers.treecontext
+  let kept: string[] = []
+  if (existing && typeof existing === 'object' && !Array.isArray(existing)) {
+    // Converge only what install owns (D385), force or not.
+    const converged = convergeMcpEntry(existing as Record<string, unknown>, entry, force)
+    if (!converged.changed) {
       return { type: 'mcp-config', path, status: 'skipped', detail: 'already configured' }
     }
+    servers.treecontext = converged.entry
+    kept = converged.kept
+  } else {
+    servers.treecontext = entry
   }
-
-  const status = servers.treecontext ? 'updated' : 'created'
-  servers.treecontext = entry
+  const status = existing ? 'updated' : 'created'
   data[rootKey] = servers
 
+  const detail = keptDetail(kept, dryRun)
   if (dryRun) {
-    return { type: 'mcp-config', path, status: 'dry-run' }
+    return { type: 'mcp-config', path, status: 'dry-run', ...(detail ? { detail } : {}) }
   }
   atomicWrite(path, JSON.stringify(data, null, 2) + '\n')
-  return { type: 'mcp-config', path, status }
+  return { type: 'mcp-config', path, status, ...(detail ? { detail } : {}) }
 }
 
 export function removeJsonMcp(path: string, rootKey: string, dryRun: boolean): ActionResult | null {
@@ -709,33 +884,29 @@ export function upsertTomlMcp(
   }
 
   const servers = (data.mcp_servers ?? {}) as Record<string, unknown>
-  if (servers.treecontext && !force) {
-    const existing = servers.treecontext as Record<string, unknown>
-    const existingCmd = existing.command as string | undefined
-    const existingArgs = (existing.args ?? []) as string[]
-    // Bare interpreter names break GUI-launched agents — upgrade them.
-    const bareLegacyCmd = existingCmd === 'node' || existingCmd === 'treecontext'
-    const staleInterpreter = existingCmd && isAbsolute(existingCmd) && !existsSync(existingCmd)
-    const hasCapture = existingArgs.includes('--capture')
-    // Converge the backend flag (see upsertJsonMcp): a --lexical disagreement
-    // between desired and existing must trigger an update even without --force.
-    const desiredArgs = (entry.args ?? []) as string[]
-    const lexicalMismatch = desiredArgs.includes('--lexical') !== existingArgs.includes('--lexical')
-    // Converge the forwarded worker environment too: an entry an earlier
-    // build wrote without `env_vars` strands every Codex worker's rows.
-    const existingEnvVars = Array.isArray(existing.env_vars) ? (existing.env_vars as unknown[]) : []
-    const envVarsMissing = WORKER_ENV_VARS.some((v) => !existingEnvVars.includes(v))
-    if (!bareLegacyCmd && !staleInterpreter && hasCapture && !lexicalMismatch && !envVarsMissing) {
+  const existing = servers.treecontext
+  let kept: string[] = []
+  if (existing && typeof existing === 'object' && !Array.isArray(existing)) {
+    // Converge only what install owns (D385), force or not: the command, its
+    // own arguments and the forwarded worker variables (an entry an earlier
+    // build wrote without `env_vars` strands every Codex worker's rows);
+    // the developer's approvals, enabled tools, env and other args stay.
+    const converged = convergeMcpEntry(existing as Record<string, unknown>, entry, force)
+    if (!converged.changed) {
       return { type: 'mcp-config', path, status: 'skipped', detail: 'already configured' }
     }
+    servers.treecontext = converged.entry
+    kept = converged.kept
+  } else {
+    servers.treecontext = entry
   }
-  const status = servers.treecontext ? 'updated' : 'created'
-  servers.treecontext = entry
+  const status = existing ? 'updated' : 'created'
   data.mcp_servers = servers
 
-  if (dryRun) return { type: 'mcp-config', path, status: 'dry-run' }
+  const detail = keptDetail(kept, dryRun)
+  if (dryRun) return { type: 'mcp-config', path, status: 'dry-run', ...(detail ? { detail } : {}) }
   atomicWrite(path, stringifyToml(data) + '\n')
-  return { type: 'mcp-config', path, status }
+  return { type: 'mcp-config', path, status, ...(detail ? { detail } : {}) }
 }
 
 export function removeTomlMcp(path: string, dryRun: boolean): ActionResult | null {
@@ -816,6 +987,45 @@ export const CAPTURE_PLATFORMS = new Set(['claude'])
  * and doctor names that command as the way to copy (D208).
  */
 export const COPYING_CLIENTS = new Set(['codex', 'gemini'])
+
+/**
+ * Whether an agent's capture hooks are installed, which is when its entry
+ * starts the server in capture mode (D386): Claude Code always, and a
+ * copying client opted in by name under the experimental flag, in this run
+ * or an earlier one whose copy is still in place. Install writes the entry
+ * from it and doctor reads the entry against it, so the two cannot disagree.
+ */
+export function captureHooksInstalled(
+  agent: AgentDefinition, platform: Platform, experimentalCapture = false,
+): boolean {
+  if (CAPTURE_PLATFORMS.has(agent.slug)) return true
+  if (!agent.hooks || !COPYING_CLIENTS.has(agent.slug)) return false
+  if (experimentalCapture) return true
+  return clientHookReport(agent, platform)?.hooksPresent === true
+}
+
+/**
+ * Whether a serve argument list starts the server in capture mode, as the
+ * CLI parses it: the last of `--capture` / `--no-capture` wins, and with
+ * neither the server takes `capture` from its config file (applyConfigFile),
+ * which doctor reads as the global one, `configCapture`.
+ */
+export function serveCaptures(args: readonly string[], configCapture: boolean): boolean {
+  const on = args.lastIndexOf('--capture')
+  const off = args.lastIndexOf('--no-capture')
+  if (on < 0 && off < 0) return configCapture
+  return on > off
+}
+
+/** The global config's `[server] capture`, which a server started with no capture flag takes. */
+function globalConfigCapture(): boolean {
+  try {
+    const data = parseToml(readFileSync(join(homedir(), '.treecontext', 'config.toml'), 'utf8')) as Record<string, unknown>
+    return ((data.server ?? {}) as Record<string, unknown>).capture === true
+  } catch {
+    return false
+  }
+}
 
 /**
  * Clients that read the Claude settings file as-is (D154): the installer
@@ -2641,7 +2851,8 @@ export async function install(opts: InstallOptions): Promise<AgentInstallResult[
     // MCP config
     const configPath = getConfigPath(agent, platform)
     if (configPath) {
-      const entry = buildMcpEntry(agent, opts.useNpx, opts.lexical)
+      // Capture mode only where the agent's capture hooks are installed (D386).
+      const entry = buildMcpEntry(agent, opts.useNpx, opts.lexical, captureHooksInstalled(agent, platform, opts.experimentalCapture))
 
       // ~/.claude.json is Claude Code's live state file, not a config file we
       // own: it also holds project history and onboarding state, and Claude
@@ -2684,8 +2895,12 @@ export async function install(opts: InstallOptions): Promise<AgentInstallResult[
       // Sync MCP config to CCS per-instance .claude.json files (once, for first claude-settings agent)
       if (!ccsMcpSynced && (agent.slug === 'claude' || agent.slug === 'vscode' || agent.slug === 'cursor')) {
         ccsMcpSynced = true
+        // A CCS instance is a Claude Code profile: its entry is Claude Code's,
+        // in capture mode, whichever agent of the three reached this first.
+        const claude = getAgent('claude')
+        const ccsEntry = claude ? buildMcpEntry(claude, opts.useNpx, opts.lexical, true) : entry
         for (const ccsConfig of getCcsMcpTargets()) {
-          const ccsResult = upsertJsonMcp(ccsConfig, 'mcpServers', entry, true, opts.dryRun)
+          const ccsResult = upsertJsonMcp(ccsConfig, 'mcpServers', ccsEntry, true, opts.dryRun)
           agentResult.actions.push(ccsResult)
           if (ccsResult.status !== 'skipped') {
             console.log(`  mcp: synced to CCS (${ccsConfig}) [${ccsResult.status}]`)
@@ -5323,8 +5538,8 @@ export async function doctor(): Promise<DiagnosticResult[]> {
   const detected = detectAgents(platform)
   // Each documented client's row, kept for the headline (D276).
   const agentRows: DiagnosticResult[] = []
-  let agentsCaptureOk = 0
-  let agentsCaptureWarn = 0
+  let agentsCapture = 0
+  let agentsModeWrong = 0
   let agentsTotal = 0
 
   for (const agent of detected) {
@@ -5388,21 +5603,39 @@ export async function doctor(): Promise<DiagnosticResult[]> {
     // Mode detection from MCP args. On a client other than Claude Code this
     // is the SERVER's mode: the client itself captures nothing unless its
     // own hooks run, and the row must not read as if it did.
+    // The mode is read against the hooks doctor finds (D386): capture where
+    // the agent's capture hooks are installed, and without capture
+    // everywhere else, which is the honest entry, not a problem. The one
+    // disagreement that warns is a capture-mode server for a client nothing
+    // captures (the promise D29 forbids), and Claude Code's server without
+    // capture. A copy of the hooks beside a server without capture is a
+    // delay, not a loss: its events wait in staging, with their own
+    // moments, for the next capture server (D386's disclosed residual), so
+    // the row says so in words; a plain install converges the flag.
+    const captureExpected = CAPTURE_PLATFORMS.has(agent.slug)
+      || (agent.hooks != null && COPYING_CLIENTS.has(agent.slug) && client?.hooksPresent === true)
+    let hasModeProblem = false
     if (mcpArgs) {
-      const hasCapture = mcpArgs.includes('--capture')
+      const hasCapture = serveCaptures(mcpArgs, globalConfigCapture())
       const hasDebug = mcpArgs.includes('--debug')
       const hasNoDebug = mcpArgs.includes('--no-debug')
       const label = client ? 'server mode' : 'mode'
       const thisClient = client
         ? ` (this client: ${client.hooksPresent ? 'experimental hooks, unverified' : 'tools only'})`
         : ''
+      hasModeProblem = hasCapture ? !captureExpected : CAPTURE_PLATFORMS.has(agent.slug)
+      const note = hasCapture && !captureExpected
+        ? ' — but no capture hooks are installed for this client'
+        : !hasCapture && captureExpected && client
+          ? " — this client's copied hooks stage events that a capture server, such as Claude Code's, drains"
+          : ''
       if (hasCapture) {
-        parts.push(`${label}: capture${thisClient}`)
-        agentsCaptureOk++
+        parts.push(`${label}: capture${thisClient}${note}`)
       } else {
-        parts.push(`${label}: standard (no auto-capture)${thisClient}`)
-        agentsCaptureWarn++
+        parts.push(`${label}: standard (no auto-capture)${thisClient}${note}`)
       }
+      if (hasCapture) agentsCapture++
+      if (hasModeProblem) agentsModeWrong++
       if (hasNoDebug) {
         parts.push('debug: off')
       } else if (hasDebug) {
@@ -5637,22 +5870,27 @@ export async function doctor(): Promise<DiagnosticResult[]> {
       }
     }
 
-    const hasModeProblem = mcpArgs != null && !mcpArgs.includes('--capture')
-    const allGood = !hasModeProblem && !interpreterProblem && !channelProblem && parts.every(p =>
+    const installNeeded = interpreterProblem || channelProblem || !parts.every(p =>
       !p.includes('not configured') && !p.includes('missing') && !p.includes('error')
       && !p.includes('outdated'),
     )
+    const allGood = !hasModeProblem && !installNeeded
     // The client clause is graded on its own terms: its state words (a copy
     // whose scripts are "missing") must not trip the MCP grader above, and
     // its fix is the remedy it names, unless the MCP half needs the install.
     if (client) parts.push(`the client ${client.mode}; state: ${client.state}; remedy: ${client.remedy}`)
     // One command per row. A copy that needs rewriting is rewritten only by
     // the flagged install, so when the copy warns the fix carries the flag,
-    // and --force when the MCP half needs it too.
+    // and --force when the MCP half needs it too. A mode that disagrees with
+    // the hooks needs no force: install converges its own flags (D385), and
+    // the flagged install that rewrites a copy converges them with it.
     const copyWarn = client?.warn === true && COPYING_CLIENTS.has(agent.slug)
-    const fix = !allGood
-      ? `treecontext install --force --agent ${agent.slug}${copyWarn ? ' --experimental-capture' : ''}`
-      : client?.warn ? client.fix : undefined
+    const flag = copyWarn ? ' --experimental-capture' : ''
+    const fix = installNeeded
+      ? `treecontext install --force --agent ${agent.slug}${flag}`
+      : hasModeProblem
+        ? `treecontext install --agent ${agent.slug}${flag}`
+        : client?.warn ? client.fix : undefined
     const agentRow: DiagnosticResult = {
       check: agent.name,
       status: allGood && !client?.warn ? 'ok' : 'warn',
@@ -5672,13 +5910,19 @@ export async function doctor(): Promise<DiagnosticResult[]> {
   }
 
   // Conversation indexer summary
+  // Graded the way each agent's row is (D386): an agent without capture
+  // hooks runs its server without capture, and that is correct.
   if (agentsTotal > 0) {
-    if (agentsCaptureOk === agentsTotal) {
-      results.push({ check: 'Conversation indexer', status: 'ok', detail: `all ${agentsTotal} agent${agentsTotal !== 1 ? 's' : ''} in capture mode` })
-    } else if (agentsCaptureWarn > 0) {
+    const plural = (n: number): string => `${n} agent${n !== 1 ? 's' : ''}`
+    if (agentsModeWrong === 0) {
+      results.push({
+        check: 'Conversation indexer', status: 'ok',
+        detail: `${agentsCapture} of ${plural(agentsTotal)} in capture mode, each as its capture hooks call for`,
+      })
+    } else {
       results.push({
         check: 'Conversation indexer', status: 'warn',
-        detail: `${agentsCaptureWarn} of ${agentsTotal} agent${agentsTotal !== 1 ? 's' : ''} in standard mode (no auto-capture)`,
+        detail: `${agentsModeWrong} of ${plural(agentsTotal)} in a mode their capture hooks disagree with`,
         fix: 'treecontext install --force',
       })
     }
@@ -5736,7 +5980,7 @@ export async function doctor(): Promise<DiagnosticResult[]> {
         check: 'Debug logs',
         status: 'warn',
         detail: `no log files in ${LOGS_DIR}`,
-        fix: 'Ensure --debug is in your MCP args (default since v0.x). Run treecontext install --force to update configs.',
+        fix: 'Debug logs are on by the server\'s own default (an entry with --no-debug turns them off); a session that starts its server writes one.',
       })
     }
   }

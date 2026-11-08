@@ -22,7 +22,7 @@ import {
   removeVscodeHooks, removeCursorHooks,
   buildVscodeHooksConfig, vscodeHooksComplete,
   agentHookWrapperIssue, resetManagedLayoutScan,
-  buildMcpEntry, configRootKey, mcpCommand,
+  buildMcpEntry, configRootKey, mcpCommand, convergeMcpEntry,
   mcpLauncherPath, mcpLauncherScriptContent,
   hookScriptContent, interpreterIssue, launcherInterpreter, launcherCliPath,
   hookScriptIssue,
@@ -94,8 +94,20 @@ describe('buildMcpEntry', () => {
     const agent = makeAgent({ configFormat: 'json-mcpServers' })
     const entry = buildMcpEntry(agent, false)
     expect(entry.command).toBeDefined()
-    expect(entry.args).toBeDefined()
-    expect((entry.args as string[])).toContain('--capture')
+    expect(entry.args).toEqual(['serve', '--transport', 'stdio', '--no-capture'])
+  })
+
+  it('starts the server in capture mode, with debug, only where the capture hooks are installed (D386)', () => {
+    // Claude Code always; another agent only when the caller says its
+    // hooks are installed (a copying client opted in by name). Every other
+    // entry says --no-capture: the global config install writes sets
+    // capture on, and a server given no capture flag would read it.
+    const claude = getAgent('claude')!
+    expect(buildMcpEntry(claude, false)['args']).toEqual(['serve', '--transport', 'stdio', '--capture', '--debug'])
+    const codex = getAgent('codex')!
+    expect(buildMcpEntry(codex, false)['args']).toEqual(['serve', '--transport', 'stdio', '--no-capture'])
+    expect(buildMcpEntry(codex, false, false, true)['args']).toEqual(['serve', '--transport', 'stdio', '--capture', '--debug'])
+    expect(buildMcpEntry(codex, false, true)['args']).toEqual(['serve', '--transport', 'stdio', '--no-capture', '--lexical'])
   })
 
   it('builds json-servers entry (VS Code/JetBrains)', () => {
@@ -103,7 +115,7 @@ describe('buildMcpEntry', () => {
     const entry = buildMcpEntry(agent, false)
     expect(entry.type).toBe('stdio')
     expect(entry.command).toBeDefined()
-    expect((entry.args as string[])).toContain('--capture')
+    expect((entry.args as string[])).not.toContain('--capture')
   })
 
   it('builds json-opencode entry', () => {
@@ -117,15 +129,16 @@ describe('buildMcpEntry', () => {
     const agent = makeAgent({ configFormat: 'toml-codex' })
     const entry = buildMcpEntry(agent, false)
     expect(entry.command).toBeDefined()
-    expect(entry.args).toBeDefined()
-    expect((entry.args as string[])).toContain('--capture')
+    expect(entry.args).toEqual(['serve', '--transport', 'stdio', '--no-capture'])
   })
 
   it('uses npx when requested', () => {
     const agent = makeAgent({ configFormat: 'json-servers' })
     const entry = buildMcpEntry(agent, true)
     expect(entry.command).toBe('npx')
-    expect(entry.args).toEqual(['-y', 'treecontext-mcp', 'serve', '--transport', 'stdio', '--capture', '--debug'])
+    expect(entry.args).toEqual(['-y', 'treecontext-mcp', 'serve', '--transport', 'stdio', '--no-capture'])
+    expect(buildMcpEntry(agent, true, false, true)['args'])
+      .toEqual(['-y', 'treecontext-mcp', 'serve', '--transport', 'stdio', '--capture', '--debug'])
   })
 })
 
@@ -214,7 +227,7 @@ describe('upsertJsonMcp', () => {
     // lexical flag. Without convergence this would wrongly skip.
     const existing = { command: process.execPath, args: ['cli.js', 'serve', '--capture', '--code-index'] }
     writeFileSync(p, JSON.stringify({ mcpServers: { treecontext: existing } }))
-    const entry = { command: process.execPath, args: ['cli.js', 'serve', '--capture', '--code-index', '--lexical'] }
+    const entry = { command: process.execPath, args: ['cli.js', 'serve', '--capture', '--lexical', '--code-index'] }
     const r = upsertJsonMcp(p, 'mcpServers', entry, false, false)
     expect(r.status).toBe('updated')
     const data = readJson(p)
@@ -316,6 +329,198 @@ describe('upsertJsonMcp', () => {
   })
 })
 
+// D385: a reinstall, forced or not, converges only what install owns in its
+// entry — the command, its own arguments, Codex's worker variables — and
+// keeps every other key and argument the developer put there.
+describe('convergeMcpEntry and the upserts that use it (D385)', () => {
+  let dir: string
+
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'tc-inst-')) })
+  afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
+
+  const launcher = (): string => process.execPath // an absolute command that exists
+  const codexWant = (capture = false): Record<string, unknown> => ({
+    command: launcher(),
+    args: ['serve', '--transport', 'stdio', ...(capture ? ['--capture', '--debug'] : ['--no-capture'])],
+    env_vars: ['TREECONTEXT_TICKET', 'TREECONTEXT_WORKER_SESSION'],
+  })
+  const tomlEntry = (p: string): Record<string, unknown> =>
+    (parseToml(readFileSync(p, 'utf8')) as { mcp_servers: Record<string, Record<string, unknown>> }).mcp_servers['treecontext']!
+
+  it('TOML, no force: adds the worker variables and keeps the store, the instructions flag, the approval and the enabled tools', () => {
+    const p = join(dir, 'config.toml')
+    writeFileSync(p, [
+      '[mcp_servers.treecontext]',
+      `command = ${JSON.stringify(launcher())}`,
+      'args = ["serve", "--transport", "stdio", "--store", "pinned", "--instructions", "none"]',
+      'default_tools_approval_mode = "approve"',
+      'enabled_tools = ["treecontext_query", "treecontext_insert"]',
+      'startup_timeout_sec = 20',
+      '',
+      '[mcp_servers.treecontext.env]',
+      'FOO = "bar"',
+      '',
+      '[mcp_servers.treecontext.tools.treecontext_insert]',
+      'approval_mode = "prompt"',
+      '',
+    ].join('\n'))
+    const r = upsertTomlMcp(p, codexWant(), false, false)
+    expect(r.status).toBe('updated')
+    expect(r.detail).toBe('kept your --store pinned, --instructions none, default_tools_approval_mode, enabled_tools, startup_timeout_sec, env, tools')
+    expect(tomlEntry(p)).toEqual({
+      command: launcher(),
+      args: ['serve', '--transport', 'stdio', '--no-capture', '--store', 'pinned', '--instructions', 'none'],
+      env_vars: ['TREECONTEXT_TICKET', 'TREECONTEXT_WORKER_SESSION'],
+      default_tools_approval_mode: 'approve',
+      enabled_tools: ['treecontext_query', 'treecontext_insert'],
+      startup_timeout_sec: 20,
+      env: { FOO: 'bar' },
+      tools: { treecontext_insert: { approval_mode: 'prompt' } },
+    })
+    // Converged once, the next run changes nothing.
+    const after = readFileSync(p, 'utf8')
+    expect(upsertTomlMcp(p, codexWant(), false, false).status).toBe('skipped')
+    expect(readFileSync(p, 'utf8')).toBe(after)
+  })
+
+  it('TOML: an extra env_vars name of the developer is unioned in, never dropped', () => {
+    const p = join(dir, 'config.toml')
+    writeFileSync(p, [
+      '[mcp_servers.treecontext]',
+      `command = ${JSON.stringify(launcher())}`,
+      'args = ["serve", "--transport", "stdio", "--no-capture"]',
+      'env_vars = ["MY_TOKEN", "TREECONTEXT_TICKET"]',
+    ].join('\n'))
+    const r = upsertTomlMcp(p, codexWant(), false, false)
+    expect(r.status).toBe('updated')
+    expect(r.detail).toBe('kept your env_vars MY_TOKEN')
+    expect(tomlEntry(p)['env_vars']).toEqual(['MY_TOKEN', 'TREECONTEXT_TICKET', 'TREECONTEXT_WORKER_SESSION'])
+  })
+
+  it('TOML, no force: an entry an earlier build wrote in capture mode loses the capture and debug flags and keeps the policy flag (D386)', () => {
+    const p = join(dir, 'config.toml')
+    writeFileSync(p, [
+      '[mcp_servers.treecontext]',
+      `command = ${JSON.stringify(launcher())}`,
+      'args = ["serve", "--transport", "stdio", "--capture", "--debug", "--store", "pinned", "--policy", "contributor"]',
+      'env_vars = ["TREECONTEXT_TICKET", "TREECONTEXT_WORKER_SESSION"]',
+    ].join('\n'))
+    expect(upsertTomlMcp(p, codexWant(), false, false).status).toBe('updated')
+    expect(tomlEntry(p)['args']).toEqual(['serve', '--transport', 'stdio', '--no-capture', '--store', 'pinned', '--policy', 'contributor'])
+  })
+
+  it('TOML, force: a valid hand-edited command is rewritten and every developer key stays', () => {
+    const p = join(dir, 'config.toml')
+    writeFileSync(p, [
+      '[mcp_servers.treecontext]',
+      'command = "/bin/sh"',
+      'args = ["serve", "--store", "pinned"]',
+      'env_vars = ["TREECONTEXT_TICKET", "TREECONTEXT_WORKER_SESSION"]',
+      'default_tools_approval_mode = "prompt"',
+    ].join('\n'))
+    // Without force a command that exists is the developer's to keep.
+    expect(upsertTomlMcp(p, codexWant(), false, false).status).toBe('updated')
+    expect(tomlEntry(p)['command']).toBe('/bin/sh')
+    expect(tomlEntry(p)['args']).toEqual(['serve', '--transport', 'stdio', '--no-capture', '--store', 'pinned'])
+    // With force install's command replaces it; the developer's keys stay.
+    expect(upsertTomlMcp(p, codexWant(), true, false).status).toBe('updated')
+    expect(tomlEntry(p)).toEqual({
+      command: launcher(),
+      args: ['serve', '--transport', 'stdio', '--no-capture', '--store', 'pinned'],
+      env_vars: ['TREECONTEXT_TICKET', 'TREECONTEXT_WORKER_SESSION'],
+      default_tools_approval_mode: 'prompt',
+    })
+  })
+
+  it('JSON, no force: a stale interpreter is repaired and the pinned store and env block stay', () => {
+    const p = join(dir, 'claude.json')
+    writeFileSync(p, JSON.stringify({ mcpServers: { treecontext: {
+      type: 'stdio',
+      command: '/nonexistent/node-v0.0.0/bin/node',
+      args: ['/nonexistent/node-v0.0.0/lib/node_modules/treecontext-mcp/dist/server/cli.js', 'serve', '--transport', 'stdio', '--capture', '--debug', '--store', 'pinned'],
+      env: { TREECONTEXT_LOG: 'debug' },
+    } } }))
+    const want = { command: launcher(), args: ['serve', '--transport', 'stdio', '--capture', '--debug'] }
+    const r = upsertJsonMcp(p, 'mcpServers', want, false, false)
+    expect(r.status).toBe('updated')
+    expect(r.detail).toBe('kept your --store pinned, type, env')
+    expect((readJson(p).mcpServers as Record<string, unknown>).treecontext).toEqual({
+      type: 'stdio',
+      command: launcher(),
+      args: ['serve', '--transport', 'stdio', '--capture', '--debug', '--store', 'pinned'],
+      env: { TREECONTEXT_LOG: 'debug' },
+    })
+  })
+
+  it('JSON, force: a customised args list keeps its own flags, in order, beside the ones install writes', () => {
+    const p = join(dir, 'mcp.json')
+    writeFileSync(p, JSON.stringify({ mcpServers: { treecontext: {
+      command: '/bin/sh',
+      args: ['serve', '--no-debug', '--namespace', 'team', '--transport', 'stdio', '--no-sidecar', '--capture'],
+    } } }))
+    const want = { command: launcher(), args: ['serve', '--transport', 'stdio', '--capture', '--debug'] }
+    const r = upsertJsonMcp(p, 'mcpServers', want, true, false)
+    expect(r.status).toBe('updated')
+    expect((readJson(p).mcpServers as Record<string, unknown>).treecontext).toEqual({
+      command: launcher(),
+      args: ['serve', '--transport', 'stdio', '--capture', '--debug', '--no-debug', '--namespace', 'team', '--no-sidecar'],
+    })
+  })
+
+  it('JSON: an entry that already says what install writes, in another order, is left byte for byte', () => {
+    const p = join(dir, 'mcp.json')
+    const raw = JSON.stringify({ mcpServers: { treecontext: {
+      env: { A: '1' },
+      args: ['serve', '--store', 'pinned', '--debug', '--transport', 'stdio', '--capture'],
+      command: launcher(),
+    } } })
+    writeFileSync(p, raw)
+    const want = { command: launcher(), args: ['serve', '--transport', 'stdio', '--capture', '--debug'] }
+    expect(upsertJsonMcp(p, 'mcpServers', want, false, false).status).toBe('skipped')
+    expect(upsertJsonMcp(p, 'mcpServers', want, true, false).status).toBe('skipped')
+    expect(readFileSync(p, 'utf8')).toBe(raw)
+  })
+
+  it("JSON, opencode's command array: install's head is rewritten and the developer's tail and keys stay", () => {
+    const p = join(dir, 'opencode.json')
+    writeFileSync(p, JSON.stringify({ mcp: { treecontext: {
+      type: 'local',
+      command: ['treecontext', 'serve', '--transport', 'stdio', '--capture', '--debug', '--store', 'pinned'],
+      enabled: true,
+    } } }))
+    const want = { type: 'local', command: [launcher(), 'serve', '--transport', 'stdio', '--no-capture'] }
+    const r = upsertJsonMcp(p, 'mcp', want, false, false)
+    expect(r.status).toBe('updated')
+    expect((readJson(p).mcp as Record<string, unknown>).treecontext).toEqual({
+      type: 'local',
+      command: [launcher(), 'serve', '--transport', 'stdio', '--no-capture', '--store', 'pinned'],
+      enabled: true,
+    })
+  })
+
+  it("an npx entry rewritten under force loses npx's package with the command and keeps the developer's flags", () => {
+    const existing = { command: 'npx', args: ['-y', 'treecontext-mcp', 'serve', '--transport', 'stdio', '--capture', '--debug', '--store', 'pinned'] }
+    const want = { command: launcher(), args: ['serve', '--transport', 'stdio', '--capture', '--debug'] }
+    const kept = convergeMcpEntry(existing, want, false)
+    expect(kept.changed).toBe(false)
+    const forced = convergeMcpEntry(existing, want, true)
+    expect(forced.entry).toEqual({ command: launcher(), args: ['serve', '--transport', 'stdio', '--capture', '--debug', '--store', 'pinned'] })
+  })
+
+  it('a dry run says what it would keep and writes nothing', () => {
+    const p = join(dir, 'config.toml')
+    const raw = [
+      '[mcp_servers.treecontext]',
+      `command = ${JSON.stringify(launcher())}`,
+      'args = ["serve", "--store", "pinned"]',
+    ].join('\n')
+    writeFileSync(p, raw)
+    const r = upsertTomlMcp(p, codexWant(), false, true)
+    expect(r).toEqual({ type: 'mcp-config', path: p, status: 'dry-run', detail: 'would keep your --store pinned' })
+    expect(readFileSync(p, 'utf8')).toBe(raw)
+  })
+})
+
 describe('removeJsonMcp', () => {
   let dir: string
 
@@ -395,12 +600,15 @@ describe('upsertTomlMcp', () => {
     const p = join(dir, 'config.toml')
     writeFileSync(p, [
       '[mcp_servers.treecontext]',
-      'command = "old"',
-      'args = ["serve", "--capture", "--code-index"]',
+      `command = ${JSON.stringify(process.execPath)}`,
+      'args = ["serve", "--transport", "stdio", "--code-index"]',
       'env_vars = ["TREECONTEXT_TICKET", "TREECONTEXT_WORKER_SESSION"]',
     ].join('\n'))
-    const r = upsertTomlMcp(p, { command: 'new' }, false, false)
+    const before = readFileSync(p, 'utf8')
+    const entry = { command: 'new', args: ['serve', '--transport', 'stdio'], env_vars: ['TREECONTEXT_TICKET', 'TREECONTEXT_WORKER_SESSION'] }
+    const r = upsertTomlMcp(p, entry, false, false)
     expect(r.status).toBe('skipped')
+    expect(readFileSync(p, 'utf8')).toBe(before)
   })
 
   it('updates an entry an earlier build wrote without the worker env_vars (converges, no force)', () => {
@@ -416,7 +624,10 @@ describe('upsertTomlMcp', () => {
     const r = upsertTomlMcp(p, entry, false, false)
     expect(r.status).toBe('updated')
     const servers = (parseToml(readFileSync(p, 'utf8')) as { mcp_servers: Record<string, unknown> }).mcp_servers
-    expect(servers['treecontext']).toEqual(entry)
+    // The stale command is repaired and the variables added; the
+    // developer's own flag stays (D385).
+    expect(servers['treecontext']).toEqual({ ...entry, args: ['serve', '--capture', '--code-index'] })
+    expect(r.detail).toBe('kept your --code-index')
   })
 
   it('overwrites when force=true', () => {

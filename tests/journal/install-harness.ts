@@ -1,6 +1,7 @@
 import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, existsSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { meetsNodeFloor } from '../../src/server/installer.js'
 import { spawnSync } from 'node:child_process'
+import { expect } from 'vitest'
 import { basename, delimiter, isAbsolute, join, relative, sep } from 'node:path'
 import { homedir, tmpdir } from 'node:os'
 import { getAgent, getConfigPath } from '../../src/server/agents.js'
@@ -71,6 +72,14 @@ export interface InstallWorld extends World {
   iDoctorRun?: CliRun
   /** D290 README scenario: the README's install section. */
   iInstallSection?: string
+  /** D385/D386 scenarios: the client the scenario's row names. */
+  iClient?: 'Claude Code' | 'Codex CLI'
+  /** D385 scenarios: the arguments the developer added to the entry, in their order. */
+  iDeveloperArgs?: string[]
+  /** D385 scenarios: the developer's own keys in the entry, as they wrote them. */
+  iDeveloperKeys?: Record<string, unknown>
+  /** D386 scenarios: the server's own mode line, from the server the entry starts. */
+  iServerMode?: string
 }
 
 /**
@@ -169,6 +178,77 @@ export function agentCli(w: InstallWorld, args: string[]): CliRun {
     )
   }
   return { status: r.status, stdout, stderr, out: `${stdout}\n${stderr}` }
+}
+
+/**
+ * Run Codex CLI's OWN cli against the redirected HOME — the other side for
+ * Codex. Codex reads its configuration from CODEX_HOME, so the child gets
+ * the sandbox's `.codex` there as well as the sandboxed HOME: an inherited
+ * CODEX_HOME would send it to the developer's real configuration. `codex mcp
+ * get` reads the file and calls no model.
+ */
+export function codexCli(w: InstallWorld, args: string[]): CliRun {
+  const env = sandboxedSpawnEnv(w.ihome!, { CODEX_HOME: join(w.ihome!, '.codex') })
+  const win = process.platform === 'win32'
+  const bin = win ? resolveOnPath('codex') : 'codex'
+  for (const a of args) {
+    if (win && /[\s"&|<>^%]/.test(a)) throw new Error(`codexCli: argument ${JSON.stringify(a)} needs cmd.exe quoting this helper does not do`)
+  }
+  const r = bin === null
+    ? { error: Object.assign(new Error('codex not found on PATH'), { code: 'ENOENT' }), status: null, stdout: '', stderr: '' }
+    : spawnSync(win ? `"${bin}"` : bin, args, { env, cwd: w.iproj ?? w.ihome!, encoding: 'utf8', timeout: 120_000, shell: win })
+  if (r.error && (r.error as NodeJS.ErrnoException).code === 'ENOENT') {
+    // Not skipped, for the reason agentCli gives: without the client there
+    // is nothing to ask.
+    throw new Error(
+      'Codex CLI (`codex`) is not on PATH — the journal-install scenarios that read '
+      + "Codex's own view of its configuration cannot be verified without it. Install it "
+      + '(`npm i -g @openai/codex`, no model call is made), or move them to the wip register with a reason.',
+    )
+  }
+  const stdout = r.stdout ?? ''
+  const stderr = r.stderr ?? ''
+  return { status: r.status, stdout, stderr, out: `${stdout}\n${stderr}` }
+}
+
+/** The treecontext entry as the client itself reads it: the command and arguments it would start, from its own CLI. */
+export interface ClientEntry {
+  command: string
+  args: string[]
+  /** Codex: the names it forwards; Claude Code: the names in its environment block. */
+  envNames: string[]
+  /** The client's own printout, for the assertions that read a key only it prints. */
+  printed: string
+  /** Codex: its `--json` reading, parsed. */
+  json?: Record<string, unknown>
+}
+
+/** Claude Code's or Codex CLI's own reading of the treecontext entry under the redirected HOME. */
+export function clientEntry(w: InstallWorld, agent: 'Claude Code' | 'Codex CLI'): ClientEntry {
+  if (agent === 'Codex CLI') {
+    const json = codexCli(w, ['mcp', 'get', 'treecontext', '--json'])
+    expect(json.status, `codex could not read the entry:\n${json.out}`).toBe(0)
+    const parsed = JSON.parse(json.stdout) as { transport: { command: string; args: string[]; env_vars?: string[] | null } }
+    const plain = codexCli(w, ['mcp', 'get', 'treecontext'])
+    expect(plain.status, plain.out).toBe(0)
+    return {
+      command: parsed.transport.command, args: parsed.transport.args,
+      envNames: parsed.transport.env_vars ?? [], printed: `${json.stdout}\n${plain.stdout}`,
+      json: parsed as unknown as Record<string, unknown>,
+    }
+  }
+  const got = agentCli(w, ['mcp', 'get', 'treecontext'])
+  expect(got.status, `claude could not read the entry:\n${got.out}`).toBe(0)
+  const line = (label: string): string | undefined =>
+    got.stdout.split('\n').map(l => l.trim()).find(l => l.startsWith(`${label}:`))?.slice(label.length + 1).trim()
+  const command = line('Command')
+  expect(command, `claude printed no command:\n${got.out}`).toBeDefined()
+  const env = /Environment:\n((?:[ ]{4,}\S.*\n?)*)/.exec(got.stdout)?.[1] ?? ''
+  return {
+    command: command!, args: (line('Args') ?? '').split(' ').filter(Boolean),
+    envNames: env.split('\n').map(l => l.trim()).filter(Boolean).map(l => l.split('=')[0]!),
+    printed: got.stdout,
+  }
 }
 
 export async function openInstallWorld(w: InstallWorld, agentDirs: string[] = ['.claude']): Promise<void> {

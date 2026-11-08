@@ -35,6 +35,9 @@
  *  |                                        | the scenario says the harness does it                       |
  *  | `writeFakeClaude`                      | the `claude` on PATH whose `--version` install and doctor   |
  *  |                                        | read (journal-install, D290, D304, D338)                    |
+ *  | `startEntryAsClient`                   | Claude Code or Codex CLI starting the MCP server its        |
+ *  |                                        | treecontext entry names, with the command and arguments the |
+ *  |                                        | client itself read (journal-install, D386)                  |
  *  | `preCompact`                           | Claude Code compacting a session's context: it fires the    |
  *  |                                        | real PreCompact hook, then SessionStart with source         |
  *  |                                        | `compact` under the same session, in that order (D375)      |
@@ -102,8 +105,8 @@
  * message), `exit`.
  */
 import { spawn } from 'node:child_process'
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { join, resolve } from 'node:path'
 import { WORKER_AGENT_ID, type LegRef, type LegRegistration } from '../../src/persistence/leg-registry.js'
 import { mintTicket, TICKET_ENV, type TicketFields } from '../../src/ticket.js'
 import { spawnWorker, DOOR_LINE_PREFIX, type WorkerRunResult } from '../../src/ticket-door.js'
@@ -449,5 +452,56 @@ export function writeFakeClaude(dir: string, version: string | null): void {
     writeFileSync(join(dir, 'claude.cmd'), `@echo off\r\necho ${answer}\r\nexit /b ${status}\r\n`)
   } else {
     writeFileSync(join(dir, 'claude'), `#!/bin/sh\necho '${answer}'\nexit ${status}\n`, { mode: 0o755 })
+  }
+}
+
+/**
+ * A client starting the server its treecontext entry names, as Claude Code
+ * and Codex CLI do at a session's start: the command and the arguments the
+ * client itself read from its configuration (journal-install's
+ * `clientEntry`), passed verbatim, with stdin held open as a client holds
+ * it. It may do nothing else: it writes no configuration and reads no row.
+ *
+ * The command is the launcher install wrote under the home, and the launcher
+ * forwards its arguments to the module it pins (`exec "$TC_NODE" "$TC_CLI"
+ * "$@"`, or `"%TC_NODE%" "%TC_CLI%" %*` on Windows). Under this suite that
+ * module is the source tree's `cli.js`, which exists as its `.ts` twin only
+ * (the same acceptance "each command resolves to an absolute path that
+ * exists" makes), so the launcher's dispatch is followed here: the pinned
+ * module's twin under the suite's loader, the arguments as the client gave
+ * them. What it returns is the server's own word: the `Mode:` line `serve`
+ * writes to its debug log under the home. The server is stopped after.
+ */
+export async function startEntryAsClient(home: string, entry: { command: string; args: string[] }, cwd: string): Promise<string> {
+  const launcher = readFileSync(entry.command, 'utf8')
+  const win = launcher.startsWith('@echo off')
+  const pin = (win ? /set "TC_CLI=([^"]+)"/ : /TC_CLI="([^"]+)"/).exec(launcher)?.[1]
+  if (!pin) throw new Error(`the entry's command ${entry.command} pins no module: is it the launcher install writes?`)
+  const forwards = win ? /"%TC_NODE%" "%TC_CLI%" %\*/ : /exec "\$TC_NODE" "\$TC_CLI" "\$@"/
+  if (!forwards.test(launcher)) throw new Error(`the launcher ${entry.command} does not forward its arguments to ${pin}`)
+  const module = existsSync(pin) ? pin : pin.replace(/\.js$/, '.ts')
+  if (resolve(module) !== resolve(CLI_TS)) throw new Error(`the launcher pins ${pin}, not this build's CLI (${CLI_TS})`)
+
+  const logs = join(home, '.treecontext', 'logs')
+  const child = spawn(process.execPath, nodeTsArgs(CLI_TS, entry.args), {
+    cwd, env: sandboxedSpawnEnv(home), stdio: ['pipe', 'pipe', 'pipe'],
+  })
+  let stderr = ''
+  child.stderr.on('data', (d: Buffer) => { stderr += d.toString() })
+  child.stdout.resume()
+  try {
+    const deadline = Date.now() + 60_000
+    while (Date.now() < deadline) {
+      const file = existsSync(logs) ? readdirSync(logs).find(f => f.endsWith(`-${child.pid}.log`)) : undefined
+      const line = file ? /\[serve\] Mode: (.+)/.exec(readFileSync(join(logs, file), 'utf8'))?.[1] : undefined
+      if (line) return line.trim()
+      if (child.exitCode !== null) throw new Error(`the server exited ${child.exitCode} before writing its mode:\n${stderr}`)
+      await new Promise(r => setTimeout(r, 100))
+    }
+    throw new Error(`the server wrote no mode line within 60s:\n${stderr}`)
+  } finally {
+    child.stdin.end()
+    child.kill('SIGTERM')
+    await new Promise<void>((r) => { if (child.exitCode !== null || child.signalCode !== null) r(); else child.once('exit', () => r()) })
   }
 }

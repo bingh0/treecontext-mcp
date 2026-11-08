@@ -212,11 +212,11 @@ runFeatures(join(HERE, '../../features'), {
     {
       feature: 'journal-install',
       scenarios: [
-        // Unit 1: D385 (a reinstall converges what install owns), D386
-        // (capture mode only where capture hooks are installed; the
-        // Antigravity CLI row waits on unit 3).
-        'a forced reinstall rewrites only the agent it names',
-        "a reinstall converges <agent>'s entry and keeps what the developer added",
+        // Unit 1 bound D385 and D386 (2026-11-07). The D386 outline's
+        // Antigravity CLI row waits on unit 3 (D383): this build has no
+        // agent entry for Antigravity CLI, so "Antigravity CLI is
+        // installed" is left unbound and the outline, whose other rows
+        // bind and run, is held open here by its title.
         'the server runs in capture mode for <agent> only where its capture hooks are installed',
         // Unit 2: D381 and D390 (the four tools approved per tool in Codex
         // and Claude Code; the install message, `config tool-approvals`,

@@ -46,7 +46,7 @@ const vscodeMcp = getConfigPath(vscodeAgent)
 if (!vscodeMcp) throw new Error(`agent registry defines no vscode config path for ${process.platform}`)
 mkdirSync(dirname(vscodeMcp), { recursive: true })
 writeFileSync(vscodeMcp, JSON.stringify({
-  servers: { treecontext: { command: process.execPath, args: ['cli.js', '--capture'] } },
+  servers: { treecontext: { command: process.execPath, args: ['cli.js', 'serve', '--no-capture'] } },
 }))
 
 // Leftover Copilot hooks from an older install, pointing at a build that is
