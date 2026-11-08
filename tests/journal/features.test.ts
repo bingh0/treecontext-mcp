@@ -210,20 +210,9 @@ runFeatures(join(HERE, '../../features'), {
     // uninstall scenario reworded for the permission rules.
     // journal-agent-surface left this list 2026-11-08 with unit 4 (D382):
     // the @D8 scenario's new Then and the four worker scenarios bind.
-    {
-      feature: 'journal-clients',
-      scenarios: [
-        // Unit 3 bound D383's row of the D161 outline, D387's Antigravity
-        // CLI row and the off-state outline's Antigravity CLI row
-        // (2026-11-08); unit 2 bound D387's Codex rows and D390's off state
-        // for Claude Code and Codex CLI.
-        // Unit 6: D388 (the README's headless-workers section and the
-        // matrices' permission modes), bound once the dogfood has run.
-        'a cell verified live says under which permissions its run was made',
-        "the README's headless-workers section carries the steps for <worker>",
-        'the README says what a worker may do, that it skips orientation, and how a failed run reads',
-      ],
-    },
+    // journal-clients left this list 2026-11-08 with unit 6 (D388): the
+    // README's headless-workers section and the matrices' permission modes
+    // bound, the last of its open scenarios.
     // The main checkout's own lane (D372-D376, D378, 2026-11-02) left this
     // list with the main-lane build: the pre-stamp door's four scenarios
     // and the @D376 scenario's added Then bound with unit U3b.

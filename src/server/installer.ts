@@ -6874,7 +6874,10 @@ export async function doctor(): Promise<DiagnosticResult[]> {
     // The client clause is graded on its own terms: its state words (a copy
     // whose scripts are "missing") must not trip the MCP grader above, and
     // its fix is the remedy it names, unless the MCP half needs the install.
-    if (client) parts.push(`the client ${client.mode}; state: ${client.state}; remedy: ${client.remedy}`)
+    // After an approvals clause the client's hooks clause starts a sentence of
+    // its own, so the approvals remedy does not run into it ("nothing to do,
+    // the client copies the hooks...").
+    if (client) parts.push(`${approval ? 'Hooks: ' : ''}the client ${client.mode}; state: ${client.state}; remedy: ${client.remedy}`)
     // One command per row. A copy that needs rewriting is rewritten only by
     // the flagged install, so when the copy warns the fix carries the flag,
     // and --force when the MCP half needs it too. A mode that disagrees with
@@ -6896,7 +6899,7 @@ export async function doctor(): Promise<DiagnosticResult[]> {
     const agentRow: DiagnosticResult = {
       check: agent.name,
       status: allGood && !client?.warn && !approval?.warn ? 'ok' : 'warn',
-      detail: parts.join(', '),
+      detail: parts.reduce((acc, p, i) => i === 0 ? p : `${acc}${p.startsWith('Hooks: ') ? '. ' : ', '}${p}`, ''),
       ...(fix ? { fix } : {}),
     }
     results.push(agentRow)

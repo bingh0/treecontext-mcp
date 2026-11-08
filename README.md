@@ -150,6 +150,29 @@ text (`doctor` says "skill outdated" until it does). Coming from
 worker variables (`env_vars`) to an existing Codex CLI entry; until you
 re-run it, Claude Code keeps summarising idle sessions.
 
+**Upgrading to `0.1.0-beta.4`.** Re-run `treecontext install`. What an
+upgrade changes:
+
+- It writes tool approvals into Claude Code, Codex CLI and Antigravity CLI
+  (§3), so a headless worker can read and write the journal. The way back:
+  `treecontext config tool-approvals off|on [--agent claude|codex|agy]`, or
+  `treecontext install --no-tool-approvals`. A chosen off is kept by every
+  later install.
+- It rewrites Codex's `config.toml`, which does not keep comments, after
+  keeping the file as it was beside it, as
+  `config.toml.treecontext-bak-<UTC moment>`.
+- It starts the server in capture mode only where capture hooks run. A
+  Codex entry now carries `--no-capture` unless you installed with
+  `--experimental-capture`; Cursor and VS Code keep capture where they run
+  the Claude Code hooks.
+- `--force` keeps your additions to an entry; it rewrites what install
+  owns and nothing more. To start over, run `treecontext uninstall --agent
+  <name>`, then `treecontext install`.
+- Gemini CLI is detected by its binary or its own files, no longer by the
+  `~/.gemini` directory alone (Antigravity CLI uses that directory too).
+  `treecontext doctor` reports a Gemini CLI entry an earlier install left
+  where Gemini CLI is not present.
+
 ## 3. Set up your agent
 
 ```bash
@@ -168,6 +191,11 @@ This detects your installed agents and wires treecontext into them. Add
 | `~/.claude/settings.json` | registers 7 hooks: `SessionStart`, `UserPromptSubmit`, `PostToolUse`, `Stop`, `PreCompact`, `SubagentStart`, `SubagentStop`; and sets `"idleCompaction": false` when the key is absent (see below) |
 | `~/.claude/hooks/tc-*` | the hook wrapper scripts themselves (`.cmd` on Windows) |
 | `~/.claude/skills/treecontext-reference/SKILL.md` | the reference skill your agent loads on demand |
+| `~/.claude/settings.json` (again) | `permissions.allow` gets `mcp__treecontext__treecontext_status`, `_query`, `_export` and `_insert`, the tool approvals below |
+| `~/.codex/config.toml` | with `--agent codex`: the treecontext MCP entry, with `[mcp_servers.treecontext.tools.<tool>] approval_mode = "approve"` for status, query, export and insert |
+| `~/.gemini/config/mcp_config.json` | with `--agent agy`: Antigravity CLI's MCP entry |
+| `~/.gemini/antigravity-cli/settings.json` | with `--agent agy`: `permissions.allow` gets `mcp(treecontext/<tool>)` for status, query, export and insert |
+| `~/.gemini/GEMINI.md` | the instruction block of Antigravity CLI, a file it shares with Gemini CLI |
 | `~/.treecontext/config.toml` | treecontext's own settings |
 | `~/.treecontext/install-state.json` | install's record of the `idleCompaction` key it wrote and in which settings file, so uninstall removes only its own key |
 
@@ -176,6 +204,24 @@ client's MCP entry instead; Codex CLI's, in `~/.codex/config.toml`, also
 lists `env_vars = ["TREECONTEXT_TICKET", "TREECONTEXT_WORKER_SESSION"]`,
 so a `codex exec` worker's rows reach its lane (§5, "Running work as
 legs").
+
+**Tool approvals.** A headless worker cannot answer a prompt, so install
+approves the four tools that read and write the journal (`treecontext_status`,
+`_query`, `_export`, `_insert`) in Claude Code, Codex CLI and Antigravity
+CLI, and says so in one line. The four that remove or bring in rows
+(`_clear`, `_delete`, `_import`, `_merge_from_agent`) keep asking, so a
+headless worker is refused them. A rule of your own, allow, ask or deny, or
+a default for the server, always wins: install never writes over one and
+never removes one. To take the approvals back and put them back:
+
+```bash
+treecontext config tool-approvals off [--agent claude|codex|agy]
+treecontext config tool-approvals on  [--agent claude|codex|agy]
+treecontext install --no-tool-approvals
+```
+
+`off` removes exactly what install wrote. A chosen off is kept by every
+later install until you say `on`.
 
 On Windows, `~` means `%USERPROFILE%`. Existing config is merged, not
 overwritten — your other MCP servers and hooks are left alone, and a
@@ -416,7 +462,7 @@ command as a worker, with its run, role and key in its environment:
 treecontext run --run login --role parser-dev --key parser \
   --parent build-script --checkpointer parser-dev \
   --prompt "Start with the tokenizer." \
-  -- claude -p --model sonnet --allowedTools mcp__treecontext__treecontext_insert
+  -- claude -p --model sonnet
 ```
 
 - `--run`, `--role` and `--parent` are required, and so is `--key` (or
@@ -425,12 +471,9 @@ treecontext run --run login --role parser-dev --key parser \
   recorded as declared. `--checkpointer` is optional when a brief names
   one.
 - The worker's first message (the brief, the checkpoint(s) in effect,
-  then `--prompt`) goes to its stdin. A bare `claude -p` needs its prompt
-  before `--allowedTools`, because that flag takes several values; here
-  `treecontext run` sends the prompt on stdin, so nothing follows the
-  flag. `--message-arg` puts the message last among the worker's
-  arguments instead, so don't use it with a command that ends in
-  `--allowedTools`.
+  then `--prompt`) goes to its stdin. `--message-arg` puts the message
+  last among the worker's arguments instead, for a CLI that takes its
+  prompt as an argument (see "Headless workers" below).
 - The worker writes its checkpoint through its own treecontext tools, as
   a subagent does. Its stdout passes through unchanged. When it exits,
   that output becomes its summary row, and one line on stderr, starting
@@ -438,14 +481,8 @@ treecontext run --run login --role parser-dev --key parser \
   A worker that owes a checkpoint and exits without one is run once more
   to write it. `--timeout <seconds>` stops the worker and everything it
   started.
-- Codex CLI (`-- codex exec`) and Antigravity CLI (`-- agy -p`) have been
-  run live this way (orchestration matrix, §6). Codex CLI passes the
-  worker's variables to treecontext only when its MCP entry lists them;
-  `treecontext install --agent codex` writes that line, and a
-  hand-written entry in `~/.codex/config.toml` needs it too:
-  `env_vars = ["TREECONTEXT_TICKET", "TREECONTEXT_WORKER_SESSION"]`. For
-  Antigravity CLI, add the server once with
-  `agy mcp add treecontext -- treecontext serve`.
+- Codex CLI (`-- codex exec`) and Antigravity CLI (`-- agy -p`) run
+  as workers too; see "Headless workers" below.
 
 **Ask the store where a key stands.** `treecontext_query` with
 `key_lookup: { "run": "login", "key": "parser" }` returns, instead of
@@ -467,6 +504,146 @@ does the same with `treecontext_export` and `run` (`form: "whole"` with
 of its own as a record of what happened elsewhere, never a replay: an
 imported brief steers no role, and an imported checkpoint takes no number
 in your sequence.
+
+### Headless workers
+
+`treecontext run` starts any command as a worker. The line is the same for
+every CLI; only what follows `--` changes:
+
+```bash
+treecontext run --run R --role ROLE (--key K | --no-key) --parent <session> \
+  [--checkpointer ROLE] [--timeout S] [--prompt-file F] -- <command>
+```
+
+**Claude Code (`claude -p`).**
+
+```bash
+treecontext run --run login --role parser-dev --key parser --parent build-script \
+  --prompt-file task.md -- claude -p --model sonnet
+```
+
+- Install approves the four tools in `~/.claude/settings.json`, so the line
+  needs no `--allowedTools`. If you use that flag anyway, it takes several
+  values and swallows a prompt that follows it: put the prompt first, or
+  use `--prompt-file` (the prompt then travels on stdin and nothing follows
+  the flag).
+- Left to you: nothing. Doctor's Claude Code row says the worker can use the
+  tools in its "tool approvals" clause.
+
+**Codex CLI (`codex exec`).**
+
+```bash
+treecontext run --run login --role parser-dev --key parser --parent build-script \
+  --prompt-file task.md -- codex exec -m <model> -s read-only -
+```
+
+- The `-` at the end makes Codex read its prompt on stdin, where
+  `treecontext run` puts it.
+- Install writes the MCP entry with the worker variables forwarded
+  (`env_vars = ["TREECONTEXT_TICKET", "TREECONTEXT_WORKER_SESSION"]`; a
+  hand-written entry needs that line too) and the four approvals
+  (`approval_mode = "approve"`, §3).
+- Left to you, on Linux only: Codex's sandbox runs on bubblewrap. On Ubuntu
+  24.04 and later (`kernel.apparmor_restrict_unprivileged_userns=1`) it
+  also needs an AppArmor profile that lets `/usr/bin/bwrap` create user
+  namespaces. Write this to `/etc/apparmor.d/bwrap`:
+
+  ```
+  abi <abi/4.0>, include <tunables/global> profile bwrap /usr/bin/bwrap flags=(unconfined) { userns, include if exists <local/bwrap> }
+  ```
+
+  and load it with `sudo apparmor_parser -r /etc/apparmor.d/bwrap`.
+  treecontext changes no system file. Doctor's "Codex sandbox" row runs
+  `codex sandbox -- true` and says whether the sandbox is ready.
+- Doctor's Codex CLI row carries a "headless workers" clause that says
+  whether the entry forwards the variables and approves the tools.
+- A model hint, a docs fact for Codex 0.167: the read-only sandbox is
+  described to the model as a read entry `:root`, and its tools sit inside
+  a JavaScript `exec` tool. A cheap model at low effort misread both until
+  the prompt said "you can read any file; call `exec` and use
+  `tools.exec_command` inside it".
+
+**Antigravity CLI (`agy -p`).**
+
+```bash
+treecontext run --run login --role parser-dev --key parser --parent build-script \
+  --message-arg --prompt-file task.md -- agy --model <model> --output-format text -p
+```
+
+- `--message-arg` puts the message last, because agy takes the prompt as
+  the value of `-p` itself.
+- Install writes the MCP entry in `~/.gemini/config/mcp_config.json` and
+  the four allow rules, `mcp(treecontext/<tool>)`, in
+  `~/.gemini/antigravity-cli/settings.json`. Left to you: nothing.
+- Doctor's Antigravity CLI row, in its "headless workers" clause, says
+  whether the entry and the rules are there.
+
+**What a worker may do.** A worker reads and writes the journal: status,
+query, export and insert. Clear, delete, import and merge still ask, so a
+headless worker's request for them is refused.
+
+**A worker skips orientation.** Its server hands it the worker card, and
+the instruction block names the door's opening lines, so the worker begins
+from its first message and runs no orientation. Measured on the
+dogfood machine (2026-11-08, Codex 0.167.0, gpt-6-luna at low effort, the
+same one-insert task): a main `codex exec` session oriented first and used
+131,852 input tokens; a ticket-door worker went straight to the insert with
+62,829, about 52% fewer.
+
+**How a failed run reads.** A worker that exits non-zero or prints nothing
+gets a summary row carrying its exit code and the end of its error stream,
+the last 2,000 characters, marked when cut. Codex given a model its account
+does not have left this row:
+
+```
+treecontext: the worker exited with code 1 having printed nothing; its error stream, all 1200 characters of it:
+ERROR: The 'no-such-model-xyz' model is not supported when using Codex with a ChatGPT account.
+```
+
+**The environment.** The door hands a worker none of its spawner's Claude
+Code session variables: `CLAUDECODE`, `CLAUDE_CODE_SESSION_ID`,
+`CLAUDE_CODE_CHILD_SESSION`, `CLAUDE_PID`, `CLAUDE_CODE_MESSAGING_TOKEN`
+and `CLAUDE_CODE_MESSAGING_SOCKET`; the rest of the environment, your
+configuration and credentials included, passes unchanged. A worker's
+stderr is a pipe, so CLIs that colour only on a terminal write plain text.
+
+Variables the scrub keeps by design, because they name no session and open
+no channel back into one: `CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_USE_BEDROCK`,
+`CLAUDE_CODE_USE_VERTEX`, `CLAUDE_EFFORT`, `CLAUDE_CODE_ENTRYPOINT`,
+`CLAUDE_CODE_EXECPATH` and `CLAUDE_CODE_SESSION_ATTENDED`. The scrub is the
+door's rule (`treecontext run` or the library's `spawnWorker`). A spawner
+that sets `TREECONTEXT_TICKET` itself and launches the CLI directly is not
+the door and must scrub its own environment.
+
+**Things to know about a worker's end.**
+
+- Stderr is a pipe. When something the worker started still holds it, the
+  door waits up to 2 s after the worker exits. A background process the
+  worker started that keeps writing to stderr after the run ends gets
+  SIGPIPE, so such processes should redirect their stderr.
+- A worker the door itself signals (its `--timeout`, or the spawner's
+  abort) is a cut whatever its exit code: no summary row, no send-back,
+  and the next leg is a recovery leg.
+- A failed run's summary row keeps the end of stderr verbatim. If a CLI
+  prints secrets or tokens to stderr, they land in the journal. Note that
+  `codex exec` writes its whole progress transcript to stderr.
+
+**A dispatcher for Claude Code.** treecontext installs no skill for this.
+If you want a one-word way to hand a task to a worker from inside Claude
+Code, a shell function is enough. It writes the task to a file and runs the
+worker read-only, with no bypass flag:
+
+```bash
+tc-worker() {   # tc-worker <run> <role> <key> "<task>"
+  local f; f="$(mktemp)"; printf '%s\n' "$4" > "$f"
+  treecontext run --run "$1" --role "$2" --key "$3" --parent "${CLAUDE_CODE_SESSION_ID:-dispatcher}" \
+    --timeout 600 --prompt-file "$f" -- codex exec -s read-only -
+  rm -f "$f"
+}
+```
+
+Swap the command after `--` for `claude -p --model sonnet`, or for the agy
+line above with `--message-arg`.
 
 ## 6. Platform support
 
@@ -532,11 +709,17 @@ what the role needs; the gap is named), each with the date it was
 checked. beta.3.1 targets every cell a client makes possible, verified
 live; parity is this matrix filled, not a word.
 
+The Codex CLI and Antigravity CLI worker and pen cells were first run on
+2026-11-01 with the client's bypass flags (`--dangerously-bypass-approvals-and-sandbox`
+for Codex CLI, `--dangerously-skip-permissions` for agy), so those runs
+proved the door and said nothing about permissions. The cells above are the
+2026-11-08 runs, each made under the permission mode it names.
+
 | Client | Headless worker through the ticket door | The worker's pen (how the tools reach it) | The worker's own tool calls captured | A main that registers itself and spawns workers | Subagent legs through the hooks door | The pointer on the Agent tool's return |
 | --- | --- | --- | --- | --- | --- | --- |
-| Claude Code | verified through a stand-in (`claude -p` under its real hooks, 2026-11-01) | install writes its MCP entry (verified live, 2026-11-01) | verified through a stand-in (its real hooks, 2026-11-01) | verified through a stand-in (its real SessionStart hook, 2026-11-01) | verified live (its real SubagentStart and SubagentStop hooks; on 2.1.271 and later in auto mode the report arrives through the `SubagentHandback` tool and is read from the subagent's transcript, 2.1.316, 2026-11-02) | verified through a stand-in (its real PostToolUse hook, 2026-11-01) |
-| Codex CLI | verified live (`codex exec` 0.166.0 through `treecontext run`, 2026-11-01) | install writes its MCP entry with the ticket variables forwarded (`env_vars`; a hand-written entry needs that line too; verified live: its checkpoint landed in its lane, 2026-11-01) | documented only (the experimental hooks copy, 2026-10-05) | documented only (its SessionStart hook in the copy, 2026-10-05) | documented only (SubagentStart and SubagentStop in its hook set, 2026-10-05) | documented only (PostToolUse in its hook set, 2026-10-05) |
-| Antigravity CLI | verified live (`agy -p` 1.4.12 through `treecontext run`, 2026-11-01) | one line you add, `agy mcp add treecontext -- treecontext serve` (verified live: its checkpoint landed in its lane through that server, 2026-11-01) | documented only: no adapter yet, and its PostToolUse payload carries no tool output (hooks docs read 2026-11-01) | documented only: no adapter yet (hooks docs read 2026-11-01) | not possible: no SubagentStart or SubagentStop event (hooks docs read 2026-11-01) | not possible: no event fires on a subagent's return (hooks docs read 2026-11-01) |
+| Claude Code | verified live (`claude -p --model sonnet` through `treecontext run` from inside a Claude Code session after the environment scrub, no `--allowedTools`, its checkpoint in its own lane, 2026-11-08) | install writes its MCP entry (verified live, 2026-11-01) | verified through a stand-in (its real hooks, 2026-11-01) | verified through a stand-in (its real SessionStart hook, 2026-11-01) | verified live (its real SubagentStart and SubagentStop hooks; on 2.1.271 and later in auto mode the report arrives through the `SubagentHandback` tool and is read from the subagent's transcript, 2.1.316, 2026-11-02) | verified through a stand-in (its real PostToolUse hook, 2026-11-01) |
+| Codex CLI | verified live (`codex exec` 0.167.0 through `treecontext run`, default approvals with install's per-tool approvals, read-only sandbox, 2026-11-08) | install writes its MCP entry with `env_vars` and the four approvals (a hand-written entry needs those too; verified live: a worker's insert in its own lane, 2026-11-07, and bypass-free, 2026-11-08) | documented only (the experimental hooks copy, 2026-10-05) | documented only (its SessionStart hook in the copy, 2026-10-05) | documented only (SubagentStart and SubagentStop in its hook set, 2026-10-05) | documented only (PostToolUse in its hook set, 2026-10-05) |
+| Antigravity CLI | verified live (`agy -p` 1.5.1 in the default request-review preset, with install's persisted allow rules, no `--mode` or skip flag, 2026-11-08) | install writes its MCP entry and four allow rules (verified live: an insert in its own lane; a delete auto-denied as the negative control; with approvals off the insert is refused, 2026-11-08) | documented only: no adapter yet, and its PostToolUse payload carries no tool output (hooks docs read 2026-11-01) | documented only: no adapter yet (hooks docs read 2026-11-01) | not possible: no SubagentStart or SubagentStop event (hooks docs read 2026-11-01) | not possible: no event fires on a subagent's return (hooks docs read 2026-11-01) |
 
 ### Copilot capture (preview)
 

@@ -52,6 +52,13 @@ export interface ClientsWorld extends InstallWorld {
   claudeBlock?: HookBlock
   /** Doctor's row for a client, read for its approvals clause (D387, D390). */
   approval?: ApprovalRowRead
+  /** The README's "Headless workers" section (D388). */
+  headless?: string
+  /** The part of it for one worker, read for its steps. */
+  workerPart?: string
+  workerKey?: string
+  /** The orchestration matrix rows for Codex CLI and Antigravity CLI. */
+  orchRows?: Array<{ client: string; cells: string[] }>
 }
 
 /** A client's doctor row read for whether its headless workers can use the tools. */
@@ -297,7 +304,10 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
     }
   })
   reg.define(/^a developer reads it$/, (w: ClientsWorld) => {
-    w.matrix = parseMatrix(w.readme!)
+    // The compatibility matrix's scenario reads the README; the headless
+    // workers scenario (D388) reads its section.
+    if (w.headless !== undefined) w.workerPart = w.headless.replace(/\s+/g, ' ')
+    else w.matrix = parseMatrix(w.readme!)
   })
   reg.define(/^the developer sees every row name the client, the hook events it offers, the date or release of the documentation checked, and one status$/, (w: ClientsWorld) => {
     const rows = w.matrix!
@@ -756,7 +766,7 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
     expect(i, `doctor printed no ${client} row:\n${out}`).toBeGreaterThanOrEqual(0)
     const row = lines[i]!
     const label = client === 'Claude Code' ? 'tool approvals' : 'headless workers'
-    const m = new RegExp(`${label}: (.+?); remedy: (.+?)(?:, the client .*)?$`).exec(row)
+    const m = new RegExp(`${label}: (.+?); remedy: (.+?)(?:\\. Hooks: the client .*)?$`).exec(row)
     expect(m, `doctor's ${client} row says nothing about headless workers:\n${row}`).not.toBeNull()
     const fix = /^\s+fix: (.+)$/.exec(lines[i + 1] ?? '')?.[1] ?? null
     return { status: /^\[(\w+)\]/.exec(row)![1]!, row, clause: m![1]!, remedy: m![2]!, fix }
@@ -1080,5 +1090,134 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
     expect(r.fix).toBe(line)
     runNamedCommand(w, 'treecontext install --agent agy')
     expect(approvalRow(w, 'Antigravity CLI').clause).toBe(r.clause)
+  })
+
+  // ── the matrices name the permissions their runs were made under (D388) ─
+  const MODE_WORDS = /default approvals|request-review preset|bypass-free|allow rules|approvals off/
+  reg.define(/^a developer reads the cells for Codex CLI and Antigravity CLI$/, (w: ClientsWorld) => {
+    const m = parseOrchestrationMatrix(w.readme!)
+    w.orchRows = m.rows.filter(r => r.client === 'Codex CLI' || r.client === 'Antigravity CLI')
+    expect(w.orchRows.map(r => r.client)).toEqual(['Codex CLI', 'Antigravity CLI'])
+  })
+  reg.define(/^the developer sees every "verified live" cell name the permission mode its run was made in$/, (w: ClientsWorld) => {
+    const live = w.orchRows!.flatMap(r => r.cells.filter(c => c.includes('verified live')).map(c => `${r.client}: ${c}`))
+    // The needle fires: both clients have verified-live cells.
+    expect(live.length, 'no verified-live cell to read').toBeGreaterThanOrEqual(4)
+    for (const c of live) expect(c, `${c} names no permission mode`).toMatch(MODE_WORDS)
+  })
+  reg.define(/^the developer sees no such cell rest on a run made with a flag that bypasses the client's approvals or sandbox unless the cell says so$/, (w: ClientsWorld) => {
+    for (const r of w.orchRows!) for (const c of r.cells.filter(x => x.includes('verified live'))) {
+      const bypassed = /--dangerously-|2026-11-01/.test(c)
+      if (bypassed) expect(c, `${r.client}: a cell on a bypass run does not say so: ${c}`).toMatch(/bypass/i)
+    }
+    // The first runs' history is disclosed where the matrix is given.
+    const orch = w.readme!.slice(w.readme!.indexOf('### Orchestration matrix'))
+    expect(orch).toContain('--dangerously-bypass-approvals-and-sandbox')
+    expect(orch).toContain('--dangerously-skip-permissions')
+  })
+
+  // ── the README's headless-workers section (D388) ───────────────────────
+  reg.define(/^the README's section on headless workers$/, (w: ClientsWorld) => {
+    const readme = readFileSync(join(TS_ROOT, 'README.md'), 'utf8')
+    const start = readme.indexOf('\n### Headless workers')
+    expect(start, 'the README has no "Headless workers" section').toBeGreaterThan(-1)
+    const rest = readme.slice(start + 1)
+    const end = rest.slice(3).search(/^## /m)
+    w.headless = end === -1 ? rest : rest.slice(0, end + 3)
+  })
+  const PARTS: Record<string, { from: RegExp; to: RegExp }> = {
+    '`claude -p`': { from: /^\*\*Claude Code \(`claude -p`\)\.\*\*$/m, to: /^\*\*Codex CLI/m },
+    '`codex exec`': { from: /^\*\*Codex CLI \(`codex exec`\)\.\*\*$/m, to: /^\*\*Antigravity CLI/m },
+    '`agy -p`': { from: /^\*\*Antigravity CLI \(`agy -p`\)\.\*\*$/m, to: /^\*\*What a worker may do/m },
+  }
+  reg.define(/^a developer reads the part for (`claude -p`|`codex exec`|`agy -p`)$/, (w: ClientsWorld, ...captures) => {
+    const part = PARTS[captures[0] as string]!
+    const text = w.headless!
+    const a = text.search(part.from)
+    expect(a, `no part for ${captures[0]}`).toBeGreaterThan(-1)
+    const rest = text.slice(a + 1)
+    const b = rest.search(part.to)
+    expect(b).toBeGreaterThan(-1)
+    w.workerPart = rest.slice(0, b)
+    w.workerKey = captures[0] as string
+  })
+  reg.define(/^the developer reads the `treecontext run` line that starts one, (?:.+)$/, (w: ClientsWorld) => {
+    const part = w.workerPart!
+    const line = /treecontext run[^`]*?-- (claude|codex|agy)[^\n]*/s.exec(part)
+    expect(line, 'the part has no treecontext run line').not.toBeNull()
+    const text = part.replace(/\s+/g, ' ')
+    switch (w.workerKey) {
+      case '`claude -p`':
+        expect(line![0]).toMatch(/-- claude -p --model sonnet/)
+        expect(line![0].match(/--allowedTools/g) ?? [], 'the claude line carries --allowedTools').toEqual([])
+        expect(text).toMatch(/takes several values and swallows a prompt that follows it/)
+        break
+      case '`codex exec`':
+        expect(line![0]).toMatch(/-- codex exec -m <model> -s read-only -$/)
+        expect(text).toMatch(/read its prompt on stdin/)
+        break
+      default:
+        expect(part).toMatch(/--message-arg[^\n]*-- agy --model <model> --output-format text -p/)
+        expect(text).toMatch(/agy takes the prompt as the value of `-p` itself/)
+    }
+  })
+  reg.define(/^the developer reads what install sets up for it and what is left to the developer: (?:.+)$/, (w: ClientsWorld) => {
+    const text = w.workerPart!.replace(/\s+/g, ' ')
+    expect(text, 'the part says nothing of what install sets up').toMatch(/Install (approves|writes)/)
+    switch (w.workerKey) {
+      case '`claude -p`':
+        expect(text).toMatch(/Left to you: nothing/)
+        break
+      case '`codex exec`':
+        expect(text).toMatch(/Left to you, on Linux only/)
+        expect(text).toContain('bubblewrap')
+        expect(text).toContain('kernel.apparmor_restrict_unprivileged_userns=1')
+        expect(text).toContain('/etc/apparmor.d/bwrap')
+        expect(text).toContain('abi <abi/4.0>, include <tunables/global> profile bwrap /usr/bin/bwrap flags=(unconfined) { userns, include if exists <local/bwrap> }')
+        expect(text).toContain('sudo apparmor_parser -r /etc/apparmor.d/bwrap')
+        expect(text).toContain('treecontext changes no system file')
+        break
+      default:
+        expect(text).toMatch(/Left to you: nothing/)
+    }
+  })
+  reg.define(/^the developer reads which doctor row says whether it is ready$/, (w: ClientsWorld) => {
+    const text = w.workerPart!.replace(/\s+/g, ' ')
+    switch (w.workerKey) {
+      case '`claude -p`': expect(text).toMatch(/Doctor's Claude Code row .*"tool approvals" clause/); break
+      case '`codex exec`':
+        expect(text).toMatch(/Doctor's Codex CLI row carries a "headless workers" clause/)
+        expect(text).toMatch(/Doctor's "Codex sandbox" row/)
+        break
+      default: expect(text).toMatch(/Doctor's Antigravity CLI row, in its "headless workers" clause/)
+    }
+  })
+
+  reg.define(/^the developer reads that a worker reads and writes the journal and never removes or brings in rows, its request to do so refused$/, (w: ClientsWorld) => {
+    expect(w.workerPart).toMatch(/A worker reads and writes the journal: status, query, export and insert\. Clear, delete, import and merge still ask, so a headless worker's request for them is refused/)
+  })
+  reg.define(/^the developer reads that a worker begins from its first message and runs no orientation$/, (w: ClientsWorld) => {
+    expect(w.workerPart).toMatch(/the worker begins from its first message and runs no orientation/)
+    expect(w.workerPart).toContain('131,852')
+    expect(w.workerPart).toContain('62,829')
+  })
+  reg.define(/^the developer reads that a failed or silent worker's summary row carries its exit code and the end of its error stream$/, (w: ClientsWorld) => {
+    expect(w.workerPart).toMatch(/exits non-zero or prints nothing gets a summary row carrying its exit code and the end of its error stream, the last 2,000 characters/)
+    expect(w.workerPart).toContain('treecontext: the worker exited with code 1 having printed nothing; its error stream, all 1200 characters of it:')
+  })
+  reg.define(/^the developer reads how to turn tool approvals off and on again$/, () => {
+    const readme = readFileSync(join(TS_ROOT, 'README.md'), 'utf8')
+    expect(readme).toContain('treecontext config tool-approvals off [--agent claude|codex|agy]')
+    expect(readme).toContain('treecontext config tool-approvals on  [--agent claude|codex|agy]')
+    expect(readme).toContain('treecontext install --no-tool-approvals')
+  })
+  reg.define(/^the developer reads a short dispatcher example for Claude Code to copy, and that treecontext installs no skill for it$/, (w: ClientsWorld) => {
+    expect(w.workerPart).toContain('treecontext installs no skill for this')
+    const code = /tc-worker\(\) \{[\s\S]*?\n\}/.exec(w.headless!)
+    expect(code, 'no dispatcher example').not.toBeNull()
+    expect(code![0]).toContain('--prompt-file')
+    expect(code![0]).toContain('-s read-only')
+    expect(code![0].match(/--dangerously[\w-]*|bypass|--yolo/g) ?? [], 'the dispatcher uses a bypass flag').toEqual([])
+    expect(code![0].split('\n').length).toBeLessThan(12)
   })
 }
