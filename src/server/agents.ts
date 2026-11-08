@@ -9,6 +9,7 @@
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { delimiter, join } from 'node:path'
+import { isOwnHookCommand } from './hook-command-owner.js'
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -377,9 +378,6 @@ export function commandOnPath(name: string, platform: Platform = process.platfor
   return false
 }
 
-/** A hook command treecontext writes: its per-client hook scripts, the `tc-` wrappers, the CLI. */
-const TC_HOOK_COMMAND_RE = /(hooks[\\/](gemini|vscode|codex|cursor)[\\/]|tc-|cli\.js|treecontext)/
-
 /** Whether a settings `hooks` value holds no hook command but treecontext's (an empty one included). */
 export function hooksAreTreecontextOnly(hooks: unknown): boolean {
   const commands: string[] = []
@@ -393,7 +391,7 @@ export function hooksAreTreecontextOnly(hooks: unknown): boolean {
   }
   if (hooks !== null && typeof hooks === 'object') walk(hooks)
   else if (hooks !== undefined) return false
-  return commands.every(c => TC_HOOK_COMMAND_RE.test(c))
+  return commands.every(c => isOwnHookCommand(c))
 }
 
 /** The files and directories in `~/.gemini` that only Gemini CLI makes (D383). */

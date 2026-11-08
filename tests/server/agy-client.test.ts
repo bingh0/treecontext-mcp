@@ -34,6 +34,14 @@ const mcpPath = (h: string): string => join(h, '.gemini', 'config', 'mcp_config.
 const agyRow = (out: string): string => out.split('\n').find(l => /^\[\w+\]\s+Antigravity CLI:/.test(l)) ?? ''
 
 describe('an agy rule names a tool as agy reads it', () => {
+  test("a regex rule may decide a treecontext tool only when it is an mcp rule or names mcp or treecontext", () => {
+    for (const r of ['mcp(regex:treecontext/.*)', 'MCP( regex:.* )', 'regex:mcp\\(treecontext/.*\\)', 'regex:.*treecontext.*']) {
+      expect(agyRuleMayCover(r, 'treecontext_insert'), r).toBe(true)
+    }
+    for (const r of ['command(regex:git (status|log).*)', 'read_file(regex:/var/log/.*)', 'command(regex:npm run (build|lint|test))']) {
+      expect(agyRuleMayCover(r, 'treecontext_insert'), r).toBe(false)
+    }
+  })
   test('only the shapes agy documents decide a tool for certain, matched exactly', () => {
     for (const r of ['mcp(treecontext/treecontext_insert)', 'mcp(treecontext/*)', 'mcp(*)']) {
       expect(agyRuleCovers(r, 'treecontext_insert'), r).toBe(true)
@@ -52,7 +60,8 @@ describe('an agy rule names a tool as agy reads it', () => {
     const may = (r: string, t = 'treecontext_insert'): boolean => agyRuleMayCover(r, t)
     // A regex anywhere, for every tool.
     for (const t of ALL_TOOLS) expect(may('mcp(regex:^tree)', t)).toBe(true)
-    expect(may('command(regex:.*)')).toBe(true)
+    // A regex in another action's rule decides no MCP tool (unit 3 re-check, 2026-11-08).
+    expect(may('command(regex:.*)')).toBe(false)
     // Case and whitespace variants of mcp, the server and the tool.
     for (const r of ['MCP(treecontext/treecontext_insert)', 'mcp(TreeContext/*)', 'mcp(treecontext/Treecontext_Insert)', ' mcp( treecontext/* ) ', 'Mcp(*)']) {
       expect(may(r), r).toBe(true)
@@ -192,11 +201,21 @@ describe('the directory Gemini CLI and agy share (D383)', () => {
     }
   })
   test("hooks treecontext wrote, or the empty hooks its uninstall leaves, are not Gemini CLI's own", () => {
-    const tcHooks = { hooks: { SessionStart: [{ hooks: [{ type: 'command', command: 'exec "/x/.claude/hooks/tc-session-start"' }] }], BeforeTool: [{ hooks: [{ type: 'command', command: 'node /x/dist/hooks/gemini/before-tool.js' }] }] } }
-    for (const data of [{ hooks: {} }, tcHooks, { ...tcHooks, mcpServers: { treecontext: { command: 'x', args: ['serve'] } } }]) {
+    for (const shape of ['empty', 'tc', 'tc+server'] as const) {
       const h = home()
+      // The commands as install writes them in this home: a Claude Code hook
+      // script in its own hooks directory, and an earlier build's adapter.
+      const tcHooks = { hooks: { SessionStart: [{ hooks: [{ type: 'command', command: `exec "${join(h, '.claude', 'hooks', 'tc-session-start')}"` }] }], BeforeAgent: [{ hooks: [{ type: 'command', command: 'node /opt/tc/dist/hooks/gemini/before-agent.js' }] }] } }
+      const data = shape === 'empty' ? { hooks: {} } : shape === 'tc' ? tcHooks : { ...tcHooks, mcpServers: { treecontext: { command: 'x', args: ['serve'] } } }
       writeFileSync(join(h, '.gemini', 'settings.json'), JSON.stringify(data))
       expect(detected(h), JSON.stringify(data)).toBe('Antigravity CLI')
+    }
+  })
+  test("a developer's own Gemini hook proves Gemini CLI, however its path reads", () => {
+    for (const command of ['/etc-scripts/audit.sh', 'node ./scripts/cli.js lint', '/opt/treecontext-notes/sync.sh', '/usr/local/bin/audit']) {
+      const h = home()
+      writeFileSync(join(h, '.gemini', 'settings.json'), JSON.stringify({ hooks: { BeforeTool: [{ hooks: [{ type: 'command', command }] }] } }))
+      expect(detected(h), command).toBe('Gemini CLI Antigravity CLI')
     }
   })
   test('the gemini command on PATH is Gemini CLI', () => {

@@ -195,7 +195,15 @@ function globMatches(pattern: string, name: string): boolean {
  */
 export function agyRuleMayCover(rule: string, tool: string): boolean {
   if (agyRuleCovers(rule, tool)) return false
-  if (/regex:/i.test(rule)) return true
+  // A `regex:` rule touches treecontext's tools only when it is an mcp rule
+  // (`mcp(regex:…)`, any case or spacing) or a bare pattern that names mcp
+  // or treecontext; `command(regex:git …)` and the like decide no MCP tool.
+  if (/regex:/i.test(rule)) {
+    const flat = rule.replace(/\s+/g, '').toLowerCase()
+    if (flat.startsWith('mcp(')) return true
+    if (!/^[a-z_]+\(/.test(flat) && /mcp|treecontext/.test(flat)) return true
+    return false
+  }
   const m = /^mcp\((.*)\)$/.exec(rule.replace(/\s+/g, '').toLowerCase())
   if (!m) return false
   const target = m[1]!

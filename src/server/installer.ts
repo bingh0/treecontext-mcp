@@ -46,6 +46,11 @@ import {
   agySettingsPath, agyProjectsDir, agyHooksPath, agyMcpConfigPath,
 } from './agents.js'
 import {
+  TC_HOOK_PREFIX, CLAUDE_HOOK_SCRIPTS, HOOK_SCRIPTS_DIR_NAME, AGENT_HOOK_WRAPPER_STEMS,
+  escapeRegex, runsOwnHookScript, CLAUDE_SCRIPT_NAMES, isOwnHookCommand as copyOwnedCommand,
+} from './hook-command-owner.js'
+export { AGENT_HOOK_WRAPPER_STEMS } from './hook-command-owner.js'
+import {
   SKILL_REFERENCE_NAME, SKILL_REFERENCE_DESCRIPTION, SKILL_REFERENCE_BODY,
 } from './instructions.js'
 
@@ -1146,14 +1151,7 @@ export function removeTomlMcp(path: string, dryRun: boolean): ActionResult | nul
 
 // ── Hook installation ──────────────────────────────────────────────
 
-const TC_HOOK_PREFIX = 'tc-'
 
-/** The Claude Code hook scripts `install` writes, in install order. */
-const CLAUDE_HOOK_SCRIPTS = [
-  'session-reminder', 'session-start', 'pre-compact',
-  'post-tool-use', 'user-prompt-submit', 'stop',
-  'subagent-start', 'subagent-stop',
-] as const
 
 /** Windows needs a .cmd extension for a hook script to be executable. */
 function hookScriptExt(platform: Platform = process.platform as Platform): string {
@@ -1182,7 +1180,6 @@ export function claudeHookScriptPaths(platform: Platform = process.platform as P
   return CLAUDE_HOOK_SCRIPTS.map(n => join(hooksDir, `${TC_HOOK_PREFIX}${n}${ext}`))
 }
 const LEGACY_HOOK_PREFIXES = ['cbm-']
-const HOOK_SCRIPTS_DIR_NAME = 'hooks'
 
 /**
  * Agent slugs whose capture adapter has earned a live-payload
@@ -1496,12 +1493,6 @@ export function removeClaudeHookScripts(dryRun: boolean, hooksOnly = false, spar
 // in removeClaudeHookScripts cleans them up on uninstall.
 
 /** Hook entry-point stems per agent, mirroring dist/hooks/<agent>/<stem>.js. */
-export const AGENT_HOOK_WRAPPER_STEMS = {
-  gemini: ['session-start', 'before-agent', 'after-tool', 'pre-compress'],
-  vscode: ['session-start', 'user-prompt-submit', 'post-tool-use', 'stop', 'pre-compact'],
-  codex: ['session-start', 'user-prompt-submit', 'post-tool-use', 'pre-compact'],
-  cursor: ['session-start', 'user-prompt-submit', 'post-tool-use', 'pre-compact'],
-} as const
 
 export type AgentHookAgent = keyof typeof AGENT_HOOK_WRAPPER_STEMS
 
@@ -2290,46 +2281,6 @@ export function translateHookBlockForGemini(
   return out
 }
 
-/**
- * What marks a hook command in a copying client's configuration as
- * treecontext's, and nothing else: a Claude Code hook script or an earlier
- * build's per-agent wrapper IN treecontext's own hooks directory
- * (`<home>/.claude/hooks/tc-<known stem>`), an earlier build's adapter entry
- * point (`hooks/codex|gemini/<known stem>.js`), or the `treecontext hook
- * <event>` subcommand. ONE predicate, shared by the copy writer, the remover
- * and doctor's consistency check. Never a bare `/hooks/tc-`: that claimed a
- * user's `<project>/.git/hooks/tc-notify.sh`, and the rewrite deleted it.
- * Never the bare substring 'hook ' either: it once claimed `my-tool hook
- * sync`.
- */
-function normalizeHookPath(p: string): string {
-  const slashed = p.replace(/\\/g, '/')
-  return process.platform === 'win32' ? slashed.toLowerCase() : slashed
-}
-
-const LEGACY_COPY_ENTRY_RE = new RegExp(
-  `(?:^|[/"'\\s])hooks/(?:codex|gemini)/(?:${[...new Set([...AGENT_HOOK_WRAPPER_STEMS.codex, ...AGENT_HOOK_WRAPPER_STEMS.gemini])].join('|')})\\.js\\b`,
-)
-const TC_SUBCOMMAND_RE = new RegExp(
-  `(?:\\btreecontext|cli\\.js"?)\\s+hook\\s+(?:${CLAUDE_HOOK_SCRIPTS.join('|')})\\b`,
-)
-
-/** Does `cmd` run one of the named scripts in treecontext's own hooks directory? */
-function runsOwnHookScript(cmd: string, names: readonly string[]): boolean {
-  const c = normalizeHookPath(cmd)
-  const dir = normalizeHookPath(join(homedir(), '.claude', HOOK_SCRIPTS_DIR_NAME)) + '/'
-  return names.some(n => new RegExp(`${escapeRegex(dir + n)}(?:\\.cmd)?(?![\\w.-])`).test(c))
-}
-
-const CLAUDE_SCRIPT_NAMES = CLAUDE_HOOK_SCRIPTS.map(n => `${TC_HOOK_PREFIX}${n}`)
-const LEGACY_WRAPPER_NAMES = (['codex', 'gemini'] as const)
-  .flatMap(a => AGENT_HOOK_WRAPPER_STEMS[a].map(st => `${TC_HOOK_PREFIX}${a}-${st}`))
-
-function copyOwnedCommand(cmd: unknown): boolean {
-  if (typeof cmd !== 'string') return false
-  if (runsOwnHookScript(cmd, [...CLAUDE_SCRIPT_NAMES, ...LEGACY_WRAPPER_NAMES])) return true
-  return LEGACY_COPY_ENTRY_RE.test(normalizeHookPath(cmd)) || TC_SUBCOMMAND_RE.test(cmd)
-}
 
 type LooseMatcher = { matcher?: unknown; hooks?: Array<{ command?: unknown } & Record<string, unknown>> }
 
@@ -2867,9 +2818,6 @@ export function removeClaudeSkill(dryRun: boolean): ActionResult | null {
   return { type: 'skill', path: skillDir, status: dryRun ? 'dry-run' : 'updated', detail: 'removed' }
 }
 
-function escapeRegex(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-}
 
 // ── Global config (capture mode) ───────────────────────────────────
 

@@ -653,6 +653,9 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
     const slug = CLIENT_SLUG[client!]!
     await openInstallWorld(w, [])
     mkdirSync(clientDir(slug, w.ihome!), { recursive: true })
+    // "Gemini CLI is installed": one of its own artifacts (D383); its
+    // directory, or a settings.json holding only what install wrote, is not.
+    if (slug === 'gemini') markGeminiCliInstalled(w.ihome!)
     // The block as the real installer writes it today, then the copy written
     // through the real door: the flagged install names the client, which
     // writes the copy and the server entry in capture mode together (D386).
