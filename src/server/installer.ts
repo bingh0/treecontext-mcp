@@ -8,7 +8,7 @@
 import { TICKET_ENV, WORKER_SESSION_ENV } from '../ticket.js'
 import {
   existsSync, readFileSync, writeFileSync, renameSync, mkdirSync,
-  unlinkSync, readdirSync, lstatSync, statSync, rmSync,  realpathSync, readlinkSync,
+  unlinkSync, readdirSync, lstatSync, statSync, rmSync,  realpathSync, readlinkSync, chmodSync,
 } from 'node:fs'
 import { execFileSync, spawnSync } from 'node:child_process'
 import type { DatabaseSync } from 'node:sqlite'
@@ -24,7 +24,7 @@ import {
 import { redactHome } from '../debug.js'
 import {
   IDLE_COMPACTION_KEY, decideIdleCompaction, idleCompactionRow, installLine, readClaudeVersion,
-  installStatePath, readIdleCompaction, readSettingsObject, recordIdleCompactionWrite, removeIdleCompactionWritten,
+  installStatePath, parseTolerantJson, readIdleCompaction, readSettingsObject, recordIdleCompactionWrite, removeIdleCompactionWritten,
   withIdleCompactionOff, type IdleCompactionDecision, type IdleCompactionSetting,
 } from './idle-compaction.js'
 import { leaseHolders } from '../persistence/leases.js'
@@ -32,16 +32,16 @@ import {
   APPROVED_TOOLS, APPROVAL_CLIENT_NAMES, CODEX_APPROVE, NO_TOOL_APPROVALS_FLAG, TOOL_APPROVALS_OFF_COMMAND,
   TOOL_APPROVALS_ON_COMMAND, andList, approvalsChoice, claudeApprovalClause, claudeView, clientStateWords, codexHeadlessClause,
   codexView, isApprovalClient, recordApprovalsChoice, recordWrittenApprovals, toolWords, viewWords, withAllowRules, withCodexApprovals,
-  withoutAllowRules, withoutCodexApprovals, writtenApprovals, agyView, agyHeadlessClause, CLAUDE_DIALECT, AGY_DIALECT, APPROVAL_CLIENTS,
+  withoutAllowRules, withoutCodexApprovals, writtenApprovals, agyView, agyHeadlessClause, CLAUDE_DIALECT, AGY_DIALECT, APPROVAL_CLIENTS, UNVERIFIED_SHAPE,
   type AgyEntryState, type ApprovalClause, type ApprovalClient, type ClaudeSettingsSource, type ClientView, type CodexApprovalSupport, type ApprovalsChoice,
 } from './tool-approvals.js'
 import {
   CODEX_APPROVALS_FLOOR, codexApprovalSupport, codexOriginFile, readCodexConfig, readCodexVersion, runCodexSandboxCheck, sandboxRow,
 } from './codex-client.js'
-import { repairInstallState } from './install-state.js'
+import { forgetCreatedFile, installCreated, recordCreatedFile, repairInstallState } from './install-state.js'
 import {
   type AgentDefinition, type Platform,
-  AGENTS, detectAgents, getAgent, getConfigPath,
+  AGENTS, detectAgents, geminiCliPresent, getAgent, getConfigPath,
   getHookSettingsPath, getInstructionsPath, claudeLegacyMcpPath, legacyMcpConfigs,
   agySettingsPath, agyProjectsDir, agyHooksPath, agyMcpConfigPath,
 } from './agents.js'
@@ -628,16 +628,25 @@ function ensureDir(filePath: string): void {
   }
 }
 
+/** Files install creates owner-only, as their client does: Antigravity CLI's MCP configuration and settings (agy writes both 0600). */
+function ownerOnlyWhenNew(filePath: string): boolean {
+  const p = resolve(filePath)
+  return p === resolve(agyMcpConfigPath()) || p === resolve(agySettingsPath())
+}
+
 function atomicWrite(filePath: string, content: string, mode?: number): void {
   ensureDir(filePath)
-  // A file that is already there keeps its own permissions (Antigravity CLI
-  // and Claude Code keep theirs owner-only): a rewrite never loosens them.
-  let keep = 0o644
+  // A file that is already there keeps its own permissions exactly (Antigravity
+  // CLI and Claude Code keep theirs owner-only): a rewrite never loosens them,
+  // whatever the umask. A new file of agy's is created owner-only, as agy
+  // creates it; any other new file takes the umask's default.
+  let keep: number | undefined
   if (mode === undefined) {
-    try { keep = statSync(filePath).mode & 0o777 } catch { /* a new file */ }
+    try { keep = statSync(filePath).mode & 0o777 } catch { keep = ownerOnlyWhenNew(filePath) ? 0o600 : undefined }
   }
   const tmp = `${filePath}.tmp.${process.pid}`
-  writeFileSync(tmp, content, { mode: mode ?? keep })
+  writeFileSync(tmp, content, { mode: mode ?? keep ?? 0o644 })
+  if (mode === undefined && keep !== undefined && process.platform !== 'win32') chmodSync(tmp, keep)
   // On Windows, renameSync fails if the destination exists. Remove it
   // first for cross-platform atomic-ish write semantics.
   try { unlinkSync(filePath) } catch { /* may not exist yet */ }
@@ -3073,24 +3082,61 @@ function pathsIn(value: unknown, out: string[] = []): string[] {
   return out
 }
 
-/** Whether `dir` is `root` or lies under it. */
-function within(dir: string, root: string): boolean {
-  const r = resolve(root)
-  const d = resolve(dir)
-  return d === r || d.startsWith(r.endsWith(sep) ? r : r + sep)
+/** A path as the file system resolves it (symlinks followed), or as written where it does not exist. */
+function realOr(p: string): string {
+  try { return realpathSync.native(p) } catch { return resolve(p) }
+}
+
+/** How closely a project root holds `cwd`: its length when `cwd` is the root or lies under it, else -1. Both are compared by realpath. */
+export function projectMatchLength(cwd: string, root: string): number {
+  const r = realOr(root)
+  const d = realOr(cwd)
+  if (d === r) return r.length
+  return d.startsWith(r.endsWith(sep) ? r : r + sep) ? r.length : -1
+}
+
+/** The global settings' parse error in the parser's own words, or null when it parses as an object (or is absent). */
+function settingsParseError(file: string): string | null {
+  if (!existsSync(file)) return null
+  let text: string
+  try { text = readFileSync(file, 'utf8') } catch (e) { return (e as Error).message }
+  try {
+    const v = parseTolerantJson(text)
+    return v !== null && typeof v === 'object' && !Array.isArray(v) ? null : 'it is not a JSON object'
+  } catch (e) {
+    try { JSON.parse(text) } catch (strict) { return (strict as Error).message }
+    return (e as Error).message
+  }
+}
+
+/** The settings agy reads for a directory, with what doctor could not place or read. */
+export interface AgySettingsRead {
+  /** In agy's precedence: the project file that applies first, then the global file. */
+  sources: ClaudeSettingsSource[]
+  unreadable: string[]
+  unplaced: string[]
+  settingsFile: string
+  /** The project file that applies, and whether it matches only through `/`. */
+  project?: { file: string; weak: boolean }
+  /** The global settings file's parse error, when it does not parse. */
+  settingsError?: string
 }
 
 /**
  * Every settings file Antigravity CLI reads permission rules from for a
- * session in `cwd` (D383, D387): the global `settings.json` (with install's
- * record), and each project file under `~/.gemini/config/projects/` that
- * carries `permissions` and names `cwd` or a directory above it, since agy
- * ranks a project's rules over the global ones. agy documents no shape for
- * a project file, so one that carries rules but names no directory doctor
- * can match is `unplaced`, and the row says agy may apply its rules here.
- * Install writes only the global file.
+ * session in `cwd` (D383, D387): the project file that applies, then the
+ * global `settings.json` (with install's record), in agy's stated
+ * precedence, a project's rules over the global ones. agy documents no
+ * shape for a project file, so this reads its undocumented one: a file
+ * under `~/.gemini/config/projects/` that carries `permissions` and names
+ * directories (absolute paths or file URIs anywhere in it). The one that
+ * applies names `cwd` or its nearest ancestor (the longest match wins,
+ * compared by realpath); a bare `/` applies only where nothing longer does,
+ * and is a weak match. A file that carries rules but names no directory is
+ * `unplaced`, and the row says agy may apply its rules here. Install writes
+ * only the global file.
  */
-export function agySettingsSources(cwd: string): { sources: ClaudeSettingsSource[]; unreadable: string[]; unplaced: string[]; settingsFile: string } {
+export function agySettingsSources(cwd: string): AgySettingsRead {
   const settingsFile = agySettingsPath()
   const sources: ClaudeSettingsSource[] = []
   const unreadable: string[] = []
@@ -3100,6 +3146,7 @@ export function agySettingsSources(cwd: string): { sources: ClaudeSettingsSource
   try {
     for (const f of readdirSync(agyProjectsDir()).sort()) if (f.endsWith('.json')) projects.push(join(agyProjectsDir(), f))
   } catch { /* no projects directory */ }
+  let best: { file: string; data: Record<string, unknown>; length: number; weak: boolean } | null = null
   for (const file of projects) {
     const read = readSettingsObject(file)
     if (read.state !== 'ok') { if (read.state === 'unreadable') unreadable.push(file); continue }
@@ -3107,12 +3154,35 @@ export function agySettingsSources(cwd: string): { sources: ClaudeSettingsSource
     const { permissions: _p, ...rest } = read.data
     const paths = pathsIn(rest)
     if (paths.length === 0) { unplaced.push(file); continue }
-    if (paths.some(root => within(cwd, root))) sources.push({ file, data: read.data })
+    for (const root of paths) {
+      const length = projectMatchLength(cwd, root)
+      if (length < 0) continue
+      const weak = realOr(root) === sep || /^[A-Za-z]:\\?$/.test(realOr(root))
+      if (!best || length > best.length) best = { file, data: read.data, length, weak }
+    }
   }
+  if (best) sources.push({ file: best.file, data: best.data })
   const read = readSettingsObject(settingsFile)
   if (read.state === 'unreadable') unreadable.push(settingsFile)
   else if (read.state === 'ok') sources.push({ file: settingsFile, data: read.data, ...(recorded[settingsFile] ? { recorded: recorded[settingsFile] } : {}) })
-  return { sources, unreadable, unplaced, settingsFile }
+  // The parser's words on one line: V8 quotes the text it read, newlines and all.
+  const settingsError = read.state === 'unreadable' ? (settingsParseError(settingsFile) ?? 'it does not parse').replace(/\s+/g, ' ').trim() : undefined
+  return {
+    sources, unreadable, unplaced, settingsFile,
+    ...(best ? { project: { file: best.file, weak: best.weak } } : {}),
+    ...(settingsError !== undefined ? { settingsError } : {}),
+  }
+}
+
+/**
+ * The backup an earlier install made of agy's MCP configuration when it did
+ * not parse (install moves such a file to `<file>.bak` and writes a fresh
+ * one), told by a `.bak` beside it that still does not parse; null otherwise.
+ */
+export function agyReplacedBackup(path: string = agyMcpConfigPath()): string | null {
+  const bak = `${path}.bak`
+  if (!existsSync(bak)) return null
+  try { JSON.parse(readFileSync(bak, 'utf8')); return null } catch { return bak }
 }
 
 /** What agy's MCP configuration holds for treecontext. */
@@ -3157,7 +3227,10 @@ export function writeAllowRules(slug: 'claude' | 'agy', file: string, dryRun: bo
   }
   const recorded = writtenApprovals(slug)[file]
   const merge = withAllowRules(read.state === 'ok' ? read.data : {}, recorded, slug === 'agy' ? AGY_DIALECT : CLAUDE_DIALECT)
-  if (merge.data && !dryRun) atomicWrite(file, JSON.stringify(merge.data, null, 2) + '\n')
+  if (merge.data && !dryRun) {
+    atomicWrite(file, JSON.stringify(merge.data, null, 2) + '\n')
+    if (slug === 'agy' && read.state === 'absent') recordCreatedFile(file)
+  }
   if (!dryRun && !merge.unwritable) recordWrittenApprovals(slug, file, merge.ours, merge.created)
   return {
     file, added: merge.added, removed: [], ours: merge.ours,
@@ -3180,6 +3253,43 @@ export function removeAllowRules(slug: 'claude' | 'agy', file: string, dryRun: b
   }
   if (!dryRun) recordWrittenApprovals(slug, file, [])
   return none
+}
+
+/** Whether a client file holds nothing: `{}`, or `{"mcpServers": {}}`. */
+function emptyClientFile(data: Record<string, unknown>): boolean {
+  const keys = Object.keys(data)
+  if (keys.length === 0) return true
+  const servers = data['mcpServers']
+  return keys.length === 1 && servers !== null && typeof servers === 'object' && !Array.isArray(servers) && Object.keys(servers).length === 0
+}
+
+/**
+ * Delete a file install created (its record says so) once uninstall has
+ * left it empty; a dry run reads what the file would hold after this
+ * uninstall's removals. A file install did not create is never deleted, and
+ * one the developer has since filled is no longer install's to delete.
+ */
+function removeCreatedIfEmpty(file: string, dryRun: boolean): ActionResult | null {
+  if (!installCreated(file)) return null
+  if (!existsSync(file)) { if (!dryRun) forgetCreatedFile(file); return null }
+  const read = readSettingsObject(file)
+  if (read.state !== 'ok') return null
+  let data = read.data
+  if (dryRun) {
+    const servers = data['mcpServers']
+    if (servers && typeof servers === 'object' && !Array.isArray(servers) && 'treecontext' in servers) {
+      const { treecontext: _t, ...rest } = servers as Record<string, unknown>
+      data = { ...data, mcpServers: rest }
+    }
+    const recorded = writtenApprovals('agy')[file]
+    if (recorded) data = withoutAllowRules(data, recorded).data ?? data
+  }
+  if (!emptyClientFile(data)) { if (!dryRun) forgetCreatedFile(file); return null }
+  if (!dryRun) {
+    unlinkSync(file)
+    forgetCreatedFile(file)
+  }
+  return { type: 'mcp-config', path: file, status: dryRun ? 'dry-run' : 'updated', detail: 'deleted: install created it and it is left empty' }
 }
 
 /** Merge Claude Code's four allow rules into one settings file, and record them. */
@@ -3300,7 +3410,8 @@ export function approvalsMessage(summaries: readonly ApprovalSummary[], dryRun: 
 function inForceLine(name: string, view: ClientView, off: boolean): string {
   const w = viewWords(view)
   const can = APPROVED_TOOLS.filter(t => !w.refused.includes(t))
-  const asking = w.asking.length > 0 ? `; ${toolWords(w.asking)} still ask, so a headless worker is refused them` : ''
+  const asking = (w.asking.length > 0 ? `; ${toolWords(w.asking)} still ask, so a headless worker is refused them` : '')
+    + (w.uncertain.length > 0 ? `; ${andList(w.uncertainRules)}, named above, may decide otherwise (${UNVERIFIED_SHAPE})` : '')
   if (off) {
     return w.refused.length > 0
       ? `headless workers will now be refused ${toolWords(w.refused)} in ${name}${can.length > 0 ? `; ${toolWords(can)} ${can.length === 1 ? 'stays' : 'stay'} approved by your own rules, named above` : ''}${asking}`
@@ -3324,6 +3435,28 @@ function hasTreecontextEntry(agent: AgentDefinition, platform: Platform): boolea
   } catch {
     return false
   }
+}
+
+/**
+ * Whether an agent is present on this machine and carries a treecontext
+ * entry: wired and still there to read what install wrote for it. A Gemini
+ * CLI entry left in `~/.gemini/settings.json` where Gemini CLI is no longer
+ * present (an orphan, D383) wires nothing anyone reads.
+ */
+function presentAndWired(agent: AgentDefinition, platform: Platform): boolean {
+  return detectAgents(platform).some(a => a.slug === agent.slug) && hasTreecontextEntry(agent, platform)
+}
+
+/**
+ * An orphan Gemini CLI entry (D383): `~/.gemini/settings.json` carries the
+ * treecontext entry an earlier install wrote, and Gemini CLI is not present
+ * (no `gemini` on PATH, none of its artifacts in `~/.gemini`). Doctor warns
+ * and names the uninstall; install never removes it on its own.
+ */
+export function orphanGeminiEntry(platform: Platform): string | null {
+  const gemini = getAgent('gemini')
+  if (!gemini || geminiCliPresent(platform) || !hasTreecontextEntry(gemini, platform)) return null
+  return getConfigPath(gemini, platform)
 }
 
 /** Whether agy's MCP configuration carries a treecontext entry (install wired it). */
@@ -3582,7 +3715,10 @@ export async function install(opts: InstallOptions): Promise<AgentInstallResult[
           }
         }
       } else {
+        const fresh = agent.slug === 'agy' && !existsSync(configPath)
         result = upsertJsonMcp(configPath, configRootKey(agent), entry, opts.force, opts.dryRun)
+        // A file install made for agy is install's to delete again, once empty.
+        if (fresh && !opts.dryRun && existsSync(configPath)) recordCreatedFile(configPath)
       }
       const { approvals: _approvals, ...action } = result
       agentResult.actions.push(action)
@@ -4033,7 +4169,7 @@ export async function uninstall(opts: {
     if (agent.instructions && !opts.hooksOnly) {
       const instrPath = getInstructionsPath(agent, platform)
       const sharer = instrPath ? AGENTS.find(o => o.slug !== agent.slug && !agents.includes(o)
-        && getInstructionsPath(o, platform) === instrPath && hasTreecontextEntry(o, platform)) : undefined
+        && getInstructionsPath(o, platform) === instrPath && presentAndWired(o, platform)) : undefined
       if (instrPath && sharer) {
         console.log(`${agent.name}: instructions kept in ${instrPath} — ${sharer.name} reads the same block and is still wired`)
       } else if (instrPath) {
@@ -4056,6 +4192,18 @@ export async function uninstall(opts: {
           console.log(`${agent.name}: tool approvals install wrote (${andList(o.removed)}) removed from ${file}`)
         } else if (o.problem) {
           console.log(`${agent.name}: ${o.problem}`)
+        }
+      }
+    }
+
+    // A file install created for agy and leaves empty goes with it; a file
+    // the developer had stays, empty or not (D383).
+    if (agent.slug === 'agy' && !opts.hooksOnly) {
+      for (const file of [agyMcpConfigPath(), agySettingsPath()]) {
+        const gone = removeCreatedIfEmpty(file, opts.dryRun)
+        if (gone) {
+          agentResult.actions.push(gone)
+          console.log(`${agent.name}: ${opts.dryRun ? 'would delete' : 'deleted'} ${file} — install created it, and it is left empty`)
         }
       }
     }
@@ -6760,10 +6908,14 @@ export async function doctor(): Promise<DiagnosticResult[]> {
       // Antigravity CLI (D383, D387): its MCP entry, the four allow rules in
       // the settings it reads for this directory, and any ask or deny rule
       // of the developer's over one of them, named with its file.
-      const { sources, unreadable, unplaced, settingsFile } = agySettingsSources(process.cwd())
+      const read = agySettingsSources(process.cwd())
+      const backup = agyReplacedBackup(configPath)
       approval = agyHeadlessClause({
-        mcpPath: configPath, entry: agyEntryState(configPath), view: agyView(sources), settingsFile,
-        choice: approvalsChoice('agy'), unreadable, unplaced,
+        mcpPath: configPath, entry: agyEntryState(configPath), view: agyView(read.sources), settingsFile: read.settingsFile,
+        choice: approvalsChoice('agy'), unreadable: read.unreadable, unplaced: read.unplaced,
+        ...(read.project ? { project: read.project } : {}),
+        ...(read.settingsError !== undefined ? { settingsError: read.settingsError } : {}),
+        ...(backup ? { replacedBackup: backup } : {}),
       })
     }
     if (approval) parts.push(`${approval.text}; remedy: ${approval.remedy}`)
@@ -6813,6 +6965,21 @@ export async function doctor(): Promise<DiagnosticResult[]> {
       if (!check.missing) results.push({ check: 'Codex sandbox', ...sandboxRow(check) })
     }
     if (unmanagedRow) results.push(unmanagedRow)
+  }
+
+  // An orphan Gemini CLI entry (D383): an earlier install wired Gemini CLI
+  // (the directory alone once read as it), and Gemini CLI is not present.
+  // Nothing reads the entry; install leaves it, so doctor names the way out.
+  {
+    const orphan = orphanGeminiEntry(platform)
+    if (orphan) {
+      results.push({
+        check: 'Gemini CLI',
+        status: 'warn',
+        detail: `an earlier install wired Gemini CLI, which is not present — ${orphan} holds its treecontext entry, and no \`gemini\` command or Gemini CLI file of its own is here (install leaves the entry alone)`,
+        fix: 'treecontext uninstall --agent gemini',
+      })
+    }
   }
 
   // Conversation indexer summary

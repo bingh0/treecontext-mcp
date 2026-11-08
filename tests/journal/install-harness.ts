@@ -9,7 +9,7 @@ import { mcpLauncherPath } from '../../src/server/installer.js'
 import { sandboxedSpawnEnv, spawnCli, type CliSpawnResult } from '../helpers/cli-spawn.js'
 import type { World } from './world.js'
 import { TS_ROOT } from './proc.js'
-import { writeFakeClaude, writeFakeCodex, type FakeCodexPlan } from './standins.js'
+import { writeFakeClaude, writeFakeCodex, writeFakeGemini, type FakeCodexPlan } from './standins.js'
 
 // ── Install-wave harness: the real CLI, a redirected HOME, and the ─────
 //    other side of every boundary it claims to cross.
@@ -76,6 +76,8 @@ export interface InstallWorld extends World {
   iClient?: 'Claude Code' | 'Codex CLI' | 'Antigravity CLI'
   /** D383 scenarios: a directory holding the real `agy`, first on the CLI's PATH. */
   iAgyBin?: string
+  /** A directory holding the stand-in `gemini`, first on the CLI's PATH (Gemini CLI installed by its command, D383). */
+  iGeminiBin?: string
   /** D385 scenarios: the arguments the developer added to the entry, in their order. */
   iDeveloperArgs?: string[]
   /** D385 scenarios: the developer's own keys in the entry, as they wrote them. */
@@ -115,10 +117,30 @@ export function tcCli(w: InstallWorld, args: string[], opts: { cwd?: string } = 
   // installs Antigravity CLI; the machine's own is hidden from every child
   // (sandboxedSpawnEnv), so no other world sees it (D383).
   const base = w.iPathWithoutCodex ?? process.env['PATH'] ?? ''
-  const withAgy = w.iAgyBin ? `${w.iAgyBin}${delimiter}${base}` : base
+  const withGemini = w.iGeminiBin ? `${w.iGeminiBin}${delimiter}${base}` : base
+  const withAgy = w.iAgyBin ? `${w.iAgyBin}${delimiter}${withGemini}` : withGemini
   const path = pathWithFakeClaude(w, w.iCodexBin ? `${w.iCodexBin}${delimiter}${withAgy}` : withAgy)
-  const env = w.iClaudeBin || w.iCodexBin || w.iPathWithoutCodex || w.iAgyBin ? { PATH: path } : undefined
+  const env = w.iClaudeBin || w.iCodexBin || w.iPathWithoutCodex || w.iAgyBin || w.iGeminiBin ? { PATH: path } : undefined
   return spawnCli(args, { home: w.ihome!, cwd: opts.cwd ?? TS_ROOT, ...(env ? { env } : {}) })
+}
+
+/**
+ * Gemini CLI installed in a home: a file of its own in `~/.gemini`, the
+ * `installation_id` it writes on its first run. Since D383 the directory
+ * alone is not Gemini CLI (Antigravity CLI makes it too), so a world that
+ * means Gemini CLI to be there lays out one of its artifacts.
+ */
+export function markGeminiCliInstalled(home: string): void {
+  mkdirSync(join(home, '.gemini'), { recursive: true })
+  writeFileSync(join(home, '.gemini', 'installation_id'), 'install-world\n')
+}
+
+/** Gemini CLI installed by its command: the stand-in `gemini` (./standins.ts) first on the CLI's PATH. */
+export function putGeminiOnPath(w: InstallWorld): void {
+  if (w.iGeminiBin) return
+  w.iGeminiBin = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-gemini-bin-')))
+  w.defer(() => rmSync(w.iGeminiBin!, { recursive: true, force: true }))
+  writeFakeGemini(w.iGeminiBin)
 }
 
 /** The machine's real `agy`, resolved on this process's PATH; a missing one fails loudly, as a missing `codex` does. */

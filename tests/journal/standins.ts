@@ -42,6 +42,9 @@
  *  |                                        | `sandbox -- true` exactly; it runs nothing in a sandbox,    |
  *  |                                        | reads no configuration, calls no model and answers no other |
  *  |                                        | subcommand or sandbox command (exit 2, saying so)           |
+ *  | `writeFakeGemini`                      | the `gemini` on PATH whose presence install reads as Gemini |
+ *  |                                        | CLI installed (D383): install and doctor never run it; run, |
+ *  |                                        | it answers nothing and exits 127, saying it is a stand-in   |
  *  | `startEntryAsClient`                   | a client (Claude Code, Codex CLI, Antigravity CLI, Cursor)  |
  *  |                                        | starting the MCP server its treecontext entry names: the    |
  *  |                                        | command and args the client read, spawned as written, so    |
@@ -462,6 +465,20 @@ export function writeFakeClaude(dir: string, version: string | null): void {
     writeFileSync(join(dir, 'claude.cmd'), `@echo off\r\necho ${answer}\r\nexit /b ${status}\r\n`)
   } else {
     writeFileSync(join(dir, 'claude'), `#!/bin/sh\necho '${answer}'\nexit ${status}\n`, { mode: 0o755 })
+  }
+}
+
+/**
+ * A `gemini` in `dir`: Gemini CLI's command on PATH, which install reads
+ * as Gemini CLI installed (D383) without running it. It answers nothing:
+ * run, it exits 127 saying it is a stand-in, so a caller that reached for
+ * more than its presence fails loudly.
+ */
+export function writeFakeGemini(dir: string): void {
+  if (process.platform === 'win32') {
+    writeFileSync(join(dir, 'gemini.cmd'), '@echo off\r\necho stand-in gemini: not stood in for 1>&2\r\nexit /b 127\r\n')
+  } else {
+    writeFileSync(join(dir, 'gemini'), '#!/bin/sh\necho "stand-in gemini: not stood in for" >&2\nexit 127\n', { mode: 0o755 })
   }
 }
 

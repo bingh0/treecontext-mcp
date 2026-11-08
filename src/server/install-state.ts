@@ -40,6 +40,8 @@ export interface ToolApprovalsState {
 export interface InstallState {
   idleCompaction?: Record<string, { value: false; at: string }>
   toolApprovals?: ToolApprovalsState
+  /** Client files install created where none was (Antigravity CLI's): uninstall deletes one it leaves empty, never a file the developer had. */
+  createdFiles?: Record<string, { at: string }>
 }
 
 /** The clients whose approvals a record that did not parse leaves unknown. */
@@ -210,5 +212,31 @@ export function updateInstallState(fn: (state: InstallState) => InstallState | f
     const out = next ?? state
     if (JSON.stringify(out) === before && existsSync(installStatePath())) return
     writeAtomic(installStatePath(), JSON.stringify(out, null, 2) + '\n', 0o600)
+  })
+}
+
+/** Record that install created a file where none was. */
+export function recordCreatedFile(file: string): void {
+  if (readInstallState().createdFiles?.[file]) return
+  updateInstallState((state) => {
+    state.createdFiles = { ...state.createdFiles, [file]: { at: new Date().toISOString() } }
+    return state
+  })
+}
+
+/** Whether install's record says install created this file. */
+export function installCreated(file: string): boolean {
+  return readInstallState().createdFiles?.[file] !== undefined
+}
+
+/** Forget that install created a file (deleted, or no longer install's to delete). */
+export function forgetCreatedFile(file: string): void {
+  if (!installCreated(file)) return
+  updateInstallState((state) => {
+    const files = { ...state.createdFiles }
+    delete files[file]
+    if (Object.keys(files).length > 0) state.createdFiles = files
+    else delete state.createdFiles
+    return state
   })
 }

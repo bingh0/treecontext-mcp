@@ -31,6 +31,8 @@ const launcher = mcpLauncherPath()
 // registration naming the launcher, and no hooks.
 const geminiSettings = getConfigPath(gemini)!
 mkdirSync(dirname(geminiSettings), { recursive: true })
+// Gemini CLI itself is here: a file of its own (D383), not only treecontext's entry.
+writeFileSync(join(dirname(geminiSettings), 'installation_id'), 'fixture\n')
 writeFileSync(geminiSettings, JSON.stringify({
   mcpServers: { treecontext: { command: launcher, args: ['serve', '--transport', 'stdio', '--capture', '--lexical'] } },
 }))

@@ -137,7 +137,10 @@ export function recordWrittenApprovals(slug: ApprovalClient, file: string, items
 /** How a client's permission rules name a tool: the rule install writes, and whether a rule covers a tool. */
 export interface RuleDialect {
   rule(tool: string): string
+  /** The rule certainly decides the tool. */
   covers(rule: string, tool: string): boolean
+  /** The rule may decide the tool, in a shape whose handling by the client is unverified (agy). */
+  mayCover?(rule: string, tool: string): boolean
 }
 
 /** Claude Code's permission rule for one treecontext tool. */
@@ -159,30 +162,50 @@ export function agyRule(tool: string): string {
   return `mcp(treecontext/${tool})`
 }
 
-/** A target part of an agy rule, `*` matching anything, read against a name. */
-function agyPartMatches(pattern: string, name: string): boolean {
+/** The two server-wide rules agy documents: the whole treecontext server, and every MCP tool. */
+const AGY_SERVER_RULES: ReadonlySet<string> = new Set(['mcp(treecontext/*)', 'mcp(*)'])
+
+/**
+ * Whether an agy rule certainly decides a treecontext tool: only the shapes
+ * agy documents, matched exactly as written there, `mcp(treecontext/<tool>)`,
+ * `mcp(treecontext/*)` and `mcp(*)`. Install writes no allow beside one of
+ * these, and doctor reads them as deciding.
+ */
+export function agyRuleCovers(rule: string, tool: string): boolean {
+  return rule === agyRule(tool) || AGY_SERVER_RULES.has(rule)
+}
+
+/** A glob part, `*` matching anything, read against a name. */
+function globMatches(pattern: string, name: string): boolean {
   if (!pattern.includes('*')) return pattern === name
   const re = new RegExp(`^${pattern.split('*').map(p => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*')}$`)
   return re.test(name)
 }
 
 /**
- * Whether an agy rule decides a treecontext tool: `mcp(treecontext/<tool>)`,
- * `mcp(treecontext/*)` and `mcp(*)` as agy's documentation gives them, and
- * any `*` pattern in the server or tool part read the same way, so a rule
- * of the developer's that would cover the tool is never written beside.
+ * Whether an agy rule may decide a treecontext tool, in a shape agy does
+ * not document (its handling of it is unverified): a `regex:` anywhere in
+ * the rule; a case or whitespace variant of `mcp`, `treecontext` or the
+ * tool's name; a glob inside a part (a server part `tree*`, a tool part
+ * `treecontext_q*`); or `mcp(treecontext)` with no slash.
+ * A certain rule (agyRuleCovers) is not one of these. Install writes its
+ * allow beside such a rule, since agy ranks deny and ask over allow and an
+ * allow of the developer's would decide as install's does; doctor warns,
+ * naming the rule and its file, and never reads ok.
  */
-export function agyRuleCovers(rule: string, tool: string): boolean {
-  const m = /^\s*mcp\s*\(\s*(.*?)\s*\)\s*$/.exec(rule)
+export function agyRuleMayCover(rule: string, tool: string): boolean {
+  if (agyRuleCovers(rule, tool)) return false
+  if (/regex:/i.test(rule)) return true
+  const m = /^mcp\((.*)\)$/.exec(rule.replace(/\s+/g, '').toLowerCase())
   if (!m) return false
   const target = m[1]!
-  if (target === '*') return true
   const slash = target.indexOf('/')
-  if (slash < 0) return agyPartMatches(target, 'treecontext')
-  return agyPartMatches(target.slice(0, slash), 'treecontext') && agyPartMatches(target.slice(slash + 1), tool)
+  const server = slash < 0 ? target : target.slice(0, slash)
+  if (!globMatches(server, 'treecontext')) return false
+  return slash < 0 || globMatches(target.slice(slash + 1), tool.toLowerCase())
 }
 
-export const AGY_DIALECT: RuleDialect = { rule: agyRule, covers: agyRuleCovers }
+export const AGY_DIALECT: RuleDialect = { rule: agyRule, covers: agyRuleCovers, mayCover: agyRuleMayCover }
 
 /** A rule of the developer's that decides a tool, and the list it is in. */
 export interface DeveloperRule { list: 'allow' | 'ask' | 'deny'; rule: string }
@@ -413,10 +436,17 @@ export function withoutCodexApprovals(entry: Record<string, unknown>, recorded: 
 
 export const ALL_TOOLS: readonly string[] = [...APPROVED_TOOLS, ...ASKING_TOOLS]
 
-export type ToolDecision =
+/** A rule that may decide a tool in a shape whose handling by the client is unverified (agy's undocumented shapes). */
+export interface MayRule { list: 'allow' | 'ask' | 'deny'; rule: string; file: string }
+
+export type ToolDecision = (
   | { by: 'install'; file: string }
   | { by: 'developer'; approves: boolean; what: string; file: string; kind?: string; rule?: string }
   | { by: 'none' }
+) & {
+  /** Rules that may decide the tool otherwise, in a shape the client's handling of is unverified. */
+  may?: MayRule[]
+}
 
 /** Each of the eight tools, and what decides it. */
 export type ClientView = Record<string, ToolDecision>
@@ -429,9 +459,29 @@ export function claudeView(sources: readonly ClaudeSettingsSource[]): ClientView
   return allowListView(sources, CLAUDE_DIALECT)
 }
 
-/** Antigravity CLI's view across its global settings and the project file that applies (allowListView in agy's dialect). */
+/**
+ * Antigravity CLI's view across the settings that apply in a directory,
+ * given in agy's stated precedence: the matching project file first, then
+ * the global file. The first file whose rules decide a tool decides it
+ * (agy: a project's rules take precedence over the global ones); within one
+ * file deny beats ask beats allow. A rule that may decide a tool in a shape
+ * agy does not document is carried as `may`, from the deciding file and
+ * every file above it.
+ */
 export function agyView(sources: readonly ClaudeSettingsSource[]): ClientView {
-  return allowListView(sources, AGY_DIALECT)
+  const view: ClientView = {}
+  const perFile = sources.map(src => allowListView([src], AGY_DIALECT))
+  for (const tool of ALL_TOOLS) {
+    let decided: ToolDecision = { by: 'none' }
+    const may: MayRule[] = []
+    for (const one of perFile) {
+      const d = one[tool]!
+      if (d.may) may.push(...d.may)
+      if (d.by !== 'none') { const { may: _m, ...rest } = d; decided = rest; break }
+    }
+    view[tool] = may.length > 0 ? { ...decided, may } : decided
+  }
+  return view
 }
 
 /** A client's view across its settings files: deny anywhere over ask anywhere over allow (theirs, then install's). */
@@ -439,6 +489,7 @@ export function allowListView(sources: readonly ClaudeSettingsSource[], dialect:
   const view: ClientView = {}
   for (const tool of ALL_TOOLS) {
     const found: Record<'deny' | 'ask' | 'allow' | 'ours', { rule: string; file: string } | undefined> = { deny: undefined, ask: undefined, allow: undefined, ours: undefined }
+    const may: MayRule[] = []
     for (const src of sources) {
       const perms = src.data?.['permissions']
       if (!isObject(perms)) continue
@@ -447,21 +498,27 @@ export function allowListView(sources: readonly ClaudeSettingsSource[], dialect:
         const rules = perms[list]
         if (!Array.isArray(rules)) continue
         for (const r of rules) {
-          if (typeof r !== 'string' || !dialect.covers(r, tool)) continue
+          if (typeof r !== 'string') continue
+          if (!dialect.covers(r, tool)) {
+            if (dialect.mayCover?.(r, tool)) may.push({ list, rule: r, file: src.file })
+            continue
+          }
           const slot = list === 'allow' && ours.has(r) ? 'ours' : list
           found[slot] ??= { rule: r, file: src.file }
         }
       }
     }
     const d = found.deny ?? found.ask
+    let decision: ToolDecision
     if (d) {
       const kind = `${found.deny ? 'deny' : 'ask'} rule`
-      view[tool] = { by: 'developer', approves: false, what: `${kind} ${d.rule}`, file: d.file, kind, rule: d.rule }
+      decision = { by: 'developer', approves: false, what: `${kind} ${d.rule}`, file: d.file, kind, rule: d.rule }
     } else if (found.allow) {
-      view[tool] = { by: 'developer', approves: true, what: `allow rule ${found.allow.rule}`, file: found.allow.file, kind: 'allow rule', rule: found.allow.rule }
+      decision = { by: 'developer', approves: true, what: `allow rule ${found.allow.rule}`, file: found.allow.file, kind: 'allow rule', rule: found.allow.rule }
     }
-    else if (found.ours) view[tool] = { by: 'install', file: found.ours.file }
-    else view[tool] = { by: 'none' }
+    else if (found.ours) decision = { by: 'install', file: found.ours.file }
+    else decision = { by: 'none' }
+    view[tool] = may.length > 0 ? { ...decision, may } : decision
   }
   return view
 }
@@ -504,7 +561,15 @@ export interface ViewWords {
   developer: string[]
   /** The developer's rules that refuse one of the four, as a remedy names them. */
   refusingRules: string[]
+  /** Rules that may decide a tool in a shape the client's handling of is unverified, each with the tools and its file. */
+  uncertain: string[]
+  /** Those rules, as a remedy names them. */
+  uncertainRules: string[]
 }
+
+/** The words for a rule whose shape agy does not document (D383, D387). */
+export const UNVERIFIED_SHAPE = "agy's handling of that shape is unverified"
+
 
 export function viewWords(view: ClientView): ViewWords {
   const of = (tools: readonly string[], p: (d: ToolDecision) => boolean): string[] => tools.filter(t => p(view[t]!))
@@ -525,7 +590,19 @@ export function viewWords(view: ClientView): ViewWords {
     g.rules.length === 0 ? g.kind : g.kind === 'approval' ? andList(g.rules) : g.rules.length === 1 ? `${g.kind} ${g.rules[0]}` : `${g.kind}s ${andList(g.rules)}`
   const developerRefuses = of(APPROVED_TOOLS, d => d.by === 'developer' && !d.approves)
   const unapproved = of(APPROVED_TOOLS, d => d.by === 'none')
+  const mayGroups = new Map<string, { list: string; rule: string; file: string; tools: string[] }>()
+  for (const tool of ALL_TOOLS) {
+    for (const m of view[tool]!.may ?? []) {
+      const k = `${m.list}\0${m.rule}\0${m.file}`
+      const g = mayGroups.get(k) ?? { list: m.list, rule: m.rule, file: m.file, tools: [] }
+      if (!g.tools.includes(tool)) g.tools.push(tool)
+      mayGroups.set(k, g)
+    }
+  }
+  const mayList = [...mayGroups.values()]
   return {
+    uncertain: mayList.map(g => `your ${g.list} rule ${g.rule} in ${g.file} may decide ${toolWords(g.tools)} (${UNVERIFIED_SHAPE})`),
+    uncertainRules: mayList.map(g => `your ${g.list} rule ${g.rule} in ${g.file}`),
     byInstall: of(APPROVED_TOOLS, d => d.by === 'install'),
     unapproved,
     developerRefuses,
@@ -543,6 +620,7 @@ export function clientStateWords(view: ClientView, installWhere: string): string
   parts.push(...w.developer)
   if (w.unapproved.length > 0) parts.push(`${toolWords(w.unapproved)} not approved`)
   if (w.asking.length > 0) parts.push(`still asking: ${toolWords(w.asking)}`)
+  parts.push(...w.uncertain)
   return parts.join('; ')
 }
 
@@ -694,12 +772,21 @@ export type AgyEntryState =
 export function agyHeadlessClause(args: {
   mcpPath: string; entry: AgyEntryState; view: ClientView; settingsFile: string
   choice: ApprovalsChoice; unreadable: readonly string[]; unplaced: readonly string[]
+  /** The global settings file does not parse: the parser's own words. */
+  settingsError?: string
+  /** The project file whose rules apply here, read in agy's undocumented format; `weak` when it matches only through `/`. */
+  project?: { file: string; weak: boolean }
+  /** A backup an earlier install made when it replaced an MCP configuration that did not parse. */
+  replacedBackup?: string
 }): ApprovalClause {
   const { mcpPath, entry, view, settingsFile, choice } = args
   const label = 'headless workers'
   const install = 'treecontext install --agent agy'
+  const backup = args.replacedBackup
+    ? `; an earlier install replaced ${mcpPath} because it did not parse, so any servers of yours that were in it survive only in ${args.replacedBackup}`
+    : ''
   if (entry.state === 'absent') {
-    return { text: `${label}: agy has no treecontext tools — ${mcpPath} holds no treecontext server`, warn: true, remedy: install, fix: install }
+    return { text: `${label}: agy has no treecontext tools — ${mcpPath} holds no treecontext server${backup}`, warn: true, remedy: install, fix: install }
   }
   if (entry.state === 'unreadable') {
     const remedy = `fix ${mcpPath} so it parses as JSON, then ${install}`
@@ -707,29 +794,50 @@ export function agyHeadlessClause(args: {
   }
   if (entry.disabled) {
     const remedy = `your "disabled": true on the treecontext server in ${mcpPath}, yours to change (install leaves it): agy mcp enable treecontext`
-    return { text: `${label}: agy has no treecontext tools — the treecontext server is turned off ("disabled": true) in ${mcpPath}`, warn: true, remedy, fix: remedy }
+    return { text: `${label}: agy has no treecontext tools — the treecontext server is turned off ("disabled": true) in ${mcpPath}${backup}`, warn: true, remedy, fix: remedy }
   }
   const notes: string[] = []
-  if (args.unreadable.length > 0) notes.push(`${andList(args.unreadable)} could not be read as settings`)
-  if (args.unplaced.length > 0) notes.push(`${andList(args.unplaced)} ${args.unplaced.length === 1 ? 'holds' : 'hold'} permission rules for a project doctor cannot place, which agy may apply here`)
-  const tail = notes.length > 0 ? `; ${notes.join('; ')}` : ''
+  if (args.project) {
+    notes.push(`the rules of ${args.project.file} apply here, read from agy's undocumented project-file format${args.project.weak ? ' (a weak match: it names only "/")' : ''}`)
+  }
+  const unreadable = args.unreadable.filter(f => !(args.settingsError !== undefined && f === settingsFile))
+  if (unreadable.length > 0) notes.push(`${andList(unreadable)} could not be read as settings`)
+  if (args.unplaced.length > 0) notes.push(`${andList(args.unplaced)} ${args.unplaced.length === 1 ? 'holds' : 'hold'} permission rules for a project doctor cannot place, which agy may apply here (agy's project-file format is undocumented)`)
+  const tail = `${notes.length > 0 ? `; ${notes.join('; ')}` : ''}${backup}`
   const w = viewWords(view)
+  const uncertain = w.uncertain.length > 0 ? `; ${w.uncertain.join('; ')}` : ''
+  const uncertainRemedy = `${andList(w.uncertainRules)}, yours to check: agy documents mcp(treecontext/<tool>), mcp(treecontext/*) and mcp(*)`
+  if (args.settingsError !== undefined) {
+    // Install skips a file it cannot read, so naming install would loop.
+    const remedy = `fix the JSON in ${settingsFile} by hand (${args.settingsError}); install skips a file it cannot read`
+    const refused = w.refused.length > 0 ? `, so an \`agy -p\` worker would be refused ${andList(w.refused)}` : ''
+    return { text: `${label}: ${settingsFile} does not parse (${args.settingsError}), and install adds no rule to it${refused}${uncertain}${tail}`, warn: true, remedy, fix: remedy }
+  }
   if (choice.state === 'unknown') {
-    return { text: `${label}: tool approvals are ${unknownWords(choice.backup)}${tail}`, warn: true, remedy: TOOL_APPROVALS_ON_COMMAND, fix: TOOL_APPROVALS_ON_COMMAND }
+    return { text: `${label}: tool approvals are ${unknownWords(choice.backup)}${uncertain}${tail}`, warn: true, remedy: TOOL_APPROVALS_ON_COMMAND, fix: TOOL_APPROVALS_ON_COMMAND }
   }
   if (choice.state === 'off') {
-    return { text: `${label}: tool approvals are ${offWords(w, "agy's default preset asks before each and an `agy -p` worker cannot be asked")}${tail}`, warn: false, remedy: TOOL_APPROVALS_ON_COMMAND }
+    const text = `${label}: tool approvals are ${offWords(w, "agy's default preset asks before each and an `agy -p` worker cannot be asked")}${uncertain}${tail}`
+    return w.uncertain.length > 0
+      ? { text, warn: true, remedy: uncertainRemedy, fix: uncertainRemedy }
+      : { text, warn: false, remedy: TOOL_APPROVALS_ON_COMMAND }
   }
   if (w.refused.length === 0) {
-    const where = w.byInstall.length > 0 ? `, ${toolWords(w.byInstall)} allowed in ${settingsFile}` : ''
+    const where = w.byInstall.length === APPROVED_TOOLS.length
+      ? `, allowed in ${settingsFile}`
+      : w.byInstall.length > 0 ? `; ${toolWords(w.byInstall)} allowed in ${settingsFile}` : ''
     const theirs = w.developer.length > 0 ? `; ${w.developer.join('; ')}` : ''
     const extra = ASKING_TOOLS.filter(t => view[t]!.by === 'developer' && (view[t] as { approves: boolean }).approves)
     const canAlso = extra.length > 0 ? `, so a headless worker can also ${toolWords(extra)}` : ''
-    return { text: `${label}: an \`agy -p\` worker can use ${toolWords(APPROVED_TOOLS)}${where}${theirs}${canAlso}${tail}`, warn: notes.length > 0, remedy: NOTHING }
+    const text = `${label}: an \`agy -p\` worker can use ${toolWords(APPROVED_TOOLS)}${where}${theirs}${canAlso}${uncertain}${tail}`
+    // A rule agy may read as deciding otherwise is never ok (D387).
+    if (w.uncertain.length > 0) return { text, warn: true, remedy: uncertainRemedy, fix: uncertainRemedy }
+    return { text, warn: unreadable.length > 0 || args.unplaced.length > 0, remedy: NOTHING }
   }
   const why: string[] = []
   if (w.unapproved.length > 0) why.push(`${toolWords(w.unapproved)} ${w.unapproved.length === 1 ? 'is' : 'are'} not allowed in ${settingsFile}`)
   why.push(...w.developer.filter(d => / refused by /.test(d)))
+  why.push(...w.uncertain)
   const remedy = w.unapproved.length > 0 ? install : `${w.refusingRules.join(' and ')}, yours to change (install leaves it)`
   return { text: `${label}: an \`agy -p\` worker would be refused ${andList(w.refused)} — ${why.join('; ')}${tail}`, warn: true, remedy, fix: remedy }
 }

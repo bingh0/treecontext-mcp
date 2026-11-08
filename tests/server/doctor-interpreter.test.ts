@@ -20,6 +20,8 @@ const restoreHome = redirectHome(fakeHome)
 
 // Gemini: legacy bare-node MCP command + legacy bare-node hook command
 mkdirSync(join(fakeHome, '.gemini'), { recursive: true })
+// Gemini CLI itself is here: a file of its own (D383), not only treecontext's entry.
+writeFileSync(join(fakeHome, '.gemini', 'installation_id'), 'fixture\n')
 writeFileSync(join(fakeHome, '.gemini', 'settings.json'), JSON.stringify({
   mcpServers: { treecontext: { command: 'node', args: ['cli.js', '--capture', '--code-index'] } },
   hooks: {

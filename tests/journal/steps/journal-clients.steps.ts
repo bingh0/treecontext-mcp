@@ -12,7 +12,7 @@ import { launcherCliPath } from '../../../src/server/installer.js'
 import { agyHooksPath, getAgent, getHookSettingsPath } from '../../../src/server/agents.js'
 import { decodeContent } from '../../../src/persistence/content-codec.js'
 import { TS_ROOT } from '../proc.js'
-import { type InstallWorld, tcCli, openInstallWorld, agentConfigPath, mcpLauncherIn, setFakeCodex, pathWithoutCodex, putAgyOnPath, agyMcpList } from '../install-harness.js'
+import { type InstallWorld, tcCli, openInstallWorld, agentConfigPath, mcpLauncherIn, setFakeCodex, pathWithoutCodex, putAgyOnPath, agyMcpList, markGeminiCliInstalled } from '../install-harness.js'
 import { CODEX_APPROVALS_FLOOR } from '../../../src/server/codex-client.js'
 import { parse as parseToml, stringify as stringifyToml } from 'smol-toml'
 
@@ -412,6 +412,7 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
   // ── a teammate on another agent reads and writes through the tools (D152)
   reg.define(/^a teammate on Gemini CLI with the treecontext server configured and no hooks$/, async (w: ClientsWorld) => {
     await openInstallWorld(w, ['.gemini'])
+    markGeminiCliInstalled(w.ihome!)
     w.iproj = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-clients-proj-')))
     w.defer(() => rmSync(w.iproj!, { recursive: true, force: true }))
     mkdirSync(w.iproj, { recursive: true })
@@ -513,6 +514,8 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
     w.clientName = client!
     await openInstallWorld(w, [])
     mkdirSync(clientDir(CLIENT_SLUG[client!]!, w.ihome!), { recursive: true })
+    // Gemini CLI is there by a file of its own, not by `~/.gemini` alone (D383).
+    if (client === 'Gemini CLI') markGeminiCliInstalled(w.ihome!)
     if (client === 'Antigravity CLI') {
       // The real `agy` on the CLI's PATH, and its own hook file holding a
       // hook of the developer's and none of treecontext's.
@@ -972,7 +975,7 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
     expect(after.status, after.row).toBe('ok')
     // step-lint: allow unearned-absence -- the Then before this one in the same scenario asserts "off by your choice" present in this clause before the remedy ran
     expect(after.clause).not.toMatch(/off by your choice/)
-    expect(after.clause).toMatch(w.clientName === 'Codex CLI' ? /^can use the tools — / : w.clientName === 'Antigravity CLI' ? /^an `agy -p` worker can use status, query, export and insert, status, query, export and insert allowed in / : /^status, query, export and insert allowed in /)
+    expect(after.clause).toMatch(w.clientName === 'Codex CLI' ? /^can use the tools — / : w.clientName === 'Antigravity CLI' ? /^an `agy -p` worker can use status, query, export and insert, allowed in / : /^status, query, export and insert allowed in /)
   })
 
   // ── doctor's row for Antigravity CLI (D387, D383) ───────────────────
@@ -983,6 +986,13 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
   // from the other side. agy prints no permission rules, so the rule half is
   // the file agy reads, ~/.gemini/antigravity-cli/settings.json, edited as a
   // developer edits it. Each row's status is read with its words.
+  //
+  // Half-lit, on purpose: the outline's states are all in agy's global
+  // settings file, and its words do not reach a project file. The project
+  // layer doctor also reads (agy's undocumented project-file format: the
+  // nearest project by realpath, a bare "/" as a weak match, the project's
+  // rules over the global ones, a rule in an undocumented shape that may
+  // decide) is unit-tested in tests/server/agy-client.test.ts, not bound here.
   const agySettingsFile = (w: ClientsWorld): string => join(w.ihome!, '.gemini', 'antigravity-cli', 'settings.json')
   const editAgySettings = (w: ClientsWorld, edit: (perms: Record<string, unknown[]>) => void): void => {
     const data = JSON.parse(readFileSync(agySettingsFile(w), 'utf8')) as Record<string, unknown>
@@ -1030,7 +1040,7 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
       case 'read that the tools are its whole surface and headless workers can use the four tools':
         expect(r.status, r.row).toBe('ok')
         expect(w.clause!.mode).toMatch(/so the tools are its whole surface/)
-        expect(r.clause).toMatch(new RegExp(`^an \`agy -p\` worker can use status, query, export and insert, status, query, export and insert allowed in ${file}$`))
+        expect(r.clause).toMatch(new RegExp(`^an \`agy -p\` worker can use status, query, export and insert, allowed in ${file}$`))
         break
       case 'warn that agy has no treecontext tools':
         expect(r.status, r.row).toBe('warn')

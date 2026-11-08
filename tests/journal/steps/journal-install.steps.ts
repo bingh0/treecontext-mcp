@@ -14,7 +14,7 @@ import { openNodeSqlite } from '../../../src/persistence/node-sqlite.js'
 import { FlatStore } from '../../../src/flat-store.js'
 import { LeaseClient, DRAIN_LEASE_TTL_SECS } from '../../../src/persistence/leases.js'
 import { MAX_INGEST_ATTEMPTS } from '../../../src/persistence/capture-constants.js'
-import { type InstallWorld, pathWithFakeClaude, setClaudeVersion, tcCli, agentCli, codexCli, codexConfigRead, setFakeCodex, openInstallWorld, treeOf, pathsMentioned, installedCommands, interpreterRunsPackage, isBatchBody, toPosix, mcpLauncherIn, agentConfigPath, fakeGlobalInstall, clientEntry, putAgyOnPath, agyMcpList, type ClientEntry } from '../install-harness.js'
+import { type InstallWorld, pathWithFakeClaude, setClaudeVersion, tcCli, agentCli, codexCli, codexConfigRead, setFakeCodex, openInstallWorld, treeOf, pathsMentioned, installedCommands, interpreterRunsPackage, isBatchBody, toPosix, mcpLauncherIn, agentConfigPath, fakeGlobalInstall, clientEntry, putAgyOnPath, putGeminiOnPath, markGeminiCliInstalled, agyMcpList, type ClientEntry } from '../install-harness.js'
 import { CODEX_APPROVALS_FLOOR } from '../../../src/server/codex-client.js'
 import { startEntryAsClient } from '../standins.js'
 import { parse as parseToml, stringify as stringifyToml } from 'smol-toml'
@@ -96,6 +96,7 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
   // ── the dry run is the whole plan ───────────────────────────────────
   reg.define(/^a machine with agents detected$/, async (w: InstallWorld) => {
     await openInstallWorld(w, ['.claude', '.gemini'])
+    markGeminiCliInstalled(w.ihome!)
   })
 
   reg.define(/^install runs with the dry-run flag$/, (w: InstallWorld) => {
@@ -111,7 +112,9 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
     const realHome = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-install-real-')))
     try {
       mkdirSync(join(realHome, '.claude'), { recursive: true })
-      mkdirSync(join(realHome, '.gemini'), { recursive: true })
+      markGeminiCliInstalled(realHome)
+      // The world's own files are not install's writes.
+      const fixture = new Set(treeOf(realHome).map(f => `/${toPosix(f)}`))
       const real = tcCli({ ...w, ihome: realHome }, ['install', '--yes'])
       expect(real.status).toBe(0)
       // Both sides normalised to posix before comparing. The planned paths are
@@ -123,6 +126,7 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
       const wroteRel = treeOf(realHome)
         .map(f => `/${toPosix(f)}`)
         .filter(f => !f.startsWith('/.treecontext/logs'))   // debug logs, not config
+        .filter(f => !fixture.has(f))
         .filter(f => statSync(join(realHome, f.slice(1))).isFile())
       const unannounced = wroteRel.filter(f => ![...plannedRel].some(p => p === f || f.startsWith(`${p}/`)))
       expect(unannounced, `a real install wrote paths the dry run never listed: ${unannounced.join(', ')}`).toEqual([])
@@ -453,8 +457,8 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
     await openInstallWorld(w, ['.claude', '.gemini', '.cursor'])
     // Denied by SHAPE, not by permission bits: a regular FILE sits where the
     // .gemini DIRECTORY must be, so every write beneath it fails ENOTDIR on
-    // every platform. The agent is still DETECTED (existsSync is true for a
-    // file), so the installer reaches the write and has to report the denial.
+    // every platform. The agent is still DETECTED (by its command on PATH,
+    // below), so the installer reaches the write and has to report the denial.
     //
     // The previous fixture chmod'ed the directory to 0o500, which NTFS does not
     // honour: on Windows the install simply succeeded and this scenario
@@ -468,6 +472,10 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
     // the old fixture carried, since root cannot descend into a file either.
     rmSync(join(w.ihome!, '.gemini'), { recursive: true, force: true })
     writeFileSync(join(w.ihome!, '.gemini'), 'not a directory\n')
+    // Gemini CLI is still installed, by its command: since D383 a `.gemini`
+    // with none of Gemini CLI's own files in it is not Gemini CLI, so the
+    // command on PATH is what has install reach the blocked write.
+    putGeminiOnPath(w)
   })
 
   reg.define(/^the failure names the path and the permission problem$/, (w: InstallWorld) => {

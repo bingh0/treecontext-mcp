@@ -91,44 +91,51 @@ export const LEAK_KEYS = [
  */
 export const DETECTED_CLIENT_COMMANDS = ['agy', 'gemini'] as const
 
-const mirrors = new Map<string, string | null>()
+const mirrors = new Map<string, string>()
 let mirrorRoot: string | null = null
 
-/** A directory of the machine's PATH holding a detected client, mirrored without it (null on Windows: left out). */
-function mirrorWithoutClients(dir: string): string | null {
+/** A directory of the machine's PATH holding a detected client, mirrored without it: every other name there symlinked. */
+function mirrorWithoutClients(dir: string): string {
   const cached = mirrors.get(dir)
   if (cached !== undefined) return cached
-  let mirror: string | null = null
-  if (process.platform !== 'win32') {
-    if (!mirrorRoot) {
-      mirrorRoot = mkdtempSync(join(tmpdir(), 'tc-path-mirror-'))
-      const root = mirrorRoot
-      process.once('exit', () => { try { rmSync(root, { recursive: true, force: true }) } catch { /* best effort */ } })
-    }
-    mirror = mkdtempSync(join(mirrorRoot, 'd-'))
-    for (const name of readdirSync(dir)) {
-      if ((DETECTED_CLIENT_COMMANDS as readonly string[]).includes(name)) continue
-      try { symlinkSync(join(dir, name), join(mirror, name)) } catch { /* a name that cannot be linked is not a command we need */ }
-    }
+  if (!mirrorRoot) {
+    mirrorRoot = mkdtempSync(join(tmpdir(), 'tc-path-mirror-'))
+    const root = mirrorRoot
+    process.once('exit', () => { try { rmSync(root, { recursive: true, force: true }) } catch { /* best effort */ } })
+  }
+  const mirror = mkdtempSync(join(mirrorRoot, 'd-'))
+  for (const name of readdirSync(dir)) {
+    if ((DETECTED_CLIENT_COMMANDS as readonly string[]).includes(name)) continue
+    try { symlinkSync(join(dir, name), join(mirror, name)) } catch { /* a name that cannot be linked is not a command we need */ }
   }
   mirrors.set(dir, mirror)
   return mirror
 }
 
 function holdsClient(dir: string): boolean {
-  const exts = process.platform === 'win32' ? ['.exe', '.cmd', '.bat', '.ps1', ''] : ['']
-  return DETECTED_CLIENT_COMMANDS.some(c => exts.some(e => existsSync(join(dir, `${c}${e}`))))
+  return DETECTED_CLIENT_COMMANDS.some(c => existsSync(join(dir, c)))
 }
 
-/** A PATH whose directories from this machine's own PATH show no detected client command. */
-export function pathHidingMachineClients(path: string | undefined): string | undefined {
-  if (path === undefined) return undefined
+/**
+ * A PATH whose directories from this machine's own PATH show no detected
+ * client command. On Linux and macOS each such directory is replaced by a
+ * mirror of it without `agy` and `gemini`.
+ *
+ * On Windows the hiding is off, and the PATH is returned as it is. A mirror
+ * needs symlinks, which Windows grants only to an elevated or developer-mode
+ * account; dropping the directory instead would take every other command in
+ * it too (npm's global directory holds `gemini.cmd` beside `node`, `npx` and
+ * treecontext's own shim, which the children need). Shadowing the two with
+ * stub `.cmd` files first on PATH does not hide them either: install detects
+ * a client by its command's file on PATH (commandOnPath) without running it,
+ * so a stub reads as the client installed. A Windows machine that has `agy`
+ * or `gemini` on PATH therefore detects them in a sandboxed install world;
+ * the scenarios that depend on their absence are verified on Linux and macOS.
+ */
+export function pathHidingMachineClients(path: string | undefined, platform: NodeJS.Platform = process.platform): string | undefined {
+  if (path === undefined || platform === 'win32') return path
   const ambient = new Set((process.env['PATH'] ?? '').split(delimiter).filter(Boolean))
-  return path.split(delimiter).flatMap((d) => {
-    if (!d || !ambient.has(d) || !holdsClient(d)) return [d]
-    const m = mirrorWithoutClients(d)
-    return m ? [m] : []
-  }).join(delimiter)
+  return path.split(delimiter).map(d => (!d || !ambient.has(d) || !holdsClient(d) ? d : mirrorWithoutClients(d))).join(delimiter)
 }
 
 /** Child-process env: home sandboxed, every leak key scrubbed, overrides

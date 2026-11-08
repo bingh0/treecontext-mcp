@@ -139,8 +139,9 @@ export const AGENTS: AgentDefinition[] = [
     name: 'Gemini CLI',
     slug: 'gemini',
     configFormat: 'json-mcpServers',
-    // `~/.gemini` alone is Gemini CLI's only where Antigravity CLI has not
-    // made it its own too (geminiCliPresent, D383).
+    // `~/.gemini` alone is not Gemini CLI's: Antigravity CLI makes it too.
+    // Detection reads the command and Gemini CLI's own artifacts there
+    // (geminiCliPresent, D383); detectDirs is not consulted for it.
     detectCommands: ['gemini'],
     detectDirs: {
       linux: [join(home(), '.gemini')],
@@ -376,33 +377,50 @@ export function commandOnPath(name: string, platform: Platform = process.platfor
   return false
 }
 
+/** The files and directories in `~/.gemini` that only Gemini CLI makes (D383). */
+export const GEMINI_ARTIFACTS = ['installation_id', 'oauth_creds.json', 'google_accounts.json', 'trusted_hooks.json', 'tmp'] as const
+
 /**
- * Whether Gemini CLI is installed (D383). Antigravity CLI keeps its own
- * directories inside `~/.gemini` (`antigravity-cli`, `config`), so where
- * one of them is there, the `~/.gemini` directory proves nothing about
- * Gemini CLI: only its command on PATH, its credentials, or a
- * `settings.json` holding a setting of Gemini CLI's own (anything but the
- * MCP servers and hooks an install writes, or a server other than
- * treecontext) does. Where neither of agy's directories is there, the
- * directory is Gemini CLI's, as before.
+ * What in `~/.gemini` shows Gemini CLI has been there (D383): the files and
+ * directories it makes (GEMINI_ARTIFACTS), and a `settings.json` holding a
+ * key of its own, which is any key but the treecontext entry under
+ * `mcpServers` an install writes (another server there is the developer's).
+ * A `settings.json` that does not parse is not treecontext's, which writes
+ * only JSON, so it counts. Antigravity CLI's own directories,
+ * `antigravity-cli` and `config`, never count, and neither does
+ * `~/.gemini` itself, which agy creates too. Each artifact by its name.
+ */
+export function geminiArtifacts(): string[] {
+  const dir = join(home(), '.gemini')
+  const found: string[] = GEMINI_ARTIFACTS.filter(f => existsSync(join(dir, f)))
+  const settings = join(dir, 'settings.json')
+  if (existsSync(settings)) {
+    try {
+      const data = JSON.parse(readFileSync(settings, 'utf8')) as unknown
+      if (!data || typeof data !== 'object' || Array.isArray(data)) {
+        found.push('settings.json')
+      } else {
+        const rec = data as Record<string, unknown>
+        const servers = rec['mcpServers']
+        const ownKey = Object.keys(rec).some(k => k !== 'mcpServers')
+        const otherServer = servers !== undefined && (!servers || typeof servers !== 'object' || Array.isArray(servers)
+          || Object.keys(servers).some(k => k !== 'treecontext'))
+        if (ownKey || otherServer) found.push('settings.json')
+      }
+    } catch {
+      found.push('settings.json')
+    }
+  }
+  return found
+}
+
+/**
+ * Whether Gemini CLI is installed (D383): its command on PATH, or one of
+ * its own artifacts in `~/.gemini` (geminiArtifacts). The directory alone
+ * proves nothing, since Antigravity CLI creates it too.
  */
 export function geminiCliPresent(platform: Platform = process.platform as Platform): boolean {
-  if (commandOnPath('gemini', platform)) return true
-  const dir = join(home(), '.gemini')
-  if (!existsSync(dir)) return false
-  const agyThere = existsSync(agyDir()) || existsSync(join(dir, 'config'))
-  if (!agyThere) return true
-  if (['oauth_creds.json', 'google_accounts.json'].some(f => existsSync(join(dir, f)))) return true
-  try {
-    const data = JSON.parse(readFileSync(join(dir, 'settings.json'), 'utf8')) as unknown
-    if (!data || typeof data !== 'object' || Array.isArray(data)) return false
-    const rec = data as Record<string, unknown>
-    if (Object.keys(rec).some(k => k !== 'mcpServers' && k !== 'hooks')) return true
-    const servers = rec['mcpServers']
-    return !!servers && typeof servers === 'object' && Object.keys(servers).some(k => k !== 'treecontext')
-  } catch {
-    return false
-  }
+  return commandOnPath('gemini', platform) || geminiArtifacts().length > 0
 }
 
 export function detectAgents(platform?: Platform): AgentDefinition[] {
