@@ -142,7 +142,8 @@ if (step.waitFor !== undefined) {
   const deadline = Date.now() + 60_000
   while (!existsSync(step.waitFor) && Date.now() < deadline) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20)
 }
-if (step.stderr !== undefined) await new Promise<void>((resolve) => { process.stderr.write(step.stderr!, () => resolve()) })
+const envLines = step.envToStderr === undefined ? '' : Object.entries(process.env).filter(([k]) => k.startsWith(step.envToStderr!)).map(([k, v]) => `${k}=${v}\n`).join('')
+if (step.stderr !== undefined || envLines !== '') await new Promise<void>((resolve) => { process.stderr.write(`${step.stderr ?? ''}${envLines}`, () => resolve()) })
 if (step.print !== undefined) process.stdout.write(step.print)
 if (step.exit === 'hang') {
   setInterval(() => { /* until a signal ends it */ }, 1 << 30)

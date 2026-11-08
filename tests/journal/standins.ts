@@ -294,6 +294,11 @@ export interface WorkerStep {
   stderr?: string
   /** D389: a file its whole environment is written to, as JSON. */
   envTo?: string
+  /** D389, D384: the lines `NAME=value` of its environment whose names
+   *  start with this prefix, written to its error stream (after `stderr`),
+   *  so that a variable the door failed to leave out would reach the
+   *  summary row's error tail. */
+  envToStderr?: string
   /** Reads through its own tools after its writes (the real serve). */
   reads?: { query?: Record<string, unknown>; status?: Record<string, unknown> }
   /** Handshake reads (D382): a real serve per entry, its `initialize`

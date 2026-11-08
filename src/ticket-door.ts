@@ -105,6 +105,10 @@ export interface SendBackInput {
    *  a refusal is no checkpoint, so it changes nothing of the decision but
    *  the words that give it. */
   capRefused?: { size: number } | null
+  /** The door itself signalled the worker (its timeout, the spawner's
+   *  abort): a cut whatever the exit code, a worker that traps the signal
+   *  and exits with a code of its own included (D292). */
+  doorSignalled?: boolean
 }
 
 export interface SendBackVerdict {
@@ -117,7 +121,9 @@ export interface SendBackVerdict {
 
 /**
  * Whether a run that just ended earns the leg its one send-back. Only an
- * exit on its own, whatever its code (D292), of a worker whose ticket was
+ * exit on its own, whatever its code, of a run the door never signalled
+ * (D292: a worker that traps the door's signal and exits with a code is
+ * still cut), of a worker whose ticket was
  * read whole, names a key and names the worker itself as the one who will
  * checkpoint it (D281, D291), and declares a way to write or says nothing
  * about it (D316, D340), with no checkpoint under the key newer than its
@@ -125,6 +131,9 @@ export interface SendBackVerdict {
  * while the store can be written (D279, D307).
  */
 export function sendBackDecision(i: SendBackInput): SendBackVerdict {
+  if (i.exit.signal === null && i.doorSignalled === true) {
+    return { sendBack: false, ending: 'cut', why: `the door signalled it and it exited with code ${i.exit.code ?? 0}, a cut, which is never sent back` }
+  }
   if (i.exit.signal !== null) return { sendBack: false, ending: 'cut', why: `it was ended by ${i.exit.signal}, a cut, which is never sent back` }
   if (!i.ticketValid) return { sendBack: false, ending: 'invalid', why: 'its ticket could not be read whole, so it had no valid instructions' }
   if (i.noKey) return { sendBack: false, ending: 'retired', why: 'its ticket says it has no key, so it owed no checkpoint' }
@@ -200,6 +209,9 @@ export interface WorkerRunRecord {
   start: number | null
   token: string | null
   exit: { code: number | null; signal: string | null }
+  /** The door signalled this run (its timeout, the spawner's abort): its
+   *  end is a cut whatever its exit code (D292). */
+  doorSignalled: boolean
   /** The whole of the worker's input from the door: its stdin and argv. */
   input: { stdin: string | null; argv: string[] }
   /** What it printed on stdout, whole. */
@@ -346,7 +358,7 @@ function launch(o: SpawnWorkerOptions, message: string, env: NodeJS.ProcessEnv, 
   const deliver = o.deliver ?? 'stdin'
   const argv = deliver === 'argv' ? [...(o.args ?? []), message] : [...(o.args ?? [])]
   const record: WorkerRunRecord = {
-    pid: null, start: null, token: null, exit: { code: null, signal: null },
+    pid: null, start: null, token: null, exit: { code: null, signal: null }, doorSignalled: false,
     input: { stdin: deliver === 'stdin' ? message : null, argv }, output: '', errorTail: '', errorChars: 0,
   }
   const done = new Promise<void>((resolve) => {
@@ -405,6 +417,7 @@ function launch(o: SpawnWorkerOptions, message: string, env: NodeJS.ProcessEnv, 
       if (timer) clearTimeout(timer)
       if (killer) clearTimeout(killer)
       record.exit = { code, signal }
+      record.doorSignalled = signalled
       // A worker the door signalled is cut whole: what is left of its group
       // goes with it, so nothing it started outlives the cut. The leader is
       // reaped by now, so the group is signalled by its number only while
@@ -424,8 +437,9 @@ function legName(leg: Pick<LegRegistration, 'role' | 'run' | 'key' | 'sessionId'
   return `the ${leg.role ?? 'unnamed'} worker${leg.run ? ` of the run "${leg.run}"` : ''} (session ${leg.sessionId}${keyed})`
 }
 
-function exitWords(exit: WorkerRunRecord['exit']): string {
-  return exit.signal !== null ? `was ended by ${exit.signal}` : `exited with code ${exit.code ?? 0}`
+function exitWords(exit: WorkerRunRecord['exit'], doorSignalled = false): string {
+  if (exit.signal !== null) return `was ended by ${exit.signal}`
+  return `exited with code ${exit.code ?? 0}${doorSignalled ? ' after the door signalled it' : ''}`
 }
 
 /** The line the spawner reads when the store could not be read (D307). */
@@ -546,7 +560,7 @@ export async function spawnWorker(o: SpawnWorkerOptions): Promise<WorkerRunResul
       const verdict = sendBackDecision({
         // D281: who is named to checkpoint is the registration's word (the
         // ticket's, else the brief's), never the ticket's alone.
-        exit: rec.exit, ticketValid: reading.valid, noKey: t.noKey === true, role: leg?.role ?? t.role, checkpointer: leg?.checkpointer ?? null,
+        exit: rec.exit, doorSignalled: rec.doorSignalled, ticketValid: reading.valid, noKey: t.noKey === true, role: leg?.role ?? t.role, checkpointer: leg?.checkpointer ?? null,
         canWrite: t.canWrite ?? null, sendBacks: leg?.sendBacks ?? 0, checkpointSinceStart, storeWritable: readable,
         ...(leg ? { capRefused: capRefusalOf(leg) } : {}),
       })
@@ -591,7 +605,7 @@ export async function spawnWorker(o: SpawnWorkerOptions): Promise<WorkerRunResul
         // D307: the exit could not be recorded; the spawner still has the
         // output whole, and the leg stays registered for the phantom pass.
         result.ended = 'unrecorded'
-        result.line = `${DOOR_LINE_PREFIX} the store could not be written when ${legName(started.leg)} ${exitWords(rec.exit)}, `
+        result.line = `${DOOR_LINE_PREFIX} the store could not be written when ${legName(started.leg)} ${exitWords(rec.exit, rec.doorSignalled)}, `
           + 'so nothing of its exit was recorded and it was not sent back; its output is handed to you whole, '
           + 'and its registration stays live until the next reader of the registry on this host retires it as a phantom.'
         return result
@@ -607,7 +621,7 @@ export async function spawnWorker(o: SpawnWorkerOptions): Promise<WorkerRunResul
         result.ended = how
       } catch (err) {
         result.ended = 'unrecorded'
-        result.line = `${DOOR_LINE_PREFIX} the store could not be written when ${legName(started.leg)} ${exitWords(rec.exit)} (${errText(err)}), `
+        result.line = `${DOOR_LINE_PREFIX} the store could not be written when ${legName(started.leg)} ${exitWords(rec.exit, rec.doorSignalled)} (${errText(err)}), `
           + 'so nothing of its exit was recorded; its output is handed to you whole, '
           + 'and its registration stays live until the next reader of the registry on this host retires it as a phantom.'
         return result
@@ -645,7 +659,7 @@ function exitLine(
   const name = legName(leg)
   const after = result.sentBack ? ' after its one send-back' : ''
   if (how === 'cut') {
-    return `${DOOR_LINE_PREFIX} ${name} ${exitWords(exit)}: a cut, so it is not sent back and left no summary row; `
+    return `${DOOR_LINE_PREFIX} ${name} ${exitWords(exit, result.runs.at(-1)?.doorSignalled)}: a cut, so it is not sent back and left no summary row; `
       + `the next ${leg.role ?? 'unnamed'} leg${leg.key ? ` under "${leg.key}"` : ''} starts as a recovery leg.`
   }
   const writer = legWriterOf(leg)

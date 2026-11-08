@@ -26,6 +26,7 @@ import {
   reapedGroupIsOurs, StreamTail, summaryOf,
 } from '../src/ticket-door.js'
 import { workerEnvironment, CLIENT_SESSION_VARIABLE_NAMES } from '../src/client-session-env.js'
+import { decodeContent } from '../src/persistence/content-codec.js'
 import { hostProbe } from '../src/persistence/process-probe.js'
 import { registerSelf } from '../src/persistence/session-registry.js'
 import { NO_SESSION } from '../src/dedup-identity.js'
@@ -190,6 +191,8 @@ describe('sendBackDecision', () => {
     ['a checkpoint newer than its start', { checkpointSinceStart: true }, [false, 'retired']],
     ['a one-off with no key (D341)', { noKey: true }, [false, 'retired']],
     ['a ticket not read whole (D303)', { ticketValid: false }, [false, 'invalid']],
+    ['a run the door signalled is a cut whatever its exit code (D292)', { exit: { code: 143, signal: null }, doorSignalled: true }, [false, 'cut']],
+    ['a run the door never signalled, exiting 143 on its own, is finished (D292)', { exit: { code: 143, signal: null }, doorSignalled: false }, [true, 'retired']],
     ['a signal outranks everything', { exit: { code: null, signal: 'SIGKILL' }, ticketValid: false }, [false, 'cut']],
   ] as Array<[string, Partial<SendBackInput>, [boolean, string]]>)('%s', (_name, o, want) => {
     expect(row(o)).toEqual(want)
@@ -474,6 +477,119 @@ describe('the end of the error stream (D384)', () => {
     expect(summaryOf(rec('', 1, 'x'.repeat(2000), 50000)))
       .toBe(`treecontext: the worker exited with code 1 having printed nothing; the last 2000 of the 50000 characters it wrote to its error stream, the earlier part was left out:\n${'x'.repeat(2000)}`)
   })
+})
+
+describe('a run the door signalled is a cut, whatever its exit code (D292)', () => {
+  const trap = ['-c', 'trap "exit 143" TERM; cat >/dev/null; sleep 777 & wait']
+  const ticket = { run: 'r1', key: 'k', role: 'builder', checkpointer: 'builder', parent: { id: 'p1' } }
+  it('a worker that traps the door\'s SIGTERM and exits with a code is retired cut: no summary row, no send-back, a recovery leg next', async () => {
+    const s = await open()
+    try {
+      const r = await spawnWorker({ store: s, ticket, command: 'sh', args: trap, timeoutMs: 1000 })
+      expect([r.runs[0]!.exit.signal, r.runs[0]!.exit.code, r.runs[0]!.doorSignalled]).toEqual([null, 143, true])
+      expect([r.ended, r.sentBack, r.runs.length, r.summaryId, r.exitCode]).toEqual(['cut', false, 1, null, 143])
+      expect(r.line).toContain('exited with code 143 after the door signalled it: a cut')
+      expect(raw("SELECT 1 FROM nodes WHERE session_key = ? AND json_extract(metadata_json, '$.kind') IN ('subagent-summary', 'send-back')", r.sessionId)).toHaveLength(0)
+      expect(raw<{ ended: string; send_backs: number }>('SELECT ended, send_backs FROM session_registry WHERE session_id = ?', r.sessionId)[0]).toEqual({ ended: 'cut', send_backs: 0 })
+      // The next leg of the role starts as a recovery leg.
+      const next = await spawnWorker({ store: s, ticket, command: 'true', args: [] })
+      expect(next.firstMessage).toContain(r.sessionId)
+    } finally { await s.close() }
+  }, 60_000)
+
+  it('the same worker exiting 143 on its own, never signalled, is finished and sent back once', async () => {
+    const s = await open()
+    try {
+      const r = await spawnWorker({ store: s, ticket, command: 'sh', args: ['-c', 'cat >/dev/null; exit 143'] })
+      expect([r.ended, r.sentBack, r.runs.length]).toEqual(['retired', true, 2])
+      expect(r.runs.map((x) => x.doorSignalled)).toEqual([false, false])
+    } finally { await s.close() }
+  }, 60_000)
+})
+
+describe('the error stream is read through a pipe, and what that costs (D384)', () => {
+  const ticket = { run: 'r1', key: 'k', role: 'builder', checkpointer: 'reviewer', parent: { id: 'p1' } }
+  const stray = (): void => { for (const pid of strays) { try { process.kill(-pid, 'SIGKILL') } catch { /* gone */ } } }
+  const strays: number[] = []
+  afterEach(stray)
+
+  it('(a) a run whose worker has exited waits out the drain while something holds its stderr', async () => {
+    const s = await open()
+    try {
+      const t0 = Date.now()
+      // The background process keeps the stderr pipe (its stdout goes away).
+      const r = await spawnWorker({ store: s, ticket, command: 'sh', args: ['-c', 'cat >/dev/null; sleep 30 >/dev/null & exit 0'], stderr: 'ignore' })
+      const took = Date.now() - t0
+      strays.push(r.runs[0]!.pid!)
+      expect(r.exitCode).toBe(0)
+      expect(took).toBeGreaterThanOrEqual(STDOUT_DRAIN_MS - 100)
+      expect(took).toBeLessThan(STDOUT_DRAIN_MS + 4000)
+    } finally { await s.close() }
+  }, 30_000)
+
+  it('a worker that holds nothing on stderr is not made to wait', async () => {
+    const s = await open()
+    try {
+      const t0 = Date.now()
+      const r = await spawnWorker({ store: s, ticket, command: 'sh', args: ['-c', 'cat >/dev/null; exit 0'], stderr: 'ignore' })
+      strays.push(r.runs[0]!.pid!)
+      expect(Date.now() - t0).toBeLessThan(STDOUT_DRAIN_MS)
+    } finally { await s.close() }
+  }, 30_000)
+
+  it('(b) a background process that writes to stderr after the run settled is ended by SIGPIPE on that write', async () => {
+    const s = await open()
+    try {
+      const mark = join(tmpDir, 'late-status')
+      const script = `cat >/dev/null; ( ( sleep 3.5; echo late >&2 ) >/dev/null; echo "status $?" > '${mark}' ) & exit 0`
+      const r = await spawnWorker({ store: s, ticket, command: 'sh', args: ['-c', script], stderr: 'ignore' })
+      strays.push(r.runs[0]!.pid!)
+      expect(existsSync(mark)).toBe(false)
+      for (let i = 0; i < 100 && !existsSync(mark); i++) await new Promise((res) => setTimeout(res, 100))
+      expect(readFileSync(mark, 'utf8').trim()).toBe('status 141')
+    } finally { await s.close() }
+  }, 30_000)
+})
+
+describe('the cut marker counts characters (D384)', () => {
+  const ticket = { run: 'r1', key: 'k', role: 'builder', checkpointer: 'reviewer', parent: { id: 'p1' } }
+  const summaryText = (sessionId: string | null): string =>
+    raw<{ c: Buffer | string }>("SELECT content AS c FROM nodes WHERE session_key = ? AND json_extract(metadata_json, '$.kind') = 'subagent-summary'", sessionId)
+      .map((r) => decodeContent(r.c)).join('')
+
+  it('1500 two-byte characters, none cut, read "all 1500 characters"; 3000 of them read "the last 2000 of the 3000"', async () => {
+    const s = await open()
+    try {
+      const small = await spawnWorker({ store: s, ticket, stderr: 'ignore', ...standin({ first: { stderr: 'é'.repeat(1500), exit: 1 } }) })
+      expect(summaryText(small.sessionId)).toContain('its error stream, all 1500 characters of it:')
+      const big = await spawnWorker({ store: s, ticket, stderr: 'ignore', ...standin({ first: { stderr: 'é'.repeat(3000), exit: 1 } }) })
+      expect(summaryText(big.sessionId)).toContain('the last 2000 of the 3000 characters it wrote')
+    } finally { await s.close() }
+  }, 60_000)
+})
+
+describe('the send-back re-run\'s environment is scrubbed too (D389)', () => {
+  it('a worker sent back once holds none of the six session variables on either run', async () => {
+    const s = await open()
+    try {
+      const f1 = join(tmpDir, 'env-1.json')
+      const f2 = join(tmpDir, 'env-2.json')
+      const w = standin({ first: { envTo: f1 }, rerun: { envTo: f2 } })
+      const session = Object.fromEntries(CLIENT_SESSION_VARIABLE_NAMES.map((n) => [n, `fake-${n}`]))
+      const r = await spawnWorker({
+        store: s, ticket: { run: 'r1', key: 'k', role: 'builder', checkpointer: 'builder', parent: { id: 'p1' } },
+        ...w, env: { ...w.env, ...session, CLAUDE_CONFIG_DIR: '/fake/config' },
+      })
+      expect([r.sentBack, r.runs.length]).toEqual([true, 2])
+      for (const f of [f1, f2]) {
+        const env = JSON.parse(readFileSync(f, 'utf8')) as Record<string, string>
+        expect(CLIENT_SESSION_VARIABLE_NAMES).toHaveLength(6)
+        for (const n of CLIENT_SESSION_VARIABLE_NAMES) expect([f, n, env[n]]).toEqual([f, n, undefined])
+        expect(env['CLAUDE_CONFIG_DIR']).toBe('/fake/config')
+        expect(env[WORKER_SESSION_ENV]).toBe(r.sessionId)
+      }
+    } finally { await s.close() }
+  }, 60_000)
 })
 
 describe('the worker\'s environment (D389)', () => {

@@ -2089,6 +2089,11 @@ export function failedRunSteps(define: (re: RegExp, fn: (w: WorkersWorld, ...cap
       const { head, body } = treecontextLine(row.content)
       expect(head, spawner).toContain('the earlier part was left out')
       expect(head).toMatch(/\bexited with code 1\b/)
+      // The marker's total counts characters, not bytes: the stream's filler
+      // is multi-byte, so the two differ.
+      const chars = [...stream].length
+      expect(Buffer.byteLength(stream)).toBeGreaterThan(chars)
+      expect(head, spawner).toContain(`the last ${n} of the ${chars} characters it wrote`)
       // Exactly the stream's last characters: none fewer, none more.
       expect(body.length, spawner).toBe(Number(n))
       expect(body).toBe(stream.slice(-Number(n)))
@@ -2183,7 +2188,7 @@ export function sessionVariableSteps(define: (re: RegExp, fn: (w: WorkersWorld, 
     w.facts!['ticket'] = ticket
     await runWorker(w, {
       spawner: how!.spawner, prompt: 'wire the submit button', ticket,
-      plan: { first: { envTo: envFile, print: 'environment written' } },
+      plan: { first: { envTo: envFile, envToStderr: 'CLAUDE' } },
       spawnerEnv: w.facts!['spawner-env'] as Record<string, string>, ...(how!.own ? { libraryOwnEnv: true } : {}),
     })
     expect(outOf(w).exitCode).toBe(0)
@@ -2201,9 +2206,17 @@ export function sessionVariableSteps(define: (re: RegExp, fn: (w: WorkersWorld, 
     expect(session).toHaveLength(6)
     for (const name of session) expect(env[name], name).toBeUndefined()
     // Nor does the token reach the worker under another name, or the
-    // store: no row holds it.
+    // store. The worker wrote its CLAUDE* variables to its error stream and
+    // exited 0 having printed nothing, so its summary row carries that
+    // stream's tail (D384): a token the door had left in would be in it.
     const token = String(w.facts!['token'])
     expect(Object.values(env)).not.toContain(token)
+    const row = summaryRowOf(w, outOf(w))
+    const had = w.facts!['spawner-env'] as Record<string, string>
+    // The row does hold the worker's variables (the setting it kept), so the
+    // absence below is read off a row that would have shown the token.
+    expect(row.content).toContain(`CLAUDE_CONFIG_DIR=${had['CLAUDE_CONFIG_DIR']}`)
+    expect(row.content.includes(token)).toBe(false)
     const rows = rawAll<{ c: Buffer | string; m: string }>(w, 'SELECT content AS c, metadata_json AS m FROM nodes')
     expect(rows.length).toBeGreaterThan(0)
     for (const r of rows) expect(`${decodeContent(r.c)}${r.m}`).not.toContain(token)
