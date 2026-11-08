@@ -1,7 +1,8 @@
 import { spawn } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
-import { homedir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { existsSync, readFileSync } from 'node:fs'
+import { installStatePath, readInstallState, writeAtomic, writeInstallState, type InstallState } from './install-state.js'
+
+export { installStatePath }
 
 // ── Claude Code's idle compaction (D290, D304, D338) ───────────────────
 //
@@ -322,36 +323,6 @@ export function idleCompactionRow(version: string | null, setting: IdleCompactio
 // the value install wrote, and otherwise leaves it, so a client is never left
 // with a setting install chose after treecontext is gone, and a value the
 // user set, or set since, is never touched.
-
-interface InstallState {
-  idleCompaction?: Record<string, { value: false; at: string }>
-}
-
-/** treecontext's own install state, beside its config. */
-export function installStatePath(): string {
-  return join(homedir(), '.treecontext', 'install-state.json')
-}
-
-function writeAtomic(file: string, content: string, mode: number): void {
-  mkdirSync(dirname(file), { recursive: true })
-  const tmp = `${file}.tmp.${process.pid}`
-  writeFileSync(tmp, content, { mode })
-  try { unlinkSync(file) } catch { /* may not exist yet */ }
-  renameSync(tmp, file)
-}
-
-function readInstallState(): InstallState {
-  try {
-    const parsed: unknown = JSON.parse(readFileSync(installStatePath(), 'utf8'))
-    return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as InstallState : {}
-  } catch {
-    return {}
-  }
-}
-
-function writeInstallState(state: InstallState): void {
-  writeAtomic(installStatePath(), JSON.stringify(state, null, 2) + '\n', 0o600)
-}
 
 /** Install wrote the key off into this file. */
 export function recordIdleCompactionWrite(settingsFile: string): void {

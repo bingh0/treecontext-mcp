@@ -113,7 +113,10 @@ describe.skipIf(!posix)('idle compaction through the CLI', () => {
     const install = spawnCli(['install', '--yes'], { home, env })
     expect(install.status, install.out).toBe(0)
     expect(install.stdout.split('\n').filter((l) => /idle.?compaction/i.test(l))).toEqual([])
-    expect(() => readFileSync(stateFile(home), 'utf8')).toThrow()
+    // The record file holds install's tool approvals (D390), and no
+    // idle-compaction record: the key is the user's.
+    const state = JSON.parse(readFileSync(stateFile(home), 'utf8')) as Record<string, unknown>
+    expect(state).not.toHaveProperty('idleCompaction')
     const uninstall = spawnCli(['uninstall', '--yes'], { home, env })
     expect(uninstall.status, uninstall.out).toBe(0)
     expect(settings(home)['idleCompaction']).toBe(false)

@@ -79,6 +79,11 @@ jobs:
       # because nobody asking the other side is what 0.0.9-beta shipped.
       - name: install the reference agent CLI
         run: npm i -g @anthropic-ai/claude-code
+      # The Codex CLI scenarios ask Codex itself how it reads its
+      # configuration (`codex mcp get`, its app server's config/read) and
+      # run its sandbox check; none of them calls a model.
+      - name: install Codex CLI
+        run: npm i -g @openai/codex
 
       - run: npm run typecheck
       # The hook-budget suite times the hooks as they ship: built (dist)

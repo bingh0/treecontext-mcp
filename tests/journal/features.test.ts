@@ -218,16 +218,19 @@ runFeatures(join(HERE, '../../features'), {
         // installed" is left unbound and the outline, whose other rows
         // bind and run, is held open here by its title.
         'the server runs in capture mode for <agent> only where its capture hooks are installed',
-        // Unit 2: D381 and D390 (the four tools approved per tool in Codex
-        // and Claude Code; the install message, `config tool-approvals`,
-        // `--no-tool-approvals`; Antigravity CLI's rows wait on unit 3).
-        'install lets a headless Codex worker use the tools that read and write, and leaves the four that remove or bring in rows asking',
-        'install never writes the approval the developer set for <tool> to <value>',
+        // Unit 2 bound D381 and D390 for Codex CLI and Claude Code
+        // (2026-11-08). Held open: the version floor scenario, conditional
+        // (D381: kept only if a Codex older than 0.167 is shown to refuse
+        // the keys) and not established, a dogfood item, since installing
+        // an older Codex would change the owner's global one; the install
+        // message and the `--no-tool-approvals` scenario, whose Given names
+        // Antigravity CLI installed, which this build has no agent entry
+        // for (unit 3, D383); and the off-and-on outline, whose Antigravity
+        // CLI row waits on unit 3 and whose other rows bind and run.
         'a Codex that cannot read per-tool approvals gets none, and is told why',
         'install says what it approved, what still asks, and the way back',
         'turning tool approvals off and on again in <client> touches only what install wrote',
         'an install told not to approve writes no approval, and a later install keeps it that way',
-        "Claude Code's grant sits beside the developer's own rules and leaves with uninstall",
         // Unit 3: D383 (Antigravity CLI as a tools-only client; the
         // @D51 uninstall scenario reworded for the permission rules).
         'uninstall removes everything install wrote and nothing else',
@@ -256,13 +259,10 @@ runFeatures(join(HERE, '../../features'), {
         // and D387's Antigravity CLI row.
         'doctor reports <client> as a client that <mode>',
         "doctor's row for Antigravity CLI says whether a headless agy worker can use the tools, when <state>",
-        // Unit 2: D387 (Codex's headless readiness and the Linux sandbox
-        // row) and D390 (the off state; Antigravity CLI's row waits on
-        // unit 3).
-        "doctor's row for Codex CLI says whether a headless worker can use the tools, when its entry <state>",
-        "the command doctor's Codex row names makes its headless workers ready",
-        "on Linux, doctor runs Codex's own sandbox check, which <result>",
-        'doctor shows no sandbox row where it does not apply',
+        // Unit 2 bound D387's Codex rows and D390's off state for Claude
+        // Code and Codex CLI (2026-11-08). The off-state outline's
+        // Antigravity CLI row waits on unit 3 (D383), and the outline,
+        // whose other rows bind and run, is held open here by its title.
         "doctor's row for <client> shows tool approvals turned off as the developer's choice",
         // Unit 6: D388 (the README's headless-workers section and the
         // matrices' permission modes), bound once the dogfood has run.

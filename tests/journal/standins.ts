@@ -35,6 +35,12 @@
  *  |                                        | the scenario says the harness does it                       |
  *  | `writeFakeClaude`                      | the `claude` on PATH whose `--version` install and doctor   |
  *  |                                        | read (journal-install, D290, D304, D338)                    |
+ *  | `writeFakeCodex`                       | the `codex` on PATH whose `--version` install and doctor    |
+ *  |                                        | read and whose `sandbox -- true` doctor runs on Linux       |
+ *  |                                        | (journal-clients, D381, D387): it answers by its plan, a    |
+ *  |                                        | version and the sandbox check's exit code and stderr; it    |
+ *  |                                        | runs nothing in a sandbox, reads no configuration, calls no |
+ *  |                                        | model and answers no other subcommand (exit 2, saying so)   |
  *  | `startEntryAsClient`                   | a client (Claude Code, Codex CLI, Cursor) starting the MCP  |
  *  |                                        | server its treecontext entry names: the command and args    |
  *  |                                        | the client read, spawned as written, so the real launcher   |
@@ -455,6 +461,41 @@ export function writeFakeClaude(dir: string, version: string | null): void {
   } else {
     writeFileSync(join(dir, 'claude'), `#!/bin/sh\necho '${answer}'\nexit ${status}\n`, { mode: 0o755 })
   }
+}
+
+/** What the stand-in `codex` answers: its version, and its sandbox check's result. */
+export interface FakeCodexPlan {
+  /** `codex --version` prints `codex-cli <version>`; null prints nothing with a version and exits 1. */
+  version: string | null
+  /** `codex sandbox -- …`: the exit code and what it writes on stderr. */
+  sandbox: { exit: number; stderr: string }
+}
+
+/**
+ * A `codex` in `dir` that answers `--version` and `sandbox -- <command>`
+ * by its plan, and nothing else: every other subcommand exits 2 saying it
+ * is not stood in for, so a caller that reached for more than doctor and
+ * install read fails loudly instead of being answered. Writing it again
+ * replaces it in place. POSIX only answers the sandbox check (doctor runs
+ * it on Linux alone); the Windows shim answers the version.
+ */
+export function writeFakeCodex(dir: string, plan: FakeCodexPlan): void {
+  const version = plan.version === null ? null : `codex-cli ${plan.version}`
+  if (process.platform === 'win32') {
+    const v = version === null ? 'echo codex: cannot report a version\r\nexit /b 1' : `echo ${version}\r\nexit /b 0`
+    writeFileSync(join(dir, 'codex.cmd'), `@echo off\r\nif "%1"=="--version" (\r\n${v}\r\n)\r\necho stand-in codex: %1 is not stood in for 1>&2\r\nexit /b 2\r\n`)
+    return
+  }
+  const q = (t: string): string => `'${t.replace(/'/g, `'\\''`)}'`
+  writeFileSync(join(dir, 'codex'), [
+    '#!/bin/sh',
+    'case "$1" in',
+    version === null ? '  --version) echo "codex: cannot report a version"; exit 1 ;;' : `  --version) echo ${q(version)}; exit 0 ;;`,
+    `  sandbox) printf '%s\\n' ${q(plan.sandbox.stderr)} >&2; exit ${plan.sandbox.exit} ;;`,
+    '  *) echo "stand-in codex: $1 is not stood in for" >&2; exit 2 ;;',
+    'esac',
+    '',
+  ].join('\n'), { mode: 0o755 })
 }
 
 /**

@@ -84,7 +84,8 @@ scenario, are in `docs/beta3-bindings-audit.md`.
   `@modelcontextprotocol/server`), 8 tools
 - `src/server/cli.ts` — CLI: serve, install/uninstall, doctor, init, hook,
   backup, stores, ccr, export/import (the handoff file's shell door),
-  config checkpoint-interval, run (the ticket door's shell door)
+  config checkpoint-interval and tool-approvals, run (the ticket door's
+  shell door)
 - `src/server/ingestion.ts` — drains staged events into the journal
   (honest timestamps, dedup, byte valve, poison dead-letter); stamps a
   captured row's `_writer` from the hook payload's agent fields and runs
@@ -98,6 +99,17 @@ scenario, are in `docs/beta3-bindings-audit.md`.
 - `src/server/idle-compaction.ts` — Claude Code's idle-compaction key
   (D290, D304, D338): the version parse and the 2.1.290 / 2.1.302 floors,
   what install does about the key, and doctor's row for it
+- `src/server/tool-approvals.ts` — the one approval rule (D381, D390): the
+  four tools install approves and the four that keep asking, Claude Code's
+  `permissions.allow` merge and Codex's per-tool approvals, each beside the
+  developer's own rules and never over them, the record of what install
+  wrote and of an off the developer chose, and doctor's clauses for them
+- `src/server/codex-client.ts` — what install and doctor ask the Codex on
+  PATH (D381, D387): its version against the per-tool approvals floor, and
+  on Linux its own sandbox check (`codex sandbox -- true`) and doctor's row
+- `src/server/install-state.ts` — install's own record,
+  `~/.treecontext/install-state.json` (D361, D390): what install wrote, so
+  uninstall and `config tool-approvals off` take back that and nothing else
 - `src/handoff.ts` — the handoff door: the import rule (importer's marks,
   `_handoff_claims`, `handoff:` lanes), the export forms (`summaries`,
   `whole`, and a run's `skeleton`), the file's self-describing head, the

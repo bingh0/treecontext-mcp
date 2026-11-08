@@ -71,6 +71,10 @@ export const LEAK_KEYS = [
   'TREECONTEXT_PROJECT_DIR',
   'XDG_CONFIG_HOME',
   'CCR_CONFIG',
+  // Codex CLI reads its configuration from CODEX_HOME: doctor runs Codex's
+  // own sandbox check and version read (D381, D387), so an inherited one
+  // would point those at the developer's real configuration.
+  'CODEX_HOME',
 ]
 
 /** Child-process env: home sandboxed, every leak key scrubbed, overrides

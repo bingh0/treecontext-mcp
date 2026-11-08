@@ -376,7 +376,7 @@ describe('convergeMcpEntry and the upserts that use it (D385)', () => {
     ].join('\n'))
     const r = upsertTomlMcp(p, codexWant(), false, false)
     expect(r.status).toBe('updated')
-    expect(r.detail).toMatch(/^kept your --store pinned, --instructions none, default_tools_approval_mode, enabled_tools, startup_timeout_sec, env, tools; /)
+    expect(r.detail).toMatch(/^kept your --store pinned, --instructions none, default_tools_approval_mode, enabled_tools, startup_timeout_sec, env, tools\.treecontext_insert\.approval_mode; /)
     expect(r.detail).toMatch(backupNote(p))
     expect(tomlEntry(p)).toEqual({
       command: launcher(),

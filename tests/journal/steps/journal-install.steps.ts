@@ -14,7 +14,8 @@ import { openNodeSqlite } from '../../../src/persistence/node-sqlite.js'
 import { FlatStore } from '../../../src/flat-store.js'
 import { LeaseClient, DRAIN_LEASE_TTL_SECS } from '../../../src/persistence/leases.js'
 import { MAX_INGEST_ATTEMPTS } from '../../../src/persistence/capture-constants.js'
-import { type InstallWorld, pathWithFakeClaude, setClaudeVersion, tcCli, agentCli, openInstallWorld, treeOf, pathsMentioned, installedCommands, interpreterRunsPackage, isBatchBody, toPosix, mcpLauncherIn, agentConfigPath, fakeGlobalInstall, clientEntry } from '../install-harness.js'
+import { type InstallWorld, pathWithFakeClaude, setClaudeVersion, tcCli, agentCli, codexCli, codexConfigRead, openInstallWorld, treeOf, pathsMentioned, installedCommands, interpreterRunsPackage, isBatchBody, toPosix, mcpLauncherIn, agentConfigPath, fakeGlobalInstall, clientEntry } from '../install-harness.js'
+import { CODEX_APPROVALS_FLOOR } from '../../../src/server/codex-client.js'
 import { startEntryAsClient } from '../standins.js'
 import { parse as parseToml, stringify as stringifyToml } from 'smol-toml'
 
@@ -1639,5 +1640,247 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
     expect(row, `doctor warns on ${String(agent)}'s row:\n${row}\n${lines[i + 1] ?? ''}`).toMatch(/^\[ok\]/)
     const indexer = lines.find(l => /Conversation indexer:/.test(l))
     expect(indexer, doctor.stdout).toMatch(/^\[ok\]/)
+  })
+
+  // ── tool approvals: Codex per tool, Claude Code's grant, the way back
+  //    (D381, D390) ───────────────────────────────────────────────────
+  //
+  // The other side for Codex is Codex itself: its app server's own reading
+  // of the whole configuration (`config/read`, the request every Codex front
+  // end makes for its settings, no model call), which carries each tool's
+  // approval and the file each key came from; `codex mcp get --json` does
+  // not print the approvals, so it is not asked for them. Claude Code has no
+  // command that prints its permission rules outside its interactive
+  // /permissions, so its view is read from the settings file it reads,
+  // ~/.claude/settings.json, and the binding says so at each read; that the
+  // client honours the rules is the dogfood's (D390, unit 2). Antigravity
+  // CLI's rows wait on unit 3: this build has no agent entry for it.
+  const codexToolsSeen = async (w: InstallWorld): Promise<{ tools: Record<string, { approval_mode?: unknown }>; entry: Record<string, unknown>; origins: Record<string, { name?: { type?: string; file?: string } }> }> => {
+    const read = await codexConfigRead(w)
+    expect(read.error, `Codex refused its configuration:\n${read.raw}`).toBeUndefined()
+    const servers = (read.config?.['mcp_servers'] ?? {}) as Record<string, Record<string, unknown>>
+    const entry = servers['treecontext']
+    expect(entry, `Codex reads no treecontext server:\n${read.raw}`).toBeDefined()
+    return { tools: (entry!['tools'] ?? {}) as Record<string, { approval_mode?: unknown }>, entry: entry!, origins: read.origins ?? {} }
+  }
+  const FOUR = ['treecontext_status', 'treecontext_query', 'treecontext_export', 'treecontext_insert']
+  const ASKING = ['treecontext_clear', 'treecontext_delete', 'treecontext_import', 'treecontext_merge_from_agent']
+  const codexConfigFile = (w: InstallWorld): string => agentConfigPath('codex', w.ihome!)
+  /** Claude Code's permission rules, read from the settings file it reads (it prints none of its own). */
+  const claudePermissions = (w: InstallWorld): Record<string, unknown[]> =>
+    ((settingsOnDisk(w)['permissions'] ?? {}) as Record<string, unknown[]>)
+  const installRecord = (w: InstallWorld): { toolApprovals?: { written?: Record<string, Record<string, { items: string[] }>>; off?: Record<string, unknown> } } => {
+    const p = join(w.ihome!, '.treecontext', 'install-state.json')
+    return existsSync(p) ? JSON.parse(readFileSync(p, 'utf8')) as ReturnType<typeof installRecord> : {}
+  }
+
+  reg.define(/^Codex CLI is installed at a version that reads per-tool approvals$/, async (w: InstallWorld) => {
+    await openInstallWorld(w, ['.claude', '.codex'])
+    w.iproj = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-install-proj-')))
+    w.defer(() => rmSync(w.iproj!, { recursive: true, force: true }))
+    // The real Codex, read by its own --version, at or past the first
+    // version verified to read per-tool approvals.
+    const v = codexCli(w, ['--version'])
+    expect(v.status, v.out).toBe(0)
+    const version = /(\d+)\.(\d+)\.(\d+)/.exec(v.stdout)
+    expect(version, `codex --version printed no version:\n${v.out}`).not.toBeNull()
+    const [maj, min, pat] = CODEX_APPROVALS_FLOOR.split('.').map(Number) as [number, number, number]
+    const have = [Number(version![1]), Number(version![2]), Number(version![3])]
+    expect(have[0]! * 1e6 + have[1]! * 1e3 + have[2]!, `Codex ${version![0]} is older than ${CODEX_APPROVALS_FLOOR}`).toBeGreaterThanOrEqual(maj * 1e6 + min * 1e3 + pat)
+  })
+
+  reg.define(/^Codex's own reading of its configuration shows the treecontext server with status, query, export and insert approved$/, async (w: InstallWorld) => {
+    expect(w.irun!.status, w.irun!.out).toBe(0)
+    const seen = await codexToolsSeen(w)
+    for (const tool of FOUR) {
+      expect(seen.tools[tool]?.approval_mode, `Codex reads no approval for ${tool}`).toBe('approve')
+      // From the user's configuration file install wrote, not a default.
+      expect(seen.origins[`mcp_servers.treecontext.tools.${tool}.approval_mode`]?.name, `where Codex read ${tool}'s approval`).toEqual(expect.objectContaining({ type: 'user', file: codexConfigFile(w) }))
+    }
+    // One by one, never a default for the whole server (D381).
+    expect(seen.entry['default_tools_approval_mode'] ?? null, 'install wrote a default approval for the whole server').toBeNull()
+  })
+
+  reg.define(/^it shows clear, delete, import and merge with no approval install wrote$/, async (w: InstallWorld) => {
+    const seen = await codexToolsSeen(w)
+    // The needle fires: Codex does show the approvals install wrote.
+    expect(Object.keys(seen.tools).length).toBeGreaterThan(0)
+    for (const tool of ASKING) {
+      expect(seen.tools[tool]?.approval_mode, `Codex reads an approval for ${tool}`).toBeUndefined()
+    }
+    expect(seen.entry['default_tools_approval_mode'] ?? null).toBeNull()
+    // And install's own record names none of them.
+    const written = Object.values(installRecord(w).toolApprovals?.written?.['codex'] ?? {}).flatMap(f => f.items)
+    expect(written.sort()).toEqual([...FOUR].sort())
+  })
+
+  reg.define(/^Codex reads its whole configuration without refusing it$/, (w: InstallWorld) => {
+    // An approval Codex cannot read makes it refuse the whole file
+    // ("unknown variant"), so its own listing is the check.
+    const listed = codexCli(w, ['mcp', 'list'])
+    expect(listed.status, `codex refused its configuration:\n${listed.out}`).toBe(0)
+    expect(listed.stdout).toMatch(/^treecontext\s/m)
+  })
+
+  reg.define(/^a Codex CLI whose treecontext entry carries the developer's approval for (treecontext_\w+) set to (\w+)$/, async (w: InstallWorld, tool: unknown, value: unknown) => {
+    await openInstallWorld(w, ['.claude', '.codex'])
+    w.iproj = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-install-proj-')))
+    w.defer(() => rmSync(w.iproj!, { recursive: true, force: true }))
+    expect(tcCli(w, ['install', '--yes']).status).toBe(0)
+    // The developer sets the tool's approval in the entry install wrote:
+    // over install's own for one of the four, beside it for another tool.
+    const path = codexConfigFile(w)
+    const toml = parseToml(readFileSync(path, 'utf8')) as Record<string, Record<string, Record<string, unknown>>>
+    const entry = toml['mcp_servers']!['treecontext']!
+    const tools = (entry['tools'] ?? {}) as Record<string, Record<string, unknown>>
+    tools[String(tool)] = { ...tools[String(tool)], approval_mode: String(value) }
+    entry['tools'] = tools
+    writeFileSync(path, stringifyToml(toml) + '\n')
+    const seen = await codexToolsSeen(w)
+    expect(seen.tools[String(tool)]?.approval_mode).toBe(String(value))
+    w.iDeveloperBefore = JSON.stringify({ tool, value })
+  })
+
+  reg.define(/^the approval for (treecontext_\w+) still reads (\w+)$/, async (w: InstallWorld, tool: unknown, value: unknown) => {
+    expect(w.irun!.status, w.irun!.out).toBe(0)
+    const seen = await codexToolsSeen(w)
+    expect(seen.tools[String(tool)]?.approval_mode, `Codex's reading of ${String(tool)}'s approval after install`).toBe(String(value))
+    expect(seen.origins[`mcp_servers.treecontext.tools.${String(tool)}.approval_mode`]?.name?.file).toBe(codexConfigFile(w))
+    // The other three of the four stay install's.
+    for (const t of FOUR.filter(t => t !== tool)) expect(seen.tools[t]?.approval_mode).toBe('approve')
+  })
+
+  reg.define(/^install says nothing about having written it$/, (w: InstallWorld) => {
+    const { tool } = JSON.parse(w.iDeveloperBefore!) as { tool: string }
+    const short = tool.replace(/^treecontext_/, '').replace(/_from_agent$/, '')
+    const lines = w.irun!.stdout.split('\n')
+    // Every approvals line install printed, its per-agent line and its
+    // message: none names the tool as approved by it.
+    const approvals = lines.filter(l => /tool approvals|approved/.test(l))
+    expect(approvals.length, `install printed nothing about approvals:\n${w.irun!.stdout}`).toBeGreaterThan(0)
+    for (const l of approvals) {
+      const said = /\b(?:would approve|approved) ([^;\]]*)/.exec(l)?.[1] ?? ''
+      const listed = /^\s*Codex CLI: ([^(]*) (?:would be )?approved/.exec(l)?.[1] ?? ''
+      expect(said, `install claims it approved ${tool}: ${l}`).not.toMatch(new RegExp(`\\b${tool}\\b`))
+      expect(listed, `install's message names ${short} as approved: ${l}`).not.toMatch(new RegExp(`\\b${short}\\b`))
+    }
+  })
+
+  // ── off and on again, per client (D390) ─────────────────────────────
+  const DEV_RULE: Record<string, { client: 'Claude Code' | 'Codex CLI'; tool: string }> = {
+    'an ask rule for treecontext_insert': { client: 'Claude Code', tool: 'treecontext_insert' },
+    'an approval set to prompt for treecontext_query': { client: 'Codex CLI', tool: 'treecontext_query' },
+  }
+  /** The client's view of the four and of the developer's rule. */
+  const viewOf = async (w: InstallWorld): Promise<{ approvedByInstall: string[]; developerRule: string }> => {
+    if (w.iClient === 'Claude Code') {
+      // Claude Code prints no permission rules: its settings file is read.
+      const perms = claudePermissions(w)
+      const allow = (perms['allow'] ?? []) as string[]
+      return {
+        approvedByInstall: FOUR.filter(t => allow.includes(`mcp__treecontext__${t}`)),
+        developerRule: JSON.stringify(perms['ask'] ?? null),
+      }
+    }
+    const seen = await codexToolsSeen(w)
+    const { tool } = Object.values(DEV_RULE).find(r => r.client === 'Codex CLI')!
+    return {
+      approvedByInstall: FOUR.filter(t => t !== tool && seen.tools[t]?.approval_mode === 'approve'),
+      developerRule: JSON.stringify(seen.tools[tool] ?? null),
+    }
+  }
+
+  reg.define(/^(Claude Code|Codex CLI) wired by install, with the developer's own rule (an ask rule for treecontext_insert|an approval set to prompt for treecontext_query) beside install's grants$/, async (w: InstallWorld, client: unknown, rule: unknown) => {
+    const row = DEV_RULE[String(rule)]!
+    expect(row.client).toBe(client)
+    w.iClient = row.client
+    await openInstallWorld(w, w.iClient === 'Codex CLI' ? ['.claude', '.codex'] : ['.claude'])
+    w.iproj = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-install-proj-')))
+    w.defer(() => rmSync(w.iproj!, { recursive: true, force: true }))
+    const install = tcCli(w, ['install', '--yes'])
+    expect(install.status, install.out).toBe(0)
+    // Install's grants, then the developer's rule beside them, written the
+    // way the developer writes it, in the client's own file.
+    if (w.iClient === 'Claude Code') {
+      const settings = settingsOnDisk(w)
+      const perms = (settings['permissions'] ?? {}) as Record<string, unknown>
+      expect(perms['allow'], 'install wrote no grant').toEqual(FOUR.map(t => `mcp__treecontext__${t}`))
+      writeFileSync(settingsFile(w), JSON.stringify({ ...settings, permissions: { ...perms, ask: [`mcp__treecontext__${row.tool}`] } }, null, 2) + '\n')
+    } else {
+      const path = codexConfigFile(w)
+      const toml = parseToml(readFileSync(path, 'utf8')) as Record<string, Record<string, Record<string, Record<string, Record<string, unknown>>>>>
+      const tools = toml['mcp_servers']!['treecontext']!['tools']!
+      expect(Object.keys(tools).sort(), 'install wrote no grant').toEqual([...FOUR].sort())
+      tools[row.tool] = { approval_mode: 'prompt' }
+      writeFileSync(path, stringifyToml(toml) + '\n')
+    }
+    const view = await viewOf(w)
+    w.iDeveloperBefore = view.developerRule
+    expect(w.iDeveloperBefore).toMatch(w.iClient === 'Claude Code' ? /mcp__treecontext__treecontext_insert/ : /"approval_mode":"prompt"/)
+    w.iAfterInstall = JSON.stringify(view.approvedByInstall)
+    expect(view.approvedByInstall.length, 'install approved none of the four').toBeGreaterThan(0)
+  })
+
+  reg.define(/^the developer runs `treecontext config tool-approvals (off|on)`$/, (w: InstallWorld, value: unknown) => {
+    w.irun = tcCli(w, ['config', 'tool-approvals', String(value)])
+    expect(w.irun.status, w.irun.out).toBe(0)
+  })
+
+  reg.define(/^the developer sees it say that headless workers will now be refused the four tools, and how to turn them back on$/, (w: InstallWorld) => {
+    const out = w.irun!.stdout
+    expect(out).toMatch(/^tool approvals: off for /m)
+    expect(out).toMatch(/headless workers will now be refused status, query, export and insert\b/)
+    expect(out).toMatch(/to turn them back on: treecontext config tool-approvals on$/m)
+  })
+
+  reg.define(/^(Claude Code|Codex CLI)'s own view shows none of the four approved by install, and the developer's rule as it was$/, async (w: InstallWorld, client: unknown) => {
+    expect(client).toBe(w.iClient)
+    const view = await viewOf(w)
+    expect(view.approvedByInstall, `${String(client)} still approves`).toEqual([])
+    expect(view.developerRule, "the developer's rule").toBe(w.iDeveloperBefore)
+  })
+
+  reg.define(/^(Claude Code|Codex CLI)'s own view shows the four approved again, and the developer's rule as it was$/, async (w: InstallWorld, client: unknown) => {
+    expect(client).toBe(w.iClient)
+    // The four install grants are back as they were: each of the four is
+    // approved by install again, except the one the developer's own rule
+    // decides, which install never writes over or beside (D390), and which
+    // reads as the developer left it.
+    const view = await viewOf(w)
+    const { tool } = Object.values(DEV_RULE).find(r => r.client === w.iClient)!
+    expect(view.approvedByInstall, `${String(client)}'s approvals after on`).toEqual(FOUR.filter(t => t !== tool))
+    expect(view.developerRule, "the developer's rule").toBe(w.iDeveloperBefore)
+    expect(w.irun!.stdout).toMatch(/^headless workers can use .+; clear, delete, import and merge still ask/m)
+  })
+
+  // ── Claude Code's grant beside the developer's rules (D390, D51) ────
+  reg.define(/^Claude Code's settings holding the developer's allow rule for another server's tool and deny rule for treecontext_delete$/, async (w: InstallWorld) => {
+    await openInstallWorld(w, ['.claude'])
+    const theirs = { model: 'opus', permissions: { allow: ['mcp__github__get_issue'], deny: ['mcp__treecontext__treecontext_delete'] } }
+    writeFileSync(settingsFile(w), JSON.stringify(theirs, null, 2) + '\n')
+    w.iDeveloperBefore = JSON.stringify(theirs.permissions)
+  })
+
+  reg.define(/^install runs and then uninstall runs$/, (w: InstallWorld) => {
+    const install = tcCli(w, ['install', '--yes'])
+    expect(install.status, install.out).toBe(0)
+    // Claude Code prints no permission rules: the file it reads is read.
+    w.iAfterInstall = JSON.stringify(claudePermissions(w))
+    const uninstall = tcCli(w, ['uninstall', '--yes'])
+    expect(uninstall.status, uninstall.out).toBe(0)
+    w.irun = uninstall
+  })
+
+  reg.define(/^after install the settings allow the four treecontext tools, and the developer's two rules read as they were$/, (w: InstallWorld) => {
+    const before = JSON.parse(w.iDeveloperBefore!) as { allow: string[]; deny: string[] }
+    const after = JSON.parse(w.iAfterInstall!) as { allow: string[]; deny: string[] }
+    expect(after.allow).toEqual([...before.allow, ...FOUR.map(t => `mcp__treecontext__${t}`)])
+    expect(after.deny).toEqual(before.deny)
+  })
+
+  reg.define(/^after uninstall the four rules install added are gone and the developer's two remain$/, (w: InstallWorld) => {
+    expect(JSON.stringify(claudePermissions(w))).toBe(w.iDeveloperBefore)
+    expect(settingsOnDisk(w)['model']).toBe('opus')
+    expect(w.irun!.stdout).toMatch(/tool approvals install wrote \(.*\) removed from /)
   })
 }

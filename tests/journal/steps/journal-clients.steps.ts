@@ -12,7 +12,9 @@ import { launcherCliPath } from '../../../src/server/installer.js'
 import { getAgent, getHookSettingsPath } from '../../../src/server/agents.js'
 import { decodeContent } from '../../../src/persistence/content-codec.js'
 import { TS_ROOT } from '../proc.js'
-import { type InstallWorld, tcCli, openInstallWorld, agentConfigPath, mcpLauncherIn } from '../install-harness.js'
+import { type InstallWorld, tcCli, openInstallWorld, agentConfigPath, mcpLauncherIn, setFakeCodex, pathWithoutCodex } from '../install-harness.js'
+import { CODEX_APPROVALS_FLOOR } from '../../../src/server/codex-client.js'
+import { parse as parseToml, stringify as stringifyToml } from 'smol-toml'
 
 // ── journal-clients ─────────────────────────────────────────────────────
 //
@@ -48,7 +50,12 @@ export interface ClientsWorld extends InstallWorld {
   clause?: DoctorClause
   /** The Claude Code hooks block as install wrote it into ~/.claude/settings.json. */
   claudeBlock?: HookBlock
+  /** Doctor's row for a client, read for its approvals clause (D387, D390). */
+  approval?: ApprovalRowRead
 }
+
+/** A client's doctor row read for whether its headless workers can use the tools. */
+interface ApprovalRowRead { status: string; row: string; clause: string; remedy: string; fix: string | null }
 
 /** A Claude-format hooks block: event → matcher entries. */
 type HookBlock = Record<string, Array<{ matcher?: string; hooks: Array<Record<string, unknown>> }>>
@@ -536,7 +543,15 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
     if (slug === 'codex') expect(treecontextHookMentions(join(w.ihome!, '.codex', 'config.toml'))).toEqual([])
   })
   reg.define(/^the developer runs doctor$/, (w: ClientsWorld) => {
-    w.clause = readClause(w, w.clientName!)
+    // A client row with the D161 clause is cut into its halves; Claude
+    // Code's row has none, and a sandbox scenario names no client.
+    if (w.clientName && w.clientName !== 'Claude Code') {
+      w.clause = readClause(w, w.clientName)
+      return
+    }
+    const run = tcCli(w, ['doctor'])
+    expect(run.status, run.out).toBe(0)
+    w.doctorOut = run.stdout
   })
   reg.define(new RegExp(`^the developer sees doctor's row for ${CLIENT_RE} say the client (.+)$`), (w: ClientsWorld, ...captures) => {
     const [client, mode] = captures as string[]
@@ -573,6 +588,12 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
   })
   reg.define(/^the row names (the flagged command that copies them|turning that setting on|nothing) as the remedy$/, (w: ClientsWorld, ...captures) => {
     const [remedy] = captures as string[]
+    if (remedy === 'nothing' && w.approval) {
+      // The headless clause's remedy (D387): nothing, and no fix line.
+      expect(w.approval.remedy).toBe('nothing to do')
+      expect(w.approval.fix, w.approval.row).toBeNull()
+      return
+    }
     const c = w.clause!
     const slug = CLIENT_SLUG[w.clientName!]!
     if (remedy === 'nothing') {
@@ -686,5 +707,248 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
     expect(after.state).toMatch(/: present and consistent with/)
     expect(after.status).toBe('ok')
     expectNoVerifiedClaim(after.row)
+  })
+
+  // ── doctor's Codex row says whether a headless worker can use the tools
+  //    (D387, D381), and the off state as a choice (D390) ───────────────
+  //
+  // A real install and a real doctor under a redirected HOME, the written
+  // file edited the way the Given says; each row's status is read with its
+  // words, since the hollow green D387 prevents is an [ok] whose text says
+  // ready. The approvals clause names its own remedy inside the row, and a
+  // warning row's fix line is that remedy.
+  const codexFile = (w: ClientsWorld): string => agentConfigPath('codex', w.ihome!)
+  /** Doctor's row for a client, its status, its headless or approvals clause and that clause's remedy, and its fix line. */
+  const approvalRow = (w: ClientsWorld, client: 'Claude Code' | 'Codex CLI', fresh = true): ApprovalRowRead => {
+    if (fresh || w.doctorOut === undefined) {
+      const run = tcCli(w, ['doctor'])
+      expect(run.status, run.out).toBe(0)
+      w.doctorOut = run.stdout
+    }
+    const out = w.doctorOut
+    const lines = out.split('\n')
+    const i = lines.findIndex(l => new RegExp(`^\\[(ok|warn|err)\\]\\s+${client}:`).test(l))
+    expect(i, `doctor printed no ${client} row:\n${out}`).toBeGreaterThanOrEqual(0)
+    const row = lines[i]!
+    const label = client === 'Codex CLI' ? 'headless workers' : 'tool approvals'
+    const m = new RegExp(`${label}: (.+?); remedy: (.+?)(?:, the client .*)?$`).exec(row)
+    expect(m, `doctor's ${client} row says nothing about headless workers:\n${row}`).not.toBeNull()
+    const fix = /^\s+fix: (.+)$/.exec(lines[i + 1] ?? '')?.[1] ?? null
+    return { status: /^\[(\w+)\]/.exec(row)![1]!, row, clause: m![1]!, remedy: m![2]!, fix }
+  }
+  const editCodexEntry = (w: ClientsWorld, edit: (entry: Record<string, unknown>) => void): void => {
+    const path = codexFile(w)
+    const toml = parseToml(readFileSync(path, 'utf8')) as Record<string, Record<string, Record<string, unknown>>>
+    edit(toml['mcp_servers']!['treecontext']!)
+    writeFileSync(path, stringifyToml(toml) + '\n')
+  }
+  const CODEX_STATES: Record<string, (w: ClientsWorld) => void> = {
+    'forwards the worker variables and approves the four tools': () => { /* as install wrote it */ },
+    'lacks the worker variables': (w) => editCodexEntry(w, (e) => { delete e['env_vars'] }),
+    'approves none of the four tools, with no choice of the developer\'s recorded': (w) => editCodexEntry(w, (e) => { delete e['tools'] }),
+    'carries the developer\'s approval for treecontext_insert set to prompt': (w) => editCodexEntry(w, (e) => {
+      (e['tools'] as Record<string, Record<string, unknown>>)['treecontext_insert'] = { approval_mode: 'prompt' }
+    }),
+    'carries the developer\'s default approving every tool': (w) => editCodexEntry(w, (e) => { e['default_tools_approval_mode'] = 'approve' }),
+  }
+  reg.define(/^Codex CLI is installed and its treecontext entry (.+)$/, async (w: ClientsWorld, ...captures) => {
+    const [state] = captures as string[]
+    const edit = CODEX_STATES[state!]
+    expect(edit, `no setup for a Codex entry that ${state}`).toBeDefined()
+    w.clientName = 'Codex CLI'
+    await openInstallWorld(w, ['.claude', '.codex'])
+    const run = tcCli(w, ['install', '--yes'])
+    expect(run.status, run.out).toBe(0)
+    edit!(w)
+    // No choice of the developer's is recorded for any row.
+    const statePath = join(w.ihome!, '.treecontext', 'install-state.json')
+    const record = existsSync(statePath) ? JSON.parse(readFileSync(statePath, 'utf8')) as { toolApprovals?: { off?: unknown } } : {}
+    expect(record.toolApprovals?.off).toBeUndefined()
+  })
+  reg.define(/^the developer sees doctor's row for Codex CLI (read that headless workers can use the tools|warn that a worker's rows would land in no lane|warn that a `codex exec` worker would be refused every treecontext call|warn that a `codex exec` worker would be refused treecontext_insert|say in words that a headless worker can also clear, delete, import and merge, and not warn)$/, (w: ClientsWorld, ...captures) => {
+    const [say] = captures as string[]
+    const r = approvalRow(w, 'Codex CLI', false)
+    w.approval = r
+    const path = codexFile(w).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    switch (say) {
+      case 'read that headless workers can use the tools':
+        expect(r.status, r.row).toBe('ok')
+        expect(r.clause).toMatch(new RegExp(`^can use the tools — TREECONTEXT_TICKET and TREECONTEXT_WORKER_SESSION forwarded, status, query, export and insert approved in ${path}$`))
+        break
+      case "warn that a worker's rows would land in no lane":
+        expect(r.status, r.row).toBe('warn')
+        expect(r.clause).toMatch(/^a worker's rows would land in no lane — the entry does not forward TREECONTEXT_TICKET and TREECONTEXT_WORKER_SESSION \(env_vars\)$/)
+        break
+      case 'warn that a `codex exec` worker would be refused every treecontext call':
+        expect(r.status, r.row).toBe('warn')
+        expect(r.clause).toMatch(new RegExp(`^a \`codex exec\` worker would be refused every treecontext call — none of status, query, export and insert is approved in ${path}$`))
+        break
+      case 'warn that a `codex exec` worker would be refused treecontext_insert':
+        expect(r.status, r.row).toBe('warn')
+        expect(r.clause).toMatch(new RegExp(`^a \`codex exec\` worker would be refused treecontext_insert — your mcp_servers\\.treecontext\\.tools\\.treecontext_insert\\.approval_mode = "prompt" in ${path}$`))
+        // Refused that one alone: the anchored clause names no other tool.
+        break
+      default:
+        expect(r.status, r.row).toBe('ok')
+        expect(r.clause).toMatch(new RegExp(`^can use the tools — .* approved in ${path}; your default_tools_approval_mode = "approve" in ${path} approves every tool, so a headless worker can also clear, delete, import and merge$`))
+    }
+  })
+  reg.define(/^the row names (`treecontext install --agent codex`|the line in Codex's configuration that sets it) as the remedy$/, (w: ClientsWorld, ...captures) => {
+    const [remedy] = captures as string[]
+    const r = w.approval!
+    if (remedy === '`treecontext install --agent codex`') {
+      expect(r.remedy).toBe('treecontext install --agent codex')
+      expect(r.fix).toBe('treecontext install --agent codex')
+      // The remedy does what it says: run as printed, the row reads ready.
+      runNamedCommand(w, r.fix!)
+      const after = approvalRow(w, 'Codex CLI')
+      expect(after.status, after.row).toBe('ok')
+      expect(after.clause).toMatch(/^can use the tools — /)
+      return
+    }
+    // The developer's line, named where it is: install leaves it, and so
+    // a plain install changes nothing about it.
+    const line = `your mcp_servers.treecontext.tools.treecontext_insert.approval_mode = "prompt" in ${codexFile(w)}, yours to change (install leaves it)`
+    expect(r.remedy).toBe(line)
+    expect(r.fix).toBe(line)
+    runNamedCommand(w, 'treecontext install --agent codex')
+    expect(approvalRow(w, 'Codex CLI').clause).toBe(r.clause)
+  })
+
+  // ── the command doctor's Codex row names makes it ready (D387, D51) ──
+  reg.define(/^Codex CLI whose treecontext entry an earlier build wrote, without the worker variables or the four approvals$/, async (w: ClientsWorld) => {
+    w.clientName = 'Codex CLI'
+    await openInstallWorld(w, ['.claude', '.codex'])
+    const run = tcCli(w, ['install', '--yes'])
+    expect(run.status, run.out).toBe(0)
+    // The beta.3 shape: the server in capture mode, no variables, no
+    // approvals, and no record of any.
+    editCodexEntry(w, (e) => {
+      delete e['env_vars']
+      delete e['tools']
+      e['args'] = ['serve', '--transport', 'stdio', '--capture', '--debug', '--lexical']
+    })
+    rmSync(join(w.ihome!, '.treecontext', 'install-state.json'), { force: true })
+    const before = approvalRow(w, 'Codex CLI')
+    expect(before.status).toBe('warn')
+    expect(before.clause).toMatch(/would land in no lane.*refused every treecontext call/)
+    w.approval = before
+  })
+  reg.define(/^the developer runs the command doctor's row for Codex CLI names, and then doctor again$/, (w: ClientsWorld) => {
+    const r = w.approval!
+    expect(r.fix, `doctor's Codex row names no command:\n${r.row}`).not.toBeNull()
+    runNamedCommand(w, r.fix!)
+    w.approval = approvalRow(w, 'Codex CLI')
+  })
+  // ── Codex's own sandbox check, on Linux (D387) ──────────────────────
+  //
+  // [stand-in] for the system's answer: a `codex` on PATH whose sandbox
+  // check answers by plan (writeFakeCodex, tests/journal/standins.ts). The
+  // real check, which passes on the dogfood machine since its AppArmor
+  // profile was loaded, is held to the same row by
+  // tests/server/doctor-codex-sandbox.test.ts.
+  const SANDBOX_PLANS: Record<string, { exit: number; stderr: string }> = {
+    passes: { exit: 0, stderr: '' },
+    'fails because the system refuses bubblewrap a user namespace': { exit: 1, stderr: 'bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted' },
+    'fails for another reason': { exit: 101, stderr: "thread 'main' panicked at linux-sandbox/src/linux_run_main.rs:1193:5:\nFailed to execvp true: Permission denied (os error 13)" },
+  }
+  const sandboxRowOf = (out: string): string | null => {
+    const lines = out.split('\n')
+    const i = lines.findIndex(l => /^\[(ok|warn|err)\]\s+Codex sandbox:/.test(l))
+    if (i < 0) return null
+    return /^\s+fix: /.test(lines[i + 1] ?? '') ? `${lines[i]}\n${lines[i + 1]}` : lines[i]!
+  }
+  reg.define(/^a Linux machine with Codex CLI installed, whose sandbox check (passes|fails because the system refuses bubblewrap a user namespace|fails for another reason)$/, async (w: ClientsWorld, ...captures) => {
+    const [result] = captures as string[]
+    await openInstallWorld(w, ['.claude', '.codex'])
+    setFakeCodex(w, { version: CODEX_APPROVALS_FLOOR, sandbox: SANDBOX_PLANS[result!]! })
+    const run = tcCli(w, ['install', '--yes'])
+    expect(run.status, run.out).toBe(0)
+  })
+  reg.define(/^the developer sees doctor's row for Codex's sandbox (read ok|warn that a sandboxed Codex worker can read no file, .+|warn with the check's own words)$/, (w: ClientsWorld, ...captures) => {
+    const [row] = captures as string[]
+    const printed = sandboxRowOf(w.doctorOut!)
+    if (process.platform !== 'linux') {
+      // The ruling's other shape (D387): Codex sandboxes with bubblewrap on
+      // Linux alone, so on this OS the same Codex, with a check that would
+      // answer, gets no row at all; the Linux lanes bind the rows.
+      expect(w.doctorOut).toMatch(/^\[(ok|warn)\]\s+Codex CLI:/m)
+      expect(printed, w.doctorOut).toBeNull()
+      return
+    }
+    expect(printed, `doctor printed no row for Codex's sandbox:\n${w.doctorOut}`).not.toBeNull()
+    if (row === 'read ok') {
+      expect(printed).toMatch(/^\[ok\]\s+Codex sandbox: `codex sandbox -- true` passed/)
+      return
+    }
+    expect(printed).toMatch(/^\[warn\]\s+Codex sandbox: `codex sandbox -- true` failed/)
+    if (row === "warn with the check's own words") {
+      // Quoted as the check said it, and no namespace steps it did not ask for.
+      expect(printed).toContain("thread 'main' panicked at linux-sandbox/src/linux_run_main.rs:1193:5: / Failed to execvp true: Permission denied (os error 13)")
+      // step-lint: allow unearned-absence -- the user-namespace row of this same outline asserts "install the bubblewrap package" and the AppArmor profile present in the same row shape
+      expect(printed).not.toMatch(/apparmor|bubblewrap/i)
+      return
+    }
+    expect(printed).toContain('bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted')
+    expect(printed).toMatch(/a sandboxed Codex worker can read no file/)
+    expect(printed).toMatch(/Steps for you to run, as root: install the bubblewrap package/)
+    expect(printed).toContain('write an AppArmor profile that lets /usr/bin/bwrap create user namespaces at /etc/apparmor.d/bwrap: abi <abi/4.0>, include <tunables/global> profile bwrap /usr/bin/bwrap flags=(unconfined) { userns, include if exists <local/bwrap> }')
+    expect(printed).toMatch(/load it with sudo apparmor_parser -r \/etc\/apparmor\.d\/bwrap/)
+    expect(printed).toMatch(/treecontext changes no system file/)
+  })
+  reg.define(/^a machine that is not Linux, or a Linux machine with no Codex CLI$/, async (w: ClientsWorld) => {
+    await openInstallWorld(w, ['.claude'])
+    if (process.platform === 'linux') {
+      // No Codex CLI: no ~/.codex, and no codex on the CLI's PATH.
+      w.iPathWithoutCodex = pathWithoutCodex(w)
+    } else {
+      // Not Linux: Codex installed, with a sandbox check that would fail
+      // if doctor ran it.
+      mkdirSync(join(w.ihome!, '.codex'), { recursive: true })
+      setFakeCodex(w, { version: CODEX_APPROVALS_FLOOR, sandbox: { exit: 1, stderr: 'bwrap: setting up uid map: Permission denied' } })
+    }
+    const run = tcCli(w, ['install', '--yes'])
+    expect(run.status, run.out).toBe(0)
+  })
+  reg.define(/^the developer sees no row for Codex's sandbox$/, (w: ClientsWorld) => {
+    // The needle fires: doctor printed its client rows.
+    expect(w.doctorOut).toMatch(/^\[ok\]\s+Claude Code:/m)
+    expect(sandboxRowOf(w.doctorOut!), w.doctorOut).toBeNull()
+    // step-lint: allow unearned-absence -- the sandbox outline asserts "`codex sandbox -- true` passed" and "failed" present in doctor's report of the same shape
+    expect(w.doctorOut).not.toMatch(/codex sandbox -- true/)
+  })
+
+  // ── the off state, a choice (D390, D387) ────────────────────────────
+  reg.define(/^(Claude Code|Codex CLI) wired by install, and tool approvals turned off with `treecontext config tool-approvals off`$/, async (w: ClientsWorld, ...captures) => {
+    const [client] = captures as string[]
+    w.clientName = client!
+    await openInstallWorld(w, client === 'Codex CLI' ? ['.claude', '.codex'] : ['.claude'])
+    expect(tcCli(w, ['install', '--yes']).status).toBe(0)
+    const off = tcCli(w, ['config', 'tool-approvals', 'off'])
+    expect(off.status, off.out).toBe(0)
+  })
+  reg.define(/^the developer sees doctor's row for (Claude Code|Codex CLI) say tool approvals are off by the developer's choice and that headless workers will be refused the four tools$/, (w: ClientsWorld, ...captures) => {
+    const [client] = captures as string[]
+    const r = approvalRow(w, client as 'Claude Code' | 'Codex CLI', false)
+    w.approval = r
+    expect(r.clause).toMatch(/\boff by your choice \(treecontext config tool-approvals off or install --no-tool-approvals\), so headless workers will be refused status, query, export and insert\b/)
+  })
+  reg.define(/^the row does not count it as a failure$/, (w: ClientsWorld) => {
+    const r = w.approval!
+    expect(r.status, r.row).toBe('ok')
+    expect(r.fix, r.row).toBeNull()
+    // The indexer's summary does not count the client as wrong either.
+    expect(w.doctorOut).toMatch(/^\[ok\]\s+Conversation indexer:/m)
+  })
+  reg.define(/^the row names `treecontext config tool-approvals on` as the remedy$/, (w: ClientsWorld) => {
+    const r = w.approval!
+    expect(r.remedy).toBe('treecontext config tool-approvals on')
+    // Run as printed, the approvals are back and the row reads ready.
+    runNamedCommand(w, r.remedy)
+    const after = approvalRow(w, w.clientName as 'Claude Code' | 'Codex CLI')
+    expect(after.status, after.row).toBe('ok')
+    // step-lint: allow unearned-absence -- the Then before this one in the same scenario asserts "off by your choice" present in this clause before the remedy ran
+    expect(after.clause).not.toMatch(/off by your choice/)
+    expect(after.clause).toMatch(w.clientName === 'Codex CLI' ? /^can use the tools — / : /^status, query, export and insert allowed in /)
   })
 }

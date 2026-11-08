@@ -105,6 +105,8 @@ export interface CliArgs {
   useNpx: boolean
   /** Install capture hooks for platforms with an unverified adapter. */
   experimentalCapture: boolean
+  /** `install --no-tool-approvals`: write no tool approval, and keep it that way (D390). */
+  noToolApprovals: boolean
   /** Uninstall only hook config, leaving MCP registration in place. */
   hooksOnly: boolean
   /** Dump debug logs to stdout (doctor --dump-logs). */
@@ -157,6 +159,7 @@ export function parseArgs(argv: string[]): CliArgs {
     installAgents: null,
     useNpx: false,
     experimentalCapture: false,
+    noToolApprovals: false,
     hooksOnly: false,
     dumpLogs: false,
     debug: true,
@@ -233,8 +236,17 @@ export function parseArgs(argv: string[]): CliArgs {
         // following positional is a word of it, quoted or not.
         args.command = 'config'
         const key = argv[i + 1]
+        if (key === 'tool-approvals') {
+          // `config tool-approvals on|off [--agent <name>]` (D390).
+          const value = argv[i + 2]
+          if (value !== 'on' && value !== 'off') error('config tool-approvals takes on or off, e.g. treecontext config tool-approvals off [--agent codex]')
+          args.configKey = key
+          args.configValue = value
+          i += 2
+          break
+        }
         if (key !== 'checkpoint-interval') {
-          error(`config: the one setting is checkpoint-interval — e.g. treecontext config checkpoint-interval "20 rounds or 45 minutes"`)
+          error(`config: the settings are checkpoint-interval and tool-approvals — e.g. treecontext config checkpoint-interval "20 rounds or 45 minutes", or treecontext config tool-approvals off`)
         }
         args.configKey = key
         i++
@@ -470,6 +482,9 @@ export function parseArgs(argv: string[]): CliArgs {
       case '--experimental-capture':
         args.experimentalCapture = true
         break
+      case '--no-tool-approvals':
+        args.noToolApprovals = true
+        break
       case '--hooks-only':
         args.hooksOnly = true
         break
@@ -554,12 +569,13 @@ function printUsage(): void {
 
 Usage:
   treecontext serve [options]
-  treecontext install [-y] [--dry-run] [--force] [--agent <name>] [--experimental-capture (requires --agent)]
+  treecontext install [-y] [--dry-run] [--force] [--agent <name>] [--experimental-capture (requires --agent)] [--no-tool-approvals]
   treecontext uninstall [-y] [--dry-run] [--agent <name>] [--hooks-only]
   treecontext doctor
   treecontext doctor --dump-logs
   treecontext init [--force] [--dry-run]
   treecontext config checkpoint-interval <value> [--store X]
+  treecontext config tool-approvals on|off [--agent <name>]
   treecontext hook <event>
   treecontext run [--run R --role ROLE (--key K | --no-key) --parent ID [--checkpointer ROLE] [--checkpointed-by ROLE]
                   [--parent-cli CLI] [--door | --no-door] | --ticket JSON] [--prompt TEXT | --prompt-file PATH]
@@ -586,6 +602,12 @@ Commands:
                        for this directory's store: "20 rounds", "45 minutes",
                        "20 rounds or 45 minutes" (the default), or "off".
                        Echoes the setting back as it will behave.
+  config tool-approvals on|off
+                       Whether install's approvals of status, query, export
+                       and insert stand in Claude Code and Codex CLI (--agent
+                       for one), so headless workers can use them; off takes
+                       back only what install wrote and later installs keep
+                       it off. Clear, delete, import and merge always ask.
   hook <event>         Dispatch a hook event (session-start, pre-compact, etc.)
   run -- <command>     Spawn a headless worker (claude -p, codex exec, agy -p)
                        through the ticket door: its ticket, minted from
@@ -1543,6 +1565,7 @@ async function main(): Promise<void> {
       // the flag, so a wrapper-launched server runs lexical regardless.)
       lexical: args.provided.has('lexical') ? args.lexical : true,
       experimentalCapture: args.experimentalCapture,
+      noToolApprovals: args.noToolApprovals,
     })
     return
   }
@@ -1585,6 +1608,18 @@ async function main(): Promise<void> {
     } else {
       console.log(`${result.status}: ${target}`)
     }
+    return
+  }
+
+  if (args.command === 'config' && args.configKey === 'tool-approvals') {
+    const { configToolApprovals } = await import('./installer.js')
+    let lines: string[]
+    try {
+      lines = await configToolApprovals(args.configValue === 'on', args.installAgents)
+    } catch (e) {
+      error(e instanceof Error ? e.message : String(e))
+    }
+    for (const l of lines) console.log(l)
     return
   }
 

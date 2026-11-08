@@ -1,6 +1,6 @@
 import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, existsSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { meetsNodeFloor } from '../../src/server/installer.js'
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { expect } from 'vitest'
 import { basename, delimiter, isAbsolute, join, relative, sep } from 'node:path'
 import { homedir, tmpdir } from 'node:os'
@@ -9,7 +9,7 @@ import { mcpLauncherPath } from '../../src/server/installer.js'
 import { sandboxedSpawnEnv, spawnCli, type CliSpawnResult } from '../helpers/cli-spawn.js'
 import type { World } from './world.js'
 import { TS_ROOT } from './proc.js'
-import { writeFakeClaude } from './standins.js'
+import { writeFakeClaude, writeFakeCodex, type FakeCodexPlan } from './standins.js'
 
 // ── Install-wave harness: the real CLI, a redirected HOME, and the ─────
 //    other side of every boundary it claims to cross.
@@ -80,6 +80,14 @@ export interface InstallWorld extends World {
   iDeveloperKeys?: Record<string, unknown>
   /** D386 scenarios: the server's own mode line, from the server the entry starts. */
   iServerMode?: string
+  /** D387 scenarios: the directory holding the stand-in `codex`, first on the CLI's PATH. */
+  iCodexBin?: string
+  /** D387 scenarios: a PATH for the CLI that holds no `codex` at all (a machine without Codex CLI). */
+  iPathWithoutCodex?: string
+  /** D381/D390 scenarios: a file's bytes or a rule as the developer left it, to compare after. */
+  iDeveloperBefore?: string
+  /** D390 scenarios: a client's view after install, kept for the Thens. */
+  iAfterInstall?: string
 }
 
 /**
@@ -99,8 +107,79 @@ export interface InstallWorld extends World {
 export function tcCli(w: InstallWorld, args: string[], opts: { cwd?: string } = {}): CliRun {
   // A scenario that set a Claude Code version has put a fake `claude` in a
   // directory of its own; it goes first on the child's PATH and nowhere else.
-  const env = w.iClaudeBin ? { PATH: pathWithFakeClaude(w) } : undefined
+  // A stand-in `codex` goes first beside it, and a scenario on a machine
+  // without Codex CLI gets a PATH that holds none.
+  const base = w.iPathWithoutCodex ?? process.env['PATH'] ?? ''
+  const path = pathWithFakeClaude(w, w.iCodexBin ? `${w.iCodexBin}${delimiter}${base}` : base)
+  const env = w.iClaudeBin || w.iCodexBin || w.iPathWithoutCodex ? { PATH: path } : undefined
   return spawnCli(args, { home: w.ihome!, cwd: opts.cwd ?? TS_ROOT, ...(env ? { env } : {}) })
+}
+
+/** A stand-in `codex` (./standins.ts) on the CLI's PATH, answering by its plan; called again, it replaces the plan. */
+export function setFakeCodex(w: InstallWorld, plan: FakeCodexPlan): void {
+  if (!w.iCodexBin) {
+    w.iCodexBin = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-fake-codex-')))
+    w.defer(() => rmSync(w.iCodexBin!, { recursive: true, force: true }))
+  }
+  writeFakeCodex(w.iCodexBin, plan)
+}
+
+/**
+ * A PATH on which no `codex` resolves: every directory of this one that
+ * holds a `codex` is left out, and this interpreter, when it shared such a
+ * directory, is linked into one of its own so the CLI still finds `node`.
+ */
+export function pathWithoutCodex(w: InstallWorld): string {
+  const names = process.platform === 'win32' ? ['codex.cmd', 'codex.exe', 'codex.ps1', 'codex'] : ['codex']
+  const dirs = (process.env['PATH'] ?? '').split(delimiter).filter(Boolean)
+  const kept = dirs.filter(d => !names.some(n => existsSync(join(d, n))))
+  const nodeDir = join(w.ihome!, 'node-only-bin')
+  mkdirSync(nodeDir, { recursive: true })
+  if (process.platform !== 'win32') symlinkSync(process.execPath, join(nodeDir, 'node'))
+  return [nodeDir, ...kept].join(delimiter)
+}
+
+/**
+ * Codex's own reading of its whole configuration, as Codex resolves it: its
+ * app server's `config/read` request over stdio (the request every Codex
+ * front end makes for its settings; no model call, no sign-in), under the
+ * redirected HOME and CODEX_HOME. Returns the effective configuration and
+ * the origin of each key, or the error Codex answered with when it refuses
+ * the configuration.
+ */
+export async function codexConfigRead(w: InstallWorld): Promise<{ config?: Record<string, unknown>; origins?: Record<string, { name?: { type?: string; file?: string } }>; error?: unknown; raw: string }> {
+  const env = sandboxedSpawnEnv(w.ihome!, { CODEX_HOME: join(w.ihome!, '.codex') })
+  const child = spawn('codex', ['app-server'], { env, cwd: w.iproj ?? w.ihome!, stdio: ['pipe', 'pipe', 'pipe'], shell: process.platform === 'win32' })
+  let out = ''
+  let err = ''
+  child.stderr.on('data', (d: Buffer) => { err += d.toString() })
+  const answer = new Promise<Record<string, unknown>>((resolve, reject) => {
+    child.stdout.on('data', (d: Buffer) => {
+      out += d.toString()
+      for (const line of out.split('\n')) {
+        try {
+          const msg = JSON.parse(line) as Record<string, unknown>
+          if (msg['id'] === 1) resolve(msg)
+        } catch { /* a partial line, or not ours */ }
+      }
+    })
+    child.once('error', (e) => reject(new Error(`codex app-server could not start (is Codex CLI on PATH?): ${e.message}`)))
+    child.once('close', (code) => reject(new Error(`codex app-server exited ${code} before answering config/read:\n${out}\n${err}`)))
+  })
+  const send = (m: unknown): void => { child.stdin.write(`${JSON.stringify(m)}\n`) }
+  send({ method: 'initialize', id: 0, params: { clientInfo: { name: 'treecontext-tests', version: '1' } } })
+  send({ method: 'initialized' })
+  send({ method: 'config/read', id: 1, params: { includeLayers: false } })
+  const timer = setTimeout(() => child.kill('SIGKILL'), 60_000)
+  try {
+    const msg = await answer
+    const result = msg['result'] as { config?: Record<string, unknown>; origins?: Record<string, { name?: { type?: string; file?: string } }> } | undefined
+    return { ...(result?.config ? { config: result.config } : {}), ...(result?.origins ? { origins: result.origins } : {}), ...(msg['error'] !== undefined ? { error: msg['error'] } : {}), raw: out }
+  } finally {
+    clearTimeout(timer)
+    child.stdin.end()
+    child.kill('SIGTERM')
+  }
 }
 
 /**
