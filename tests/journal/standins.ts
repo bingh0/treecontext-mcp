@@ -24,7 +24,9 @@
  *  |   (tests/helpers/standin-claude-p.ts)  | real hooks the install wires, with the payloads Claude Code |
  *  |                                        | sends, in the order it sends them                           |
  *  | a plan's `viaTools` / `toolNotes` /    | a worker's CLI writing and reading through its own tools: a |
- *  |   `reads`                              | real `treecontext serve` the stand-in starts with its env   |
+ *  |   `reads` / `handshakes`               | real `treecontext serve` the stand-in starts with its env   |
+ *  |                                        | (`handshakes`: the client reading `initialize`'s            |
+ *  |                                        | instructions, D382)                                         |
  *  | `workerLeg`, `registerThroughLibrary`  | a spawner registering a worker through the library door     |
  *  |                                        | (`FlatStore.registerWorker`), no worker process running     |
  *  | `retiredWithoutReturn`, `cutByTimeout`,| a leg already ended, for a Given of history: retired with   |
@@ -102,7 +104,15 @@
  * a worker's CLI makes through those same tools: `query` a
  * treecontext_query call with these arguments, `status` a
  * treecontext_status call; each reply recorded whole in its log line as
- * `reads`; reads imply the real serve), `at` (the rows' moment),
+ * `reads`; reads imply the real serve), `handshakes` (handshake reads,
+ * D382: before any write, each a real `treecontext serve` started over
+ * stdio with its own environment, `initialize`'s instructions recorded
+ * whole in its log line as `handshakes`, in order; an entry's `ticket`
+ * replaces TREECONTEXT_TICKET for that one server and its `lane` replaces
+ * TREECONTEXT_WORKER_SESSION, null leaving the variable out, as a nested
+ * worker's or a client's server that inherited the lane with a ticket of
+ * its own, or with no worker variables, would be started; it calls no
+ * tool), `at` (the rows' moment),
  * `waitFor` (a file it waits for after writing `<file>.ready`), `print`
  * (its last output), `exit` (a code, or `'hang'`). The run that opens on
  * the door's send-back message follows `rerun`.
@@ -279,6 +289,10 @@ export interface WorkerStep {
   exit?: number | 'hang'; waitFor?: string; at?: number; viaTools?: boolean
   /** Reads through its own tools after its writes (the real serve). */
   reads?: { query?: Record<string, unknown>; status?: Record<string, unknown> }
+  /** Handshake reads (D382): a real serve per entry, its `initialize`
+   *  instructions recorded; `ticket` / `lane` replace that server's worker
+   *  variables, null leaves one out. */
+  handshakes?: Array<{ ticket?: string | null; lane?: string | null }>
 }
 /** The hook-less stand-in's plan (STANDIN_PLAN). */
 export interface WorkerPlan { first: WorkerStep; rerun?: WorkerStep; claim?: { prompt?: string } }
@@ -312,6 +326,9 @@ export interface StandinRecord {
   /** The hook-less stand-in's reads through its own tools (a plan's
    *  `reads`): each tool's reply, parsed, as its CLI received it. */
   reads?: { query?: Record<string, unknown>; status?: Record<string, unknown> }
+  /** The hook-less stand-in's handshake reads (a plan's `handshakes`):
+   *  each server's `initialize` instructions, whole, in the plan's order. */
+  handshakes?: string[]
 }
 
 /** What spawns the worker: the wrapper, the library call, or nothing (a

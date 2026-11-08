@@ -3,7 +3,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import {
-  INSTRUCTIONS_BRIEF_LEXICAL, TRIGGER_CORE,
+  INSTRUCTIONS_BRIEF_LEXICAL, INSTRUCTIONS_WORKER_LEXICAL, TRIGGER_CORE,
   SKILL_REFERENCE_BODY, resolveInstructions,
 } from '../../src/server/instructions.js'
 import {
@@ -16,7 +16,8 @@ import {
  * again that day when the handoff step named the label, D218; and
  * 2026-10-11 when step 2 said what it recovers, D264; and 2026-11-03
  * when the handoff step named the file's path, the import tool refusing
- * a label beside a path): the
+ * a label beside a path; and 2026-11-08 when the routine gained the one
+ * line a worker of a run skips it by, D382): the
  * served instruction set is INSTRUCTIONS_BRIEF_LEXICAL — brief by the
  * t10 activation evidence (verbose SUPPRESSED activation and blew the
  * 2KB cap). Changing these bytes is a deliberate act: update this pin
@@ -29,6 +30,7 @@ const GOLDEN_LEXICAL: string = [
   '   Fetch each resume pointer via treecontext_export(node_id).',
   '2. treecontext_query("what was I working on, what was the next step") recovers the thread around the resume pointers status found.',
   'Only then respond to the user.',
+  'Skip this if your first message opens with treecontext naming you a worker.',
   '',
   'On Claude Code, hooks auto-capture tool-use and user messages; elsewhere',
   'only what you insert is kept. Use treecontext_insert for the *why*:',
@@ -139,6 +141,24 @@ describe('served-instructions golden pin (AC2.1)', () => {
   it('is byte-identical to the pinned lexical instruction set', () => {
     expect(INSTRUCTIONS_BRIEF_LEXICAL).toBe(GOLDEN_LEXICAL)
   })
+
+  // D382: a ticket-door worker's card. Its own head in place of the
+  // routine, then the ordinary card's body byte for byte ("the rest of the
+  // card is unchanged").
+  it('the worker card is its own head over the ordinary body, byte for byte', () => {
+    const lines = GOLDEN_LEXICAL.split('\n')
+    const body = lines.slice(lines.indexOf('')).join('\n')
+    expect(INSTRUCTIONS_WORKER_LEXICAL).toBe([
+      'WORKER START — treecontext\'s ticket door started you as a worker of a run.',
+      'Your first message holds your brief and the checkpoint(s) in effect (or',
+      'says there are none): begin there.',
+    ].join('\n') + '\n' + body)
+    expect(INSTRUCTIONS_WORKER_LEXICAL).not.toContain('SESSION START')
+    for (const tool of ['treecontext_status', 'what was I working on', TRIGGER_CORE.gate]) {
+      expect(GOLDEN_LEXICAL, `the needle ${tool} is dead`).toContain(tool)
+      expect(INSTRUCTIONS_WORKER_LEXICAL).not.toContain(tool)
+    }
+  })
 })
 
 describe('resolveInstructions variant selector (AC5.1)', () => {
@@ -151,11 +171,22 @@ describe('resolveInstructions variant selector (AC5.1)', () => {
     expect(resolveInstructions(retiredVerbose)).toBe(INSTRUCTIONS_BRIEF_LEXICAL)
     expect(resolveInstructions('none')).toBe('')
   })
+
+  it('serves the worker card only when told the worker is trusted (D382)', () => {
+    expect(resolveInstructions('brief', { worker: true })).toBe(INSTRUCTIONS_WORKER_LEXICAL)
+    expect(resolveInstructions('brief', { worker: false })).toBe(INSTRUCTIONS_BRIEF_LEXICAL)
+    expect(resolveInstructions('none', { worker: true })).toBe('')
+  })
 })
 
 describe('size budgets (AC2.3)', () => {
   it('the served set fits the Claude Code 2KB instruction cap', () => {
     expect(Buffer.byteLength(INSTRUCTIONS_BRIEF_LEXICAL, 'utf8')).toBeLessThanOrEqual(2048)
+  })
+
+  it('the worker card fits the same cap and stays a card (D382, D210)', () => {
+    expect(Buffer.byteLength(INSTRUCTIONS_WORKER_LEXICAL, 'utf8')).toBeLessThanOrEqual(2048)
+    expect(INSTRUCTIONS_WORKER_LEXICAL.length).toBeLessThan(2500)
   })
 
   it('first 512 chars are self-contained (Codex constraint)', () => {

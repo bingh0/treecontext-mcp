@@ -68,6 +68,25 @@ raw.close()
 const label = step.label ?? (rerun ? 'second run' : 'first run')
 const at = (): Record<string, number> => (step.at !== undefined ? { createdAt: step.at } : {})
 const reads: { query?: Record<string, unknown>; status?: Record<string, unknown> } = {}
+const handshakes: string[] = []
+const ownEnv = (): Record<string, string> =>
+  Object.fromEntries(Object.entries(process.env).filter((e): e is [string, string] => e[1] !== undefined))
+for (const h of step.handshakes ?? []) {
+  // A handshake read (D382): the client starting its treecontext server
+  // over stdio, as a worker's CLI does before its first model call, and
+  // reading what `initialize` hands it. Nothing else: no tool is called.
+  const env = ownEnv()
+  if (h.ticket === null) delete env[TICKET_ENV]
+  else if (h.ticket !== undefined) env[TICKET_ENV] = h.ticket
+  if (h.lane === null) delete env[WORKER_SESSION_ENV]
+  else if (h.lane !== undefined) env[WORKER_SESSION_ENV] = h.lane
+  const transport = new StdioClientTransport({
+    command: process.execPath, args: nodeTsArgs(CLI_TS, ['serve', '--lexical', '--store', dbPath]), env, cwd: process.cwd(), stderr: 'ignore',
+  })
+  const client = new Client({ name: 'standin-worker', version: '0' })
+  await client.connect(transport)
+  try { handshakes.push(client.getInstructions() ?? '') } finally { await client.close() }
+}
 if (leg && (step.viaTools || step.reads)) {
   // Through the tools, as a real worker's CLI writes: a real `treecontext
   // serve` this worker starts with its own environment (its ticket and the
@@ -109,7 +128,11 @@ if (leg) {
   }
 }
 await store.close()
-if (log) appendFileSync(log, `${JSON.stringify(Object.keys(reads).length > 0 ? { ...record, reads } : record)}\n`)
+if (log) {
+  appendFileSync(log, `${JSON.stringify({
+    ...record, ...(Object.keys(reads).length > 0 ? { reads } : {}), ...(handshakes.length > 0 ? { handshakes } : {}),
+  })}\n`)
+}
 if (step.waitFor !== undefined) {
   writeFileSync(`${step.waitFor}.ready`, String(process.pid))
   const deadline = Date.now() + 60_000

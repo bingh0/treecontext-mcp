@@ -2683,7 +2683,10 @@ export const MARKER_END = '<!-- treecontext:end -->'
 
 // States the TRIGGER_CORE orientation protocol (instructions.ts) with
 // AGENTS.md reference framing; protocol conformance is enforced by
-// tests/server/instructions-drift.test.ts.
+// tests/server/instructions-drift.test.ts. Its one worker line (D382)
+// quotes the ticket door's first-message openings literally, never from
+// first-moment.ts's code: journal-agent-surface's outline holds the two
+// together, so a reword of either side fails it.
 export const INSTRUCTIONS_CONTENT = `${MARKER_START}
 # Treecontext — Working Memory
 
@@ -2698,6 +2701,7 @@ On other agents nothing is captured for you: only what you insert is kept.
    If resume_pointers non-empty, \`treecontext_export(node_id)\` on each.
 2. \`treecontext_query("what was I working on, what was the next step")\`
 Only then proceed with the user's request.
+A session whose first message opens with "treecontext: you are the … worker of the run", "treecontext: you are a one-off … worker of the run" or "treecontext: your instructions were invalid" is a worker of a run: it skips these Session Start steps and begins from that message.
 
 ## What to Write Manually
 Hooks capture the *what*. You record the *why*:

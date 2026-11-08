@@ -1915,14 +1915,16 @@ async function main(): Promise<void> {
     // D288, D335: a server started inside a worker the ticket door
     // registered stamps the worker's rows into the worker's own lane.
     // Only a lane registered for the ticket in this same environment is
-    // honoured; anything else falls to the ordinary identity ladder.
+    // honoured; anything else falls to the ordinary identity ladder, and
+    // to the ordinary handshake: the same trust decides that a worker is
+    // told to begin from its first message, never the routine (D382).
     const { trustedWorkerLane } = await import('../ticket.js')
     const workerSession = trustedWorkerLane(db, process.env)
     await startServer({
       database: db,
       migrate: true,
       ...serveOpts,
-      ...(workerSession !== null ? { ccSessionId: workerSession } : {}),
+      ...(workerSession !== null ? { ccSessionId: workerSession, worker: true } : {}),
       // Runtime-derived, not args-derived: capture requires owning the
       // drain, and info carries resolved paths.
       capture: args.capture,

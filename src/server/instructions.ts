@@ -249,14 +249,37 @@ export const SKILL_REFERENCE_BODY: string = [
  *  The card stays a card (D210): the whole text stays under 2500
  *  characters and under the reference platform's 2KB instruction cap,
  *  because the verbose variant measurably SUPPRESSED memory use (t10). The
- *  long form lives in SKILL_REFERENCE_BODY, which the text points to. */
-export const INSTRUCTIONS_BRIEF_LEXICAL: string = [
+ *  long form lives in SKILL_REFERENCE_BODY, which the text points to.
+ *
+ *  Two cards share one body (D382): every session's card opens with the
+ *  session-start routine and the one line a worker of a run skips it by;
+ *  a ticket-door worker's own server (trustedWorkerLane) opens the same
+ *  body with WORKER_START_LINES instead, naming no routine. */
+
+/** D382: the one line of every session's card a worker of a run skips the
+ *  routine by. It names the worker's line and not the opening the
+ *  instruction block quotes: the 2KB cap leaves this card no room for it. */
+export const WORKER_SKIP_LINE = 'Skip this if your first message opens with treecontext naming you a worker.'
+
+const SESSION_START_LINES: readonly string[] = [
   'SESSION START — do this BEFORE any other work:',
   '1. treecontext_status — check resume_pointers ("newest N of M" means',
   '   stale pointers need supersession cleanup).',
   '   Fetch each resume pointer via treecontext_export(node_id).',
   '2. treecontext_query("what was I working on, what was the next step") recovers the thread around the resume pointers status found.',
   'Only then respond to the user.',
+  WORKER_SKIP_LINE,
+]
+
+/** D382: what a ticket-door worker's own server says in place of the
+ *  session-start routine: its first message is where it begins. */
+const WORKER_START_LINES: readonly string[] = [
+  'WORKER START — treecontext\'s ticket door started you as a worker of a run.',
+  'Your first message holds your brief and the checkpoint(s) in effect (or',
+  'says there are none): begin there.',
+]
+
+const CARD_BODY: readonly string[] = [
   '',
   'On Claude Code, hooks auto-capture tool-use and user messages; elsewhere',
   'only what you insert is kept. Use treecontext_insert for the *why*:',
@@ -287,14 +310,23 @@ export const INSTRUCTIONS_BRIEF_LEXICAL: string = [
   'Tag other plans with metadata.next_session=true; pass supersedes:',
   '[old_node_ids] when one replaces another. treecontext_query takes',
   'time_range and sort_by. Don\'t put project facts in global auto-memory.',
-].join('\n')
+]
 
-export function resolveInstructions(variant: 'brief' | 'none'): string {
+/** Every session's card but a ticket-door worker's. */
+export const INSTRUCTIONS_BRIEF_LEXICAL: string = [...SESSION_START_LINES, ...CARD_BODY].join('\n')
+
+/** D382: a ticket-door worker's card, served only where serve trusts the
+ *  worker's lane (trustedWorkerLane): the same body, no routine. */
+export const INSTRUCTIONS_WORKER_LEXICAL: string = [...WORKER_START_LINES, ...CARD_BODY].join('\n')
+
+export function resolveInstructions(variant: 'brief' | 'none', opts: { worker?: boolean } = {}): string {
   // One backend, one instruction set: 'verbose' was removed outright at
   // the 0.1 corpus audit (D4) — the parser now refuses it instead of
   // silently serving brief
   // lexical text when the tree variants left with the tree era
   // (deletion phase, 2026-07-25). 'none' stays for clients whose hook
   // channel already delivers the trigger.
-  return variant === 'none' ? '' : INSTRUCTIONS_BRIEF_LEXICAL
+  // A ticket-door worker (D382) gets its own card, never the routine.
+  if (variant === 'none') return ''
+  return opts.worker === true ? INSTRUCTIONS_WORKER_LEXICAL : INSTRUCTIONS_BRIEF_LEXICAL
 }

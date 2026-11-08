@@ -1785,6 +1785,14 @@ export interface StartServerOptions {
    */
   instructions?: 'brief' | 'none'
   /**
+   * D382: this server serves a ticket-door worker whose lane serve trusts
+   * (trustedWorkerLane: the ticket in the same environment describes the
+   * registration there), so its handshake is the worker's card: begin from
+   * the first message, no session-start routine. Never set from the lane
+   * variable alone. Default: false.
+   */
+  worker?: boolean
+  /**
    * Write the sidecar panes beside the store on each drain (see
    * `sidecar-blob.ts`). Reached only when this process owns the drain, so a
    * second server on the same store never overwrites the holder's panes.
@@ -1898,7 +1906,10 @@ export async function startServer(opts: StartServerOptions): Promise<void> {
     transport,
     ...(shieldThreshold !== undefined ? { shieldThreshold } : {}),
     ...(shieldDir ? { shieldDir } : {}),
-    instructions: resolveInstructions(instructions),
+    instructions: resolveInstructions(instructions, { worker: opts.worker === true }),
+  }
+  if (opts.worker === true && instructions !== 'none') {
+    dbg('startup', 'Handshake: the worker card (a trusted ticket-door worker, D382)')
   }
   if (info) createOpts.info = info
   if (opts.lockHook) createOpts.lockHook = opts.lockHook

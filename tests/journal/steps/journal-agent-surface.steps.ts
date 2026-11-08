@@ -4,12 +4,16 @@ import { tmpdir } from 'node:os'
 import { expect } from 'vitest'
 import { type Registry } from 'gherkin-node-test/vitest'
 import { INSTRUCTIONS_BRIEF_LEXICAL, SKILL_REFERENCE_BODY, SKILL_REFERENCE_NAME, TRIGGER_CORE } from '../../../src/server/instructions.js'
-import { SESSION_REMINDER_TEXT, INSTRUCTIONS_CONTENT } from '../../../src/server/installer.js'
+import { SESSION_REMINDER_TEXT, INSTRUCTIONS_CONTENT, MARKER_START, MARKER_END } from '../../../src/server/installer.js'
+import { CODEX_APPROVALS_FLOOR } from '../../../src/server/codex-client.js'
+import { mintTicket, readTicket, type TicketFields } from '../../../src/ticket.js'
+import { type RunWorld, openRunWorld, briefFor, rawRegistration } from '../run-world.js'
+import { runWorker, type WorkerSpec, type Outcome, type StandinRecord } from '../standins.js'
 import { DEFAULT_ROLE_WEIGHTS } from '../../../src/persistence/fts.js'
 import { DEFAULT_RECENCY_WEIGHT } from '../../../src/server/query-telemetry.js'
 import { KEY_LOOKUP_PARAM } from '../../../src/key-lookup.js'
 import { mcpOver, openLiveStore, exportNode, mediaOf, rawMediaOf, insertAttachment } from '../world.js'
-import { type InstallWorld, tcCli } from '../install-harness.js'
+import { type InstallWorld, tcCli, openInstallWorld, setFakeCodex, markGeminiCliInstalled } from '../install-harness.js'
 
 // ── journal-agent-surface ───────────────────────────────────────────────
 
@@ -64,9 +68,14 @@ function clause(w: AgentSurfaceWorld, name: string): void {
  * was promoting ihome into the shared World, which would have told every
  * other wave that a redirected install home is part of their vocabulary.
  * The extension says the true thing instead: agent-surface drives the
- * install harness.
+ * install harness. Since D382 it extends the run waves' world as well: the
+ * worker scenarios start a stand-in worker through the real ticket door.
  */
-export interface AgentSurfaceWorld extends InstallWorld {
+export interface AgentSurfaceWorld extends InstallWorld, RunWorld {
+  /** D382: the files install wrote its instruction block into, by client. */
+  blockFiles?: Record<string, string>
+  /** D382: the block as an agent reads it out of each file. */
+  blocks?: Record<string, string>
   /** The live handshake's instruction text, off a real transport. */
   instructions?: string
   /** The four channels that must teach one protocol, keyed by channel name. */
@@ -114,6 +123,20 @@ export const agentSurfaceDefiner = (reg: Registry<AgentSurfaceWorld>): void => {
       // with the user's request") — what must survive is that the gate
       // holds the USER's turn behind orientation.
       expect(text.toLowerCase(), `${name} does not gate the user's request`).toMatch(/only then[^.\n]*(respond|proceed)[^.\n]*user/)
+    }
+  })
+  // D382: the one line each of the two channels carries, read where it
+  // must sit to mean the protocol: the line right after the gate, inside
+  // the session-start section, and the only line of the channel that says
+  // so. The handshake is the live one off the transport.
+  reg.define(/^the handshake and the AGENTS\.md block each say that a session whose first message opens with treecontext's line naming it a worker skips that protocol$/, (w: AgentSurfaceWorld) => {
+    for (const name of ['handshake instructions', 'AGENTS.md block']) {
+      const lines = w.channelTexts![name]!.split('\n')
+      const said = lines.flatMap((l, i) => (workerLineOf(l) ? [i] : []))
+      expect(said.length, `${name} says ${said.length} times that a worker skips the protocol`).toBe(1)
+      const gate = lines.findIndex((l) => l.toLowerCase().startsWith(TRIGGER_CORE.gate.toLowerCase()))
+      expect(gate, `${name} has no gate line`).toBeGreaterThan(0)
+      expect(said[0], `${name}'s worker line is not the line after the gate, inside the session-start steps`).toBe(gate + 1)
     }
   })
 
@@ -416,6 +439,7 @@ export const agentSurfaceDefiner = (reg: Registry<AgentSurfaceWorld>): void => {
     expect(readFileSync(join(w.dir!, 'AGENTS.md'), 'utf8')).toBe(content)
   })
 
+  workerOrientationSteps(reg)
 }
 
 export const agentSurfaceSchemaDefiner = (reg: Registry<AgentSurfaceWorld>): void => {
@@ -488,4 +512,243 @@ export const agentSurfaceSchemaDefiner = (reg: Registry<AgentSurfaceWorld>): voi
 }
 
 // (Critic pass 3 additions, 2026-07-25) ────────────────────────────────
+
+// ── D382: a ticket-door worker skips the session-start routine ──────────
+//
+// The worker is the hook-less stand-in (../standins.ts) started by the real
+// ticket door (`treecontext run`, through runWorker); it starts the real
+// `treecontext serve` over stdio with the environment the door set, and
+// records what `initialize` handed it (the plan's `handshakes`). The block
+// is the bytes the real `install` wrote into a redirected home. The
+// outline's openings are compared with the first message the real door
+// gave the worker, so a reword of either side fails it.
+
+const RUN = 'r1'
+const KEY = 'login-form'
+
+/** A line that says a session opening with treecontext's worker line skips
+ *  the routine: the handshake's and the block's. */
+function workerLineOf(line: string): boolean {
+  return /first message opens with "?treecontext/i.test(line) && /\bworker\b/.test(line) && /\bskips?\b/i.test(line)
+}
+
+/** The quoted openings the block's worker line names, in its order. */
+function blockOpenings(block: string): string[] {
+  const lines = block.split('\n').filter(workerLineOf)
+  expect(lines.length, 'the block has no single worker line').toBe(1)
+  return [...lines[0]!.matchAll(/"(treecontext: [^"]+)"/g)].map((m) => m[1]!)
+}
+
+/** An opening as a pattern on a message's start: the block's `…` stands
+ *  for the role, which it captures. */
+function openingPattern(opening: string): RegExp {
+  const parts = opening.split('…').map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+  return new RegExp(`^${parts.join('(\\S+)')}`)
+}
+
+const ROUTINE_NEEDLES = ['the protocol order', 'SESSION START', TRIGGER_CORE.steps[0], 'Fetch each resume pointer', 'what was I working on', TRIGGER_CORE.gate]
+
+/** The tool order and the words that make the routine, found in a card. */
+function routineNeedles(text: string): string[] {
+  const mentions = [...text.matchAll(/treecontext_\w+/g)].map((m) => m[0])
+  const firstDistinct: string[] = []
+  for (const m of mentions) if (!firstDistinct.includes(m)) firstDistinct.push(m)
+  const found: string[] = []
+  if (JSON.stringify(firstDistinct.slice(0, TRIGGER_CORE.steps.length)) === JSON.stringify([...TRIGGER_CORE.steps])) found.push(ROUTINE_NEEDLES[0]!)
+  for (const n of ROUTINE_NEEDLES.slice(1)) if (text.includes(n)) found.push(n)
+  return found
+}
+
+/** A card's body: everything from its first blank line. */
+const bodyOf = (card: string): string => card.slice(card.indexOf('\n\n'))
+
+function workerTicket(o: Partial<TicketFields> = {}): TicketFields {
+  return { run: RUN, key: KEY, role: 'builder', checkpointer: 'reviewer', parent: { id: 'p1', cli: 'codex' }, ...o } as TicketFields
+}
+
+function standinOf(w: AgentSurfaceWorld): StandinRecord {
+  const o = w.facts!['out:worker'] as Outcome | undefined
+  expect(o, 'no worker was started through the door').toBeDefined()
+  expect(o!.exitCode, `the worker did not end cleanly: ${o!.stderr}`).toBe(0)
+  expect(o!.log.length, 'the worker recorded nothing').toBeGreaterThan(0)
+  return o!.log[0]!
+}
+
+function workerOrientationSteps(reg: Registry<AgentSurfaceWorld>): void {
+  // ── a worker's own server tells it to begin from its first message ──
+  reg.define(/^a worker the ticket door started, with its ticket and its lane in its environment$/, async (w: AgentSurfaceWorld) => {
+    await openRunWorld(w)
+    await briefFor(w, 'builder', RUN, KEY, { checkpointer: 'reviewer' })
+    // Its own server, then the same client's server with neither worker
+    // variable: the ordinary card read in this same world, the control.
+    await runWorker(w, {
+      spawner: 'wrapper', prompt: 'wire the submit button', ticket: workerTicket(),
+      plan: { first: { handshakes: [{}, { ticket: null, lane: null }] } },
+    })
+    const r = standinOf(w)
+    expect(r.ticket, 'the door put no ticket in the worker\'s environment').not.toBeNull()
+    expect(r.lane, 'the door named no lane in the worker\'s environment').not.toBeNull()
+    expect(r.session, 'the worker is not in the lane the door named').toBe(r.lane)
+    const registration = rawRegistration(w, w.legs!['worker']!)
+    expect([registration['kind'], registration['agent_type'], registration['run'], registration['run_key']]).toEqual(['worker', 'builder', RUN, KEY])
+    expect(r.stdin, 'the first message does not hold the brief the card says it holds').toContain(`carry the ${KEY} of ${RUN} forward`)
+    expect(r.handshakes?.length, 'the worker read no handshake').toBe(2)
+  })
+  reg.define(/^the worker's own treecontext server sends its handshake$/, (w: AgentSurfaceWorld) => {
+    w.instructions = standinOf(w).handshakes![0]!
+    expect(w.instructions.length, 'the worker\'s server sent no instructions').toBeGreaterThan(0)
+  })
+  reg.define(/^the instructions say the worker's first message holds its brief and the checkpoint in effect, and to begin there$/, (w: AgentSurfaceWorld) => {
+    expect(flat(w.instructions!)).toMatch(/Your first message holds your brief and the checkpoint\(s\) in effect[^.]*: begin there\./)
+  })
+  reg.define(/^the instructions name no session-start routine of status, export and query$/, (w: AgentSurfaceWorld) => {
+    // The needles are live: every one fires on the ordinary card the same
+    // client's server sent without the worker variables.
+    const ordinary = standinOf(w).handshakes![1]!
+    expect(routineNeedles(ordinary), 'a needle is dead on the ordinary card').toEqual(ROUTINE_NEEDLES)
+    expect(routineNeedles(w.instructions!), 'the worker\'s card names the routine').toEqual([])
+    expect(w.instructions!.split('\n').filter(workerLineOf), 'the worker\'s card tells it to skip a routine it does not name').toEqual([])
+  })
+  reg.define(/^the checkpoint protocol and the availability marker are still there, in under 2500 characters$/, (w: AgentSurfaceWorld) => {
+    expect(protocolGaps(w.instructions!), 'the worker\'s card dropped part of the checkpoint protocol').toEqual([])
+    expect(w.instructions).toMatch(/bounded preview ending in an availability marker/)
+    expect(w.instructions).toMatch(/treecontext_export\(node_id\) fetches the whole thing/)
+    // The rest of the card is the ordinary card's, byte for byte.
+    const ordinary = standinOf(w).handshakes![1]!
+    expect(w.instructions!.endsWith(bodyOf(ordinary)), 'the worker\'s card is not the ordinary body under its own head').toBe(true)
+    expect(w.instructions!.length).toBeLessThan(2500)
+  })
+
+  // ── a lane named in the environment without its ticket ──────────────
+  // A real registration in the lane, the door's for the builder's ticket;
+  // the server beside it holds the reviewer's ticket of the same run and
+  // parent, as a nested worker's client would start one. The same client
+  // also starts a server with its own ticket in that lane (the control: the
+  // lane is one trust would honour) and one with no worker variable at all
+  // (every other session's card).
+  reg.define(/^a treecontext server started with a worker lane in its environment that the ticket beside it does not describe$/, async (w: AgentSurfaceWorld) => {
+    await openRunWorld(w)
+    const other = mintTicket(workerTicket({ role: 'reviewer' }))
+    await runWorker(w, {
+      spawner: 'wrapper', prompt: 'wire the submit button', ticket: workerTicket(),
+      plan: { first: { handshakes: [{ ticket: other }, {}, { ticket: null, lane: null }] } },
+    })
+    const r = standinOf(w)
+    const registration = rawRegistration(w, w.legs!['worker']!)
+    expect([registration['session_id'], registration['kind'], registration['agent_type']], 'the lane holds no worker registration').toEqual([r.lane, 'worker', 'builder'])
+    const read = readTicket(other)
+    expect([read.valid, read.ticket.role], 'the other ticket is not a whole ticket for another role').toEqual([true, 'reviewer'])
+    expect(other).not.toBe(r.ticket)
+    expect(r.handshakes?.length).toBe(3)
+  })
+  reg.define(/^the server sends its handshake$/, (w: AgentSurfaceWorld) => {
+    w.instructions = standinOf(w).handshakes![0]!
+  })
+  reg.define(/^the instructions carry the session-start routine as every other session's do$/, (w: AgentSurfaceWorld) => {
+    const [, own, none] = standinOf(w).handshakes!
+    expect(none!.length, 'the server with no worker variable sent no instructions').toBeGreaterThan(0)
+    expect(w.instructions, 'the lane alone changed the handshake').toBe(none)
+    expect(routineNeedles(w.instructions!)).toEqual(ROUTINE_NEEDLES)
+    // The control: in the same lane, the ticket the registration describes
+    // gets the worker's card, so the ticket is what decided.
+    expect(own, 'the lane\'s own ticket did not get the worker\'s card').not.toBe(none)
+    expect(routineNeedles(own!)).toEqual([])
+  })
+
+  // ── the instruction block's worker line ────────────────────────────
+  reg.define(/^install has written its instruction block for Codex CLI and for the clients that read GEMINI\.md$/, async (w: AgentSurfaceWorld) => {
+    await openInstallWorld(w, ['.claude', '.codex'])
+    setFakeCodex(w, { version: CODEX_APPROVALS_FLOOR, sandbox: { exit: 0, stderr: '' } })
+    markGeminiCliInstalled(w.ihome!)
+    const run = tcCli(w, ['install', '--yes'])
+    expect(run.status, run.out).toBe(0)
+    w.blockFiles = {
+      'Codex CLI': readFileSync(join(w.ihome!, '.codex', 'AGENTS.md'), 'utf8'),
+      'GEMINI.md': readFileSync(join(w.ihome!, '.gemini', 'GEMINI.md'), 'utf8'),
+    }
+  })
+  reg.define(/^an agent reads the block$/, (w: AgentSurfaceWorld) => {
+    w.blocks = {}
+    for (const [name, file] of Object.entries(w.blockFiles!)) {
+      const m = new RegExp(`${MARKER_START}[\\s\\S]*?${MARKER_END}`).exec(file)
+      expect(m, `install wrote no block for ${name}`).not.toBeNull()
+      expect(m![0], `the ${name} block is not the block install writes`).toBe(INSTRUCTIONS_CONTENT)
+      w.blocks[name] = m![0]
+    }
+  })
+  reg.define(/^the agent reads one line saying that a session whose first message opens with treecontext's line naming it a worker of a run, or saying its instructions were invalid, skips the session-start routine$/, (w: AgentSurfaceWorld) => {
+    for (const [name, block] of Object.entries(w.blocks!)) {
+      const lines = block.split('\n')
+      const said = lines.filter(workerLineOf)
+      expect(said.length, `the ${name} block says it ${said.length} times`).toBe(1)
+      const line = said[0]!
+      expect(sessionStartOf(block), `the ${name} block's worker line is outside its Session Start section`).toContain(line)
+      expect(line).toMatch(/is a worker of a run: it skips these Session Start steps/)
+      const openings = blockOpenings(block)
+      expect(openings.filter((o) => /^treecontext: you are .*\bworker of the run$/.test(o)).length, `the ${name} line names no worker opening`).toBeGreaterThan(0)
+      expect(openings, `the ${name} line does not name the invalid-instructions opening`).toContain('treecontext: your instructions were invalid')
+    }
+  })
+  reg.define(/^the block's session-start steps are otherwise as before$/, (w: AgentSurfaceWorld) => {
+    for (const [name, block] of Object.entries(w.blocks!)) {
+      expect(sessionStartOf(block).filter((l) => !workerLineOf(l)), `the ${name} block's Session Start steps changed`).toEqual(SESSION_START_BEFORE_D382)
+    }
+  })
+
+  // ── the door's openings and the block's ─────────────────────────────
+  reg.define(/^a worker with a key and a brief in effect$/, async (w: AgentSurfaceWorld) => {
+    await openRunWorld(w)
+    await briefFor(w, 'builder', RUN, KEY, { checkpointer: 'reviewer' })
+    w.facts!['spec'] = { spawner: 'wrapper', prompt: 'wire the submit button', ticket: workerTicket(), plan: { first: {} } } satisfies WorkerSpec
+    w.facts!['role'] = 'builder'
+  })
+  reg.define(/^a one-off worker whose ticket says it has no key$/, async (w: AgentSurfaceWorld) => {
+    await openRunWorld(w)
+    w.facts!['spec'] = {
+      spawner: 'wrapper', prompt: 'look over the login form', ticket: workerTicket({ key: null, noKey: true, checkpointer: null }), plan: { first: {} },
+    } satisfies WorkerSpec
+    w.facts!['role'] = 'builder'
+  })
+  reg.define(/^a worker whose ticket is truncated after the role "builder"$/, async (w: AgentSurfaceWorld) => {
+    await openRunWorld(w)
+    const t = mintTicket(workerTicket())
+    const raw = t.slice(0, t.indexOf('"role":"builder"') + '"role":"builder"'.length)
+    expect(readTicket(raw).valid, 'the truncated ticket still reads whole').toBe(false)
+    w.facts!['spec'] = { spawner: 'wrapper', prompt: 'wire the submit button', ticket: raw, plan: { first: { invalidRow: true } } } satisfies WorkerSpec
+    w.facts!['role'] = null
+  })
+  reg.define(/^the ticket door starts the worker$/, async (w: AgentSurfaceWorld) => {
+    await runWorker(w, w.facts!['spec'] as WorkerSpec)
+  })
+  reg.define(/^the worker's first message opens with the line the instruction block names$/, (w: AgentSurfaceWorld) => {
+    const message = standinOf(w).stdin
+    expect(message.length, 'the door gave the worker no first message').toBeGreaterThan(0)
+    const openings = blockOpenings(INSTRUCTIONS_CONTENT)
+    const matched = openings.map((o) => openingPattern(o).exec(message)).filter((m): m is RegExpExecArray => m !== null)
+    expect(matched.length, `the first message opens with none of the block's openings ${JSON.stringify(openings)}:\n${message.split('\n')[0]}`).toBe(1)
+    // The block's `…` is the role the ticket named, where the opening has one.
+    const role = w.facts!['role'] as string | null
+    if (role !== null) expect(matched[0]![1], 'the opening names another role').toBe(role)
+    else expect(matched[0]!.length, 'the invalid-instructions opening has a role in it').toBe(1)
+  })
+}
+
+/** The block's Session Start section, heading to the line before the next. */
+function sessionStartOf(block: string): string[] {
+  const lines = block.split('\n')
+  const start = lines.indexOf('## Session Start')
+  expect(start, 'the block has no Session Start section').toBeGreaterThanOrEqual(0)
+  const end = lines.findIndex((l, i) => i > start && l.startsWith('## '))
+  return lines.slice(start, end)
+}
+
+/** The block's Session Start section before D382 added its worker line. */
+const SESSION_START_BEFORE_D382: string[] = [
+  '## Session Start',
+  '1. `treecontext_status` — check resume_pointers.',
+  '   If resume_pointers non-empty, `treecontext_export(node_id)` on each.',
+  '2. `treecontext_query("what was I working on, what was the next step")`',
+  'Only then proceed with the user\'s request.',
+  '',
+]
 

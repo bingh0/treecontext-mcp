@@ -91,7 +91,10 @@ scenario, are in `docs/beta3-bindings-audit.md`.
   captured row's `_writer` from the hook payload's agent fields and runs
   the echo heals (session identity, writer) on `treecontext_insert` echoes
 - `src/server/instructions.ts` — agent-facing handshake text; this is a
-  charter surface, see `journal-agent-surface.feature`
+  charter surface, see `journal-agent-surface.feature`. Two cards over one
+  body (D382): every session's, with the session-start routine, and a
+  ticket-door worker's, served only where `serve` trusts the worker's lane
+  (`trustedWorkerLane`), which tells it to begin from its first message
 - `src/server/installer.ts` — agent detection, config writing, AGENTS.md
   block, doctor (one row per documented client: mode, state, remedy); the
   Claude Code hooks block, and its verbatim (Codex) and translated

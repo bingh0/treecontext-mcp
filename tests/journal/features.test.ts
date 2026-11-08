@@ -215,18 +215,8 @@ runFeatures(join(HERE, '../../features'), {
     // off-and-on outlines that named it, the install message and the
     // `--no-tool-approvals` scenario whose Given names it, and the @D51
     // uninstall scenario reworded for the permission rules.
-    {
-      feature: 'journal-agent-surface',
-      scenarios: [
-        // Unit 4: D382 (a worker skips orientation; the @D8 scenario
-        // gained one Then).
-        'every channel teaches the same session-start protocol',
-        "a worker's own server tells it to begin from its first message",
-        'a lane named in the environment without its ticket gets the ordinary handshake',
-        'the instruction block tells a worker to skip the session-start routine, in one line',
-        'the first message the ticket door composes for <case> opens with the line the block names',
-      ],
-    },
+    // journal-agent-surface left this list 2026-11-08 with unit 4 (D382):
+    // the @D8 scenario's new Then and the four worker scenarios bind.
     {
       feature: 'journal-clients',
       scenarios: [
