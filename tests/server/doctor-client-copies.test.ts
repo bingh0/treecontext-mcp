@@ -20,6 +20,7 @@ import { tmpdir } from 'node:os'
 import { parse as parseToml, stringify as stringifyToml } from 'smol-toml'
 import { spawnCli, type CliSpawnResult } from '../helpers/cli-spawn.js'
 import { TS_ROOT } from '../journal/proc.js'
+import { markClaudeCodeInstalled } from '../helpers/home.js'
 
 let home: string
 
@@ -62,6 +63,7 @@ const claudeBlock = (): Record<string, unknown> =>
 beforeEach(() => {
   home = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-copies-home-')))
   for (const d of ['.claude', '.codex', '.gemini']) mkdirSync(join(home, d), { recursive: true })
+  markClaudeCodeInstalled(home)
   // Gemini CLI installed: the installation_id it writes on its first run (D383);
   // the directory alone, or a settings.json of only treecontext's, is not.
   writeFileSync(join(home, '.gemini', 'installation_id'), 'copies-world\n')

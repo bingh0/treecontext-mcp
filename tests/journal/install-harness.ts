@@ -7,6 +7,9 @@ import { homedir, tmpdir } from 'node:os'
 import { getAgent, getConfigPath } from '../../src/server/agents.js'
 import { mcpLauncherPath } from '../../src/server/installer.js'
 import { sandboxedSpawnEnv, spawnCli, type CliSpawnResult } from '../helpers/cli-spawn.js'
+import { markClaudeCodeInstalled } from '../helpers/home.js'
+
+export { markClaudeCodeInstalled }
 import type { World } from './world.js'
 import { TS_ROOT } from './proc.js'
 import { writeFakeClaude, writeFakeCodex, writeFakeGemini, type FakeCodexPlan } from './standins.js'
@@ -286,6 +289,17 @@ export function setClaudeVersion(w: InstallWorld, version: string | null): void 
   writeFakeClaude(w.iClaudeBin, version)
 }
 
+/** An executable on this process's PATH (POSIX), or null when none is there. */
+function resolveOnPosixPath(name: string): string | null {
+  for (const dir of (process.env['PATH'] ?? '').split(delimiter).filter(Boolean)) {
+    const p = join(dir, name)
+    try {
+      if (statSync(p).isFile() && (statSync(p).mode & 0o111) !== 0) return p
+    } catch { /* not here */ }
+  }
+  return null
+}
+
 /**
  * Locate an executable on PATH the way the OS would. Windows only — on POSIX
  * spawnSync already resolves a bare name, and leaving that path untouched
@@ -323,7 +337,10 @@ export function agentCli(w: InstallWorld, args: string[]): CliRun {
       }
     }
   }
-  const bin = win ? resolveOnPath('claude') : 'claude'
+  // Resolved on this process's own PATH: the sandboxed env hides the
+  // machine's `claude` from every child (it is how install detects Claude
+  // Code, D51), and this is the one helper that means the real one.
+  const bin = win ? resolveOnPath('claude') : resolveOnPosixPath('claude')
   const r = bin === null
     // Synthesise the same shape spawnSync gives for a missing binary so the
     // guard below stays the single place that explains the failure.
@@ -430,13 +447,19 @@ export async function openInstallWorld(w: InstallWorld, agentDirs: string[] = ['
     rmSync(w.ihome!, { recursive: true, force: true })
   })
   for (const d of agentDirs) mkdirSync(join(w.ihome, d), { recursive: true })
-  // Every install world has a `claude` of its own on the CLI's PATH, so a
-  // scenario behaves the same on a machine with Claude Code and on one
-  // without (D290: install and doctor read the client's version from it).
-  // A scenario about a version sets its own with setClaudeVersion; the
-  // scenarios that need the real client call it through agentCli, which
-  // never sees this one.
-  setClaudeVersion(w, DEFAULT_CLAUDE_VERSION)
+  // A world that lays out `~/.claude` means Claude Code to be there: since
+  // the directory alone is not Claude Code (D51; install's own launcher
+  // lives in it), it gets one of Claude Code's own files, and a `claude` of
+  // its own on the CLI's PATH (D290: install and doctor read the client's
+  // version from it). A world without `~/.claude` has no `claude` at all,
+  // the machine's own hidden (sandboxedSpawnEnv), since the command alone
+  // is Claude Code too. A scenario about a version sets its own with
+  // setClaudeVersion; the scenarios that need the real client call it
+  // through agentCli, which never sees this one.
+  if (agentDirs.includes('.claude')) {
+    markClaudeCodeInstalled(w.ihome)
+    setClaudeVersion(w, DEFAULT_CLAUDE_VERSION)
+  }
 }
 
 /** The version the fake `claude` of an install world answers, unless the scenario sets another. */

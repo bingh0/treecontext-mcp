@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process'
 import { afterEach, describe, expect, test } from 'vitest'
 import { parse as parseToml } from 'smol-toml'
 import { spawnCli } from '../helpers/cli-spawn.js'
-import { sandboxedEnv } from '../helpers/home.js'
+import { markClaudeCodeInstalled, sandboxedEnv } from '../helpers/home.js'
 import { writeFakeCodex } from '../journal/standins.js'
 import {
   APPROVED_TOOLS, claudeApprovalClause, claudeView, codexHeadlessClause, codexView, withClaudeApprovals, withCodexApprovals,
@@ -137,9 +137,16 @@ describe('the sandbox row grades what the check said', () => {
       expect(r.detail).toContain(said)
     }
   })
-  test('a cut check, and no codex at all, warn with what is known', () => {
+  test('a cut check warns with what is known', () => {
     expect(sandboxRow(run(null, '', { timedOut: true }), 20_000).detail).toMatch(/did not finish within 20 s/)
-    expect(sandboxRow(run(null, '', { missing: true })).detail).toMatch(/no codex command on PATH/)
+  })
+  test('no codex at all is no row, so the row keeps no words of its own for it (doctor skips a check that could not start, D387)', () => {
+    // The branch doctor could never reach is gone: a check that could not
+    // start reaches the row only by a caller's mistake, and reads as a check
+    // that printed nothing, never as a remedy of its own.
+    const words = sandboxRow(run(null, '', { missing: true }))
+    expect(words.detail).not.toMatch(/no codex command on PATH/)
+    expect(words.fix ?? '').not.toMatch(/put Codex CLI on PATH/)
   })
 })
 
@@ -150,7 +157,7 @@ describe.skipIf(process.platform !== 'linux')("doctor's sandbox row against the 
   test("the row reads what `codex sandbox -- true` itself says on this machine", () => {
     const home = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-sandbox-real-')))
     dirs.push(home)
-    mkdirSync(join(home, '.claude'), { recursive: true })
+    markClaudeCodeInstalled(home)
     mkdirSync(join(home, '.codex'), { recursive: true })
     // The real check, under this home, before doctor runs it.
     const real = spawnSync('codex', ['sandbox', '--', 'true'], {
@@ -169,7 +176,7 @@ describe.skipIf(process.platform === 'win32')('an off the developer chose holds 
   const home = (): string => {
     const h = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-approvals-off-')))
     dirs.push(h)
-    mkdirSync(join(h, '.claude'), { recursive: true })
+    markClaudeCodeInstalled(h)
     mkdirSync(join(h, '.codex'), { recursive: true })
     return h
   }
@@ -239,7 +246,7 @@ describe.skipIf(process.platform === 'win32')('every echo reads what the files l
   const setup = (): { h: string; env: Record<string, string> } => {
     const h = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-approvals-echo-')))
     dirs.push(h)
-    mkdirSync(join(h, '.claude'), { recursive: true })
+    markClaudeCodeInstalled(h)
     mkdirSync(join(h, '.codex'), { recursive: true })
     const bin = join(h, 'fake-bin')
     mkdirSync(bin)
@@ -332,7 +339,7 @@ describe.skipIf(process.platform === 'win32')('doctor reads the configuration in
   test("a project's own settings and a trusted project's Codex configuration decide, and the row names their file", () => {
     const h = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-approvals-cwd-')))
     dirs.push(h)
-    mkdirSync(join(h, '.claude'), { recursive: true })
+    markClaudeCodeInstalled(h)
     mkdirSync(join(h, '.codex'), { recursive: true })
     // The real Codex on PATH: doctor asks it for its reading of the project.
     expect(spawnCli(['install', '--yes'], { home: h }).status).toBe(0)
@@ -361,7 +368,7 @@ describe.skipIf(process.platform === 'win32')('Codex refusing its whole configur
   test("doctor warns, quotes Codex's own error and names the file; a worker cannot start in that state", () => {
     const h = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-approvals-refused-')))
     dirs.push(h)
-    mkdirSync(join(h, '.claude'), { recursive: true })
+    markClaudeCodeInstalled(h)
     mkdirSync(join(h, '.codex'), { recursive: true })
     // The real Codex on PATH: its app server is what refuses the file.
     expect(spawnCli(['install', '--yes'], { home: h }).status).toBe(0)
@@ -380,7 +387,7 @@ describe.skipIf(process.platform === 'win32')("the floor held by behaviour, not 
   const install = (version: string): { h: string; tools: unknown; out: string } => {
     const h = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-approvals-floor-')))
     dirs.push(h)
-    mkdirSync(join(h, '.claude'), { recursive: true })
+    markClaudeCodeInstalled(h)
     mkdirSync(join(h, '.codex'), { recursive: true })
     const bin = join(h, 'fake-bin')
     mkdirSync(bin, { recursive: true })

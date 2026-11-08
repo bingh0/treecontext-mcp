@@ -22,7 +22,7 @@ import { tmpdir } from 'node:os'
 import { spawnSync } from 'node:child_process'
 import { DatabaseSync } from 'node:sqlite'
 import { spawnCli, sandboxedSpawnEnv } from '../helpers/cli-spawn.js'
-import { storesDirIn } from '../helpers/home.js'
+import { markClaudeCodeInstalled, storesDirIn } from '../helpers/home.js'
 import { placeBuiltPackage } from '../helpers/built-package.js'
 import { TS_ROOT } from '../journal/proc.js'
 import { startEntryAsClient } from '../journal/standins.js'
@@ -35,6 +35,7 @@ beforeEach(() => {
   home = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-asis-home-')))
   proj = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-asis-proj-')))
   for (const d of ['.claude', '.cursor']) mkdirSync(join(home, d), { recursive: true })
+  markClaudeCodeInstalled(home)
 })
 afterEach(() => {
   rmSync(home, { recursive: true, force: true })

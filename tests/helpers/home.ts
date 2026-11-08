@@ -1,3 +1,4 @@
+import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 
 /**
@@ -74,4 +75,16 @@ export function sandboxedEnv(
  */
 export function storesDirIn(home: string): string {
   return join(home, '.treecontext', 'stores')
+}
+
+/**
+ * Claude Code installed in a home: a directory of its own in `~/.claude`,
+ * the `projects/` it keeps its session logs in. The `~/.claude` directory
+ * alone is not Claude Code (D51: install's own MCP launcher lives there),
+ * and the machine's own `claude` is hidden from every sandboxed child, so a
+ * home that means Claude Code to be there lays out one of its artifacts,
+ * as markGeminiCliInstalled does for Gemini CLI (D383).
+ */
+export function markClaudeCodeInstalled(home: string): void {
+  mkdirSync(join(home, '.claude', 'projects'), { recursive: true })
 }

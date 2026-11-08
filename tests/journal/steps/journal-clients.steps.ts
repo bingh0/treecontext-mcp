@@ -14,6 +14,8 @@ import { decodeContent } from '../../../src/persistence/content-codec.js'
 import { TS_ROOT } from '../proc.js'
 import { type InstallWorld, tcCli, openInstallWorld, agentConfigPath, mcpLauncherIn, setFakeCodex, pathWithoutCodex, putAgyOnPath, agyMcpList, markGeminiCliInstalled } from '../install-harness.js'
 import { CODEX_APPROVALS_FLOOR } from '../../../src/server/codex-client.js'
+import { failedRunLine } from '../../../src/first-moment.js'
+import { documentedCommands, runLineRefusal } from '../../helpers/readme-commands.js'
 import { parse as parseToml, stringify as stringifyToml } from 'smol-toml'
 
 // ── journal-clients ─────────────────────────────────────────────────────
@@ -1145,6 +1147,11 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
     const part = w.workerPart!
     const line = /treecontext run[^`]*?-- (claude|codex|agy)[^\n]*/s.exec(part)
     expect(line, 'the part has no treecontext run line').not.toBeNull()
+    // The line a developer copies is one the CLI accepts: read by
+    // run-command's own parser, never only by its words (M6).
+    const copied = documentedCommands(part, 'run').filter(l => / -- /.test(l))
+    expect(copied, 'the part has no run line in a code block').toHaveLength(1)
+    expect(runLineRefusal(copied[0]!), copied[0]).toBeNull()
     const text = part.replace(/\s+/g, ' ')
     switch (w.workerKey) {
       case '`claude -p`':
@@ -1203,7 +1210,17 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
   })
   reg.define(/^the developer reads that a failed or silent worker's summary row carries its exit code and the end of its error stream$/, (w: ClientsWorld) => {
     expect(w.workerPart).toMatch(/exits non-zero or prints nothing gets a summary row carrying its exit code and the end of its error stream, the last 2,000 characters/)
-    expect(w.workerPart).toContain('treecontext: the worker exited with code 1 having printed nothing; its error stream, all 1200 characters of it:')
+    // The example's first line is the summary row's own words, composed by
+    // the code that writes them for a 1200-character stream kept whole;
+    // the README abridges the stream and says so.
+    const stream = `${'x'.repeat(1105)}\nERROR: The 'no-such-model-xyz' model is not supported when using Codex with a ChatGPT account.`
+    expect([...stream].length).toBe(1200)
+    const [head, ...kept] = failedRunLine({ code: 1, printedNothing: true, tail: stream, total: 1200 }).split('\n')
+    const example = /```\n(treecontext: the worker exited[^\n]*)\n…\n([^\n]*)\n```/.exec(w.headless!)
+    expect(example, 'no abridged failed-run example').not.toBeNull()
+    expect(example![1]).toBe(head)
+    expect(kept.join('\n').endsWith(example![2]!)).toBe(true)
+    expect(w.workerPart!.replace(/\s+/g, ' ')).toMatch(/Abridged here: the stream was 1,200 characters, all of them in the row, and only its end is shown/)
   })
   reg.define(/^the developer reads how to turn tool approvals off and on again$/, () => {
     const readme = readFileSync(join(TS_ROOT, 'README.md'), 'utf8')
@@ -1219,5 +1236,9 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
     expect(code![0]).toContain('-s read-only')
     expect(code![0].match(/--dangerously[\w-]*|bypass|--yolo/g) ?? [], 'the dispatcher uses a bypass flag').toEqual([])
     expect(code![0].split('\n').length).toBeLessThan(12)
+    // Its run line is one the CLI accepts, `$1` and the rest read as values.
+    const dispatched = documentedCommands(`\n\`\`\`\n${code![0]}\n\`\`\`\n`, 'run')
+    expect(dispatched, 'the dispatcher has no run line').toHaveLength(1)
+    expect(runLineRefusal(dispatched[0]!), dispatched[0]).toBeNull()
   })
 }

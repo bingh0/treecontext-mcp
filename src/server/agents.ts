@@ -115,6 +115,10 @@ export const AGENTS: AgentDefinition[] = [
     name: 'Claude Code',
     slug: 'claude',
     configFormat: 'json-mcpServers',
+    // `~/.claude` alone is not Claude Code's: install's own MCP launcher
+    // lives there. Detection reads the command and Claude Code's own
+    // artifacts (claudeCodePresent, D51); detectDirs is not consulted for it.
+    detectCommands: ['claude'],
     detectDirs: {
       linux: [join(home(), '.claude')],
       darwin: [join(home(), '.claude')],
@@ -444,10 +448,91 @@ export function geminiCliPresent(platform: Platform = process.platform as Platfo
   return commandOnPath('gemini', platform) || geminiArtifacts().length > 0
 }
 
+/**
+ * What Claude Code itself makes in its config directory (`~/.claude`, or
+ * `CLAUDE_CONFIG_DIR` where that relocates it), read by name only: the
+ * per-project session logs (`projects/`) and the sign-in file
+ * (`.credentials.json`, absent where the OS keychain holds it), seen on a
+ * live Claude Code 2.1; and `statsig/` and `todos/`, which earlier
+ * versions made. treecontext creates none of them.
+ */
+export const CLAUDE_CODE_ARTIFACTS = ['projects', '.credentials.json', 'statsig', 'todos'] as const
+
+/** treecontext's own rules in Claude Code's `permissions.allow` (D390), spelled as tool-approvals.ts writes them. */
+const OWN_CLAUDE_RULE = /^mcp__treecontext__treecontext_(status|query|export|insert)$/
+
+/** Whether a settings key's value is one treecontext writes there, and nothing of the developer's. */
+function ownClaudeSettingsKey(key: string, value: unknown): boolean {
+  if (key === 'hooks') return hooksAreTreecontextOnly(value)
+  // Install writes the idle-compaction key off (D361); a key alone is no client.
+  if (key === 'idleCompaction') return true
+  if (key === 'permissions') {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+    const perms = value as Record<string, unknown>
+    const allow = perms['allow']
+    return Object.keys(perms).every(k => k === 'allow') && (allow === undefined
+      || (Array.isArray(allow) && allow.every(r => typeof r === 'string' && OWN_CLAUDE_RULE.test(r))))
+  }
+  return false
+}
+
+/** Whether a JSON settings file holds a key treecontext did not write; one that does not parse counts (treecontext writes only JSON). */
+function holdsForeignKey(path: string, own: (key: string, value: unknown) => boolean): boolean {
+  if (!existsSync(path)) return false
+  try {
+    const data = JSON.parse(readFileSync(path, 'utf8')) as unknown
+    if (!data || typeof data !== 'object' || Array.isArray(data)) return true
+    return Object.entries(data as Record<string, unknown>).some(([k, v]) => !own(k, v))
+  } catch {
+    return true
+  }
+}
+
+/**
+ * What shows Claude Code has been on this machine (D51, as D383 read it for
+ * Gemini CLI): `~/.claude.json` holding a key of its own (anything but the
+ * treecontext entry install writes under `mcpServers`; another server there
+ * is the developer's); one of CLAUDE_CODE_ARTIFACTS in its config
+ * directory; or a `settings.json` there holding a key treecontext did not
+ * write (its hooks block, its four allow rules, the idle-compaction key).
+ * `~/.claude` itself never counts, nor anything treecontext puts in it: the
+ * MCP launcher and hook scripts under `hooks/`, the reference skill under
+ * `skills/`. Each artifact by its name.
+ */
+export function claudeCodeArtifacts(): string[] {
+  const found: string[] = []
+  const userConfig = claudeUserConfigPath()
+  if (holdsForeignKey(userConfig, (k, v) => k === 'mcpServers' && !!v && typeof v === 'object' && !Array.isArray(v)
+    && Object.keys(v as Record<string, unknown>).every(s => s === 'treecontext'))) {
+    found.push(userConfig)
+  }
+  const dirs = [join(home(), '.claude')]
+  const relocated = process.env.CLAUDE_CONFIG_DIR
+  if (relocated && !dirs.includes(relocated)) dirs.push(relocated)
+  for (const dir of dirs) {
+    for (const name of CLAUDE_CODE_ARTIFACTS) {
+      if (existsSync(join(dir, name))) found.push(join(dir, name))
+    }
+    const settings = join(dir, 'settings.json')
+    if (holdsForeignKey(settings, ownClaudeSettingsKey)) found.push(settings)
+  }
+  return found
+}
+
+/**
+ * Whether Claude Code is installed (D51, D383's precedent): its command on
+ * PATH, or one of its own artifacts (claudeCodeArtifacts). The `~/.claude`
+ * directory alone proves nothing: install's own MCP launcher lives there.
+ */
+export function claudeCodePresent(platform: Platform = process.platform as Platform): boolean {
+  return commandOnPath('claude', platform) || claudeCodeArtifacts().length > 0
+}
+
 export function detectAgents(platform?: Platform): AgentDefinition[] {
   const p = platform ?? process.platform as Platform
   return AGENTS.filter(agent => {
     if (agent.slug === 'gemini') return geminiCliPresent(p)
+    if (agent.slug === 'claude') return claudeCodePresent(p)
     const dirs = agent.detectDirs[p] ?? agent.detectDirs.linux ?? []
     return dirs.some(d => existsSync(d)) || (agent.detectCommands ?? []).some(c => commandOnPath(c, p))
   })

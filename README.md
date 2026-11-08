@@ -140,7 +140,7 @@ them too: it rewrites what install owns even when it is valid, nothing
 more. To start from the default entry, run `treecontext uninstall
 --agent <name>` and then `treecontext install`. Before rewriting a Codex
 `config.toml` it keeps the file as it was beside it
-(`config.toml.treecontext-bak`), since the rewrite does not keep comments. Store migrations run automatically the
+(`config.toml.treecontext-bak-<UTC timestamp>`), since the rewrite does not keep comments. Store migrations run automatically the
 next time the server opens your store and are additive — but per the
 beta caveat above, treat the journal as replaceable between beta
 releases anyway. The re-run also refreshes the installed reference skill
@@ -160,7 +160,7 @@ upgrade changes:
   later install.
 - It rewrites Codex's `config.toml`, which does not keep comments, after
   keeping the file as it was beside it, as
-  `config.toml.treecontext-bak-<UTC moment>`.
+  `config.toml.treecontext-bak-<UTC timestamp>`.
 - It starts the server in capture mode only where capture hooks run. A
   Codex entry now carries `--no-capture` unless you installed with
   `--experimental-capture`; Cursor and VS Code keep capture where they run
@@ -172,6 +172,11 @@ upgrade changes:
   `~/.gemini` directory alone (Antigravity CLI uses that directory too).
   `treecontext doctor` reports a Gemini CLI entry an earlier install left
   where Gemini CLI is not present.
+- Claude Code is detected by its `claude` command or its own files, no
+  longer by the `~/.claude` directory alone (install's own launcher lives
+  there). `treecontext doctor` reports a Claude Code wiring an earlier
+  install left where Claude Code is not present, and names
+  `treecontext uninstall --agent claude`.
 
 ## 3. Set up your agent
 
@@ -192,15 +197,15 @@ This detects your installed agents and wires treecontext into them. Add
 | `~/.claude/hooks/tc-*` | the hook wrapper scripts themselves (`.cmd` on Windows) |
 | `~/.claude/skills/treecontext-reference/SKILL.md` | the reference skill your agent loads on demand |
 | `~/.claude/settings.json` (again) | `permissions.allow` gets `mcp__treecontext__treecontext_status`, `_query`, `_export` and `_insert`, the tool approvals below |
-| `~/.codex/config.toml` | with `--agent codex`: the treecontext MCP entry, with `[mcp_servers.treecontext.tools.<tool>] approval_mode = "approve"` for status, query, export and insert |
-| `~/.gemini/config/mcp_config.json` | with `--agent agy`: Antigravity CLI's MCP entry |
-| `~/.gemini/antigravity-cli/settings.json` | with `--agent agy`: `permissions.allow` gets `mcp(treecontext/<tool>)` for status, query, export and insert |
+| `~/.codex/config.toml` | where Codex CLI is detected (or on its own with `--agent codex`): the treecontext MCP entry, with `[mcp_servers.treecontext.tools.<tool>] approval_mode = "approve"` for status, query, export and insert |
+| `~/.gemini/config/mcp_config.json` | where Antigravity CLI is detected (or on its own with `--agent agy`): Antigravity CLI's MCP entry |
+| `~/.gemini/antigravity-cli/settings.json` | where Antigravity CLI is detected (or on its own with `--agent agy`): `permissions.allow` gets `mcp(treecontext/<tool>)` for status, query, export and insert |
 | `~/.gemini/GEMINI.md` | the instruction block of Antigravity CLI, a file it shares with Gemini CLI |
 | `~/.treecontext/config.toml` | treecontext's own settings |
-| `~/.treecontext/install-state.json` | install's record of the `idleCompaction` key it wrote and in which settings file, so uninstall removes only its own key |
+| `~/.treecontext/install-state.json` | install's record: the `idleCompaction` key it wrote and in which settings file, the tool approvals it wrote in each client's file, your choice to turn them off, and the files it created (Antigravity CLI's), so uninstall and `config tool-approvals` remove only what install wrote |
 
-For another agent (`--agent codex`, and so on) install writes that
-client's MCP entry instead; Codex CLI's, in `~/.codex/config.toml`, also
+For each other agent it detects (or the one `--agent` names) install
+writes that client's MCP entry; Codex CLI's, in `~/.codex/config.toml`, also
 lists `env_vars = ["TREECONTEXT_TICKET", "TREECONTEXT_WORKER_SESSION"]`,
 so a `codex exec` worker's rows reach its lane (§5, "Running work as
 legs").
@@ -597,8 +602,12 @@ does not have left this row:
 
 ```
 treecontext: the worker exited with code 1 having printed nothing; its error stream, all 1200 characters of it:
+…
 ERROR: The 'no-such-model-xyz' model is not supported when using Codex with a ChatGPT account.
 ```
+
+Abridged here: the stream was 1,200 characters, all of them in the row, and
+only its end is shown.
 
 **The environment.** The door hands a worker none of its spawner's Claude
 Code session variables: `CLAUDECODE`, `CLAUDE_CODE_SESSION_ID`,
@@ -712,7 +721,7 @@ live; parity is this matrix filled, not a word.
 The Codex CLI and Antigravity CLI worker and pen cells were first run on
 2026-11-01 with the client's bypass flags (`--dangerously-bypass-approvals-and-sandbox`
 for Codex CLI, `--dangerously-skip-permissions` for agy), so those runs
-proved the door and said nothing about permissions. The cells above are the
+proved the door and said nothing about permissions. The cells below are the
 2026-11-08 runs, each made under the permission mode it names.
 
 | Client | Headless worker through the ticket door | The worker's pen (how the tools reach it) | The worker's own tool calls captured | A main that registers itself and spawns workers | Subagent legs through the hooks door | The pointer on the Agent tool's return |
@@ -876,6 +885,16 @@ opened (every server start and every hook opens one); a log written in the
 last five minutes, or by a process still running, is never removed, so
 more than five files can sit on disk inside that window.
 Hooks serve no client, so their diagnostics still go to stderr by design.
+
+**What install's record cannot follow.** Install's record
+(`~/.treecontext/install-state.json`) names each file it wrote by its
+absolute path, so after your home directory moves (a renamed account, a
+home restored on another machine) uninstall and `config tool-approvals`
+no longer find what install wrote there, and you remove those rules by
+hand, as uninstall lists them when the record cannot be read. Install
+writes Codex CLI's entry to `~/.codex/config.toml` and does not read
+`CODEX_HOME`, so if you set it, copy the treecontext entry into
+`$CODEX_HOME/config.toml` yourself.
 
 **Entries marked `[capture gap]`.** Not a bug: the journal recording its
 own holes where an event was dropped or failed to ingest. Trust them over

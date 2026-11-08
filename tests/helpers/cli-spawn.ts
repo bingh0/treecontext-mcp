@@ -82,14 +82,15 @@ export const LEAK_KEYS = [
 
 /**
  * Commands whose presence on PATH install reads as a client being installed
- * (D383: Antigravity CLI by `agy`, Gemini CLI by `gemini`). The machine
+ * (D383: Antigravity CLI by `agy`, Gemini CLI by `gemini`; D51: Claude Code
+ * by `claude`). The machine
  * running the suite may have them; a sandboxed child must not see them, or
  * every install world on that machine wires a client its scenario never
  * named — the PATH twin of CLAUDE_CONFIG_DIR. A scenario that means one of
  * them to be installed puts it on the child's PATH from a directory of its
  * own, which this leaves alone.
  */
-export const DETECTED_CLIENT_COMMANDS = ['agy', 'gemini'] as const
+export const DETECTED_CLIENT_COMMANDS = ['agy', 'gemini', 'claude'] as const
 
 const mirrors = new Map<string, string>()
 let mirrorRoot: string | null = null
@@ -119,7 +120,7 @@ function holdsClient(dir: string): boolean {
 /**
  * A PATH whose directories from this machine's own PATH show no detected
  * client command. On Linux and macOS each such directory is replaced by a
- * mirror of it without `agy` and `gemini`.
+ * mirror of it without `agy`, `gemini` and `claude`.
  *
  * On Windows the hiding is off, and the PATH is returned as it is. A mirror
  * needs symlinks, which Windows grants only to an elevated or developer-mode

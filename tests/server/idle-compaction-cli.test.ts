@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { afterEach, describe, expect, test } from 'vitest'
 import { spawnCli } from '../helpers/cli-spawn.js'
+import { markClaudeCodeInstalled } from '../helpers/home.js'
 
 // Idle compaction through the real CLI (D290, D304, D338) in the corners the
 // charter scenarios do not reach: no `claude` on PATH at all, and a client
@@ -16,7 +17,7 @@ afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, f
 function sandbox(): string {
   const home = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-idle-cli-')))
   dirs.push(home)
-  mkdirSync(join(home, '.claude'), { recursive: true })
+  markClaudeCodeInstalled(home)
   return home
 }
 

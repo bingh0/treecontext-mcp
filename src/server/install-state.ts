@@ -195,10 +195,22 @@ function repairLocked(): InstallState {
   return fresh
 }
 
-/** Move a record that does not parse aside (install and the config command do this first). */
-export function repairInstallState(): void {
-  if (parseRecord(installStatePath()) !== null) return
-  withLock(() => { repairLocked() })
+/** Whether the record exists and does not parse: what install wrote can no longer be told from the developer's own. */
+export function installStateUnreadable(): boolean {
+  return parseRecord(installStatePath()) === null
+}
+
+/**
+ * Move a record that does not parse aside (install, uninstall and the config
+ * command do this first). Returns where it was moved, or null when the
+ * record parsed and nothing moved.
+ */
+export function repairInstallState(): string | null {
+  if (parseRecord(installStatePath()) !== null) return null
+  return withLock(() => {
+    const state = repairLocked()
+    return Object.values(state.toolApprovals?.unknown ?? {})[0]?.backup ?? null
+  })
 }
 
 /**

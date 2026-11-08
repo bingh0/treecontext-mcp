@@ -248,6 +248,10 @@ export interface ClaudeApprovalMerge {
   data: Record<string, unknown> | null
   /** Rules this merge added. */
   added: string[]
+  /** Install's own rules taken back: a rule of the developer's that may decide the tool now sits beside them. */
+  removed: string[]
+  /** The four tools a rule of the developer's may decide (an undocumented shape), each left alone with those rules. */
+  leftAlone: Array<{ tool: string; rules: string[] }>
   /** Every rule of install's in the file afterwards (the record). */
   ours: string[]
   /** Containers install has created to hold its rules, for the record. */
@@ -258,42 +262,77 @@ export interface ClaudeApprovalMerge {
   unwritable?: string
 }
 
+/** The developer's rules in a settings object that may decide a tool in a shape the client's handling of is unverified (agy's undocumented shapes). */
+function mayDecideRules(data: Record<string, unknown>, tool: string, ours: ReadonlySet<string>, dialect: RuleDialect): string[] {
+  const perms = data['permissions']
+  if (!dialect.mayCover || !isObject(perms)) return []
+  const found: string[] = []
+  for (const list of ['deny', 'ask', 'allow'] as const) {
+    const rules = perms[list]
+    if (!Array.isArray(rules)) continue
+    for (const r of rules) {
+      if (typeof r !== 'string' || (list === 'allow' && ours.has(r))) continue
+      if (dialect.mayCover(r, tool) && !found.includes(r)) found.push(r)
+    }
+  }
+  return found
+}
+
 /**
  * Add the client's allow rule for each of the four tools where no rule of
  * the developer's (allow, ask or deny, for the tool or the whole server)
- * decides it, and nothing else. `recorded` is what install wrote before.
- * Every other key of the file stays as it is.
+ * decides it, and nothing else. A rule that may decide a tool, in a shape
+ * the client's handling of is unverified (agy's), counts as deciding: no
+ * grant goes beside it (D390), and a grant an earlier install put there is
+ * taken back. `recorded` is what install wrote before. Every other key of
+ * the file stays as it is.
  */
 export function withAllowRules(data: Record<string, unknown>, recorded: WrittenApprovals | undefined, dialect: RuleDialect): ClaudeApprovalMerge {
   const oursBefore = new Set(recorded?.items ?? [])
   const created = new Set(recorded?.created ?? [])
   const perms = data['permissions']
   if (perms !== undefined && !isObject(perms)) {
-    return { data: null, added: [], ours: [], created: [], developer: [], unwritable: '"permissions" is not an object' }
+    return { data: null, added: [], removed: [], leftAlone: [], ours: [], created: [], developer: [], unwritable: '"permissions" is not an object' }
   }
   const allow = isObject(perms) ? perms['allow'] : undefined
   if (allow !== undefined && !Array.isArray(allow)) {
-    return { data: null, added: [], ours: [], created: [], developer: [], unwritable: '"permissions.allow" is not a list' }
+    return { data: null, added: [], removed: [], leftAlone: [], ours: [], created: [], developer: [], unwritable: '"permissions.allow" is not a list' }
   }
   const have = (allow ?? []) as unknown[]
   // Install's rules still in the file; one the developer removed is gone from the record.
-  const ours = [...oursBefore].filter(r => have.includes(r))
+  let ours = [...oursBefore].filter(r => have.includes(r))
   const added: string[] = []
+  const removed: string[] = []
   const developer: ClaudeApprovalMerge['developer'] = []
+  const leftAlone: ClaudeApprovalMerge['leftAlone'] = []
   for (const tool of APPROVED_TOOLS) {
     const theirs = governingRule(data, tool, new Set(ours), dialect)
     if (theirs) { developer.push({ tool, rule: theirs }); continue }
     const rule = dialect.rule(tool)
+    const may = mayDecideRules(data, tool, new Set(ours), dialect)
+    if (may.length > 0) {
+      leftAlone.push({ tool, rules: may })
+      if (ours.includes(rule)) removed.push(rule)
+      continue
+    }
     if (ours.includes(rule)) continue
     added.push(rule)
   }
-  if (added.length === 0) {
-    return { data: null, added, ours, created: ours.length > 0 ? [...created] : [], developer }
+  ours = ours.filter(r => !removed.includes(r))
+  if (added.length === 0 && removed.length === 0) {
+    return { data: null, added, removed, leftAlone, ours, created: ours.length > 0 ? [...created] : [], developer }
   }
-  if (!isObject(perms)) created.add('permissions')
-  if (allow === undefined) created.add('allow')
-  const nextPerms = { ...(isObject(perms) ? perms : {}), allow: [...have, ...added] }
-  return { data: { ...data, permissions: nextPerms }, added, ours: [...ours, ...added], created: [...created], developer }
+  const nextAllow = [...have.filter(r => typeof r !== 'string' || !removed.includes(r)), ...added]
+  if (added.length > 0) {
+    if (!isObject(perms)) created.add('permissions')
+    if (allow === undefined) created.add('allow')
+  }
+  const nextPerms: Record<string, unknown> = { ...(isObject(perms) ? perms : {}), allow: nextAllow }
+  if (nextAllow.length === 0 && created.has('allow')) delete nextPerms['allow']
+  const next: Record<string, unknown> = { ...data, permissions: nextPerms }
+  if (Object.keys(nextPerms).length === 0 && created.has('permissions')) delete next['permissions']
+  const all = [...ours, ...added]
+  return { data: next, added, removed, leftAlone, ours: all, created: all.length > 0 ? [...created] : [], developer }
 }
 
 /** Claude Code's four allow rules merged into its settings (withAllowRules in Claude Code's dialect). */
@@ -559,6 +598,8 @@ export interface ViewWords {
   byInstall: string[]
   /** Of the four, those nothing approves (install would write them). */
   unapproved: string[]
+  /** Of the four, those nothing approves and a rule of the developer's may decide, in a shape the client's handling of is unverified: install left them alone (D390). */
+  leftAlone: string[]
   /** Of the four, those a rule of the developer's refuses. */
   developerRefuses: string[]
   /** Of the four, those a headless worker is refused: unapproved or refused by the developer. */
@@ -597,7 +638,8 @@ export function viewWords(view: ClientView): ViewWords {
   const ruleWords = (g: { kind: string; rules: string[] }): string =>
     g.rules.length === 0 ? g.kind : g.kind === 'approval' ? andList(g.rules) : g.rules.length === 1 ? `${g.kind} ${g.rules[0]}` : `${g.kind}s ${andList(g.rules)}`
   const developerRefuses = of(APPROVED_TOOLS, d => d.by === 'developer' && !d.approves)
-  const unapproved = of(APPROVED_TOOLS, d => d.by === 'none')
+  const leftAlone = of(APPROVED_TOOLS, d => d.by === 'none' && (d.may?.length ?? 0) > 0)
+  const unapproved = APPROVED_TOOLS.filter(t => view[t]!.by === 'none' && !leftAlone.includes(t))
   const mayGroups = new Map<string, { list: string; rule: string; file: string; tools: string[] }>()
   for (const tool of ALL_TOOLS) {
     for (const m of view[tool]!.may ?? []) {
@@ -613,8 +655,9 @@ export function viewWords(view: ClientView): ViewWords {
     uncertainRules: mayList.map(g => `your ${g.list} rule ${g.rule} in ${g.file}`),
     byInstall: of(APPROVED_TOOLS, d => d.by === 'install'),
     unapproved,
+    leftAlone,
     developerRefuses,
-    refused: APPROVED_TOOLS.filter(t => unapproved.includes(t) || developerRefuses.includes(t)),
+    refused: APPROVED_TOOLS.filter(t => unapproved.includes(t) || leftAlone.includes(t) || developerRefuses.includes(t)),
     asking: of(ASKING_TOOLS, d => d.by === 'none'),
     developer: [...groups.values()].map(g => `${toolWords(g.tools)} ${g.approves ? 'approved' : 'refused'} by your ${ruleWords(g)} in ${g.file}`),
     refusingRules: [...groups.values()].filter(g => !g.approves && g.tools.some(t => (APPROVED_TOOLS as readonly string[]).includes(t))).map(g => `your ${ruleWords(g)} in ${g.file}`),
@@ -627,6 +670,7 @@ export function clientStateWords(view: ClientView, installWhere: string): string
   const parts = [w.byInstall.length > 0 ? `${toolWords(w.byInstall)} approved by install (${installWhere})` : 'none approved by install']
   parts.push(...w.developer)
   if (w.unapproved.length > 0) parts.push(`${toolWords(w.unapproved)} not approved`)
+  if (w.leftAlone.length > 0) parts.push(`${toolWords(w.leftAlone)} not approved: install left ${w.leftAlone.length === 1 ? 'it' : 'them'} alone beside a rule of yours that may decide ${w.leftAlone.length === 1 ? 'it' : 'them'}, named below`)
   if (w.asking.length > 0) parts.push(`still asking: ${toolWords(w.asking)}`)
   parts.push(...w.uncertain)
   return parts.join('; ')
@@ -845,7 +889,13 @@ export function agyHeadlessClause(args: {
   const why: string[] = []
   if (w.unapproved.length > 0) why.push(`${toolWords(w.unapproved)} ${w.unapproved.length === 1 ? 'is' : 'are'} not allowed in ${settingsFile}`)
   why.push(...w.developer.filter(d => / refused by /.test(d)))
+  // No grant goes beside a rule that may decide (D390): install left the tool alone, and the rule is the developer's to check.
+  if (w.leftAlone.length > 0) why.push(`install left ${toolWords(w.leftAlone)} alone, adding no rule beside a rule of yours that may decide ${w.leftAlone.length === 1 ? 'it' : 'them'}`)
   why.push(...w.uncertain)
-  const remedy = w.unapproved.length > 0 ? install : `${w.refusingRules.join(' and ')}, yours to change (install leaves it)`
+  const theirs = [
+    ...(w.refusingRules.length > 0 ? [`${w.refusingRules.join(' and ')}, yours to change (install leaves it)`] : []),
+    ...(w.leftAlone.length > 0 ? [uncertainRemedy] : []),
+  ]
+  const remedy = w.unapproved.length > 0 ? install : theirs.join('; ')
   return { text: `${label}: an \`agy -p\` worker would be refused ${andList(w.refused)} — ${why.join('; ')}${tail}`, warn: true, remedy, fix: remedy }
 }

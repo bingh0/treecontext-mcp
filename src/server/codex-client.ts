@@ -129,11 +129,12 @@ function ownWords(run: BoundedRun): string {
   return words.length > 400 ? `…${words.slice(-400)}` : words
 }
 
-/** Doctor's row for a finished sandbox check. */
+/**
+ * Doctor's row for a finished sandbox check. A check that could not start
+ * (no codex command on PATH) gets no row at all: doctor gives none for a
+ * Codex it cannot run (D387), so this reads only a check that ran.
+ */
 export function sandboxRow(run: BoundedRun, timeoutMs: number = CODEX_SANDBOX_TIMEOUT_MS): SandboxRow {
-  if (run.missing) {
-    return { status: 'warn', detail: `\`${CODEX_SANDBOX_CHECK}\` could not run: no codex command on PATH, so whether a sandboxed Codex worker can read files is not known`, fix: `put Codex CLI on PATH (npm i -g @openai/codex), then run ${CODEX_SANDBOX_CHECK}` }
-  }
   if (run.timedOut) {
     return { status: 'warn', detail: `\`${CODEX_SANDBOX_CHECK}\` did not finish within ${Math.round(timeoutMs / 1000)} s${ownWords(run) ? `: ${ownWords(run)}` : ''}`, fix: `run ${CODEX_SANDBOX_CHECK} yourself and read what it says` }
   }

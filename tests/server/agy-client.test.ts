@@ -94,13 +94,30 @@ describe('an agy rule names a tool as agy reads it', () => {
     expect(taken.data).toEqual({ permissions: { allow: ['mcp(github/*)'], ask: [F_QUERY] } })
   })
 
-  test("install writes its allow beside a rule that only may decide, `mcp(treecontext)` with no slash included", () => {
+  test("install writes no grant beside a rule that may decide, `mcp(treecontext)` with no slash included (D390)", () => {
     for (const list of ['allow', 'ask', 'deny']) {
-      for (const r of ['mcp(treecontext)', 'mcp(tree*/*)', 'MCP(treecontext/*)', 'mcp(regex:.*)']) {
+      for (const r of ['mcp(treecontext)', 'mcp(tree*/*)', 'MCP(treecontext/*)', 'mcp(regex:.*)', 'mcp(treecontext/treecontext_*)']) {
         const m = withAllowRules({ permissions: { [list]: [r] } }, undefined, AGY_DIALECT)
-        expect(m.added, `${list} ${r}`).toEqual(FOUR)
+        expect(m.added, `${list} ${r}`).toEqual([])
+        expect(m.data, `${list} ${r}`).toBeNull()
+        expect(m.leftAlone.map(l => l.tool), `${list} ${r}`).toEqual([...APPROVED_TOOLS])
+        expect(m.leftAlone.every(l => l.rules.length === 1 && l.rules[0] === r)).toBe(true)
       }
     }
+  })
+  test('a rule that may decide one tool leaves that tool alone and the other three are granted', () => {
+    const m = withAllowRules({ permissions: { ask: ['mcp(treecontext/treecontext_q*)'] } }, undefined, AGY_DIALECT)
+    expect(m.added).toEqual([F_STATUS, FOUR[2], F_INSERT])
+    expect(m.leftAlone).toEqual([{ tool: 'treecontext_query', rules: ['mcp(treecontext/treecontext_q*)'] }])
+  })
+  test("a grant an earlier install put beside a rule that may decide is taken back, and the containers it created go when empty", () => {
+    const m = withAllowRules({ permissions: { allow: FOUR, deny: ['mcp(treecontext/treecontext_*)'] } }, { items: FOUR, created: ['permissions', 'allow'], at: '' }, AGY_DIALECT)
+    expect(m.removed).toEqual(FOUR)
+    expect(m.added).toEqual([])
+    expect(m.ours).toEqual([])
+    expect(m.data).toEqual({ permissions: { deny: ['mcp(treecontext/treecontext_*)'] } })
+    const kept = withAllowRules({ trust: 1, permissions: { allow: ['mcp(github/*)', ...FOUR], ask: ['mcp(treecontext)'] } }, { items: FOUR, at: '' }, AGY_DIALECT)
+    expect(kept.data).toEqual({ trust: 1, permissions: { allow: ['mcp(github/*)'], ask: ['mcp(treecontext)'] } })
   })
 })
 
@@ -457,23 +474,50 @@ describe.skipIf(process.platform === 'win32')('install and uninstall for agy bes
     expect(row).toContain(`insert approved by your allow rule mcp(treecontext/treecontext_insert) in ${file}`)
   })
 
-  test("a rule that may decide: install writes beside it, every echo names it, and doctor warns and is never ok", () => {
+  test("a rule that may decide: install writes no grant beside it (D390), every echo names it, and doctor warns, says install left the tools alone, and is never ok", () => {
     const h = home()
     writeFileSync(settingsPath(h), JSON.stringify({ permissions: { ask: ['mcp(treecontext)'] } }))
     const run = spawnCli(['install', '--yes'], { home: h })
     expect(run.status, run.out).toBe(0)
-    expect((settings(h)['permissions'] as { allow: string[] }).allow).toEqual(FOUR)
+    expect(settings(h)['permissions']).toEqual({ ask: ['mcp(treecontext)'] })
     const words = `your ask rule mcp(treecontext) in ${settingsPath(h)} may decide status, query, export, insert, clear, delete, import and merge (agy's handling of that shape is unverified)`
     expect(run.stdout).toContain(words)
-    const row = agyRow(spawnCli(['doctor'], { home: h }).stdout)
+    expect(run.stdout).toContain(`status, query, export and insert left alone beside your rule mcp(treecontext), which may decide them (agy's handling of that shape is unverified)`)
+    const out = spawnCli(['doctor'], { home: h }).stdout
+    const row = agyRow(out)
     expect(row).toMatch(/^\[warn\]/)
     expect(row).toContain(words)
+    expect(row).toContain('install left status, query, export and insert alone, adding no rule beside a rule of yours that may decide them')
+    const fix = out.split('\n')[out.split('\n').indexOf(row) + 1] ?? ''
+    expect(fix).toContain(`fix: your ask rule mcp(treecontext) in ${settingsPath(h)}, yours to check`)
     const off = spawnCli(['config', 'tool-approvals', 'off', '--agent', 'agy'], { home: h })
     expect(off.stdout).toContain(words)
     expect(off.stdout).toContain(`your ask rule mcp(treecontext) in ${settingsPath(h)}, named above, may decide otherwise (agy's handling of that shape is unverified)`)
     expect(agyRow(spawnCli(['doctor'], { home: h }).stdout)).toMatch(/^\[warn\]/)
     const on = spawnCli(['config', 'tool-approvals', 'on', '--agent', 'agy'], { home: h })
     expect(on.stdout).toContain(words)
+  })
+
+  test("the row's approvals remedy and its fix line name the same command, whichever install the row needs", () => {
+    const remedyAndFix = (h: string): { remedy: string; fix: string } => {
+      const out = spawnCli(['doctor'], { home: h }).stdout
+      const row = agyRow(out)
+      const remedy = /headless workers: [^;]*holds no treecontext server; remedy: ([^.]*)\. Hooks:/.exec(row)?.[1] ?? `no remedy in: ${row}`
+      const fix = (out.split('\n')[out.split('\n').indexOf(row) + 1] ?? '').replace(/^ +fix: /, '')
+      return { remedy, fix }
+    }
+    // Nothing wired anywhere: the plain install, the headline's command.
+    const bare = home()
+    expect(spawnCli(['install', '--yes'], { home: bare }).status).toBe(0)
+    writeFileSync(mcpPath(bare), '{"mcpServers": {}}\n')
+    rmSync(join(bare, '.gemini', 'GEMINI.md'))
+    expect(remedyAndFix(bare)).toEqual({ remedy: 'treecontext install', fix: 'treecontext install' })
+    // Another client wired: the forced install for agy, on both lines.
+    const beside = home(['.gemini/antigravity-cli', '.gemini/config', '.cursor'])
+    expect(spawnCli(['install', '--yes'], { home: beside }).status).toBe(0)
+    writeFileSync(mcpPath(beside), '{"mcpServers": {}}\n')
+    rmSync(join(beside, '.gemini', 'GEMINI.md'))
+    expect(remedyAndFix(beside)).toEqual({ remedy: 'treecontext install --force --agent agy', fix: 'treecontext install --force --agent agy' })
   })
 
   test("agy's settings that do not parse: doctor names the file and the parse error, and never sends the developer to an install that skips it", () => {

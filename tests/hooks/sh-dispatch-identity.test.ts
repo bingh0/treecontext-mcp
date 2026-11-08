@@ -27,7 +27,7 @@ import { pathToFileURL } from 'node:url'
 import { createRequire } from 'node:module'
 import { randomBytes } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
-import { redirectHome } from '../helpers/home.js'
+import { markClaudeCodeInstalled, redirectHome } from '../helpers/home.js'
 import { sandboxedSpawnEnv, spawnCli, CLI_TS } from '../helpers/cli-spawn.js'
 import { type CaptureWorld, openCaptureWorld, hookJson } from '../journal/capture-harness.js'
 import {
@@ -163,6 +163,8 @@ describe.skipIf(!POSIX)('hook dispatch through /bin/sh -c keeps the claude pid (
   it('doctor grades a Claude hook command without exec as degraded session identity', () => {
     const w = mkWorld()
     const home = scratch(w, 'tc-exec-doctor-')
+    // Claude Code installed: its own row is graded only where it is present (D51).
+    markClaudeCodeInstalled(home)
     try {
       expect(spawnCli(['install', '--agent', 'claude', '--yes'], { home }).status).toBe(0)
       const settings = join(home, '.claude', 'settings.json')

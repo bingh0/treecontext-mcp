@@ -38,10 +38,10 @@ import {
 import {
   CODEX_APPROVALS_FLOOR, codexApprovalSupport, codexOriginFile, readCodexConfig, readCodexVersion, runCodexSandboxCheck, sandboxRow,
 } from './codex-client.js'
-import { forgetCreatedFile, installCreated, recordCreatedFile, repairInstallState } from './install-state.js'
+import { forgetCreatedFile, installCreated, installStateUnreadable, recordCreatedFile, repairInstallState } from './install-state.js'
 import {
   type AgentDefinition, type Platform,
-  AGENTS, detectAgents, geminiCliPresent, getAgent, getConfigPath,
+  AGENTS, claudeCodePresent, detectAgents, geminiCliPresent, getAgent, getConfigPath,
   getHookSettingsPath, getInstructionsPath, claudeLegacyMcpPath, legacyMcpConfigs,
   agySettingsPath, agyProjectsDir, agyHooksPath, agyMcpConfigPath,
 } from './agents.js'
@@ -3184,9 +3184,13 @@ export function writeAllowRules(slug: 'claude' | 'agy', file: string, dryRun: bo
     if (slug === 'agy' && read.state === 'absent') recordCreatedFile(file)
   }
   if (!dryRun && !merge.unwritable) recordWrittenApprovals(slug, file, merge.ours, merge.created)
+  const leftAlone = merge.leftAlone.length > 0
+    ? `${toolWords(merge.leftAlone.map(l => l.tool))} left alone beside your ${((rules: string[]): string => `${rules.length === 1 ? 'rule' : 'rules'} ${andList(rules)}`)([...new Set(merge.leftAlone.flatMap(l => l.rules))])}, which may decide ${merge.leftAlone.length === 1 ? 'it' : 'them'} (${UNVERIFIED_SHAPE})`
+    : null
+  const problems = [...(merge.unwritable ? [`${merge.unwritable} in ${file}, so no rule was added`] : []), ...(leftAlone ? [leftAlone] : [])]
   return {
-    file, added: merge.added, removed: [], ours: merge.ours,
-    ...(merge.unwritable ? { problem: `${merge.unwritable} in ${file}, so no rule was added` } : {}),
+    file, added: merge.added, removed: merge.removed, ours: merge.ours,
+    ...(problems.length > 0 ? { problem: problems.join('; ') } : {}),
   }
 }
 
@@ -3409,6 +3413,25 @@ export function orphanGeminiEntry(platform: Platform): string | null {
   const gemini = getAgent('gemini')
   if (!gemini || geminiCliPresent(platform) || !hasTreecontextEntry(gemini, platform)) return null
   return getConfigPath(gemini, platform)
+}
+
+/**
+ * A phantom Claude Code wiring (D51): an earlier install, which read the
+ * `~/.claude` directory its own MCP launcher lives in as Claude Code, wrote
+ * Claude Code's treecontext entry or hooks block, and Claude Code is not
+ * present (no `claude` on PATH, none of its artifacts). The files that hold
+ * the wiring, or null. Doctor warns and names the uninstall; install never
+ * removes it on its own.
+ */
+export function phantomClaudeWiring(platform: Platform): string[] | null {
+  const claude = getAgent('claude')
+  if (!claude || claudeCodePresent(platform)) return null
+  const files: string[] = []
+  const configPath = getConfigPath(claude, platform)
+  if (configPath && hasTreecontextEntry(claude, platform)) files.push(configPath)
+  const settingsPath = getHookSettingsPath(claude, platform)
+  if (settingsPath && claudeHooksBlockState(platform) !== 'absent') files.push(settingsPath)
+  return files.length > 0 ? files : null
 }
 
 /** Whether agy's MCP configuration carries a treecontext entry (install wired it). */
@@ -3949,6 +3972,32 @@ export async function install(opts: InstallOptions): Promise<AgentInstallResult[
 
 // ── Uninstall ──────────────────────────────────────────────────────
 
+/**
+ * What uninstall leaves when install's record does not parse: each client
+ * file install writes into by its record, with the shapes install writes
+ * there, so the developer can remove them by hand. Only files that exist,
+ * for the clients in this uninstall's scope; nothing here is removed, since
+ * none of it can be proved install's.
+ */
+export function lostRecordLeftovers(platform: Platform, inScope: (slug: string) => boolean): string[] {
+  const lines: string[] = []
+  const allows = (rule: (t: string) => string): string => andList(APPROVED_TOOLS.map(rule))
+  if (inScope('claude')) {
+    const main = getAgent('claude') ? getHookSettingsPath(getAgent('claude')!, platform) : null
+    for (const file of claudeApprovalFiles(platform).filter(f => existsSync(f))) {
+      const idle = file === main ? `, and "${IDLE_COMPACTION_KEY}": false` : ''
+      lines.push(`Claude Code: ${file} — the permissions.allow rules ${allows(t => `mcp__treecontext__${t}`)}${idle}`)
+    }
+  }
+  if (inScope('agy')) {
+    const settings = agySettingsPath()
+    if (existsSync(settings)) lines.push(`Antigravity CLI: ${settings} — the permissions.allow rules ${allows(t => `mcp(treecontext/${t})`)}; the file itself, if install created it and nothing else is left in it`)
+    const mcp = agyMcpConfigPath()
+    if (existsSync(mcp)) lines.push(`Antigravity CLI: ${mcp} — the file itself, if install created it and it is left empty`)
+  }
+  return lines
+}
+
 export async function uninstall(opts: {
   yes: boolean
   dryRun: boolean
@@ -3999,6 +4048,26 @@ export async function uninstall(opts: {
 
   console.log(`treecontext uninstall v${getVersion()}\n`)
 
+  // Install's record does not parse (D51, D361, D390): only the record can
+  // tell install's approvals, its idle-compaction key and the files it
+  // created from the developer's own, so uninstall removes none of them. It
+  // moves the record aside as install does, and names what it left, file by
+  // file and in the shapes install writes, for the developer to remove by
+  // hand. It still exits 0, as install does over the same record.
+  const lostRecord = !opts.hooksOnly && installStateUnreadable()
+    ? lostRecordLeftovers(platform, (slug) => fullScope || agents.some(a => a.slug === slug))
+    : null
+  if (lostRecord) {
+    // The repair says where the record went; a dry run moves nothing.
+    if (opts.dryRun) console.error(`[warn] treecontext's install record ${installStatePath()} could not be read (a real run moves it aside, as install does).`)
+    else repairInstallState()
+    console.error('[warn] Without install\'s record uninstall cannot tell what install wrote from what you wrote, so it removes none of the following; '
+      + 'remove them by hand where install wrote them:')
+    for (const line of lostRecord) console.error(`  ${line}`)
+    if (lostRecord.length === 0) console.error('  (none of the files install writes these into is here)')
+    console.log()
+  }
+
   for (const agent of agents) {
     const agentResult: AgentInstallResult = { agent: agent.name, slug: agent.slug, actions: [] }
     const configPath = getConfigPath(agent, platform)
@@ -4042,9 +4111,25 @@ export async function uninstall(opts: {
         console.log(`${agent.name}: refused — ${agentResult.refused}`)
       }
       const settingsPath = getHookSettingsPath(agent, platform)
+      let blockGone = false
       if (settingsPath) {
         const hookResult = removeClaudeSettingsHooks(settingsPath, opts.dryRun)
         if (hookResult) agentResult.actions.push(hookResult)
+        blockGone = opts.dryRun ? hookResult !== null || claudeHooksBlockState(platform) === 'absent' : claudeHooksBlockState(platform) === 'absent'
+      }
+      // Cursor and VS Code read the Claude Code hooks block as it is (D154):
+      // with the block gone no capture hooks run for them, so an entry of
+      // theirs that stays converges to no capture (D386), as install would
+      // write it now, and keeps everything else (D385).
+      if (agent.slug === 'claude' && blockGone) {
+        for (const other of AGENTS.filter(a => AS_IS_CLIENTS.has(a.slug) && !agents.includes(a))) {
+          const otherPath = getConfigPath(other, platform)
+          const mode = otherPath ? setEntryCapture(other, otherPath, false, opts.dryRun) : null
+          if (mode && mode.status !== 'skipped') {
+            agentResult.actions.push(mode)
+            console.log(`${other.name}: mcp entry set to no capture in ${otherPath} — it read the Claude Code hooks block, which is gone [${mode.status}${mode.detail ? ` — ${mode.detail}` : ''}]`)
+          }
+        }
       }
       // Also remove from all CCS instance settings (shared + bare instances)
       for (const ccsPath of getCcsHookTargets()) {
@@ -4220,12 +4305,15 @@ export async function uninstall(opts: {
     }
   }
 
+  const lostNote = lostRecord && lostRecord.length > 0 ? ' install\'s record could not be read, so what it would have named was left: see the warning above.' : ''
   if (results.length === 0) {
-    console.log('Nothing to uninstall.')
+    console.log(`Nothing to uninstall.${lostNote}`)
   } else {
     console.log(results.some(r => r.refused)
-      ? `\nUninstall incomplete: part of it was refused, see above.${opts.dryRun ? ' (dry-run)' : ''}`
-      : `\nUninstall complete.${opts.dryRun ? ' (dry-run)' : ''}`)
+      ? `\nUninstall incomplete: part of it was refused, see above.${lostNote}${opts.dryRun ? ' (dry-run)' : ''}`
+      : lostNote
+        ? `\nUninstall incomplete:${lostNote}${opts.dryRun ? ' (dry-run)' : ''}`
+        : `\nUninstall complete.${opts.dryRun ? ' (dry-run)' : ''}`)
   }
   return results
 }
@@ -6483,6 +6571,8 @@ export async function doctor(): Promise<DiagnosticResult[]> {
   // The Codex on PATH, read once if a Codex row needs it.
   let codexVersion: { version: string | null } | undefined
   let agentsTotal = 0
+  /** The install command an approvals clause names as its remedy, per row: the row's fix must name the same one. */
+  const approvalRemedies = new Map<DiagnosticResult, string>()
 
   for (const agent of detected) {
     const configPath = getConfigPath(agent, platform)
@@ -6904,6 +6994,7 @@ export async function doctor(): Promise<DiagnosticResult[]> {
     }
     results.push(agentRow)
     agentRows.push(agentRow)
+    if (approval) approvalRemedies.set(agentRow, approval.remedy)
     if (hasModeProblem && fix) modeFixes.push(fix)
     if (agent.slug === 'claude') {
       const settingsPath = getHookSettingsPath(agent, platform)
@@ -6933,6 +7024,22 @@ export async function doctor(): Promise<DiagnosticResult[]> {
         status: 'warn',
         detail: `an earlier install wired Gemini CLI, which is not present — ${orphan} holds its treecontext entry, and no \`gemini\` command or Gemini CLI file of its own is here (install leaves the entry alone)`,
         fix: 'treecontext uninstall --agent gemini',
+      })
+    }
+  }
+
+  // A phantom Claude Code wiring (D51): an earlier install read the
+  // `~/.claude` directory its own launcher lives in as Claude Code and wired
+  // it, and Claude Code is not present. Install leaves it; doctor names the
+  // way out.
+  {
+    const phantom = phantomClaudeWiring(platform)
+    if (phantom) {
+      results.push({
+        check: 'Claude Code',
+        status: 'warn',
+        detail: `an earlier install wired Claude Code, which is not present — ${andList(phantom)} ${phantom.length === 1 ? 'holds' : 'hold'} its treecontext wiring, and no \`claude\` command or Claude Code file of its own is here (install leaves it alone)`,
+        fix: 'treecontext uninstall --agent claude',
       })
     }
   }
@@ -7031,6 +7138,15 @@ export async function doctor(): Promise<DiagnosticResult[]> {
       if (r.fix?.startsWith(`${INSTALL_COMMAND} --force --agent `)) r.fix = INSTALL_COMMAND
     }
     console.log(NOT_SET_UP_HEADLINE)
+  }
+
+  // One command per row: where the approvals clause's remedy is an install
+  // and the row's fix is another spelling of it (the forced install a
+  // missing file asks for, or the plain one of a machine with nothing
+  // wired), the clause names the fix, so the two lines never disagree.
+  for (const [row, remedy] of approvalRemedies) {
+    if (!row.fix || row.fix === remedy || !remedy.startsWith(`${INSTALL_COMMAND} `) || !row.fix.startsWith(INSTALL_COMMAND)) continue
+    row.detail = row.detail.replace(`; remedy: ${remedy}`, `; remedy: ${row.fix}`)
   }
 
   // Print results
