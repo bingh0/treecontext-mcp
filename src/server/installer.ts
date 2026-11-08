@@ -1445,7 +1445,7 @@ export function installClaudeHookScripts(dryRun: boolean, debug = false): Action
 // Exported for the same loop-closing reason as installClaudeHookScripts:
 // the sweep's sparing rules (MCP launcher under --hooks-only, other agents'
 // wrappers always) are claims about what uninstall actually leaves behind.
-export function removeClaudeHookScripts(dryRun: boolean, hooksOnly = false, spareClaudeScripts = false): ActionResult[] {
+export function removeClaudeHookScripts(dryRun: boolean, hooksOnly = false, spareClaudeScripts = false, spareLauncher = false): ActionResult[] {
   const results: ActionResult[] = []
   const hooksDir = join(homedir(), '.claude', HOOK_SCRIPTS_DIR_NAME)
   if (!existsSync(hooksDir)) return results
@@ -1456,7 +1456,10 @@ export function removeClaudeHookScripts(dryRun: boolean, hooksOnly = false, spar
   // --hooks-only keeps the MCP registration, and the registration points
   // at this script — deleting it left a working config aimed at nothing
   // (F1 defect, 2026-08-15). A full uninstall still takes it.
-  const spared = hooksOnly ? basename(mcpLauncherPath()) : null
+  // Every other agent's MCP entry starts the server through this launcher
+  // too, so uninstalling Claude Code alone keeps it while one of them is
+  // still wired; it goes with the last entry that names it.
+  const spared = hooksOnly || spareLauncher ? basename(mcpLauncherPath()) : null
   const ownedPrefixes = [TC_HOOK_PREFIX, ...LEGACY_HOOK_PREFIXES]
   // The other agents' wrappers share this directory and prefix but belong to
   // THEIR uninstall branches (removeAgentHookWrappers): sweeping them here
@@ -4101,7 +4104,12 @@ export async function uninstall(opts: {
       // it would leave every entry of the copy aimed at nothing, so the
       // scripts stay and the command that removes the copy first is named.
       const copies = copiesRunningClaudeScripts(platform, new Set(agents.map(a => a.slug)))
-      const scriptResults = removeClaudeHookScripts(opts.dryRun, opts.hooksOnly, copies.length > 0)
+      const removing = new Set(agents.map(a => a.slug))
+      const launcherUsers = AGENTS.filter(a => !removing.has(a.slug) && hasTreecontextEntry(a, platform))
+      const scriptResults = removeClaudeHookScripts(opts.dryRun, opts.hooksOnly, copies.length > 0, launcherUsers.length > 0)
+      if (launcherUsers.length > 0 && !opts.hooksOnly) {
+        console.log(`${agent.name}: kept the MCP launcher ${mcpLauncherPath()}: ${launcherUsers.map(a => a.name).join(', ')} still start${launcherUsers.length === 1 ? 's' : ''} treecontext through it`)
+      }
       agentResult.actions.push(...scriptResults)
       if (copies.length > 0) {
         const cmds = copies.map(a => `treecontext uninstall --agent ${a.slug}`).join(' and ')
