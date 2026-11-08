@@ -537,8 +537,14 @@ export type CodexApprovalSupport =
 export function codexHeadlessClause(args: {
   configPath: string; entry: Record<string, unknown>; view: ClientView; workerVars: readonly string[]
   choice: ApprovalsChoice; support: CodexApprovalSupport; floor: string; note?: string
+  /** Codex's own error when it refuses the configuration (its config/read). */
+  refused?: string
 }): ApprovalClause {
   const { configPath, entry, view, workerVars, choice, support, floor } = args
+  if (args.refused) {
+    const remedy = `fix that line in ${configPath}`
+    return { text: `headless workers: Codex refuses its configuration, so a headless worker cannot start — Codex says: ${args.refused.replace(/\s*\n\s*/g, ' ')}`, warn: true, remedy, fix: remedy }
+  }
   const label = 'headless workers'
   const install = 'treecontext install --agent codex'
   const note = args.note ? ` (${args.note})` : ''

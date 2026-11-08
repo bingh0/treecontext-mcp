@@ -356,3 +356,45 @@ describe.skipIf(process.platform === 'win32')('doctor reads the configuration in
     expect(home.stdout.split('\n').find(l => /^\[\w+\]\s+Codex CLI:/.test(l))).toMatch(/^\[ok\]/)
   })
 })
+
+describe.skipIf(process.platform === 'win32')('Codex refusing its whole configuration (D387)', () => {
+  test("doctor warns, quotes Codex's own error and names the file; a worker cannot start in that state", () => {
+    const h = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-approvals-refused-')))
+    dirs.push(h)
+    mkdirSync(join(h, '.claude'), { recursive: true })
+    mkdirSync(join(h, '.codex'), { recursive: true })
+    // The real Codex on PATH: its app server is what refuses the file.
+    expect(spawnCli(['install', '--yes'], { home: h }).status).toBe(0)
+    const file = join(h, '.codex', 'config.toml')
+    writeFileSync(file, `${readFileSync(file, 'utf8')}\n[mcp_servers.treecontext.tools.treecontext_clear]\napproval_mode = "bogus"\n`)
+    const row = spawnCli(['doctor'], { home: h }).stdout.split('\n').find(l => /^\[\w+\]\s+Codex CLI:/.test(l)) ?? ''
+    expect(row).toMatch(/^\[warn\]/)
+    expect(row).toContain('Codex refuses its configuration, so a headless worker cannot start')
+    expect(row).toMatch(/unknown variant `bogus`/)
+    expect(row).toContain('mcp_servers.treecontext.tools.treecontext_clear.approval_mode')
+    expect(row).toContain(`remedy: fix that line in ${file}`)
+  })
+})
+
+describe.skipIf(process.platform === 'win32')("the floor held by behaviour, not by its constant (D381)", () => {
+  const install = (version: string): { h: string; tools: unknown; out: string } => {
+    const h = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-approvals-floor-')))
+    dirs.push(h)
+    mkdirSync(join(h, '.claude'), { recursive: true })
+    mkdirSync(join(h, '.codex'), { recursive: true })
+    const bin = join(h, 'fake-bin')
+    mkdirSync(bin, { recursive: true })
+    writeFakeCodex(bin, { version, sandbox: { exit: 0, stderr: '' } })
+    const run = spawnCli(['install', '--yes'], { home: h, env: { PATH: `${bin}${delimiter}${process.env['PATH'] ?? ''}` } })
+    expect(run.status, run.out).toBe(0)
+    const cfg = parseToml(readFileSync(join(h, '.codex', 'config.toml'), 'utf8')) as { mcp_servers: { treecontext: Record<string, unknown> } }
+    return { h, tools: cfg.mcp_servers.treecontext['tools'], out: run.stdout }
+  }
+  test('a Codex answering 0.166.0 gets the four approvals written', () => {
+    const { tools } = install('0.166.0')
+    expect(Object.keys(tools as Record<string, unknown>).sort()).toEqual([...APPROVED_TOOLS].sort())
+  })
+  test('a Codex answering 0.165.0 gets none', () => {
+    expect(install('0.165.0').tools).toBeUndefined()
+  })
+})

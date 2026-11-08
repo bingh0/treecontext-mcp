@@ -174,7 +174,7 @@ export interface CodexOrigin { name?: { type?: string; file?: string; dotCodexFo
 
 export type CodexConfigRead =
   | { ok: true; config: Record<string, unknown>; origins: Record<string, CodexOrigin> }
-  | { ok: false; why: string }
+  | { ok: false; why: string; refused?: string }
 
 /**
  * Codex's effective configuration as seen from `cwd`, with each key's
@@ -225,7 +225,12 @@ export function readCodexConfig(cwd: string, timeoutMs: number = CODEX_PROBE_TIM
         if (msg['id'] !== 1) continue
         const result = msg['result'] as { config?: Record<string, unknown>; origins?: Record<string, CodexOrigin> } | undefined
         if (result?.config) settle({ ok: true, config: result.config, origins: result.origins ?? {} })
-        else settle({ ok: false, why: `codex app-server answered config/read with ${JSON.stringify(msg['error'] ?? msg).slice(0, 300)}` })
+        else {
+          const said = (msg['error'] as { message?: unknown } | undefined)?.message
+          // Codex itself refusing its configuration: its own words, whole.
+          const refused = typeof said === 'string' && /invalid configuration|(?:cannot|could not|failed to) (?:be )?(?:load|read|parse)/i.test(said) ? said.trim() : undefined
+          settle({ ok: false, why: `codex app-server answered config/read with ${JSON.stringify(msg['error'] ?? msg).slice(0, 300)}`, ...(refused ? { refused } : {}) })
+        }
       }
     })
     child.on('error', (e) => settle({ ok: false, why: e.message }))

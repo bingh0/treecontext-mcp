@@ -1,6 +1,7 @@
-import { closeSync, existsSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync, mkdirSync } from 'node:fs'
+import { randomBytes } from 'node:crypto'
+import { closeSync, existsSync, openSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync, mkdirSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 
 // ── Install's own record (D361, D390) ──────────────────────────────────
 //
@@ -57,12 +58,26 @@ export function installStatePath(): string {
  */
 export function writeAtomic(file: string, content: string, mode: number): void {
   mkdirSync(dirname(file), { recursive: true })
+  sweepTemps(file)
   const tmp = `${file}.tmp.${process.pid}`
   writeFileSync(tmp, content, { mode })
   if (process.platform === 'win32') {
     try { unlinkSync(file) } catch { /* may not exist yet */ }
   }
   renameSync(tmp, file)
+}
+
+/** Leftover `<file>.tmp.<pid>` files of a process that died between its write and its rename. */
+function sweepTemps(file: string): void {
+  const prefix = `${basename(file)}.tmp.`
+  let names: string[] = []
+  try { names = readdirSync(dirname(file)) } catch { return }
+  for (const name of names) {
+    if (!name.startsWith(prefix)) continue
+    const pid = Number(name.slice(prefix.length))
+    if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid || processAlive(pid)) continue
+    try { unlinkSync(join(dirname(file), name)) } catch { /* gone */ }
+  }
 }
 
 function unknownFor(backup: string | null): InstallState {
@@ -112,25 +127,43 @@ function processAlive(pid: number): boolean {
   }
 }
 
+/** Unlink the lock only while it still holds `token`: a fresh lock another waiter took after the stale one was judged stays. */
+export function removeIfHolding(lock: string, token: string): boolean {
+  try {
+    if (readFileSync(lock, 'utf8') !== token) return false
+    unlinkSync(lock)
+    return true
+  } catch { return false /* another took it over */ }
+}
+
 /** Run `fn` holding the record's lock: an exclusive lock file beside it, taken over only when stale. */
 function withLock<T>(fn: () => T): T {
   const lock = `${installStatePath()}.lock`
   mkdirSync(dirname(lock), { recursive: true })
   const deadline = Date.now() + LOCK_WAIT_MS
+  // pid, then a random value: a lock is one holder's, whoever else reads it.
+  const token = `${process.pid} ${randomBytes(8).toString('hex')}`
   for (;;) {
     try {
       const fd = openSync(lock, 'wx', 0o600)
-      writeFileSync(fd, `${process.pid}\n`)
+      writeFileSync(fd, `${token}\n`)
       closeSync(fd)
       break
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e
-      let stale = false
+      let stale: string | null = null
       try {
-        const pid = Number.parseInt(readFileSync(lock, 'utf8'), 10)
-        stale = Date.now() - statSync(lock).mtimeMs > LOCK_STALE_MS || (Number.isInteger(pid) && pid > 0 && !processAlive(pid))
+        const held = readFileSync(lock, 'utf8')
+        const pid = Number.parseInt(held, 10)
+        if (Date.now() - statSync(lock).mtimeMs > LOCK_STALE_MS || (Number.isInteger(pid) && pid > 0 && !processAlive(pid))) stale = held
       } catch { /* gone between the two reads: try again */ }
-      if (stale) { try { unlinkSync(lock) } catch { /* another took it over */ } continue }
+      // Take over only the lock that was judged stale: re-read it just
+      // before unlinking, so a fresh lock another waiter took in between is
+      // never removed.
+      if (stale !== null) {
+        removeIfHolding(lock, stale)
+        continue
+      }
       if (Date.now() > deadline) throw new Error(`the install record ${installStatePath()} is locked by another treecontext (${lock}); try again when it has finished`)
       sleepMs(50)
     }

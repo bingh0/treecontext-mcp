@@ -6555,6 +6555,7 @@ export async function doctor(): Promise<DiagnosticResult[]> {
       let effective = entryObject
       let fileOf = (_key: string): string => configPath
       let note: string | undefined
+      let refused: string | undefined
       if (support.state === 'reads') {
         const read = await readCodexConfig(process.cwd())
         const seen = read.ok ? ((read.config['mcp_servers'] ?? {}) as Record<string, unknown>)['treecontext'] : undefined
@@ -6563,12 +6564,13 @@ export async function doctor(): Promise<DiagnosticResult[]> {
           fileOf = (key: string): string => codexOriginFile(read.origins, key, configPath)
         } else {
           note = `read from ${configPath}; Codex's own reading was not available: ${read.ok ? 'it shows no treecontext server' : read.why}`
+          if (!read.ok) refused = read.refused
         }
       }
       const view = codexView(effective, writtenApprovals('codex')[configPath]?.items ?? [], configPath, fileOf)
       approval = codexHeadlessClause({
         configPath, entry: effective, view, workerVars: WORKER_ENV_VARS, choice: approvalsChoice('codex'),
-        support, floor: CODEX_APPROVALS_FLOOR, ...(note ? { note } : {}),
+        support, floor: CODEX_APPROVALS_FLOOR, ...(note ? { note } : {}), ...(refused ? { refused } : {}),
       })
     }
     if (approval) parts.push(`${approval.text}; remedy: ${approval.remedy}`)
