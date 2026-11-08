@@ -37,10 +37,11 @@
  *  |                                        | read (journal-install, D290, D304, D338)                    |
  *  | `writeFakeCodex`                       | the `codex` on PATH whose `--version` install and doctor    |
  *  |                                        | read and whose `sandbox -- true` doctor runs on Linux       |
- *  |                                        | (journal-clients, D381, D387): it answers by its plan, a    |
- *  |                                        | version and the sandbox check's exit code and stderr; it    |
- *  |                                        | runs nothing in a sandbox, reads no configuration, calls no |
- *  |                                        | model and answers no other subcommand (exit 2, saying so)   |
+ *  |                                        | (journal-clients, journal-install, D381, D387): it answers  |
+ *  |                                        | by its plan, a version and the exit code and stderr of      |
+ *  |                                        | `sandbox -- true` exactly; it runs nothing in a sandbox,    |
+ *  |                                        | reads no configuration, calls no model and answers no other |
+ *  |                                        | subcommand or sandbox command (exit 2, saying so)           |
  *  | `startEntryAsClient`                   | a client (Claude Code, Codex CLI, Cursor) starting the MCP  |
  *  |                                        | server its treecontext entry names: the command and args    |
  *  |                                        | the client read, spawned as written, so the real launcher   |
@@ -491,7 +492,10 @@ export function writeFakeCodex(dir: string, plan: FakeCodexPlan): void {
     '#!/bin/sh',
     'case "$1" in',
     version === null ? '  --version) echo "codex: cannot report a version"; exit 1 ;;' : `  --version) echo ${q(version)}; exit 0 ;;`,
-    `  sandbox) printf '%s\\n' ${q(plan.sandbox.stderr)} >&2; exit ${plan.sandbox.exit} ;;`,
+    // Only the check doctor runs, `sandbox -- true`, exactly; any other
+    // command in the sandbox is not stood in for.
+    `  sandbox) [ "$#" -eq 3 ] && [ "$2" = "--" ] && [ "$3" = "true" ] || { echo "stand-in codex: sandbox $* is not stood in for" >&2; exit 2; }`,
+    `           printf '%s\\n' ${q(plan.sandbox.stderr)} >&2; exit ${plan.sandbox.exit} ;;`,
     '  *) echo "stand-in codex: $1 is not stood in for" >&2; exit 2 ;;',
     'esac',
     '',

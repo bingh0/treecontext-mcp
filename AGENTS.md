@@ -103,13 +103,18 @@ scenario, are in `docs/beta3-bindings-audit.md`.
   four tools install approves and the four that keep asking, Claude Code's
   `permissions.allow` merge and Codex's per-tool approvals, each beside the
   developer's own rules and never over them, the record of what install
-  wrote and of an off the developer chose, and doctor's clauses for them
+  wrote and of an off the developer chose, and every echo, message and
+  doctor clause read from what the client's files decide now, tool by tool
 - `src/server/codex-client.ts` — what install and doctor ask the Codex on
-  PATH (D381, D387): its version against the per-tool approvals floor, and
-  on Linux its own sandbox check (`codex sandbox -- true`) and doctor's row
+  PATH (D381, D387): its version against the per-tool approvals floor
+  (0.166.0), its own reading of its configuration for a directory (the app
+  server's `config/read`), and on Linux its sandbox check (`codex sandbox
+  -- true`) and doctor's row
 - `src/server/install-state.ts` — install's own record,
   `~/.treecontext/install-state.json` (D361, D390): what install wrote, so
-  uninstall and `config tool-approvals off` take back that and nothing else
+  uninstall and `config tool-approvals off` take back that and nothing else;
+  locked and written atomically, and a record that does not parse is moved
+  aside and leaves the approvals unknown, never empty
 - `src/handoff.ts` — the handoff door: the import rule (importer's marks,
   `_handoff_claims`, `handoff:` lanes), the export forms (`summaries`,
   `whole`, and a run's `skeleton`), the file's self-describing head, the

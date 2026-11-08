@@ -219,15 +219,12 @@ runFeatures(join(HERE, '../../features'), {
         // bind and run, is held open here by its title.
         'the server runs in capture mode for <agent> only where its capture hooks are installed',
         // Unit 2 bound D381 and D390 for Codex CLI and Claude Code
-        // (2026-11-08). Held open: the version floor scenario, conditional
-        // (D381: kept only if a Codex older than 0.167 is shown to refuse
-        // the keys) and not established, a dogfood item, since installing
-        // an older Codex would change the owner's global one; the install
+        // (2026-11-08), the version floor at 0.166.0, the oldest Codex shown
+        // to read per-tool approvals. Held open: the install
         // message and the `--no-tool-approvals` scenario, whose Given names
         // Antigravity CLI installed, which this build has no agent entry
         // for (unit 3, D383); and the off-and-on outline, whose Antigravity
         // CLI row waits on unit 3 and whose other rows bind and run.
-        'a Codex that cannot read per-tool approvals gets none, and is told why',
         'install says what it approved, what still asks, and the way back',
         'turning tool approvals off and on again in <client> touches only what install wrote',
         'an install told not to approve writes no approval, and a later install keeps it that way',

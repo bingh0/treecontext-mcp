@@ -785,12 +785,12 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
         break
       case 'warn that a `codex exec` worker would be refused treecontext_insert':
         expect(r.status, r.row).toBe('warn')
-        expect(r.clause).toMatch(new RegExp(`^a \`codex exec\` worker would be refused treecontext_insert — your mcp_servers\\.treecontext\\.tools\\.treecontext_insert\\.approval_mode = "prompt" in ${path}$`))
+        expect(r.clause).toMatch(new RegExp(`^a \`codex exec\` worker would be refused treecontext_insert — insert refused by your mcp_servers\\.treecontext\\.tools\\.treecontext_insert\\.approval_mode = "prompt" in ${path}$`))
         // Refused that one alone: the anchored clause names no other tool.
         break
       default:
         expect(r.status, r.row).toBe('ok')
-        expect(r.clause).toMatch(new RegExp(`^can use the tools — .* approved in ${path}; your default_tools_approval_mode = "approve" in ${path} approves every tool, so a headless worker can also clear, delete, import and merge$`))
+        expect(r.clause).toMatch(new RegExp(`^can use the tools — .* approved in ${path}; clear, delete, import and merge approved by your mcp_servers\\.treecontext\\.default_tools_approval_mode = "approve" in ${path}, so a headless worker can also clear, delete, import and merge`))
     }
   })
   reg.define(/^the row names (`treecontext install --agent codex`|the line in Codex's configuration that sets it) as the remedy$/, (w: ClientsWorld, ...captures) => {
@@ -845,8 +845,8 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
   // [stand-in] for the system's answer: a `codex` on PATH whose sandbox
   // check answers by plan (writeFakeCodex, tests/journal/standins.ts). The
   // real check, which passes on the dogfood machine since its AppArmor
-  // profile was loaded, is held to the same row by
-  // tests/server/doctor-codex-sandbox.test.ts.
+  // profile was loaded, is held to the same row by the real-Codex test in
+  // tests/server/tool-approvals.test.ts.
   const SANDBOX_PLANS: Record<string, { exit: number; stderr: string }> = {
     passes: { exit: 0, stderr: '' },
     'fails because the system refuses bubblewrap a user namespace': { exit: 1, stderr: 'bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted' },
@@ -899,8 +899,11 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
   reg.define(/^a machine that is not Linux, or a Linux machine with no Codex CLI$/, async (w: ClientsWorld) => {
     await openInstallWorld(w, ['.claude'])
     if (process.platform === 'linux') {
-      // No Codex CLI: no ~/.codex, and no codex on the CLI's PATH.
+      // No Codex CLI: no codex on the CLI's PATH, though a ~/.codex an
+      // uninstalled Codex left behind is still there, so doctor detects the
+      // directory and must still find no Codex to check.
       w.iPathWithoutCodex = pathWithoutCodex(w)
+      mkdirSync(join(w.ihome!, '.codex'), { recursive: true })
     } else {
       // Not Linux: Codex installed, with a sandbox check that would fail
       // if doctor ran it.

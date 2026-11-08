@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
-import { installStatePath, readInstallState, writeAtomic, writeInstallState, type InstallState } from './install-state.js'
+import { installStatePath, readInstallState, updateInstallState, writeAtomic, type InstallState } from './install-state.js'
 
 export { installStatePath }
 
@@ -326,9 +326,9 @@ export function idleCompactionRow(version: string | null, setting: IdleCompactio
 
 /** Install wrote the key off into this file. */
 export function recordIdleCompactionWrite(settingsFile: string): void {
-  const state = readInstallState()
-  state.idleCompaction = { ...state.idleCompaction, [settingsFile]: { value: false, at: new Date().toISOString() } }
-  writeInstallState(state)
+  updateInstallState((state) => {
+    state.idleCompaction = { ...state.idleCompaction, [settingsFile]: { value: false, at: new Date().toISOString() } }
+  })
 }
 
 export interface IdleCompactionRemoval {
@@ -362,10 +362,12 @@ export function removeIdleCompactionWritten(dryRun: boolean): IdleCompactionRemo
     }
   }
   if (!dryRun && Object.keys(recorded).length > 0) {
-    const next: InstallState = { ...state }
-    if (Object.keys(remaining).length > 0) next.idleCompaction = remaining
-    else delete next.idleCompaction
-    writeInstallState(next)
+    updateInstallState((current) => {
+      const next: InstallState = { ...current }
+      if (Object.keys(remaining).length > 0) next.idleCompaction = remaining
+      else delete next.idleCompaction
+      return next
+    })
   }
   return out
 }

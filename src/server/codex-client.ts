@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process'
+import { join } from 'node:path'
 import type { CodexApprovalSupport } from './tool-approvals.js'
 
 // ── What doctor and install ask the Codex CLI on PATH (D381, D387) ─────
@@ -10,11 +11,13 @@ import type { CodexApprovalSupport } from './tool-approvals.js'
 // a user namespace can read no file.
 
 /**
- * The first Codex release verified to read per-tool approvals
- * (`mcp_servers.<name>.tools.<tool>.approval_mode`): 0.167.0, the dogfood's
- * Codex of 2026-11-07, until an older one is shown to read them (D381).
+ * The oldest Codex release verified to read per-tool approvals
+ * (`mcp_servers.<name>.tools.<tool>.approval_mode`): 0.166.0, whose binary
+ * on the dogfood machine accepts "approve" and refuses a bogus value with
+ * "unknown variant" (2026-11-08); the floor rule is D381's, and it moves
+ * down when an older Codex is shown to read them.
  */
-export const CODEX_APPROVALS_FLOOR = '0.167.0'
+export const CODEX_APPROVALS_FLOOR = '0.166.0'
 
 /** How long a Codex probe may take before it is cut, group and all. */
 export const CODEX_PROBE_TIMEOUT_MS = 20_000
@@ -162,4 +165,86 @@ export const CODEX_SANDBOX_TIMEOUT_MS = CODEX_PROBE_TIMEOUT_MS
 /** Run Codex's own sandbox check. */
 export function runCodexSandboxCheck(timeoutMs: number = CODEX_SANDBOX_TIMEOUT_MS): Promise<BoundedRun> {
   return runCodex(['sandbox', '--', 'true'], timeoutMs)
+}
+
+// ── Codex's own reading of its configuration, for a directory (D387) ───
+
+/** Where a key of Codex's effective configuration came from, as its app server says. */
+export interface CodexOrigin { name?: { type?: string; file?: string; dotCodexFolder?: string } }
+
+export type CodexConfigRead =
+  | { ok: true; config: Record<string, unknown>; origins: Record<string, CodexOrigin> }
+  | { ok: false; why: string }
+
+/**
+ * Codex's effective configuration as seen from `cwd`, with each key's
+ * origin: its app server's `config/read` request over stdio, the one every
+ * Codex front end makes for its settings (no model call, no sign-in). A
+ * trusted project's `.codex/config.toml` can override the user's file, and
+ * only this reading shows it. Bounded, and nothing it starts outlives it.
+ */
+export function readCodexConfig(cwd: string, timeoutMs: number = CODEX_PROBE_TIMEOUT_MS): Promise<CodexConfigRead> {
+  return new Promise((resolve) => {
+    let child: ReturnType<typeof spawn>
+    const win = process.platform === 'win32'
+    try {
+      // On Windows `codex` is a .cmd shim; the arguments are literals.
+      child = spawn(win ? (process.env['ComSpec'] ?? 'cmd.exe') : 'codex', win ? ['/d', '/s', '/c', 'codex app-server'] : ['app-server'], {
+        cwd, stdio: ['pipe', 'pipe', 'pipe'], detached: GROUPS,
+      })
+    } catch (e) {
+      resolve({ ok: false, why: e instanceof Error ? e.message : String(e) })
+      return
+    }
+    let out = ''
+    let err = ''
+    let settled = false
+    const settle = (r: CodexConfigRead): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      try { child.stdin?.end() } catch { /* closed */ }
+      try {
+        if (GROUPS && child.pid !== undefined) process.kill(-child.pid, 'SIGKILL')
+        else child.kill('SIGKILL')
+      } catch { /* gone */ }
+      resolve(r)
+    }
+    const timer = setTimeout(() => settle({ ok: false, why: `codex app-server did not answer within ${Math.round(timeoutMs / 1000)} s` }), timeoutMs)
+    child.stderr?.on('data', (d: Buffer) => { err += d.toString() })
+    // A codex that exits before reading its stdin (an old one, or no app
+    // server) must not take doctor down with an EPIPE: its exit says why.
+    child.stdin?.on('error', () => { /* the close handler reports it */ })
+    child.stdout?.on('data', (d: Buffer) => {
+      out += d.toString()
+      const lines = out.split('\n')
+      out = lines.pop() ?? ''
+      for (const line of lines) {
+        let msg: Record<string, unknown>
+        try { msg = JSON.parse(line) as Record<string, unknown> } catch { continue }
+        if (msg['id'] !== 1) continue
+        const result = msg['result'] as { config?: Record<string, unknown>; origins?: Record<string, CodexOrigin> } | undefined
+        if (result?.config) settle({ ok: true, config: result.config, origins: result.origins ?? {} })
+        else settle({ ok: false, why: `codex app-server answered config/read with ${JSON.stringify(msg['error'] ?? msg).slice(0, 300)}` })
+      }
+    })
+    child.on('error', (e) => settle({ ok: false, why: e.message }))
+    child.on('close', (code) => {
+      const said = err.split('\n').map(l => l.trim()).filter(l => l !== '').slice(-2).join(' / ')
+      settle({ ok: false, why: `codex app-server exited ${code ?? 'on a signal'} before answering${said ? `: ${said}` : ''}` })
+    })
+    const send = (m: unknown): void => { child.stdin?.write(`${JSON.stringify(m)}\n`) }
+    send({ method: 'initialize', id: 0, params: { clientInfo: { name: 'treecontext-doctor', version: '1' } } })
+    send({ method: 'initialized' })
+    send({ method: 'config/read', id: 1, params: { cwd, includeLayers: false } })
+  })
+}
+
+/** The file a key of Codex's effective configuration came from, in words. */
+export function codexOriginFile(origins: Record<string, CodexOrigin>, key: string, fallback: string): string {
+  const name = origins[key]?.name
+  if (!name) return fallback
+  if (name.file) return name.file
+  if (name.dotCodexFolder) return join(name.dotCodexFolder, 'config.toml')
+  return name.type ? `Codex's ${name.type} configuration` : fallback
 }

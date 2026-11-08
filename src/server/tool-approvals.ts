@@ -1,4 +1,4 @@
-import { readInstallState, writeInstallState, type WrittenApprovals } from './install-state.js'
+import { readInstallState, updateInstallState, type InstallState, type ToolApprovalsState, type WrittenApprovals } from './install-state.js'
 
 // ── One approval rule for the clients that run headless workers (D381, D390) ──
 //
@@ -57,32 +57,46 @@ const isObject = (v: unknown): v is Record<string, unknown> => v !== null && typ
 
 // ── The record ─────────────────────────────────────────────────────────
 
-/** The developer turned this client's approvals off (by the config command or `install --no-tool-approvals`). */
-export function approvalsOffChoice(slug: ApprovalClient): { at: string; how: 'config' | 'install' } | null {
-  return readInstallState().toolApprovals?.off?.[slug] ?? null
+/** The developer's choice for a client: on (the default), off (chosen), or unknown (the record did not parse). */
+export type ApprovalsChoice =
+  | { state: 'on' }
+  | { state: 'off'; at: string; how: 'config' | 'install' }
+  | { state: 'unknown'; backup: string | null }
+
+export function approvalsChoice(slug: ApprovalClient): ApprovalsChoice {
+  const t = readInstallState().toolApprovals
+  const unknown = t?.unknown?.[slug]
+  if (unknown) return { state: 'unknown', backup: unknown.backup }
+  const off = t?.off?.[slug]
+  return off ? { state: 'off', ...off } : { state: 'on' }
 }
 
-export function recordApprovalsOff(slugs: readonly ApprovalClient[], how: 'config' | 'install'): void {
-  const state = readInstallState()
-  const at = new Date().toISOString()
-  const off = { ...state.toolApprovals?.off }
-  for (const s of slugs) off[s] = { at, how }
-  state.toolApprovals = { ...state.toolApprovals, off }
-  writeInstallState(state)
+/** Drop empty containers of the approvals record. */
+function tidy(state: InstallState): InstallState {
+  const t = state.toolApprovals
+  if (!t) return state
+  for (const k of ['off', 'unknown', 'written'] as const) if (t[k] && Object.keys(t[k]!).length === 0) delete t[k]
+  if (Object.keys(t).length === 0) delete state.toolApprovals
+  return state
 }
 
-export function clearApprovalsOff(slugs: readonly ApprovalClient[]): void {
-  const state = readInstallState()
-  const off = { ...state.toolApprovals?.off }
-  let changed = false
-  for (const s of slugs) if (s in off) { delete off[s]; changed = true }
-  if (!changed) return
-  const next = { ...state.toolApprovals }
-  if (Object.keys(off).length > 0) next.off = off
-  else delete next.off
-  state.toolApprovals = next
-  if (Object.keys(next).length === 0) delete state.toolApprovals
-  writeInstallState(state)
+/** Record the developer's choice for these clients: off, or on again; either settles an unknown. */
+export function recordApprovalsChoice(slugs: readonly ApprovalClient[], choice: 'on' | 'off', how: 'config' | 'install'): void {
+  updateInstallState((state) => {
+    const t: ToolApprovalsState = { ...state.toolApprovals }
+    const off = { ...t.off }
+    const unknown = { ...t.unknown }
+    const at = new Date().toISOString()
+    for (const s of slugs) {
+      delete unknown[s]
+      if (choice === 'off') off[s] = { at, how }
+      else delete off[s]
+    }
+    t.off = off
+    t.unknown = unknown
+    state.toolApprovals = t
+    return tidy(state)
+  })
 }
 
 /** What install recorded writing for a client, per file. */
@@ -92,27 +106,26 @@ export function writtenApprovals(slug: ApprovalClient): Record<string, WrittenAp
 
 /** Replace the record for one client file: what install wrote there now (none forgets the file). */
 export function recordWrittenApprovals(slug: ApprovalClient, file: string, items: readonly string[], created: readonly string[] = []): void {
-  const state = readInstallState()
-  const was = state.toolApprovals?.written?.[slug]?.[file]
+  const was = readInstallState().toolApprovals?.written?.[slug]?.[file]
   // Nothing to say that the record does not already say: no write, and no
   // record file created for a client install wrote nothing into.
   if (items.length === 0 && was === undefined) return
   if (was && JSON.stringify(was.items) === JSON.stringify(items) && JSON.stringify(was.created ?? []) === JSON.stringify(created)) return
-  const written = { ...state.toolApprovals?.written }
-  const files = { ...written[slug] }
-  if (items.length > 0) {
-    files[file] = { items: [...items], ...(created.length > 0 ? { created: [...created] } : {}), at: files[file]?.at ?? new Date().toISOString() }
-  } else {
-    delete files[file]
-  }
-  if (Object.keys(files).length > 0) written[slug] = files
-  else delete written[slug]
-  const next = { ...state.toolApprovals }
-  if (Object.keys(written).length > 0) next.written = written
-  else delete next.written
-  state.toolApprovals = next
-  if (Object.keys(next).length === 0) delete state.toolApprovals
-  writeInstallState(state)
+  updateInstallState((state) => {
+    const t: ToolApprovalsState = { ...state.toolApprovals }
+    const written = { ...t.written }
+    const files = { ...written[slug] }
+    if (items.length > 0) {
+      files[file] = { items: [...items], ...(created.length > 0 ? { created: [...created] } : {}), at: files[file]?.at ?? new Date().toISOString() }
+    } else {
+      delete files[file]
+    }
+    if (Object.keys(files).length > 0) written[slug] = files
+    else delete written[slug]
+    t.written = written
+    state.toolApprovals = t
+    return tidy(state)
+  })
 }
 
 // ── Claude Code: `permissions.allow` in settings.json ──────────────────
@@ -243,13 +256,21 @@ export function codexApprovalOf(entry: Record<string, unknown>, tool: string): u
   const tools = entry['tools']
   if (!isObject(tools)) return undefined
   const t = tools[tool]
-  return isObject(t) ? t['approval_mode'] : undefined
+  // Codex's own reading prints an unset key as null.
+  return isObject(t) ? t['approval_mode'] ?? undefined : undefined
+}
+
+/** The developer's default for the server's tools, or undefined when none is set. */
+export function codexDefaultOf(entry: Record<string, unknown>): unknown {
+  return entry[CODEX_DEFAULT_KEY] ?? undefined
 }
 
 export interface CodexApprovalMerge {
   /** The entry to write, or null when nothing changes. */
   entry: Record<string, unknown> | null
   added: string[]
+  /** Install's own approvals taken back, since a default of the developer's now decides every tool. */
+  removed: string[]
   /** Every tool install has approved in the entry afterwards (the record). */
   ours: string[]
   /** The four tools each held by an approval of the developer's, left alone. */
@@ -275,12 +296,15 @@ export function withCodexApprovals(entry: Record<string, unknown>, recorded: rea
     if (v === CODEX_APPROVE && recorded.includes(tool)) ours.push(tool)
     else developer.push({ tool, value: v })
   }
-  if (Object.hasOwn(entry, CODEX_DEFAULT_KEY)) {
-    return { entry: null, added: [], ours, developer, defaultMode: entry[CODEX_DEFAULT_KEY] }
+  if (codexDefaultOf(entry) !== undefined) {
+    // The developer's default for the server wins (D390): install's own
+    // per-tool approvals would override it, so they are taken back.
+    const taken = withoutCodexApprovals(entry, recorded)
+    return { entry: taken.entry, added: [], removed: taken.removed, ours: [], developer, defaultMode: codexDefaultOf(entry) }
   }
   const tools = entry['tools']
   if (tools !== undefined && !isObject(tools)) {
-    return { entry: null, added: [], ours, developer, unwritable: '"tools" is not a table' }
+    return { entry: null, added: [], removed: [], ours, developer, unwritable: '"tools" is not a table' }
   }
   const nextTools: Record<string, unknown> = { ...tools }
   const added: string[] = []
@@ -292,8 +316,8 @@ export function withCodexApprovals(entry: Record<string, unknown>, recorded: rea
     nextTools[tool] = { ...t, approval_mode: CODEX_APPROVE }
     added.push(tool)
   }
-  if (added.length === 0) return { entry: null, added, ours, developer, ...(unwritable ? { unwritable } : {}) }
-  return { entry: { ...entry, tools: nextTools }, added, ours: [...ours, ...added], developer, ...(unwritable ? { unwritable } : {}) }
+  if (added.length === 0) return { entry: null, added, removed: [], ours, developer, ...(unwritable ? { unwritable } : {}) }
+  return { entry: { ...entry, tools: nextTools }, added, removed: [], ours: [...ours, ...added], developer, ...(unwritable ? { unwritable } : {}) }
 }
 
 /**
@@ -321,6 +345,140 @@ export function withoutCodexApprovals(entry: Record<string, unknown>, recorded: 
   return { entry: next, removed }
 }
 
+// ── What a client's files decide, tool by tool ─────────────────────────
+//
+// Every echo, install message and doctor row is read from what the client's
+// files say now (D390: the command "echoes the behaviour it leaves in
+// force"), never from what the step meant to do: for each tool, approved by
+// install's own approval, decided by a rule or approval of the developer's
+// (named, with its file), or by nothing, so it asks and a headless worker is
+// refused it. A rule install has no record of writing is the developer's.
+
+export const ALL_TOOLS: readonly string[] = [...APPROVED_TOOLS, ...ASKING_TOOLS]
+
+export type ToolDecision =
+  | { by: 'install'; file: string }
+  | { by: 'developer'; approves: boolean; what: string; file: string; kind?: string; rule?: string }
+  | { by: 'none' }
+
+/** Each of the eight tools, and what decides it. */
+export type ClientView = Record<string, ToolDecision>
+
+/** One settings file Claude Code reads, as read: its data (null when it cannot be read) and what install recorded writing there. */
+export interface ClaudeSettingsSource { file: string; data: Record<string, unknown> | null; recorded?: WrittenApprovals }
+
+/** Claude Code's view across its settings files: deny anywhere over ask anywhere over allow (theirs, then install's). */
+export function claudeView(sources: readonly ClaudeSettingsSource[]): ClientView {
+  const view: ClientView = {}
+  for (const tool of ALL_TOOLS) {
+    const found: Record<'deny' | 'ask' | 'allow' | 'ours', { rule: string; file: string } | undefined> = { deny: undefined, ask: undefined, allow: undefined, ours: undefined }
+    for (const src of sources) {
+      const perms = src.data?.['permissions']
+      if (!isObject(perms)) continue
+      const ours = new Set(src.recorded?.items ?? [])
+      for (const list of ['deny', 'ask', 'allow'] as const) {
+        const rules = perms[list]
+        if (!Array.isArray(rules)) continue
+        for (const r of rules) {
+          if (typeof r !== 'string' || !claudeRuleCovers(r, tool)) continue
+          const slot = list === 'allow' && ours.has(r) ? 'ours' : list
+          found[slot] ??= { rule: r, file: src.file }
+        }
+      }
+    }
+    const d = found.deny ?? found.ask
+    if (d) {
+      const kind = `${found.deny ? 'deny' : 'ask'} rule`
+      view[tool] = { by: 'developer', approves: false, what: `${kind} ${d.rule}`, file: d.file, kind, rule: d.rule }
+    } else if (found.allow) {
+      view[tool] = { by: 'developer', approves: true, what: `allow rule ${found.allow.rule}`, file: found.allow.file, kind: 'allow rule', rule: found.allow.rule }
+    }
+    else if (found.ours) view[tool] = { by: 'install', file: found.ours.file }
+    else view[tool] = { by: 'none' }
+  }
+  return view
+}
+
+/** Codex's view of its treecontext entry: `fileOf` names the file each key came from. */
+export function codexView(entry: Record<string, unknown>, recorded: readonly string[], userFile: string, fileOf: (key: string) => string = () => userFile): ClientView {
+  const view: ClientView = {}
+  const def = codexDefaultOf(entry)
+  const defKey = `mcp_servers.treecontext.${CODEX_DEFAULT_KEY}`
+  for (const tool of ALL_TOOLS) {
+    const v = codexApprovalOf(entry, tool)
+    if (v !== undefined) {
+      const key = codexApprovalKey(tool)
+      const file = fileOf(key)
+      view[tool] = v === CODEX_APPROVE && recorded.includes(tool) && file === userFile
+        ? { by: 'install', file }
+        : { by: 'developer', approves: v === CODEX_APPROVE, what: `${key} = ${JSON.stringify(v)}`, file, kind: 'approval', rule: `${key} = ${JSON.stringify(v)}` }
+    } else if (def !== undefined) {
+      view[tool] = { by: 'developer', approves: def === CODEX_APPROVE, what: `${defKey} = ${JSON.stringify(def)}`, file: fileOf(defKey) }
+    } else {
+      view[tool] = { by: 'none' }
+    }
+  }
+  return view
+}
+
+/** A view in words. */
+export interface ViewWords {
+  /** Of the four, those install's own approvals approve. */
+  byInstall: string[]
+  /** Of the four, those nothing approves (install would write them). */
+  unapproved: string[]
+  /** Of the four, those a rule of the developer's refuses. */
+  developerRefuses: string[]
+  /** Of the four, those a headless worker is refused: unapproved or refused by the developer. */
+  refused: string[]
+  /** Of the four that keep asking, those nothing approves or refuses. */
+  asking: string[]
+  /** Every tool a rule of the developer's decides, grouped by rule: "status and query approved by your allow rule R in F". */
+  developer: string[]
+  /** The developer's rules that refuse one of the four, as a remedy names them. */
+  refusingRules: string[]
+}
+
+export function viewWords(view: ClientView): ViewWords {
+  const of = (tools: readonly string[], p: (d: ToolDecision) => boolean): string[] => tools.filter(t => p(view[t]!))
+  const groups = new Map<string, { tools: string[]; approves: boolean; kind: string; rules: string[]; file: string }>()
+  for (const tool of ALL_TOOLS) {
+    const d = view[tool]!
+    if (d.by !== 'developer') continue
+    // Rules of one kind in one file read as one group: "your allow rules A and B in F".
+    const kind = d.kind ?? d.what
+    const k = `${kind}\0${d.file}\0${d.approves}`
+    const g = groups.get(k) ?? { tools: [], approves: d.approves, kind, rules: [], file: d.file }
+    g.tools.push(tool)
+    if (d.rule !== undefined && !g.rules.includes(d.rule)) g.rules.push(d.rule)
+    groups.set(k, g)
+  }
+  // Codex's approvals read as the configuration lines themselves.
+  const ruleWords = (g: { kind: string; rules: string[] }): string =>
+    g.rules.length === 0 ? g.kind : g.kind === 'approval' ? andList(g.rules) : g.rules.length === 1 ? `${g.kind} ${g.rules[0]}` : `${g.kind}s ${andList(g.rules)}`
+  const developerRefuses = of(APPROVED_TOOLS, d => d.by === 'developer' && !d.approves)
+  const unapproved = of(APPROVED_TOOLS, d => d.by === 'none')
+  return {
+    byInstall: of(APPROVED_TOOLS, d => d.by === 'install'),
+    unapproved,
+    developerRefuses,
+    refused: APPROVED_TOOLS.filter(t => unapproved.includes(t) || developerRefuses.includes(t)),
+    asking: of(ASKING_TOOLS, d => d.by === 'none'),
+    developer: [...groups.values()].map(g => `${toolWords(g.tools)} ${g.approves ? 'approved' : 'refused'} by your ${ruleWords(g)} in ${g.file}`),
+    refusingRules: [...groups.values()].filter(g => !g.approves && g.tools.some(t => (APPROVED_TOOLS as readonly string[]).includes(t))).map(g => `your ${ruleWords(g)} in ${g.file}`),
+  }
+}
+
+/** One client's state in words, for install's message and the config command's echo. */
+export function clientStateWords(view: ClientView, installWhere: string): string {
+  const w = viewWords(view)
+  const parts = [w.byInstall.length > 0 ? `${toolWords(w.byInstall)} approved by install (${installWhere})` : 'none approved by install']
+  parts.push(...w.developer)
+  if (w.unapproved.length > 0) parts.push(`${toolWords(w.unapproved)} not approved`)
+  if (w.asking.length > 0) parts.push(`still asking: ${toolWords(w.asking)}`)
+  return parts.join('; ')
+}
+
 // ── Doctor's clauses ───────────────────────────────────────────────────
 
 /** A row's approval clause: its words, whether it warns, and its one remedy. */
@@ -335,55 +493,38 @@ export interface ApprovalClause {
 
 const NOTHING = 'nothing to do'
 
-/** The off state's words, a choice and not a failure (D390). */
-function offWords(refusedBy: string): string {
-  return `off by your choice (${TOOL_APPROVALS_OFF_COMMAND} or ${NO_TOOL_APPROVALS_FLAG}), so headless workers will be refused ${toolWords(APPROVED_TOOLS)}, as ${refusedBy}`
+/** The off state, a choice and not a failure (D390), in what the files leave in force. */
+function offWords(w: ViewWords, refusedBy: string): string {
+  const parts = [`off by your choice (${TOOL_APPROVALS_OFF_COMMAND} or ${NO_TOOL_APPROVALS_FLAG})`]
+  if (w.refused.length > 0) parts.push(`so headless workers will be refused ${toolWords(w.refused)}, as ${refusedBy}`)
+  const head = parts.join(', ')
+  return [head, ...w.developer, ...(w.byInstall.length > 0 ? [`install's own approval of ${toolWords(w.byInstall)} is still there`] : [])].join('; ')
 }
 
-/** Claude Code's approval clause, from its settings object as the developer's file holds it. */
-export function claudeApprovalClause(
-  settingsPath: string, read: { state: 'absent' } | { state: 'ok'; data: Record<string, unknown> } | { state: 'unreadable' },
-  off: boolean, recorded: WrittenApprovals | undefined,
-): ApprovalClause {
+function unknownWords(backup: string | null): string {
+  return `not known — install's record ${backup ? `could not be read and was moved to ${backup}` : 'could not be read'}, so install writes none until you choose: ${TOOL_APPROVALS_ON_COMMAND}, or off`
+}
+
+/** Claude Code's approval clause, from its effective settings files. */
+export function claudeApprovalClause(view: ClientView, unreadable: readonly string[], userFile: string, choice: ApprovalsChoice): ApprovalClause {
   const label = 'tool approvals'
-  if (off) return { text: `${label}: ${offWords('Claude Code asks before each and a `claude -p` worker cannot be asked')}`, warn: false, remedy: TOOL_APPROVALS_ON_COMMAND }
+  const w = viewWords(view)
   const install = 'treecontext install --agent claude'
-  if (read.state === 'unreadable') {
-    return { text: `${label}: ${settingsPath} could not be read as a settings object, so whether a \`claude -p\` worker can use the tools is not known`, warn: true, remedy: install, fix: install }
+  if (choice.state === 'unknown') return { text: `${label}: ${unknownWords(choice.backup)}`, warn: true, remedy: TOOL_APPROVALS_ON_COMMAND, fix: TOOL_APPROVALS_ON_COMMAND }
+  if (choice.state === 'off') {
+    return { text: `${label}: ${offWords(w, 'Claude Code asks before each and a `claude -p` worker cannot be asked')}`, warn: false, remedy: TOOL_APPROVALS_ON_COMMAND }
   }
-  const data = read.state === 'ok' ? read.data : {}
-  const ours = new Set((recorded?.items ?? []).filter(r => {
-    const allow = isObject(data['permissions']) ? (data['permissions'] as Record<string, unknown>)['allow'] : undefined
-    return Array.isArray(allow) && allow.includes(r)
-  }))
-  const allowList = isObject(data['permissions']) && Array.isArray((data['permissions'] as Record<string, unknown>)['allow'])
-    ? (data['permissions'] as Record<string, unknown>)['allow'] as unknown[] : []
-  const missing: string[] = []
-  const heldByDeveloper: Array<{ tool: string; rule: DeveloperRule }> = []
-  for (const tool of APPROVED_TOOLS) {
-    const theirs = claudeGoverningRule(data, tool, ours)
-    if (theirs && theirs.list !== 'allow') { heldByDeveloper.push({ tool, rule: theirs }); continue }
-    if (theirs) continue
-    if (!allowList.includes(claudeRule(tool))) missing.push(tool)
+  const unread = unreadable.length > 0 ? `; ${andList(unreadable)} could not be read as settings` : ''
+  if (w.refused.length === 0) {
+    const where = w.byInstall.length > 0 ? [`${toolWords(w.byInstall)} allowed in ${userFile}`] : []
+    const theirs = w.developer.length > 0 ? `${where.length > 0 ? '; ' : ''}${w.developer.join('; ')}` : ''
+    return { text: `${label}: ${where.join('')}${theirs}, so a \`claude -p\` worker can use ${toolWords(APPROVED_TOOLS)}${unread}`, warn: unreadable.length > 0, remedy: NOTHING }
   }
-  // A developer's allow that reaches the asking tools is said in words.
-  const wider = ASKING_TOOLS.filter(t => claudeGoverningRule(data, t, ours)?.list === 'allow')
-  const also = wider.length > 0 ? `; your own allow rules also let a headless worker ${toolWords(wider)}` : ''
-  if (heldByDeveloper.length === 0 && missing.length === 0) {
-    return { text: `${label}: ${toolWords(APPROVED_TOOLS)} allowed in ${settingsPath}, so a \`claude -p\` worker can use them${also}`, warn: false, remedy: NOTHING }
-  }
-  const refused = [...heldByDeveloper.map(h => h.tool), ...missing]
-  const ordered = APPROVED_TOOLS.filter(t => refused.includes(t))
   const why: string[] = []
-  if (missing.length > 0) why.push(`${andList(missing)} ${missing.length === 1 ? 'is' : 'are'} not allowed in ${settingsPath}`)
-  for (const h of heldByDeveloper) why.push(`your ${h.rule.list} rule ${h.rule.rule} in ${settingsPath} governs ${h.tool}`)
-  const remedy = missing.length > 0
-    ? install
-    : `${heldByDeveloper.map(h => `your ${h.rule.list} rule ${h.rule.rule}`).join(' and ')} in ${settingsPath}, yours to change (install leaves it)`
-  return {
-    text: `${label}: a \`claude -p\` worker would be refused ${andList(ordered)} — ${why.join('; ')}${also}`,
-    warn: true, remedy, fix: remedy,
-  }
+  if (w.unapproved.length > 0) why.push(`${andList(w.unapproved)} ${w.unapproved.length === 1 ? 'is' : 'are'} not allowed in ${userFile}`)
+  why.push(...w.developer)
+  const remedy = w.unapproved.length > 0 ? install : `${w.refusingRules.join(' and ')}, yours to change (install leaves it)`
+  return { text: `${label}: a \`claude -p\` worker would be refused ${andList(w.refused)} — ${why.join('; ')}${unread}`, warn: true, remedy, fix: remedy }
 }
 
 /** Whether a Codex reads per-tool approvals, from its version. */
@@ -392,16 +533,18 @@ export type CodexApprovalSupport =
   | { state: 'below-floor'; version: string }
   | { state: 'unreadable' }
 
-/** Codex's headless clause: the worker variables and the four approvals, from its treecontext entry. */
-export function codexHeadlessClause(
-  configPath: string, entry: Record<string, unknown>, workerVars: readonly string[],
-  off: boolean, support: CodexApprovalSupport, floor: string,
-): ApprovalClause {
+/** Codex's headless clause: the worker variables and the four approvals, from its effective treecontext entry. */
+export function codexHeadlessClause(args: {
+  configPath: string; entry: Record<string, unknown>; view: ClientView; workerVars: readonly string[]
+  choice: ApprovalsChoice; support: CodexApprovalSupport; floor: string; note?: string
+}): ApprovalClause {
+  const { configPath, entry, view, workerVars, choice, support, floor } = args
   const label = 'headless workers'
   const install = 'treecontext install --agent codex'
+  const note = args.note ? ` (${args.note})` : ''
   const problems: string[] = []
   let installFixes = false
-  const lines: string[] = []
+  const w = viewWords(view)
 
   const raw = entry['env_vars']
   const names = Array.isArray(raw) ? raw.map(String) : typeof raw === 'string' ? [raw] : []
@@ -411,55 +554,52 @@ export function codexHeadlessClause(
     installFixes = true
   }
 
-  if (off) {
-    const words = `tool approvals are ${offWords('a `codex exec` worker runs with approval policy never and cannot be asked')}`
-    if (problems.length === 0) return { text: `${label}: ${words}`, warn: false, remedy: TOOL_APPROVALS_ON_COMMAND }
-    return { text: `${label}: ${problems.join('; ')}; ${words}`, warn: true, remedy: install, fix: install }
+  if (choice.state === 'unknown') {
+    problems.push(`tool approvals are ${unknownWords(choice.backup)}`)
+    return { text: `${label}: ${problems.join('; ')}${note}`, warn: true, remedy: TOOL_APPROVALS_ON_COMMAND, fix: TOOL_APPROVALS_ON_COMMAND }
+  }
+  if (choice.state === 'off') {
+    const words = `tool approvals are ${offWords(w, 'a `codex exec` worker runs with approval policy never and cannot be asked')}`
+    if (problems.length === 0) return { text: `${label}: ${words}${note}`, warn: false, remedy: TOOL_APPROVALS_ON_COMMAND }
+    return { text: `${label}: ${problems.join('; ')}; ${words}${note}`, warn: true, remedy: install, fix: install }
   }
 
   if (support.state !== 'reads') {
-    const which = support.state === 'below-floor' ? `Codex ${support.version} cannot read per-tool approvals` : 'the Codex version could not be read (codex --version)'
+    const which = support.state === 'below-floor' ? `Codex ${support.version} cannot read per-tool approvals` : 'the codex command could not be run (codex --version), so whether it reads per-tool approvals is not known'
     problems.push(`${which}: its headless workers need Codex ${floor} or newer for the tools`)
     const remedy = installFixes ? install : `Codex ${floor} or newer (npm i -g @openai/codex), then ${install}`
-    return { text: `${label}: ${problems.join('; ')}`, warn: true, remedy, fix: remedy }
+    return { text: `${label}: ${problems.join('; ')}${note}`, warn: true, remedy, fix: remedy }
   }
 
-  const defaultMode = Object.hasOwn(entry, CODEX_DEFAULT_KEY) ? entry[CODEX_DEFAULT_KEY] : undefined
-  let also = ''
-  if (defaultMode !== undefined) {
-    // The developer's default decides every tool that sets none of its own.
-    const unset = APPROVED_TOOLS.filter(t => codexApprovalOf(entry, t) === undefined)
-    const refusedByDefault = defaultMode === CODEX_APPROVE ? [] : unset
-    if (refusedByDefault.length > 0) {
-      problems.push(`a \`codex exec\` worker would be refused ${andList(refusedByDefault)} — your ${CODEX_DEFAULT_KEY} = ${JSON.stringify(defaultMode)} in ${configPath} decides ${refusedByDefault.length === unset.length && unset.length === APPROVED_TOOLS.length ? 'every treecontext call' : 'them'}`)
-      lines.push(`your mcp_servers.treecontext.${CODEX_DEFAULT_KEY} = ${JSON.stringify(defaultMode)}`)
-    }
-    if (defaultMode === CODEX_APPROVE) {
-      const asking = ASKING_TOOLS.filter(t => codexApprovalOf(entry, t) === undefined)
-      if (asking.length > 0) also = `; your ${CODEX_DEFAULT_KEY} = "approve" in ${configPath} approves every tool, so a headless worker can also ${toolWords(asking)}`
-    }
+  // A default of the developer's decides every tool; install's own per-tool
+  // approvals would override it, and install takes them back (D390).
+  const def = codexDefaultOf(entry)
+  if (def !== undefined && def !== CODEX_APPROVE && w.byInstall.length > 0) {
+    problems.push(`install's own approvals of ${toolWords(w.byInstall)} override your ${CODEX_DEFAULT_KEY} = ${JSON.stringify(def)}; install takes them back so your default decides`)
+    installFixes = true
   }
-  const absent = defaultMode === undefined ? APPROVED_TOOLS.filter(t => codexApprovalOf(entry, t) === undefined) : []
-  if (absent.length === APPROVED_TOOLS.length) {
+  if (w.unapproved.length === APPROVED_TOOLS.length) {
     problems.push(`a \`codex exec\` worker would be refused every treecontext call — none of ${toolWords(APPROVED_TOOLS)} is approved in ${configPath}`)
     installFixes = true
-  } else if (absent.length > 0) {
-    problems.push(`a \`codex exec\` worker would be refused ${andList(absent)} — not approved in ${configPath}`)
+  } else if (w.unapproved.length > 0) {
+    problems.push(`a \`codex exec\` worker would be refused ${andList(w.unapproved)} — not approved in ${configPath}`)
     installFixes = true
   }
-  for (const tool of APPROVED_TOOLS) {
-    const v = codexApprovalOf(entry, tool)
-    if (v === undefined || v === CODEX_APPROVE) continue
-    problems.push(`a \`codex exec\` worker would be refused ${tool} — your ${codexApprovalKey(tool)} = ${JSON.stringify(v)} in ${configPath}`)
-    lines.push(`your ${codexApprovalKey(tool)} = ${JSON.stringify(v)}`)
+  if (w.developerRefuses.length > 0) {
+    const every = w.developerRefuses.length === APPROVED_TOOLS.length
+    problems.push(`a \`codex exec\` worker would be refused ${every ? 'every treecontext call' : andList(w.developerRefuses)} — ${w.developer.filter(d => / refused by /.test(d)).join('; ')}`)
   }
-  // An approval of the developer's for one of the asking tools is said in words too.
-  const wider = ASKING_TOOLS.filter(t => codexApprovalOf(entry, t) === CODEX_APPROVE)
-  if (wider.length > 0) also += `; your own approvals also let a headless worker ${toolWords(wider)}`
+  const also = w.developer.filter(d => / approved by /.test(d))
+  const alsoWords = also.length > 0 ? `; ${also.join('; ')}` : ''
+  const extra = ASKING_TOOLS.filter(t => view[t]!.by === 'developer' && (view[t] as { approves: boolean }).approves)
+  const canAlso = extra.length > 0 ? `, so a headless worker can also ${toolWords(extra)}` : ''
 
   if (problems.length === 0) {
-    return { text: `${label}: can use the tools — ${andList(workerVars)} forwarded, ${toolWords(APPROVED_TOOLS)} approved in ${configPath}${also}`, warn: false, remedy: NOTHING }
+    const first = view[w.byInstall[0] ?? '']
+    const where = w.byInstall.length > 0 ? `, ${toolWords(w.byInstall)} approved in ${first?.by === 'install' ? first.file : configPath}` : ''
+    const redundant = def !== undefined && w.byInstall.length > 0 ? `; your ${CODEX_DEFAULT_KEY} = ${JSON.stringify(def)} decides every tool, so the next install takes install's own approvals back` : ''
+    return { text: `${label}: can use the tools — ${andList(workerVars)} forwarded${where}${alsoWords}${canAlso}${redundant}${note}`, warn: false, remedy: NOTHING }
   }
-  const remedy = installFixes ? install : `${lines.join(' and ')} in ${configPath}, yours to change (install leaves it)`
-  return { text: `${label}: ${problems.join('; ')}${also}`, warn: true, remedy, fix: remedy }
+  const remedy = installFixes ? install : `${w.refusingRules.join(' and ')}, yours to change (install leaves it)`
+  return { text: `${label}: ${problems.join('; ')}${alsoWords}${canAlso}${note}`, warn: true, remedy, fix: remedy }
 }

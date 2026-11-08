@@ -788,6 +788,16 @@ re-decided, and the previous text is in git history.
   scenarios enter the suite through scenario-scoped wip entries until
   their units bind them. (D382, D383, D384, D385, D389, D390,
   2026-11-07)
+  Unit 2 rewords one of its own new scenarios: journal-install
+  "turning tool approvals off and on again in <client> touches only
+  what install wrote", whose last Then read "shows the four approved
+  again"; it now reads "shows install's grants back for each of the four
+  that no rule of the developer's decides". The literal words could not
+  hold beside a developer's rule under D390's "the developer's own rules
+  always win": every example row names a rule of the developer's over
+  one of the four, which install never writes over or beside (owner,
+  2026-11-08: "yes, make the rewording") (direction: rewords).
+  (D390, 2026-11-08)
 
 ---
 

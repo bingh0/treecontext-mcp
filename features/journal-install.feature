@@ -430,7 +430,7 @@ Feature: Journal install — setup is auditable, reversible, and honest
     Then the developer sees it say that headless workers will now be refused the four tools, and how to turn them back on
     And <client>'s own view shows none of the four approved by install, and the developer's rule as it was
     When the developer runs `treecontext config tool-approvals on`
-    Then <client>'s own view shows the four approved again, and the developer's rule as it was
+    Then <client>'s own view shows install's grants back for each of the four that no rule of the developer's decides, and the developer's rule as it was
 
     Examples:
       | client          | rule                                            |

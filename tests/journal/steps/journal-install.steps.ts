@@ -14,7 +14,7 @@ import { openNodeSqlite } from '../../../src/persistence/node-sqlite.js'
 import { FlatStore } from '../../../src/flat-store.js'
 import { LeaseClient, DRAIN_LEASE_TTL_SECS } from '../../../src/persistence/leases.js'
 import { MAX_INGEST_ATTEMPTS } from '../../../src/persistence/capture-constants.js'
-import { type InstallWorld, pathWithFakeClaude, setClaudeVersion, tcCli, agentCli, codexCli, codexConfigRead, openInstallWorld, treeOf, pathsMentioned, installedCommands, interpreterRunsPackage, isBatchBody, toPosix, mcpLauncherIn, agentConfigPath, fakeGlobalInstall, clientEntry } from '../install-harness.js'
+import { type InstallWorld, pathWithFakeClaude, setClaudeVersion, tcCli, agentCli, codexCli, codexConfigRead, setFakeCodex, openInstallWorld, treeOf, pathsMentioned, installedCommands, interpreterRunsPackage, isBatchBody, toPosix, mcpLauncherIn, agentConfigPath, fakeGlobalInstall, clientEntry } from '../install-harness.js'
 import { CODEX_APPROVALS_FLOOR } from '../../../src/server/codex-client.js'
 import { startEntryAsClient } from '../standins.js'
 import { parse as parseToml, stringify as stringifyToml } from 'smol-toml'
@@ -1766,27 +1766,72 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
     }
   })
 
+  // ── a Codex older than the floor gets none (D381) ───────────────────
+  //
+  // [stand-in] for the old Codex: a `codex` on the CLI's PATH answering
+  // `codex-cli 0.165.0` (writeFakeCodex, standins.ts), below the oldest
+  // Codex verified to read per-tool approvals. What the file then holds is
+  // read by the real Codex's own reading of its configuration.
+  reg.define(/^a Codex CLI whose version reads older than the first that reads per-tool approvals$/, async (w: InstallWorld) => {
+    await openInstallWorld(w, ['.claude', '.codex'])
+    w.iproj = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-install-proj-')))
+    w.defer(() => rmSync(w.iproj!, { recursive: true, force: true }))
+    expect(CODEX_APPROVALS_FLOOR).toBe('0.166.0')
+    setFakeCodex(w, { version: '0.165.0', sandbox: { exit: 0, stderr: '' } })
+  })
+
+  reg.define(/^Codex's configuration carries no per-tool approval$/, async (w: InstallWorld) => {
+    const seen = await codexToolsSeen(w)
+    // The entry is there, its server named: the install wired it.
+    expect(seen.entry['command'], 'install wrote no treecontext entry').toBeDefined()
+    expect(seen.tools, 'Codex reads a per-tool approval').toEqual({})
+    expect(seen.entry['default_tools_approval_mode'] ?? null).toBeNull()
+  })
+
+  const FLOOR_LINE = new RegExp(`Codex 0\\.165\\.0 cannot read per-tool approvals: its headless workers need Codex ${CODEX_APPROVALS_FLOOR.replace(/\./g, '\\.')} or newer for the tools`)
+  reg.define(/^the developer sees install say in one line that Codex's headless workers need a newer Codex for the tools, naming the version$/, (w: InstallWorld) => {
+    const lines = w.iInstallRun!.stdout.split('\n').filter(l => /0\.165\.0|per-tool approval/.test(l))
+    expect(lines, w.iInstallRun!.stdout).toHaveLength(1)
+    expect(lines[0]).toMatch(FLOOR_LINE)
+  })
+
+  reg.define(/^the developer sees doctor's row for Codex CLI say the same$/, (w: InstallWorld) => {
+    const row = w.iDoctorRun!.stdout.split('\n').find(l => /^\[(ok|warn|err)\]\s+Codex CLI:/.test(l))
+    expect(row, w.iDoctorRun!.stdout).toBeDefined()
+    expect(row).toMatch(/^\[warn\]/)
+    expect(row).toMatch(FLOOR_LINE)
+  })
+
   // ── off and on again, per client (D390) ─────────────────────────────
   const DEV_RULE: Record<string, { client: 'Claude Code' | 'Codex CLI'; tool: string }> = {
     'an ask rule for treecontext_insert': { client: 'Claude Code', tool: 'treecontext_insert' },
     'an approval set to prompt for treecontext_query': { client: 'Codex CLI', tool: 'treecontext_query' },
   }
   /** The client's view of the four and of the developer's rule. */
-  const viewOf = async (w: InstallWorld): Promise<{ approvedByInstall: string[]; developerRule: string }> => {
+  const viewOf = async (w: InstallWorld): Promise<{ approvedByInstall: string[]; developerRule: string; grantForRuled: boolean }> => {
+    // Install's grants are what its record names and the client's file
+    // still holds.
+    const recorded = (slug: string): string[] => Object.values(installRecord(w).toolApprovals?.written?.[slug] ?? {}).flatMap(f => f.items)
     if (w.iClient === 'Claude Code') {
       // Claude Code prints no permission rules: its settings file is read.
       const perms = claudePermissions(w)
       const allow = (perms['allow'] ?? []) as string[]
+      const ours = recorded('claude')
+      const { tool } = Object.values(DEV_RULE).find(r => r.client === 'Claude Code')!
+      const rule = `mcp__treecontext__${tool}`
       return {
-        approvedByInstall: FOUR.filter(t => allow.includes(`mcp__treecontext__${t}`)),
+        approvedByInstall: FOUR.filter(t => allow.includes(`mcp__treecontext__${t}`) && ours.includes(`mcp__treecontext__${t}`)),
         developerRule: JSON.stringify(perms['ask'] ?? null),
+        grantForRuled: allow.includes(rule) || ours.includes(rule),
       }
     }
     const seen = await codexToolsSeen(w)
+    const ours = recorded('codex')
     const { tool } = Object.values(DEV_RULE).find(r => r.client === 'Codex CLI')!
     return {
-      approvedByInstall: FOUR.filter(t => t !== tool && seen.tools[t]?.approval_mode === 'approve'),
+      approvedByInstall: FOUR.filter(t => t !== tool && seen.tools[t]?.approval_mode === 'approve' && ours.includes(t)),
       developerRule: JSON.stringify(seen.tools[tool] ?? null),
+      grantForRuled: ours.includes(tool),
     }
   }
 
@@ -1840,15 +1885,15 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
     expect(view.developerRule, "the developer's rule").toBe(w.iDeveloperBefore)
   })
 
-  reg.define(/^(Claude Code|Codex CLI)'s own view shows the four approved again, and the developer's rule as it was$/, async (w: InstallWorld, client: unknown) => {
+  reg.define(/^(Claude Code|Codex CLI)'s own view shows install's grants back for each of the four that no rule of the developer's decides, and the developer's rule as it was$/, async (w: InstallWorld, client: unknown) => {
     expect(client).toBe(w.iClient)
-    // The four install grants are back as they were: each of the four is
-    // approved by install again, except the one the developer's own rule
-    // decides, which install never writes over or beside (D390), and which
-    // reads as the developer left it.
+    // Install's grants are back for each of the four no rule of the
+    // developer's decides, and for none other: install adds no grant beside
+    // the developer's rule (D390), which reads as the developer left it.
     const view = await viewOf(w)
     const { tool } = Object.values(DEV_RULE).find(r => r.client === w.iClient)!
     expect(view.approvedByInstall, `${String(client)}'s approvals after on`).toEqual(FOUR.filter(t => t !== tool))
+    expect(view.grantForRuled, `install wrote a grant beside the developer's rule for ${tool}`).toBe(false)
     expect(view.developerRule, "the developer's rule").toBe(w.iDeveloperBefore)
     expect(w.irun!.stdout).toMatch(/^headless workers can use .+; clear, delete, import and merge still ask/m)
   })
