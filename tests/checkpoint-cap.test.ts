@@ -22,7 +22,7 @@ import { registerSelf, registerSubagent, retireAllSubagents, WRITER_STAMP_KEYS, 
 import { registerSubagentLeg, legOf, legOwnsKey, capRefusalOf, type LegRef, type CapRefusal } from '../src/persistence/leg-registry.js'
 import { resolveStagedCapRefusals } from '../src/persistence/cap-refusals.js'
 import { CHECKPOINT_CAP_CHARS, OVER_CAP_KEY, charactersOf, checkpointCapRefusal } from '../src/runs.js'
-import { composeFirstMessage, composeSendBackMessage, firstMomentMetadata, sendBackReason, overCapWords } from '../src/first-moment.js'
+import { composeFirstMessage, composeSendBackMessage, firstMomentMetadata, sendBackReason, overCapWords, STATE_NOT_HISTORY_LINE } from '../src/first-moment.js'
 import { keyLookupReply } from '../src/key-lookup.js'
 import { sendBackDecision } from '../src/ticket-door.js'
 import { owesSendBack } from '../src/hooks/subagent-stop.js'
@@ -550,13 +550,15 @@ describe('the cap feeds the send-back (D279, D295, D299, D326)', () => {
     expect(sendBackDecision({ ...base, capRefused: { size: 20_000 }, checkpointSinceStart: true }).sendBack).toBe(false)
   })
 
-  it('composeSendBackMessage carries the clause in the reason, once, before the first moment composed again', async () => {
+  it('composeSendBackMessage carries the clause in the reason, once, after the first moment composed again', async () => {
     const { s, legs } = await withLegs()
     await s.writeCheckpoint(text(20_000), { run: 'r1', key: 'login-form', leg: legs['builder']! })
     const facts = s.firstMomentFacts({ run: 'r1', key: 'login-form', role: 'builder', checkpointer: 'builder', checkpointedBy: null, self: legs['builder']! })
     await s.close()
     const message = composeSendBackMessage({ facts, prompt: null, sessionId: 's1', firstMomentId: null, rows: 0, capRefused: { size: 20_000 } })
-    expect(message.startsWith(sendBackReason('builder', 'r1', 'login-form', { size: 20_000 }))).toBe(true)
+    const reason = sendBackReason('builder', 'r1', 'login-form', { size: 20_000 })
+    expect(message).toContain(reason)
+    expect(message.indexOf(reason)).toBeGreaterThan(message.indexOf(STATE_NOT_HISTORY_LINE))
     expect(message.split('was refused for being past the').length).toBe(2)
   })
 })

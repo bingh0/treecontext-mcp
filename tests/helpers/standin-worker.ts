@@ -46,8 +46,8 @@ if (!dbPath) throw new Error('standin-worker: STANDIN_DB is not set')
 const chunks: Buffer[] = []
 for await (const c of process.stdin) chunks.push(c as Buffer)
 const stdin = Buffer.concat(chunks).toString('utf8')
-// The re-run opens on the door's send-back message (first-moment.ts).
-const rerun = stdin.startsWith(sendBackReason('', '', '').slice(0, 40))
+// The re-run's message carries the door's send-back reason (first-moment.ts).
+const rerun = stdin.includes(sendBackReason('', '', '').slice(0, 40))
 const step: Step = (rerun ? plan.rerun : plan.first) ?? {}
 
 const store = await FlatStore.open({ database: openNodeSqlite(new DatabaseSync(dbPath)), retentionInterval: 1_000_000 })

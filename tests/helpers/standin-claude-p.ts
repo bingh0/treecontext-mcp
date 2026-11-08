@@ -170,7 +170,7 @@ waitFor(plan.waitAfterStop)
 if (log) {
   appendFileSync(log, `${JSON.stringify({
     pid: process.pid, ccSession: sessionId, session: process.env[WORKER_SESSION_ENV] ?? sessionId, stdin: prompt,
-    rerun: prompt.startsWith(sendBackReason('', '', '').slice(0, 40)), context, systemMessage, startStdout: start.stdout, stops, sentBack,
+    rerun: prompt.includes(sendBackReason('', '', '').slice(0, 40)), context, systemMessage, startStdout: start.stdout, stops, sentBack,
     ticket: process.env[TICKET_ENV] ?? null, lane: process.env[WORKER_SESSION_ENV] ?? null,
   })}\n`)
 }

@@ -408,7 +408,7 @@ export function hooksDoorSteps(define: Define): void {
     // missing checkpoint, the reason naming the cap and the size refused
     // (D299); the key it was refused under is its own though nothing landed.
     const refused = w.facts!['refused-size'] as number | undefined
-    expect(reason.startsWith(sendBackReason('builder', RUN, key!, refused !== undefined ? { size: refused } : null))).toBe(true)
+    expect(reason).toContain(sendBackReason('builder', RUN, key!, refused !== undefined ? { size: refused } : null))
     expect(reason).toContain(`no checkpoint under the key "${key}" on the run "${RUN}" newer than your start`)
     if (refused !== undefined) {
       expect(reason).toContain(`${refused} characters, was refused for being past the ${CHECKPOINT_CAP_CHARS}-character cap`)

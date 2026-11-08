@@ -233,11 +233,11 @@ describe('spawnWorker', () => {
       expect(log.map((l) => [l.rerun, l.lane])).toEqual([[false, r.sessionId], [true, r.sessionId]])
       expect(log[0]!.stdin).toBe(r.firstMessage)
       expect(log[1]!.stdin).toBe(r.runs[1]!.input.stdin)
-      // The re-run's message: the reason, the first moment composed again
-      // (the brief, the state line, the prompt as written), the trail.
+      // The re-run's message: the first moment composed again (the brief,
+      // the state line, the prompt as written), the reason, the trail.
       const second = log[1]!.stdin
       const at = (t: string): number => second.indexOf(t)
-      const order = [sendBackReason('builder', 'r1', 'k'), 'build the form', STATE_NOT_HISTORY_LINE, `${PROMPT_HEADING}\ngo`, `the row ${r.firstMomentId}`]
+      const order = ['build the form', STATE_NOT_HISTORY_LINE, `${PROMPT_HEADING}\ngo`, sendBackReason('builder', 'r1', 'k'), `the row ${r.firstMomentId}`]
       expect(order.map(at).every((i) => i >= 0)).toBe(true)
       expect(order.map(at).sort((a, b) => a - b)).toEqual(order.map(at))
       expect(readTicket(log[0]!.ticket).valid).toBe(true)

@@ -434,11 +434,12 @@ const capital = (s: string): string => s.charAt(0).toUpperCase() + s.slice(1)
 
 /**
  * The message a worker's second run opens on (D279, D291, D298, D332,
- * D335): the reason naming the missing checkpoint, then the whole first
- * moment composed again from the store as it now stands (the brief, the
- * checkpoint(s) in effect now, each whole with number, writer and moment
- * and its flag, treecontext's own line, the spawner's prompt as written),
- * so the re-run needs no query; then the pointer to its own trail, the
+ * D335, D382): the whole first moment composed again from the store as it
+ * now stands (the brief, the checkpoint(s) in effect now, each whole with
+ * number, writer and moment and its flag, treecontext's own line, the
+ * spawner's prompt as written), so the re-run needs no query, and so it
+ * opens on the worker line the instruction block names; then the reason
+ * naming the missing checkpoint; then the pointer to its own trail, the
  * lane's row count and its first-moment row, any row fetched whole by
  * export.
  */
@@ -457,8 +458,8 @@ export function composeSendBackMessage(o: {
   const f = o.facts
   const lane = o.agentId ? `the lane of session ${o.sessionId}, agent ${o.agentId}` : `the lane of session ${o.sessionId}`
   return [
-    sendBackReason(f.role, f.run, f.key ?? '', o.capRefused ?? null),
     o.firstMessage ?? composeFirstMessage(f, o.prompt, o.door ? { door: o.door } : {}),
+    sendBackReason(f.role, f.run, f.key ?? '', o.capRefused ?? null),
     `treecontext: your trail is in the store: ${lane}, ${o.rows} ${o.rows === 1 ? 'row' : 'rows'} of your first run`
       + `${o.firstMomentId ? `, after your first moment, the row ${o.firstMomentId}` : ''}; fetch any of them whole by export. `
       + `Write the next checkpoint under "${f.key ?? ''}" on the run "${f.run}", then stop.`,

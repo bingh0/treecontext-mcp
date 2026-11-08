@@ -151,7 +151,7 @@ describe('served-instructions golden pin (AC2.1)', () => {
     expect(INSTRUCTIONS_WORKER_LEXICAL).toBe([
       'WORKER START — treecontext\'s ticket door started you as a worker of a run.',
       'Your first message holds your brief and the checkpoint(s) in effect (or',
-      'says there are none): begin there.',
+      'says there are none, or that your instructions were invalid): begin there.',
     ].join('\n') + '\n' + body)
     expect(INSTRUCTIONS_WORKER_LEXICAL).not.toContain('SESSION START')
     for (const tool of ['treecontext_status', 'what was I working on', TRIGGER_CORE.gate]) {

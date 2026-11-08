@@ -8,7 +8,7 @@ import { SESSION_REMINDER_TEXT, INSTRUCTIONS_CONTENT, MARKER_START, MARKER_END }
 import { CODEX_APPROVALS_FLOOR } from '../../../src/server/codex-client.js'
 import { mintTicket, readTicket, type TicketFields } from '../../../src/ticket.js'
 import { type RunWorld, openRunWorld, briefFor, rawRegistration } from '../run-world.js'
-import { runWorker, type WorkerSpec, type Outcome, type StandinRecord } from '../standins.js'
+import { runWorker, hooksLeg, type WorkerSpec, type Outcome, type StandinRecord } from '../standins.js'
 import { DEFAULT_ROLE_WEIGHTS } from '../../../src/persistence/fts.js'
 import { DEFAULT_RECENCY_WEIGHT } from '../../../src/server/query-telemetry.js'
 import { KEY_LOOKUP_PARAM } from '../../../src/key-lookup.js'
@@ -628,6 +628,12 @@ function workerOrientationSteps(reg: Registry<AgentSurfaceWorld>): void {
   // (every other session's card).
   reg.define(/^a treecontext server started with a worker lane in its environment that the ticket beside it does not describe$/, async (w: AgentSurfaceWorld) => {
     await openRunWorld(w)
+    // A third producer of "every other session": a hooks-door leg live in
+    // the same store (the real SubagentStart hook registered it), beside
+    // which the plain serve below still gets the ordinary card.
+    const leg = await hooksLeg(w, 'reviewer-leg', 'reviewer', { run: RUN, key: 'review-pass' })
+    const legRow = rawRegistration(w, leg)
+    expect([legRow['kind'], legRow['agent_type'], legRow['ended'], legRow['stopped_at']], 'the hooks-door leg is not live in the store').toEqual(['subagent', 'reviewer', null, null])
     const other = mintTicket(workerTicket({ role: 'reviewer' }))
     await runWorker(w, {
       spawner: 'wrapper', prompt: 'wire the submit button', ticket: workerTicket(),
@@ -647,6 +653,9 @@ function workerOrientationSteps(reg: Registry<AgentSurfaceWorld>): void {
   reg.define(/^the instructions carry the session-start routine as every other session's do$/, (w: AgentSurfaceWorld) => {
     const [, own, none] = standinOf(w).handshakes!
     expect(none!.length, 'the server with no worker variable sent no instructions').toBeGreaterThan(0)
+    // The plain serve above ran with a hooks-door leg live in its store.
+    expect(routineNeedles(none!), 'a live hooks-door leg changed the plain serve\'s card').toEqual(ROUTINE_NEEDLES)
+    expect(none, 'a live hooks-door leg changed the plain serve\'s card').toBe(INSTRUCTIONS_BRIEF_LEXICAL)
     expect(w.instructions, 'the lane alone changed the handshake').toBe(none)
     expect(routineNeedles(w.instructions!)).toEqual(ROUTINE_NEEDLES)
     // The control: in the same lane, the ticket the registration describes

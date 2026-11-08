@@ -1101,7 +1101,7 @@ export function ticketDoorSteps(define: (re: RegExp, fn: (w: WorkersWorld, ...ca
     expect(o.spawner).toBe(by === 'library call' ? 'library' : 'wrapper')
     expect(o.log.map((r) => r.rerun)).toEqual([false, true])
     const second = o.log[1]!.stdin
-    expect(second.startsWith(sendBackReason('builder', RUN, key))).toBe(true)
+    expect(second).toContain(sendBackReason('builder', RUN, key))
     expect(second).toContain(`no checkpoint under the key "${key}"`)
     const reg = rawRegistration(w, w.legs!['worker']!)
     expect([reg['send_backs'], reg['ended']]).toEqual([1, 'retired'])
@@ -1805,7 +1805,7 @@ function claudeChildSteps(define: (re: RegExp, fn: (w: WorkersWorld, ...caps: st
   define(/^the stop hook sends it back once with the reason naming the missing checkpoint under "([^"]+)"$/, (w, key) => {
     const log = outOf(w).log[0]!
     expect(log.sentBack, 'the stop hook blocked').not.toBeNull()
-    expect(log.sentBack!.startsWith(sendBackReason('builder', RUN, key!))).toBe(true)
+    expect(log.sentBack!).toContain(sendBackReason('builder', RUN, key!))
     expect(log.sentBack!).toContain(`no checkpoint under the key "${key}"`)
     const reg = rawRegistration(w, w.legs!['worker']!)
     expect(reg['send_backs']).toBe(1)

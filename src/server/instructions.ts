@@ -276,7 +276,7 @@ const SESSION_START_LINES: readonly string[] = [
 const WORKER_START_LINES: readonly string[] = [
   'WORKER START — treecontext\'s ticket door started you as a worker of a run.',
   'Your first message holds your brief and the checkpoint(s) in effect (or',
-  'says there are none): begin there.',
+  'says there are none, or that your instructions were invalid): begin there.',
 ]
 
 const CARD_BODY: readonly string[] = [
