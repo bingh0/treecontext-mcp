@@ -124,7 +124,11 @@ describe('doctor and install on a copying client, end to end', () => {
     toml.mcp_servers['treecontext']!['args'] = [...(toml.mcp_servers['treecontext']!['args'] as string[]), '--store', 'pinned']
     toml.mcp_servers['treecontext']!['startup_timeout_sec'] = 30
     writeFileSync(codexToml(), stringifyToml(toml) + '\n')
-    ok(['uninstall', '--agent', 'codex', '--hooks-only'])
+    const un = ok(['uninstall', '--agent', 'codex', '--hooks-only'])
+    // The line names the exact backup the rewrite kept.
+    const named = new RegExp(`set to no capture in .*config\\.toml \\[updated — .*comments are not preserved; the file as it was is at (\\S+\\.treecontext-bak-\\d{8}T\\d{6}Z(?:-\\d+)?)\\]`).exec(un.stdout)
+    expect(named, un.stdout).not.toBeNull()
+    expect(existsSync(named![1]!)).toBe(true)
     const after = (parseToml(readFileSync(codexToml(), 'utf8')) as { mcp_servers: Record<string, Record<string, unknown>> }).mcp_servers['treecontext']!
     expect(after['args']).toEqual(['serve', '--transport', 'stdio', '--lexical', '--no-capture', '--store', 'pinned'])
     expect(after['startup_timeout_sec']).toBe(30)
@@ -132,6 +136,40 @@ describe('doctor and install on a copying client, end to end', () => {
     expect(r.status, r.line).toBe('ok')
     expect(r.line).toMatch(/server mode: standard \(no auto-capture\) \(this client: tools only\), /)
   }, 120_000)
+
+  for (const client of [
+    { name: 'Codex CLI', slug: 'codex' },
+    { name: 'Gemini CLI', slug: 'gemini' },
+  ] as const) {
+    it(`a ${client.name} copy beside a server without capture warns, names the install, and the install clears it (D386)`, () => {
+      ok(['install', '--agent', client.slug, '--experimental-capture'])
+      // The entry turned to no capture by hand while the copy stays.
+      const setArgs = (edit: (a: string[]) => string[]): void => {
+        if (client.slug === 'codex') {
+          const t = parseToml(readFileSync(codexToml(), 'utf8')) as { mcp_servers: Record<string, Record<string, unknown>> }
+          t.mcp_servers['treecontext']!['args'] = edit(t.mcp_servers['treecontext']!['args'] as string[])
+          writeFileSync(codexToml(), stringifyToml(t) + '\n')
+        } else {
+          const path = join(home, '.gemini', 'settings.json')
+          const j = JSON.parse(readFileSync(path, 'utf8')) as { mcpServers: Record<string, { args: string[] }> }
+          j.mcpServers['treecontext']!.args = edit(j.mcpServers['treecontext']!.args)
+          writeFileSync(path, JSON.stringify(j, null, 2))
+        }
+      }
+      const before = row(client.name)
+      expect(before.status, before.line).toBe('ok')
+      setArgs(a => a.filter(t => t !== '--capture' && t !== '--debug').concat('--no-capture'))
+      const warned = row(client.name)
+      expect(warned.status, warned.line).toBe('warn')
+      expect(warned.line).toContain("server mode: standard (no auto-capture) (this client: experimental hooks, unverified) — but this client's hooks run, and this server does not drain what they stage, ")
+      expect(warned.state).toMatch(/present and consistent/)
+      expect(warned.fix).toBe(`treecontext install --agent ${client.slug}`)
+      runNamed(warned.fix!)
+      const after = row(client.name)
+      expect(after.status, after.line).toBe('ok')
+      expect(after.line).toContain('server mode: capture (this client: experimental hooks, unverified), ')
+    }, 120_000)
+  }
 
   it('a copy in two places reads inconsistent — it would fire twice — and the named command leaves one', () => {
     ok(['install', '--agent', 'codex', '--experimental-capture'])

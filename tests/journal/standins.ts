@@ -474,7 +474,8 @@ export function writeFakeClaude(dir: string, version: string | null): void {
  * launcher's own fallback finds and runs it.
  *
  * What it returns is the server's own word: the `Mode:` line `serve`
- * writes to its debug log under the home. `holdUntil`, when given, keeps
+ * writes to its debug log under the home, the log of the process it
+ * started (named by its pid). `holdUntil`, when given, keeps
  * the server running after that line until it answers true (polled, at most
  * 60 seconds), for a caller that watches what the server does. The server
  * is stopped after.
@@ -493,10 +494,15 @@ export async function startEntryAsClient(
   let stderr = ''
   child.stderr.on('data', (d: Buffer) => { stderr += d.toString() })
   child.stdout.resume()
+  // The log of the server this call started, by its process: the launcher
+  // execs node, so on POSIX the server keeps the child's pid, which its log
+  // file is named by. On Windows the batch launcher runs node as a child of
+  // its own, so there the log is the one this start created.
+  const ours = (f: string): boolean => win ? !before.has(f) : f.endsWith(`-${child.pid}.log`)
   const modeLine = (): string | undefined => {
     if (!existsSync(logs)) return undefined
     for (const f of readdirSync(logs)) {
-      if (before.has(f)) continue
+      if (!ours(f)) continue
       const m = /\[serve\] Mode: (.+)/.exec(readFileSync(join(logs, f), 'utf8'))?.[1]
       if (m) return m.trim()
     }

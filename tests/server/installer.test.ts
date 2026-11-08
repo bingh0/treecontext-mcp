@@ -37,6 +37,16 @@ import { itPosix } from '../helpers/platform.js'
 
 // ── Helpers ───────────────────────────────────────────────────────
 
+/** The timestamped backups install kept of a TOML file, oldest first. */
+function tomlBackups(path: string): string[] {
+  const stem = `${basename(path)}.treecontext-bak-`
+  return readdirSync(join(path, '..')).filter(f => f.startsWith(stem)).sort().map(f => join(path, '..', f))
+}
+
+/** The words a rewrite adds, naming the backup install kept. */
+const backupNote = (path: string): RegExp =>
+  new RegExp(`comments are not preserved; the file as it was is at ${path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.treecontext-bak-\\d{8}T\\d{6}Z(-\\d+)?$`)
+
 function readJson(path: string): Record<string, unknown> {
   return JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>
 }
@@ -366,7 +376,8 @@ describe('convergeMcpEntry and the upserts that use it (D385)', () => {
     ].join('\n'))
     const r = upsertTomlMcp(p, codexWant(), false, false)
     expect(r.status).toBe('updated')
-    expect(r.detail).toBe(`kept your --store pinned, --instructions none, default_tools_approval_mode, enabled_tools, startup_timeout_sec, env, tools; comments are not preserved; the file as it was is at ${p}.treecontext-bak`)
+    expect(r.detail).toMatch(/^kept your --store pinned, --instructions none, default_tools_approval_mode, enabled_tools, startup_timeout_sec, env, tools; /)
+    expect(r.detail).toMatch(backupNote(p))
     expect(tomlEntry(p)).toEqual({
       command: launcher(),
       args: ['serve', '--transport', 'stdio', '--no-capture', '--store', 'pinned', '--instructions', 'none'],
@@ -393,7 +404,8 @@ describe('convergeMcpEntry and the upserts that use it (D385)', () => {
     ].join('\n'))
     const r = upsertTomlMcp(p, codexWant(), false, false)
     expect(r.status).toBe('updated')
-    expect(r.detail).toBe(`kept your env_vars MY_TOKEN; comments are not preserved; the file as it was is at ${p}.treecontext-bak`)
+    expect(r.detail).toMatch(/^kept your env_vars MY_TOKEN; /)
+    expect(r.detail).toMatch(backupNote(p))
     expect(tomlEntry(p)['env_vars']).toEqual(['MY_TOKEN', 'TREECONTEXT_TICKET', 'TREECONTEXT_WORKER_SESSION'])
   })
 
@@ -443,7 +455,8 @@ describe('convergeMcpEntry and the upserts that use it (D385)', () => {
     const want = { command: launcher(), args: ['serve', '--transport', 'stdio', '--capture', '--debug'] }
     const r = upsertJsonMcp(p, 'mcpServers', want, false, false)
     expect(r.status).toBe('updated')
-    expect(r.detail).toBe('kept your --store pinned, type, env; did not keep your /nonexistent/node-v0.0.0/lib/node_modules/treecontext-mcp/dist/server/cli.js (before serve, with the old command)')
+    // The old module path was install's own pre-launcher shape, not the developer's.
+    expect(r.detail).toBe('kept your --store pinned, type, env')
     expect((readJson(p).mcpServers as Record<string, unknown>).treecontext).toEqual({
       type: 'stdio',
       command: launcher(),
@@ -507,6 +520,21 @@ describe('convergeMcpEntry and the upserts that use it (D385)', () => {
     expect(forced.entry).toEqual({ command: launcher(), args: ['serve', '--transport', 'stdio', '--capture', '--debug', '--store', 'pinned'] })
   })
 
+  it("never reports install's own earlier shapes as the developer's, and does report a developer's own token before serve", () => {
+    const want = { command: launcher(), args: ['serve', '--transport', 'stdio', '--capture', '--debug'] }
+    for (const existing of [
+      { command: 'node', args: ['/old/lib/node_modules/treecontext/dist/server/cli.js', 'serve', '--capture'] },
+      { command: 'treecontext', args: ['serve', '--capture'] },
+      { command: 'npx', args: ['-y', 'treecontext-mcp@0.1.0-beta.1', 'serve', '--capture', '--debug'] },
+    ]) {
+      const c = convergeMcpEntry(existing, want, true)
+      expect(c.entry, JSON.stringify(existing)).toEqual(want)
+      expect(c.dropped, JSON.stringify(existing)).toEqual([])
+    }
+    const mine = convergeMcpEntry({ command: '/bin/sh', args: ['./my-wrapper.sh', 'serve'] }, want, true)
+    expect(mine.dropped).toEqual(['./my-wrapper.sh (before serve, with the old command)'])
+  })
+
   it('names what it cannot keep: an args string, a non-list env_vars, a replaced type; a single env_vars name is kept as a list', () => {
     const json = convergeMcpEntry(
       { type: 'sse', command: '/bin/sh', args: '--store pinned' },
@@ -521,19 +549,32 @@ describe('convergeMcpEntry and the upserts that use it (D385)', () => {
     expect(bad.dropped).toEqual(['env_vars 7 (not a list of names)'])
   })
 
-  it("keeps a commented config.toml's previous bytes beside it before rewriting, and says so", () => {
+  it("keeps each rewrite's previous bytes in a backup of its own, so two rewrites leave the comments in the first", () => {
     const p = join(dir, 'config.toml')
     const raw = ['# my settings, explained', 'model = "o3"', '', '[mcp_servers.treecontext]', `command = ${JSON.stringify(launcher())}`, 'args = ["serve"]', ''].join('\n')
     writeFileSync(p, raw)
-    const r = upsertTomlMcp(p, codexWant(), false, false)
-    expect(r.status).toBe('updated')
-    expect(r.detail).toContain(`comments are not preserved; the file as it was is at ${p}.treecontext-bak`)
-    expect(readFileSync(`${p}.treecontext-bak`, 'utf8')).toBe(raw)
+    // A file of the developer's that happens to share the stem is never touched.
+    writeFileSync(`${p}.treecontext-bak`, 'mine')
+    const first = upsertTomlMcp(p, codexWant(), false, false)
+    expect(first.status).toBe('updated')
+    expect(first.detail).toMatch(backupNote(p))
     expect(readFileSync(p, 'utf8')).not.toContain('# my settings')
+    // A second rewrite (the flagged install: the entry gains capture).
+    const second = upsertTomlMcp(p, codexWant(true), false, false)
+    expect(second.status).toBe('updated')
+    const kept = tomlBackups(p)
+    expect(kept.length, kept.join('\n')).toBe(2)
+    expect(readFileSync(kept[0]!, 'utf8')).toBe(raw)
+    expect(first.detail!.endsWith(kept[0]!)).toBe(true)
+    expect(second.detail!.endsWith(kept[1]!)).toBe(true)
+    expect(readFileSync(`${p}.treecontext-bak`, 'utf8')).toBe('mine')
+    // No rewrite, no backup: a converged entry is skipped.
+    expect(upsertTomlMcp(p, codexWant(true), false, false).status).toBe('skipped')
+    expect(tomlBackups(p).length).toBe(2)
     // A file install creates has no previous bytes to keep.
     const fresh = join(dir, 'fresh.toml')
     expect(upsertTomlMcp(fresh, codexWant(), false, false).detail).toBeUndefined()
-    expect(existsSync(`${fresh}.treecontext-bak`)).toBe(false)
+    expect(tomlBackups(fresh)).toEqual([])
   })
 
   it('a dry run says what it would keep and writes nothing', () => {
@@ -547,9 +588,9 @@ describe('convergeMcpEntry and the upserts that use it (D385)', () => {
     const r = upsertTomlMcp(p, codexWant(), false, true)
     expect(r).toEqual({
       type: 'mcp-config', path: p, status: 'dry-run',
-      detail: `would keep your --store pinned; comments are not preserved; the file as it is would be kept at ${p}.treecontext-bak`,
+      detail: `would keep your --store pinned; comments are not preserved; the file as it is would be kept at ${p}.treecontext-bak-<UTC moment>`,
     })
-    expect(existsSync(`${p}.treecontext-bak`)).toBe(false)
+    expect(tomlBackups(p)).toEqual([])
     expect(readFileSync(p, 'utf8')).toBe(raw)
   })
 })
@@ -660,7 +701,8 @@ describe('upsertTomlMcp', () => {
     // The stale command is repaired and the variables added; the
     // developer's own flag stays (D385).
     expect(servers['treecontext']).toEqual({ ...entry, args: ['serve', '--capture', '--code-index'] })
-    expect(r.detail).toBe(`kept your --code-index; comments are not preserved; the file as it was is at ${p}.treecontext-bak`)
+    expect(r.detail).toMatch(/^kept your --code-index; /)
+    expect(r.detail).toMatch(backupNote(p))
   })
 
   it('overwrites when force=true', () => {

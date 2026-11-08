@@ -8,7 +8,7 @@
 import { TICKET_ENV, WORKER_SESSION_ENV } from '../ticket.js'
 import {
   existsSync, readFileSync, writeFileSync, renameSync, mkdirSync,
-  unlinkSync, readdirSync, lstatSync, statSync, rmSync,  realpathSync, readlinkSync, copyFileSync, chmodSync,
+  unlinkSync, readdirSync, lstatSync, statSync, rmSync,  realpathSync, readlinkSync,
 } from 'node:fs'
 import { execFileSync, spawnSync } from 'node:child_process'
 import type { DatabaseSync } from 'node:sqlite'
@@ -742,6 +742,17 @@ function commandNeedsRepair(command: string | undefined): boolean {
   return false
 }
 
+/**
+ * A token an earlier build of install wrote before `serve`: the CLI module a
+ * pre-launcher build ran under `node` (or the bare `treecontext` command
+ * wrote none), and npx's `-y` with the package name, either name, any version.
+ */
+function isInstallPrefixToken(t: string): boolean {
+  return t === '-y'
+    || /^treecontext(-mcp)?(@\S+)?$/.test(t)
+    || /(^|[\\/])(dist|src)[\\/]server[\\/]cli\.[jt]s$/.test(t)
+}
+
 export interface ConvergedEntry {
   entry: Record<string, unknown>
   /** False when the existing entry already says what install would write. */
@@ -780,9 +791,11 @@ export function convergeMcpEntry(
   const dropped: string[] = []
   // What ran before `serve` belongs with the command it ran under: when that
   // command is replaced, it goes too, and the line says so.
-  if (replaceCommand && JSON.stringify(haveSplit.prefix) !== JSON.stringify(wantSplit.prefix) && haveSplit.prefix.length > 0) {
-    dropped.push(`${haveSplit.prefix.join(' ')} (before serve, with the old command)`)
-  }
+  // Install's own earlier shapes (the module path a pre-launcher build ran
+  // under `node`, npx's `-y` and package) are install's, never reported as
+  // the developer's.
+  const theirs = replaceCommand ? haveSplit.prefix.filter(t => !isInstallPrefixToken(t) && !wantSplit.prefix.includes(t)) : []
+  if (theirs.length > 0) dropped.push(`${theirs.join(' ')} (before serve, with the old command)`)
   // An args value that is not a list cannot be read as arguments.
   if (!have.array && existing.args !== undefined && !Array.isArray(existing.args) && 'args' in desired) {
     dropped.push(`args ${JSON.stringify(existing.args)} (not a list)`)
@@ -879,23 +892,43 @@ function keptDetail(converged: Pick<ConvergedEntry, 'kept' | 'dropped'>, dryRun:
   return parts.length > 0 ? parts.join('; ') : undefined
 }
 
-/** Where a TOML file's previous bytes are kept before install rewrites it. */
-export function tomlBackupPath(path: string): string {
-  return `${path}.treecontext-bak`
+/** The stem every backup of a TOML file install rewrites starts with. */
+export function tomlBackupStem(path: string): string {
+  return `${path}.treecontext-bak-`
+}
+
+/** The UTC moment a backup is named by: YYYYMMDDTHHMMSSZ. */
+function backupStamp(at: Date = new Date()): string {
+  return at.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z')
 }
 
 /**
- * Rewrite an existing TOML file, keeping its previous bytes beside it first
- * (overwritten each time). smol-toml re-serializes the whole file and does
- * not keep comments, so the developer's commented file is never lost to a
- * rewrite. Returns the words the install line adds, or nothing for a new file.
+ * Rewrite an existing TOML file, keeping its previous bytes beside it first.
+ * smol-toml re-serializes the whole file and does not keep comments, so the
+ * file as it was goes to a backup of its own, named by the UTC moment
+ * (`<file>.treecontext-bak-YYYYMMDDTHHMMSSZ`, a `-2`, `-3`… suffix on a
+ * collision), created exclusively: no backup, and no file of the
+ * developer's, is ever overwritten, so a second rewrite never replaces the
+ * copy that still has the comments. Callers reach this only when the file
+ * changes. Returns the words the line adds, naming the exact backup, or
+ * nothing for a file that did not exist.
  */
-function writeTomlKeepingBackup(path: string, data: Record<string, unknown>, mode?: number): string[] {
+export function writeTomlKeepingBackup(path: string, data: Record<string, unknown>, mode?: number): string[] {
   let note: string[] = []
   if (existsSync(path)) {
-    const bak = tomlBackupPath(path)
-    copyFileSync(path, bak)
-    try { chmodSync(bak, statSync(path).mode & 0o777) } catch { /* best effort */ }
+    const bytes = readFileSync(path)
+    const keepMode = statSync(path).mode & 0o777
+    const stem = `${tomlBackupStem(path)}${backupStamp()}`
+    let bak = stem
+    for (let n = 2; ; n++) {
+      try {
+        writeFileSync(bak, bytes, { flag: 'wx', mode: keepMode })
+        break
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err
+        bak = `${stem}-${n}`
+      }
+    }
     note = [`comments are not preserved; the file as it was is at ${bak}`]
   }
   atomicWrite(path, stringifyToml(data) + '\n', mode)
@@ -983,7 +1016,7 @@ export function upsertTomlMcp(
   data.mcp_servers = servers
 
   if (dryRun) {
-    const detail = keptDetail(report, true, existsSync(path) ? [`comments are not preserved; the file as it is would be kept at ${tomlBackupPath(path)}`] : [])
+    const detail = keptDetail(report, true, existsSync(path) ? [`comments are not preserved; the file as it is would be kept at ${tomlBackupStem(path)}<UTC moment>`] : [])
     return { type: 'mcp-config', path, status: 'dry-run', ...(detail ? { detail } : {}) }
   }
   const detail = keptDetail(report, false, writeTomlKeepingBackup(path, data))
@@ -3251,7 +3284,7 @@ export async function uninstall(opts: {
       }
       if (result) {
         agentResult.actions.push(result)
-        console.log(`${agent.name}: mcp removed from ${configPath}`)
+        console.log(`${agent.name}: mcp removed from ${configPath}${result.detail && result.detail !== 'removed' ? ` [${result.detail.replace(/^removed; /, '')}]` : ''}`)
       }
       // Clean the dead 0.0.9-beta location too, so uninstall leaves nothing.
       if (agent.slug === 'claude' && claudeLegacyMcpPath() !== configPath) {
@@ -3317,7 +3350,7 @@ export async function uninstall(opts: {
       const tomlResult = tomlPath ? stripCodexTomlHooks(tomlPath, opts.dryRun) : null
       if (tomlResult) {
         agentResult.actions.push(tomlResult)
-        console.log(`${agent.name}: hooks removed from [hooks] in ${tomlPath}`)
+        console.log(`${agent.name}: hooks removed from [hooks] in ${tomlPath} [${tomlResult.detail ?? ''}]`)
       }
     } else if (agent.hooks?.format === 'cursor-hooks') {
       agentResult.actions.push(...removeAgentHookWrappers('cursor', opts.dryRun))
