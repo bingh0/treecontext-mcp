@@ -35,9 +35,10 @@
  *  |                                        | the scenario says the harness does it                       |
  *  | `writeFakeClaude`                      | the `claude` on PATH whose `--version` install and doctor   |
  *  |                                        | read (journal-install, D290, D304, D338)                    |
- *  | `startEntryAsClient`                   | Claude Code or Codex CLI starting the MCP server its        |
- *  |                                        | treecontext entry names, with the command and arguments the |
- *  |                                        | client itself read (journal-install, D386)                  |
+ *  | `startEntryAsClient`                   | a client (Claude Code, Codex CLI, Cursor) starting the MCP  |
+ *  |                                        | server its treecontext entry names: the command and args    |
+ *  |                                        | the client read, spawned as written, so the real launcher   |
+ *  |                                        | runs this build compiled (journal-install, D386)            |
  *  | `preCompact`                           | Claude Code compacting a session's context: it fires the    |
  *  |                                        | real PreCompact hook, then SessionStart with source         |
  *  |                                        | `compact` under the same session, in that order (D375)      |
@@ -106,12 +107,13 @@
  */
 import { spawn } from 'node:child_process'
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { join } from 'node:path'
 import { WORKER_AGENT_ID, type LegRef, type LegRegistration } from '../../src/persistence/leg-registry.js'
 import { mintTicket, TICKET_ENV, type TicketFields } from '../../src/ticket.js'
 import { spawnWorker, DOOR_LINE_PREFIX, type WorkerRunResult } from '../../src/ticket-door.js'
 import type { FlatStore } from '../../src/flat-store.js'
 import { sandboxedSpawnEnv, nodeTsArgs, CLI_TS } from '../helpers/cli-spawn.js'
+import { placeBuiltPackage } from '../helpers/built-package.js'
 import { TS_ROOT } from './proc.js'
 import { type RunWorld, briefFor, subagentStartHook, liveProcess } from './run-world.js'
 import { type CaptureWorld, runHook, hookJson } from './capture-harness.js'
@@ -459,49 +461,61 @@ export function writeFakeClaude(dir: string, version: string | null): void {
  * A client starting the server its treecontext entry names, as Claude Code
  * and Codex CLI do at a session's start: the command and the arguments the
  * client itself read from its configuration (journal-install's
- * `clientEntry`), passed verbatim, with stdin held open as a client holds
- * it. It may do nothing else: it writes no configuration and reads no row.
+ * `clientEntry`), spawned as they are, with stdin held open as a client
+ * holds it. It may do nothing else: it writes no configuration and reads no
+ * row.
  *
- * The command is the launcher install wrote under the home, and the launcher
- * forwards its arguments to the module it pins (`exec "$TC_NODE" "$TC_CLI"
- * "$@"`, or `"%TC_NODE%" "%TC_CLI%" %*` on Windows). Under this suite that
- * module is the source tree's `cli.js`, which exists as its `.ts` twin only
- * (the same acceptance "each command resolves to an absolute path that
- * exists" makes), so the launcher's dispatch is followed here: the pinned
- * module's twin under the suite's loader, the arguments as the client gave
- * them. What it returns is the server's own word: the `Mode:` line `serve`
- * writes to its debug log under the home. The server is stopped after.
+ * The command is whatever the entry names, normally the launcher install
+ * wrote under the home, and it runs as written: whatever that launcher does
+ * with its arguments is what the server receives. Under this suite the
+ * launcher's pinned module is the source tree's `cli.js`, which exists only
+ * as its `.ts` twin, so this build is placed, compiled, where a global
+ * install lands under the home (tests/helpers/built-package.ts), and the
+ * launcher's own fallback finds and runs it.
+ *
+ * What it returns is the server's own word: the `Mode:` line `serve`
+ * writes to its debug log under the home. `holdUntil`, when given, keeps
+ * the server running after that line until it answers true (polled, at most
+ * 60 seconds), for a caller that watches what the server does. The server
+ * is stopped after.
  */
-export async function startEntryAsClient(home: string, entry: { command: string; args: string[] }, cwd: string): Promise<string> {
-  const launcher = readFileSync(entry.command, 'utf8')
-  const win = launcher.startsWith('@echo off')
-  const pin = (win ? /set "TC_CLI=([^"]+)"/ : /TC_CLI="([^"]+)"/).exec(launcher)?.[1]
-  if (!pin) throw new Error(`the entry's command ${entry.command} pins no module: is it the launcher install writes?`)
-  const forwards = win ? /"%TC_NODE%" "%TC_CLI%" %\*/ : /exec "\$TC_NODE" "\$TC_CLI" "\$@"/
-  if (!forwards.test(launcher)) throw new Error(`the launcher ${entry.command} does not forward its arguments to ${pin}`)
-  const module = existsSync(pin) ? pin : pin.replace(/\.js$/, '.ts')
-  if (resolve(module) !== resolve(CLI_TS)) throw new Error(`the launcher pins ${pin}, not this build's CLI (${CLI_TS})`)
-
+export async function startEntryAsClient(
+  home: string, entry: { command: string; args: string[] }, cwd: string,
+  holdUntil?: () => boolean,
+): Promise<string> {
+  const unplace = placeBuiltPackage(home)
   const logs = join(home, '.treecontext', 'logs')
-  const child = spawn(process.execPath, nodeTsArgs(CLI_TS, entry.args), {
-    cwd, env: sandboxedSpawnEnv(home), stdio: ['pipe', 'pipe', 'pipe'],
+  const before = new Set(existsSync(logs) ? readdirSync(logs) : [])
+  const win = process.platform === 'win32'
+  const child = spawn(win ? `"${entry.command}"` : entry.command, entry.args, {
+    cwd, env: sandboxedSpawnEnv(home), stdio: ['pipe', 'pipe', 'pipe'], shell: win,
   })
   let stderr = ''
   child.stderr.on('data', (d: Buffer) => { stderr += d.toString() })
   child.stdout.resume()
+  const modeLine = (): string | undefined => {
+    if (!existsSync(logs)) return undefined
+    for (const f of readdirSync(logs)) {
+      if (before.has(f)) continue
+      const m = /\[serve\] Mode: (.+)/.exec(readFileSync(join(logs, f), 'utf8'))?.[1]
+      if (m) return m.trim()
+    }
+    return undefined
+  }
   try {
     const deadline = Date.now() + 60_000
+    let mode: string | undefined
     while (Date.now() < deadline) {
-      const file = existsSync(logs) ? readdirSync(logs).find(f => f.endsWith(`-${child.pid}.log`)) : undefined
-      const line = file ? /\[serve\] Mode: (.+)/.exec(readFileSync(join(logs, file), 'utf8'))?.[1] : undefined
-      if (line) return line.trim()
-      if (child.exitCode !== null) throw new Error(`the server exited ${child.exitCode} before writing its mode:\n${stderr}`)
+      mode ??= modeLine()
+      if (mode !== undefined && (!holdUntil || holdUntil())) return mode
+      if (child.exitCode !== null) throw new Error(`the server exited ${child.exitCode} before ${mode ? 'the caller was done' : 'writing its mode'}:\n${stderr}`)
       await new Promise(r => setTimeout(r, 100))
     }
-    throw new Error(`the server wrote no mode line within 60s:\n${stderr}`)
+    throw new Error(`${mode ? `the server ran in ${mode}, but what the caller waited for` : 'the server wrote no mode line'} did not happen within 60s:\n${stderr}`)
   } finally {
     child.stdin.end()
     child.kill('SIGTERM')
     await new Promise<void>((r) => { if (child.exitCode !== null || child.signalCode !== null) r(); else child.once('exit', () => r()) })
+    unplace()
   }
 }

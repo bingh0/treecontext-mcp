@@ -673,7 +673,11 @@ Serve options:
 
 Install options:
   --agent <name>       Install for a specific agent only (repeatable)
-  --force              Overwrite existing config even if already valid
+  --force              Rewrite what install owns in each entry (the command,
+                       its own flags, Codex's worker variables) even if
+                       already valid; keeps your additions (a pinned store,
+                       approvals, env). To start from the default entry:
+                       uninstall --agent X, then install
   --npx                Unavailable during the beta (install globally instead)
   --experimental-capture
                        Also copy the Claude Code hooks into a client that

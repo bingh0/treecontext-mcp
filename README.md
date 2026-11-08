@@ -132,7 +132,15 @@ keeps session identity where `/bin/sh` is dash), and `doctor` reports
 re-run repairs both; doctor's fix line names the forced form,
 `treecontext install --force --agent claude`). The re-run is idempotent — it merges rather than overwrites,
 skips anything already correct, and refreshes the hook wrapper scripts
-and any stale interpreter paths. Store migrations run automatically the
+and any stale interpreter paths. In each agent's treecontext entry it
+rewrites only what install owns (the command, its own flags, Codex's
+worker variables) and keeps what you added — a pinned `--store`,
+`--instructions none`, approvals, an `env` block — and `--force` keeps
+them too: it rewrites what install owns even when it is valid, nothing
+more. To start from the default entry, run `treecontext uninstall
+--agent <name>` and then `treecontext install`. Before rewriting a Codex
+`config.toml` it keeps the file as it was beside it
+(`config.toml.treecontext-bak`), since the rewrite does not keep comments. Store migrations run automatically the
 next time the server opens your store and are additive — but per the
 beta caveat above, treat the journal as replaceable between beta
 releases anyway. The re-run also refreshes the installed reference skill

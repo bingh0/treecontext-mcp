@@ -610,21 +610,27 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
     const slug = CLIENT_SLUG[client!]!
     await openInstallWorld(w, [])
     mkdirSync(clientDir(slug, w.ihome!), { recursive: true })
-    // The block as the real installer writes it today, then the client wired
-    // for the tools the way a no-flag install leaves it.
+    // The block as the real installer writes it today, then the copy written
+    // through the real door: the flagged install names the client, which
+    // writes the copy and the server entry in capture mode together (D386).
+    // The oracle (the block verbatim, or translated) grades what it wrote; a
+    // drifted copy is that installed copy changed afterwards.
     let run = tcCli(w, ['install', '--yes', '--agent', 'claude'])
     expect(run.status, run.out).toBe(0)
-    run = tcCli(w, ['install', '--yes', '--agent', slug])
+    run = tcCli(w, ['install', '--yes', '--agent', slug, '--experimental-capture'])
     expect(run.status, run.out).toBe(0)
     w.claudeBlock = (JSON.parse(readFileSync(join(w.ihome!, '.claude', 'settings.json'), 'utf8')) as { hooks: HookBlock }).hooks
+    const hookFile = clientHookFile(slug, w.ihome!)!
+    const written = JSON.parse(readFileSync(hookFile, 'utf8')) as Record<string, unknown> & { hooks: HookBlock }
     let copy: HookBlock
     if (slug === 'codex') {
-      copy = structuredClone(w.claudeBlock)
+      expect(written.hooks, 'the flagged install did not copy the Claude Code block verbatim').toEqual(w.claudeBlock)
+      copy = structuredClone(written.hooks)
       // An older copy: taken before the block gained its Stop hook.
       if (how === 'a copy that differs from') delete copy['Stop']
-      writeFileSync(clientHookFile('codex', w.ihome!)!, JSON.stringify({ hooks: copy }, null, 2))
     } else {
-      copy = translateForGemini(w.claudeBlock)
+      expect(written.hooks, 'the flagged install did not write the translated block').toEqual(translateForGemini(w.claudeBlock))
+      copy = structuredClone(written.hooks)
       // Every translated event is one Gemini's own documentation offers.
       const offered = parseMatrix(readFileSync(join(TS_ROOT, 'README.md'), 'utf8')).find(r => r.client === 'Gemini CLI')!.events
       for (const e of Object.keys(copy)) expect(offered, `Gemini offers no ${e}`).toContain(e)
@@ -633,13 +639,11 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
         copy['PostToolUse'] = copy['AfterTool']!
         delete copy['AfterTool']
       }
-      // Gemini keeps its hooks beside its MCP registration: write into the
-      // settings file install wrote, keeping every key already there.
-      const settingsPath = clientHookFile('gemini', w.ihome!)!
-      const settings = JSON.parse(readFileSync(settingsPath, 'utf8')) as Record<string, unknown>
-      expect(settings['mcpServers'], 'the tools-only install registered no server').toBeDefined()
-      writeFileSync(settingsPath, JSON.stringify({ ...settings, hooks: copy }, null, 2))
+      // Gemini keeps its hooks beside its MCP registration.
+      expect(written['mcpServers'], 'the install registered no server').toBeDefined()
     }
+    // Every other key of the file stays as install wrote it.
+    writeFileSync(hookFile, JSON.stringify({ ...written, hooks: copy }, null, 2))
     expect(treecontextHookMentions(clientHookFile(slug, w.ihome!)).length, 'the copy holds no treecontext hook').toBeGreaterThan(0)
   })
   reg.define(/^the developer sees doctor's row for (Codex CLI|Gemini CLI) read present and (consistent|inconsistent)$/, (w: ClientsWorld, ...captures) => {

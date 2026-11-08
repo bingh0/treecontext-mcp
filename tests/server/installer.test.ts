@@ -366,7 +366,7 @@ describe('convergeMcpEntry and the upserts that use it (D385)', () => {
     ].join('\n'))
     const r = upsertTomlMcp(p, codexWant(), false, false)
     expect(r.status).toBe('updated')
-    expect(r.detail).toBe('kept your --store pinned, --instructions none, default_tools_approval_mode, enabled_tools, startup_timeout_sec, env, tools')
+    expect(r.detail).toBe(`kept your --store pinned, --instructions none, default_tools_approval_mode, enabled_tools, startup_timeout_sec, env, tools; comments are not preserved; the file as it was is at ${p}.treecontext-bak`)
     expect(tomlEntry(p)).toEqual({
       command: launcher(),
       args: ['serve', '--transport', 'stdio', '--no-capture', '--store', 'pinned', '--instructions', 'none'],
@@ -393,7 +393,7 @@ describe('convergeMcpEntry and the upserts that use it (D385)', () => {
     ].join('\n'))
     const r = upsertTomlMcp(p, codexWant(), false, false)
     expect(r.status).toBe('updated')
-    expect(r.detail).toBe('kept your env_vars MY_TOKEN')
+    expect(r.detail).toBe(`kept your env_vars MY_TOKEN; comments are not preserved; the file as it was is at ${p}.treecontext-bak`)
     expect(tomlEntry(p)['env_vars']).toEqual(['MY_TOKEN', 'TREECONTEXT_TICKET', 'TREECONTEXT_WORKER_SESSION'])
   })
 
@@ -443,7 +443,7 @@ describe('convergeMcpEntry and the upserts that use it (D385)', () => {
     const want = { command: launcher(), args: ['serve', '--transport', 'stdio', '--capture', '--debug'] }
     const r = upsertJsonMcp(p, 'mcpServers', want, false, false)
     expect(r.status).toBe('updated')
-    expect(r.detail).toBe('kept your --store pinned, type, env')
+    expect(r.detail).toBe('kept your --store pinned, type, env; did not keep your /nonexistent/node-v0.0.0/lib/node_modules/treecontext-mcp/dist/server/cli.js (before serve, with the old command)')
     expect((readJson(p).mcpServers as Record<string, unknown>).treecontext).toEqual({
       type: 'stdio',
       command: launcher(),
@@ -507,6 +507,35 @@ describe('convergeMcpEntry and the upserts that use it (D385)', () => {
     expect(forced.entry).toEqual({ command: launcher(), args: ['serve', '--transport', 'stdio', '--capture', '--debug', '--store', 'pinned'] })
   })
 
+  it('names what it cannot keep: an args string, a non-list env_vars, a replaced type; a single env_vars name is kept as a list', () => {
+    const json = convergeMcpEntry(
+      { type: 'sse', command: '/bin/sh', args: '--store pinned' },
+      { type: 'stdio', command: launcher(), args: ['serve', '--transport', 'stdio', '--no-capture'] }, false,
+    )
+    expect(json.entry).toEqual({ type: 'stdio', command: '/bin/sh', args: ['serve', '--transport', 'stdio', '--no-capture'] })
+    expect(json.dropped).toEqual(['args "--store pinned" (not a list)', 'type "sse" (install writes "stdio")'])
+    const one = convergeMcpEntry({ command: launcher(), args: ['serve', '--transport', 'stdio', '--no-capture'], env_vars: 'MY_TOKEN' }, codexWant(), false)
+    expect(one.entry['env_vars']).toEqual(['MY_TOKEN', 'TREECONTEXT_TICKET', 'TREECONTEXT_WORKER_SESSION'])
+    expect(one.dropped).toEqual([])
+    const bad = convergeMcpEntry({ command: launcher(), args: ['serve', '--transport', 'stdio', '--no-capture'], env_vars: 7 }, codexWant(), false)
+    expect(bad.dropped).toEqual(['env_vars 7 (not a list of names)'])
+  })
+
+  it("keeps a commented config.toml's previous bytes beside it before rewriting, and says so", () => {
+    const p = join(dir, 'config.toml')
+    const raw = ['# my settings, explained', 'model = "o3"', '', '[mcp_servers.treecontext]', `command = ${JSON.stringify(launcher())}`, 'args = ["serve"]', ''].join('\n')
+    writeFileSync(p, raw)
+    const r = upsertTomlMcp(p, codexWant(), false, false)
+    expect(r.status).toBe('updated')
+    expect(r.detail).toContain(`comments are not preserved; the file as it was is at ${p}.treecontext-bak`)
+    expect(readFileSync(`${p}.treecontext-bak`, 'utf8')).toBe(raw)
+    expect(readFileSync(p, 'utf8')).not.toContain('# my settings')
+    // A file install creates has no previous bytes to keep.
+    const fresh = join(dir, 'fresh.toml')
+    expect(upsertTomlMcp(fresh, codexWant(), false, false).detail).toBeUndefined()
+    expect(existsSync(`${fresh}.treecontext-bak`)).toBe(false)
+  })
+
   it('a dry run says what it would keep and writes nothing', () => {
     const p = join(dir, 'config.toml')
     const raw = [
@@ -516,7 +545,11 @@ describe('convergeMcpEntry and the upserts that use it (D385)', () => {
     ].join('\n')
     writeFileSync(p, raw)
     const r = upsertTomlMcp(p, codexWant(), false, true)
-    expect(r).toEqual({ type: 'mcp-config', path: p, status: 'dry-run', detail: 'would keep your --store pinned' })
+    expect(r).toEqual({
+      type: 'mcp-config', path: p, status: 'dry-run',
+      detail: `would keep your --store pinned; comments are not preserved; the file as it is would be kept at ${p}.treecontext-bak`,
+    })
+    expect(existsSync(`${p}.treecontext-bak`)).toBe(false)
     expect(readFileSync(p, 'utf8')).toBe(raw)
   })
 })
@@ -627,7 +660,7 @@ describe('upsertTomlMcp', () => {
     // The stale command is repaired and the variables added; the
     // developer's own flag stays (D385).
     expect(servers['treecontext']).toEqual({ ...entry, args: ['serve', '--capture', '--code-index'] })
-    expect(r.detail).toBe('kept your --code-index')
+    expect(r.detail).toBe(`kept your --code-index; comments are not preserved; the file as it was is at ${p}.treecontext-bak`)
   })
 
   it('overwrites when force=true', () => {

@@ -8,7 +8,7 @@
 import { TICKET_ENV, WORKER_SESSION_ENV } from '../ticket.js'
 import {
   existsSync, readFileSync, writeFileSync, renameSync, mkdirSync,
-  unlinkSync, readdirSync, lstatSync, statSync, rmSync,  realpathSync, readlinkSync,
+  unlinkSync, readdirSync, lstatSync, statSync, rmSync,  realpathSync, readlinkSync, copyFileSync, chmodSync,
 } from 'node:fs'
 import { execFileSync, spawnSync } from 'node:child_process'
 import type { DatabaseSync } from 'node:sqlite'
@@ -748,6 +748,8 @@ export interface ConvergedEntry {
   changed: boolean
   /** The developer's additions kept, as the install output names them. */
   kept: string[]
+  /** What the developer had that install could not keep, each named, so nothing goes silently. */
+  dropped: string[]
 }
 
 /**
@@ -775,6 +777,16 @@ export function convergeMcpEntry(
   const replaceCommand = force || commandNeedsRepair(have.command)
   const command = replaceCommand ? want.command : have.command
   const prefix = replaceCommand ? wantSplit.prefix : haveSplit.prefix
+  const dropped: string[] = []
+  // What ran before `serve` belongs with the command it ran under: when that
+  // command is replaced, it goes too, and the line says so.
+  if (replaceCommand && JSON.stringify(haveSplit.prefix) !== JSON.stringify(wantSplit.prefix) && haveSplit.prefix.length > 0) {
+    dropped.push(`${haveSplit.prefix.join(' ')} (before serve, with the old command)`)
+  }
+  // An args value that is not a list cannot be read as arguments.
+  if (!have.array && existing.args !== undefined && !Array.isArray(existing.args) && 'args' in desired) {
+    dropped.push(`args ${JSON.stringify(existing.args)} (not a list)`)
+  }
   const args = [
     ...prefix,
     ...(wantSplit.hasServe ? ['serve'] : []),
@@ -790,11 +802,20 @@ export function convergeMcpEntry(
     } else if (key === 'args') {
       entry.args = args
     } else if (key === 'env_vars' && Array.isArray(value)) {
-      const names = Array.isArray(existing.env_vars) ? (existing.env_vars as unknown[]).map(String) : []
+      // A single name written as a string is read as the list of that name.
+      const raw = existing.env_vars
+      const names = Array.isArray(raw) ? (raw as unknown[]).map(String)
+        : typeof raw === 'string' && raw.length > 0 ? [raw] : []
+      if (raw !== undefined && !Array.isArray(raw) && typeof raw !== 'string') {
+        dropped.push(`env_vars ${JSON.stringify(raw)} (not a list of names)`)
+      }
       const extra = names.filter(n => !(value as unknown[]).includes(n))
       if (extra.length > 0) kept.push(`env_vars ${extra.join(' ')}`)
       entry.env_vars = [...names, ...(value as unknown[]).map(String).filter(n => !names.includes(n))]
     } else {
+      if (key in existing && JSON.stringify(existing[key]) !== JSON.stringify(value)) {
+        dropped.push(`${key} ${JSON.stringify(existing[key])} (install writes ${JSON.stringify(value)})`)
+      }
       entry[key] = value
     }
   }
@@ -816,13 +837,69 @@ export function convergeMcpEntry(
     })
   }
   const changed = meaning(entry) !== meaning(existing)
-  return { entry: changed ? entry : existing, changed, kept }
+  return { entry: changed ? entry : existing, changed, kept, dropped: changed ? dropped : [] }
 }
 
-/** The install output's words for an entry install converged. */
-function keptDetail(kept: readonly string[], dryRun: boolean): string | undefined {
-  if (kept.length === 0) return undefined
-  return `${dryRun ? 'would keep' : 'kept'} your ${kept.join(', ')}`
+/**
+ * Turn an existing treecontext entry's capture mode on or off, changing
+ * nothing else in it: its command, its other owned flags (the transport,
+ * the backend flag) and every addition of the developer's stay. Null when
+ * the agent has no treecontext entry.
+ */
+export function setEntryCapture(agent: AgentDefinition, configPath: string, capture: boolean, dryRun: boolean): ActionResult | null {
+  if (!existsSync(configPath)) return null
+  let existing: unknown
+  try {
+    const data = agent.configFormat === 'toml-codex'
+      ? parseToml(readFileSync(configPath, 'utf8')) as Record<string, unknown>
+      : JSON.parse(readFileSync(configPath, 'utf8')) as Record<string, unknown>
+    existing = ((data[configRootKey(agent)] ?? {}) as Record<string, unknown>).treecontext
+  } catch {
+    return null
+  }
+  if (!existing || typeof existing !== 'object' || Array.isArray(existing)) return null
+  const have = entryCommand(existing as Record<string, unknown>)
+  const split = splitServeArgs(have.args)
+  const owned = split.owned.filter(t => t !== '--capture' && t !== '--no-capture' && t !== '--debug')
+  const args = [...split.prefix, 'serve', ...owned, ...(capture ? ['--capture', '--debug'] : ['--no-capture'])]
+  const desired: Record<string, unknown> = have.array
+    ? { command: [have.command, ...args] }
+    : { command: have.command, args }
+  return agent.configFormat === 'toml-codex'
+    ? upsertTomlMcp(configPath, desired, false, dryRun)
+    : upsertJsonMcp(configPath, configRootKey(agent), desired, false, dryRun)
+}
+
+/** The install output's words for an entry install converged: what it kept, and what it could not. */
+function keptDetail(converged: Pick<ConvergedEntry, 'kept' | 'dropped'>, dryRun: boolean, extra: string[] = []): string | undefined {
+  const parts: string[] = []
+  if (converged.kept.length > 0) parts.push(`${dryRun ? 'would keep' : 'kept'} your ${converged.kept.join(', ')}`)
+  if (converged.dropped.length > 0) parts.push(`${dryRun ? 'would not keep' : 'did not keep'} your ${converged.dropped.join(', ')}`)
+  parts.push(...extra)
+  return parts.length > 0 ? parts.join('; ') : undefined
+}
+
+/** Where a TOML file's previous bytes are kept before install rewrites it. */
+export function tomlBackupPath(path: string): string {
+  return `${path}.treecontext-bak`
+}
+
+/**
+ * Rewrite an existing TOML file, keeping its previous bytes beside it first
+ * (overwritten each time). smol-toml re-serializes the whole file and does
+ * not keep comments, so the developer's commented file is never lost to a
+ * rewrite. Returns the words the install line adds, or nothing for a new file.
+ */
+function writeTomlKeepingBackup(path: string, data: Record<string, unknown>, mode?: number): string[] {
+  let note: string[] = []
+  if (existsSync(path)) {
+    const bak = tomlBackupPath(path)
+    copyFileSync(path, bak)
+    try { chmodSync(bak, statSync(path).mode & 0o777) } catch { /* best effort */ }
+    note = [`comments are not preserved; the file as it was is at ${bak}`]
+  }
+  atomicWrite(path, stringifyToml(data) + '\n', mode)
+  return note
 }
 
 export function upsertJsonMcp(
@@ -833,7 +910,7 @@ export function upsertJsonMcp(
   const servers = (data[rootKey] ?? {}) as Record<string, unknown>
 
   const existing = servers.treecontext
-  let kept: string[] = []
+  let report: Pick<ConvergedEntry, 'kept' | 'dropped'> = { kept: [], dropped: [] }
   if (existing && typeof existing === 'object' && !Array.isArray(existing)) {
     // Converge only what install owns (D385), force or not.
     const converged = convergeMcpEntry(existing as Record<string, unknown>, entry, force)
@@ -841,14 +918,15 @@ export function upsertJsonMcp(
       return { type: 'mcp-config', path, status: 'skipped', detail: 'already configured' }
     }
     servers.treecontext = converged.entry
-    kept = converged.kept
+    report = converged
   } else {
+    if (existing !== undefined) report = { kept: [], dropped: [`entry ${JSON.stringify(existing)} (not an object)`] }
     servers.treecontext = entry
   }
   const status = existing ? 'updated' : 'created'
   data[rootKey] = servers
 
-  const detail = keptDetail(kept, dryRun)
+  const detail = keptDetail(report, dryRun)
   if (dryRun) {
     return { type: 'mcp-config', path, status: 'dry-run', ...(detail ? { detail } : {}) }
   }
@@ -885,7 +963,7 @@ export function upsertTomlMcp(
 
   const servers = (data.mcp_servers ?? {}) as Record<string, unknown>
   const existing = servers.treecontext
-  let kept: string[] = []
+  let report: Pick<ConvergedEntry, 'kept' | 'dropped'> = { kept: [], dropped: [] }
   if (existing && typeof existing === 'object' && !Array.isArray(existing)) {
     // Converge only what install owns (D385), force or not: the command, its
     // own arguments and the forwarded worker variables (an entry an earlier
@@ -896,16 +974,19 @@ export function upsertTomlMcp(
       return { type: 'mcp-config', path, status: 'skipped', detail: 'already configured' }
     }
     servers.treecontext = converged.entry
-    kept = converged.kept
+    report = converged
   } else {
+    if (existing !== undefined) report = { kept: [], dropped: [`entry ${JSON.stringify(existing)} (not a table)`] }
     servers.treecontext = entry
   }
   const status = existing ? 'updated' : 'created'
   data.mcp_servers = servers
 
-  const detail = keptDetail(kept, dryRun)
-  if (dryRun) return { type: 'mcp-config', path, status: 'dry-run', ...(detail ? { detail } : {}) }
-  atomicWrite(path, stringifyToml(data) + '\n')
+  if (dryRun) {
+    const detail = keptDetail(report, true, existsSync(path) ? [`comments are not preserved; the file as it is would be kept at ${tomlBackupPath(path)}`] : [])
+    return { type: 'mcp-config', path, status: 'dry-run', ...(detail ? { detail } : {}) }
+  }
+  const detail = keptDetail(report, false, writeTomlKeepingBackup(path, data))
   return { type: 'mcp-config', path, status, ...(detail ? { detail } : {}) }
 }
 
@@ -917,8 +998,8 @@ export function removeTomlMcp(path: string, dryRun: boolean): ActionResult | nul
     if (!servers.treecontext) return null
     delete servers.treecontext
     data.mcp_servers = servers
-    if (!dryRun) atomicWrite(path, stringifyToml(data) + '\n')
-    return { type: 'mcp-config', path, status: dryRun ? 'dry-run' : 'updated', detail: 'removed' }
+    const note = dryRun ? [] : writeTomlKeepingBackup(path, data)
+    return { type: 'mcp-config', path, status: dryRun ? 'dry-run' : 'updated', detail: ['removed', ...note].join('; ') }
   } catch {
     return null
   }
@@ -989,19 +1070,38 @@ export const CAPTURE_PLATFORMS = new Set(['claude'])
 export const COPYING_CLIENTS = new Set(['codex', 'gemini'])
 
 /**
- * Whether an agent's capture hooks are installed, which is when its entry
- * starts the server in capture mode (D386): Claude Code always, and a
- * copying client opted in by name under the experimental flag, in this run
- * or an earlier one whose copy is still in place. Install writes the entry
- * from it and doctor reads the entry against it, so the two cannot disagree.
+ * Whether a capture hooks block runs for an agent, which is when its entry
+ * starts the server in capture mode (D386: "a capture-mode line on a client
+ * nothing captures is the promise D29 forbids", so a client whose hooks do
+ * run gets capture): Claude Code always; a copying client when its copy is
+ * installed (by the experimental flag naming it in this run, or an earlier
+ * copy still in place); Cursor whenever the Claude Code block is installed,
+ * since it reads that block by default; VS Code when the block is installed
+ * and chat.useClaudeHooks is on. Install writes the entry from it and doctor
+ * reads the entry against it, so the two cannot disagree; a VS Code setting
+ * toggled after install is the disagreement doctor names.
+ *
+ * `claudeBlockPlanned` is a dry run that would write the Claude Code block
+ * before this agent: the block is not on disk yet, but the plan writes it.
  */
 export function captureHooksInstalled(
-  agent: AgentDefinition, platform: Platform, experimentalCapture = false,
+  agent: AgentDefinition, platform: Platform,
+  opts: { experimentalCapture?: boolean; claudeBlockPlanned?: boolean } = {},
 ): boolean {
   if (CAPTURE_PLATFORMS.has(agent.slug)) return true
-  if (!agent.hooks || !COPYING_CLIENTS.has(agent.slug)) return false
-  if (experimentalCapture) return true
-  return clientHookReport(agent, platform)?.hooksPresent === true
+  if (!agent.hooks) return false
+  if (COPYING_CLIENTS.has(agent.slug)) {
+    if (opts.experimentalCapture) return true
+    return clientHookReport(agent, platform)?.hooksPresent === true
+  }
+  if (AS_IS_CLIENTS.has(agent.slug)) {
+    const block = opts.claudeBlockPlanned === true || claudeHooksBlockState(platform) !== 'absent'
+    if (!block) return false
+    if (agent.slug === 'cursor') return true
+    const settings = vscodeUserSettingsPath(platform)
+    return settings != null && vscodeClaudeHooksSetting(settings) === 'on'
+  }
+  return false
 }
 
 /**
@@ -2421,8 +2521,8 @@ export function stripCodexTomlHooks(path: string, dryRun: boolean): ActionResult
   if (!hooks || typeof hooks !== 'object' || Array.isArray(hooks)) return null
   if (!stripOwnedHooks(hooks as Record<string, unknown>)) return null
   if (Object.keys(hooks).length === 0) delete data['hooks']
-  if (!dryRun) atomicWrite(path, stringifyToml(data) + '\n')
-  return { type: 'hook-settings', path, status: dryRun ? 'dry-run' : 'updated', detail: 'removed treecontext entries from [hooks]' }
+  const note = dryRun ? [] : writeTomlKeepingBackup(path, data)
+  return { type: 'hook-settings', path, status: dryRun ? 'dry-run' : 'updated', detail: ['removed treecontext entries from [hooks]', ...note].join('; ') }
 }
 
 export function removeCodexHooks(path: string, dryRun: boolean): ActionResult | null {
@@ -2668,8 +2768,8 @@ export function installGlobalConfig(dryRun: boolean): ActionResult {
       data.server = server
       // config.toml lives under ~/.treecontext — private by mode, like
       // everything else the tool writes there (docs/security.md §3).
-      if (!dryRun) atomicWrite(configPath, stringifyToml(data) + '\n', 0o600)
-      return { type: 'global-config', path: configPath, status: 'updated' }
+      const note = dryRun ? [] : writeTomlKeepingBackup(configPath, data, 0o600)
+      return { type: 'global-config', path: configPath, status: 'updated', ...(note.length > 0 ? { detail: note.join('; ') } : {}) }
     }
     // Corrupt file: the fresh template below replaces it, but the bytes
     // are the user's — side-file them first, same contract as
@@ -2851,8 +2951,11 @@ export async function install(opts: InstallOptions): Promise<AgentInstallResult[
     // MCP config
     const configPath = getConfigPath(agent, platform)
     if (configPath) {
-      // Capture mode only where the agent's capture hooks are installed (D386).
-      const entry = buildMcpEntry(agent, opts.useNpx, opts.lexical, captureHooksInstalled(agent, platform, opts.experimentalCapture))
+      // Capture mode wherever a capture hooks block runs for the agent (D386).
+      const entry = buildMcpEntry(agent, opts.useNpx, opts.lexical, captureHooksInstalled(agent, platform, {
+        experimentalCapture: opts.experimentalCapture === true,
+        claudeBlockPlanned: opts.dryRun && agents.some(a => a.slug === 'claude'),
+      }))
 
       // ~/.claude.json is Claude Code's live state file, not a config file we
       // own: it also holds project history and onboarding state, and Claude
@@ -3235,6 +3338,17 @@ export async function uninstall(opts: {
           agentResult.actions.push(hookResult)
           console.log(`${agent.name}: hooks removed`)
         }
+      }
+    }
+
+    // A copying client whose copy is gone runs no capture hooks, so its
+    // entry converges to no capture (D386) and keeps everything else
+    // (D385): doctor reads the hooks-only uninstall as correct straight away.
+    if (opts.hooksOnly && configPath && COPYING_CLIENTS.has(agent.slug)) {
+      const mode = setEntryCapture(agent, configPath, false, opts.dryRun)
+      if (mode) {
+        agentResult.actions.push(mode)
+        console.log(`${agent.name}: mcp entry set to no capture in ${configPath} [${mode.status}${mode.detail ? ` — ${mode.detail}` : ''}]`)
       }
     }
 
@@ -5540,6 +5654,8 @@ export async function doctor(): Promise<DiagnosticResult[]> {
   const agentRows: DiagnosticResult[] = []
   let agentsCapture = 0
   let agentsModeWrong = 0
+  // The fix each mode-disagreeing row names, for the indexer row (one cause, one command).
+  const modeFixes: string[] = []
   let agentsTotal = 0
 
   for (const agent of detected) {
@@ -5603,17 +5719,15 @@ export async function doctor(): Promise<DiagnosticResult[]> {
     // Mode detection from MCP args. On a client other than Claude Code this
     // is the SERVER's mode: the client itself captures nothing unless its
     // own hooks run, and the row must not read as if it did.
-    // The mode is read against the hooks doctor finds (D386): capture where
-    // the agent's capture hooks are installed, and without capture
-    // everywhere else, which is the honest entry, not a problem. The one
-    // disagreement that warns is a capture-mode server for a client nothing
-    // captures (the promise D29 forbids), and Claude Code's server without
-    // capture. A copy of the hooks beside a server without capture is a
-    // delay, not a loss: its events wait in staging, with their own
-    // moments, for the next capture server (D386's disclosed residual), so
-    // the row says so in words; a plain install converges the flag.
-    const captureExpected = CAPTURE_PLATFORMS.has(agent.slug)
-      || (agent.hooks != null && COPYING_CLIENTS.has(agent.slug) && client?.hooksPresent === true)
+    // The mode is read against the hooks doctor finds (D386), the same
+    // predicate install writes the entry from: capture wherever a capture
+    // hooks block runs for the client, without capture everywhere else,
+    // which is the honest entry, not a problem. Any disagreement warns: a
+    // capture-mode server for a client nothing captures (the promise D29
+    // forbids), and hooks that run beside a server that will not drain them
+    // (a copy installed by hand, VS Code's setting turned on after install).
+    // A plain install converges the flag.
+    const captureExpected = captureHooksInstalled(agent, platform)
     let hasModeProblem = false
     if (mcpArgs) {
       const hasCapture = serveCaptures(mcpArgs, globalConfigCapture())
@@ -5621,14 +5735,13 @@ export async function doctor(): Promise<DiagnosticResult[]> {
       const hasNoDebug = mcpArgs.includes('--no-debug')
       const label = client ? 'server mode' : 'mode'
       const thisClient = client
-        ? ` (this client: ${client.hooksPresent ? 'experimental hooks, unverified' : 'tools only'})`
+        ? ` (this client: ${captureExpected ? (COPYING_CLIENTS.has(agent.slug) ? 'experimental hooks, unverified' : 'reads the Claude Code hooks block') : 'tools only'})`
         : ''
-      hasModeProblem = hasCapture ? !captureExpected : CAPTURE_PLATFORMS.has(agent.slug)
-      const note = hasCapture && !captureExpected
-        ? ' — but no capture hooks are installed for this client'
-        : !hasCapture && captureExpected && client
-          ? " — this client's copied hooks stage events that a capture server, such as Claude Code's, drains"
-          : ''
+      hasModeProblem = hasCapture !== captureExpected
+      const note = !hasModeProblem ? ''
+        : hasCapture
+          ? ' — but no capture hooks run for this client'
+          : " — but this client's hooks run, and this server does not drain what they stage"
       if (hasCapture) {
         parts.push(`${label}: capture${thisClient}${note}`)
       } else {
@@ -5899,6 +6012,7 @@ export async function doctor(): Promise<DiagnosticResult[]> {
     }
     results.push(agentRow)
     agentRows.push(agentRow)
+    if (hasModeProblem && fix) modeFixes.push(fix)
     if (agent.slug === 'claude') {
       const settingsPath = getHookSettingsPath(agent, platform)
       if (settingsPath) {
@@ -5923,7 +6037,9 @@ export async function doctor(): Promise<DiagnosticResult[]> {
       results.push({
         check: 'Conversation indexer', status: 'warn',
         detail: `${agentsModeWrong} of ${plural(agentsTotal)} in a mode their capture hooks disagree with`,
-        fix: 'treecontext install --force',
+        // The per-agent row's own command where one agent is the cause; a
+        // plain install converges every agent's flag where several are.
+        fix: modeFixes.length === 1 ? modeFixes[0]! : INSTALL_COMMAND,
       })
     }
   }

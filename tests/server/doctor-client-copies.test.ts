@@ -117,6 +117,22 @@ describe('doctor and install on a copying client, end to end', () => {
     expect(ok(['doctor']).stdout).toMatch(/Codex CLI: MCP configured, server mode: capture \(this client: experimental hooks, unverified\),/)
   }, 120_000)
 
+  it('a hooks-only uninstall of the copy leaves the entry without capture, its other keys kept, and doctor [ok] at once (D386)', () => {
+    ok(['install', '--agent', 'codex', '--experimental-capture'])
+    const toml = parseToml(readFileSync(codexToml(), 'utf8')) as { mcp_servers: Record<string, Record<string, unknown>> }
+    expect(toml.mcp_servers['treecontext']!['args']).toContain('--capture')
+    toml.mcp_servers['treecontext']!['args'] = [...(toml.mcp_servers['treecontext']!['args'] as string[]), '--store', 'pinned']
+    toml.mcp_servers['treecontext']!['startup_timeout_sec'] = 30
+    writeFileSync(codexToml(), stringifyToml(toml) + '\n')
+    ok(['uninstall', '--agent', 'codex', '--hooks-only'])
+    const after = (parseToml(readFileSync(codexToml(), 'utf8')) as { mcp_servers: Record<string, Record<string, unknown>> }).mcp_servers['treecontext']!
+    expect(after['args']).toEqual(['serve', '--transport', 'stdio', '--lexical', '--no-capture', '--store', 'pinned'])
+    expect(after['startup_timeout_sec']).toBe(30)
+    const r = row('Codex CLI')
+    expect(r.status, r.line).toBe('ok')
+    expect(r.line).toMatch(/server mode: standard \(no auto-capture\) \(this client: tools only\), /)
+  }, 120_000)
+
   it('a copy in two places reads inconsistent — it would fire twice — and the named command leaves one', () => {
     ok(['install', '--agent', 'codex', '--experimental-capture'])
     expect(row('Codex CLI').state).toMatch(/present and consistent/)
