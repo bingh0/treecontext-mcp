@@ -56,3 +56,11 @@ for (let i = 0; i < 5; i++) updateInstallState(s => { const w = (s.toolApprovals
     expect(rec.toolApprovals.written.n.f.items).toHaveLength(30)
   }, 60_000)
 })
+
+describe('the clients a corrupt record leaves unknown', () => {
+  test('are every client install approves for, so none is left "on" by a corrupt record', async () => {
+    const { RECORDED_CLIENTS } = await import('../../src/server/install-state.js')
+    const { APPROVAL_CLIENTS } = await import('../../src/server/tool-approvals.js')
+    expect([...RECORDED_CLIENTS].sort()).toEqual([...APPROVAL_CLIENTS].sort())
+  })
+})

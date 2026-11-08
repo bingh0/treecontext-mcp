@@ -184,11 +184,19 @@ describe('the directory Gemini CLI and agy share (D383)', () => {
       }
       const t = home([...layout, '.gemini/tmp'])
       expect(detected(t), 'tmp/').toBe(both)
-      for (const data of [{ security: { auth: { selectedType: 'oauth-personal' } } }, { mcpServers: { github: { command: 'gh' } } }, { hooks: {} }]) {
+      for (const data of [{ security: { auth: { selectedType: 'oauth-personal' } } }, { mcpServers: { github: { command: 'gh' } } }, { hooks: { BeforeTool: [{ hooks: [{ type: 'command', command: 'my-linter --check' }] }] } }]) {
         const h = home(layout)
         writeFileSync(join(h, '.gemini', 'settings.json'), JSON.stringify(data))
         expect(detected(h), JSON.stringify(data)).toBe(both)
       }
+    }
+  })
+  test("hooks treecontext wrote, or the empty hooks its uninstall leaves, are not Gemini CLI's own", () => {
+    const tcHooks = { hooks: { SessionStart: [{ hooks: [{ type: 'command', command: 'exec "/x/.claude/hooks/tc-session-start"' }] }], BeforeTool: [{ hooks: [{ type: 'command', command: 'node /x/dist/hooks/gemini/before-tool.js' }] }] } }
+    for (const data of [{ hooks: {} }, tcHooks, { ...tcHooks, mcpServers: { treecontext: { command: 'x', args: ['serve'] } } }]) {
+      const h = home()
+      writeFileSync(join(h, '.gemini', 'settings.json'), JSON.stringify(data))
+      expect(detected(h), JSON.stringify(data)).toBe('Antigravity CLI')
     }
   })
   test('the gemini command on PATH is Gemini CLI', () => {

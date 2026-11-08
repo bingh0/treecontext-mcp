@@ -377,6 +377,25 @@ export function commandOnPath(name: string, platform: Platform = process.platfor
   return false
 }
 
+/** A hook command treecontext writes: its per-client hook scripts, the `tc-` wrappers, the CLI. */
+const TC_HOOK_COMMAND_RE = /(hooks[\\/](gemini|vscode|codex|cursor)[\\/]|tc-|cli\.js|treecontext)/
+
+/** Whether a settings `hooks` value holds no hook command but treecontext's (an empty one included). */
+export function hooksAreTreecontextOnly(hooks: unknown): boolean {
+  const commands: string[] = []
+  const walk = (v: unknown): void => {
+    if (Array.isArray(v)) { v.forEach(walk); return }
+    if (!v || typeof v !== 'object') return
+    for (const [k, x] of Object.entries(v as Record<string, unknown>)) {
+      if (k === 'command' && typeof x === 'string') commands.push(x)
+      else walk(x)
+    }
+  }
+  if (hooks !== null && typeof hooks === 'object') walk(hooks)
+  else if (hooks !== undefined) return false
+  return commands.every(c => TC_HOOK_COMMAND_RE.test(c))
+}
+
 /** The files and directories in `~/.gemini` that only Gemini CLI makes (D383). */
 export const GEMINI_ARTIFACTS = ['installation_id', 'oauth_creds.json', 'google_accounts.json', 'trusted_hooks.json', 'tmp'] as const
 
@@ -402,7 +421,11 @@ export function geminiArtifacts(): string[] {
       } else {
         const rec = data as Record<string, unknown>
         const servers = rec['mcpServers']
-        const ownKey = Object.keys(rec).some(k => k !== 'mcpServers')
+        // `hooks` is Gemini CLI's own only when it holds a hook treecontext
+        // did not write: the translated block `install --experimental-capture`
+        // copies there, or the `{}` its uninstall leaves, is ours, so an
+        // orphan carrying it still reads as an orphan.
+        const ownKey = Object.keys(rec).some(k => k !== 'mcpServers' && !(k === 'hooks' && hooksAreTreecontextOnly(rec[k])))
         const otherServer = servers !== undefined && (!servers || typeof servers !== 'object' || Array.isArray(servers)
           || Object.keys(servers).some(k => k !== 'treecontext'))
         if (ownKey || otherServer) found.push('settings.json')

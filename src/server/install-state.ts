@@ -44,8 +44,11 @@ export interface InstallState {
   createdFiles?: Record<string, { at: string }>
 }
 
-/** The clients whose approvals a record that did not parse leaves unknown. */
-const RECORDED_CLIENTS = ['claude', 'codex']
+/** The clients whose approvals a record that did not parse leaves unknown:
+ *  every client install approves for (APPROVAL_CLIENTS in tool-approvals.ts;
+ *  a test holds the two lists equal, so a client added there is not left "on"
+ *  by a corrupt record). */
+export const RECORDED_CLIENTS = ['claude', 'codex', 'agy'] as const
 
 /** treecontext's own install state, beside its config. */
 export function installStatePath(): string {
