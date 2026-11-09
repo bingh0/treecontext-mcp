@@ -220,17 +220,6 @@ export function registerSelf(db: RegistryHandle, sessionId: string, self: GitSel
   return worktree
 }
 
-/** Stop a session's self: a /clear ended the session it continues, under
- *  a new id (D216), at the clear's moment. A later resume of that session
- *  registers it again with no stop (registerSelf). Returns whether a self
- *  still open was stopped. */
-export function stopSelf(db: RegistryHandle, sessionId: string, at: number): boolean {
-  const r = db.prepare(
-    "UPDATE session_registry SET stopped_at = ? WHERE session_id = ? AND agent_id = '' AND stopped_at IS NULL",
-  ).run(at, sessionId) as { changes?: number }
-  return (r.changes ?? 0) > 0
-}
-
 /** Register a live subagent of the session (SubagentStart). */
 export function registerSubagent(
   db: RegistryHandle, sessionId: string, agentId: string, agentType: string | null, self: GitSelf, at: number,
@@ -245,7 +234,8 @@ export function registerSubagent(
 /** Retire a subagent (SubagentStop). Returns whether a live one was retired. */
 export function retireSubagent(db: RegistryHandle, sessionId: string, agentId: string, at: number): boolean {
   const r = db.prepare(
-    'UPDATE session_registry SET stopped_at = ? WHERE session_id = ? AND agent_id = ? AND stopped_at IS NULL',
+    // D396: never a self (agent id ''), whose stop the store does not record.
+    "UPDATE session_registry SET stopped_at = ? WHERE session_id = ? AND agent_id = ? AND agent_id != '' AND stopped_at IS NULL",
   ).run(at, sessionId, agentId) as { changes?: number }
   return (r.changes ?? 0) > 0
 }

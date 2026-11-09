@@ -29,7 +29,7 @@ import { FIRST_MOMENT_KIND, SEND_BACK_KIND, CHECKPOINT_KIND } from '../../../src
 import { keyLookupReply, type KeyLookup } from '../../../src/key-lookup.js'
 import { storesDirIn } from '../../helpers/store-fixtures.js'
 import {
-  runWorker, registerThroughLibrary, STANDIN_WORKER, type Spawner, type WorkerPlan, type WorkerSpec, type Outcome,
+  runWorker, registerThroughLibrary, STANDIN_WORKER, type Spawner, type WorkerPlan, type WorkerSpec, type Outcome, type StandinRecord,
 } from '../standins.js'
 import {
   type RunWorld, openRunWorld, sessionStartHook, sleeper, killAndReap, localMoment, rawOne, rawRegistration, stringSteps, liveProcess,
@@ -76,7 +76,7 @@ function ticketFor(parent: { id: string; branch?: string | null }, extra: { mint
  *  where the production resolve chain derives it (asked of the real
  *  resolver in a subprocess under the sandbox's home), and the session
  *  started there by the real SessionStart hook. */
-async function openGitSession(w: WorkersWorld, sessionId: string, branch: string): Promise<void> {
+async function openGitSession(w: WorkersWorld, sessionId: string | null, branch: string): Promise<void> {
   w.home = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-workers-home-')))
   w.defer(() => rmSync(w.home!, { recursive: true, force: true }))
   const root = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-workers-repo-')))
@@ -87,19 +87,27 @@ async function openGitSession(w: WorkersWorld, sessionId: string, branch: string
   execFileSync('git', ['init', '-q', '-b', branch, repo], { env })
   execFileSync('git', ['commit', '-q', '--allow-empty', '-m', 'init'], { cwd: repo, env })
   w.proj = repo
-  const r = spawnSync(process.execPath, tsxArgv(join(TS_ROOT, 'tests', 'helpers', 'resolve-driver.ts'), repo), {
-    env: sandboxedSpawnEnv(w.home, { TREECONTEXT_BINDINGS_FILE: join(w.home, '.treecontext', 'bindings.json') }),
-    cwd: TS_ROOT, encoding: 'utf8', timeout: 30_000,
-  })
-  expect(r.status, r.stderr).toBe(0)
-  const { storeName } = JSON.parse(r.stdout) as { storeName: string }
-  w.dbPath = join(storesDirIn(w.home), storeName, 'treecontext.db')
-  w.sessionId = sessionId
+  w.dbPath = join(storesDirIn(w.home), resolvedStoreName(w, repo), 'treecontext.db')
   w.legs = {}; w.cps = {}; w.ids = {}; w.moments = {}; w.lookups = {}; w.stops = {}; w.before = {}; w.facts = {}; w.children = []
-  sessionStartHook(w)
+  // A session that never spoke to the store (D294) starts no hook here.
+  if (sessionId !== null) {
+    w.sessionId = sessionId
+    sessionStartHook(w)
+  } else mkdirSync(dirname(w.dbPath), { recursive: true, mode: 0o700 })
   const store = await FlatStore.open({ database: openNodeSqlite(new DatabaseSync(w.dbPath)), ownsDatabase: true })
   w.defer(() => store.close())
   w.store = store
+}
+
+/** The store name the production resolver derives for a directory, asked
+ *  of it in a subprocess under the sandbox's home. */
+function resolvedStoreName(w: WorkersWorld, dir: string): string {
+  const r = spawnSync(process.execPath, tsxArgv(join(TS_ROOT, 'tests', 'helpers', 'resolve-driver.ts'), dir), {
+    env: sandboxedSpawnEnv(w.home!, { TREECONTEXT_BINDINGS_FILE: join(w.home!, '.treecontext', 'bindings.json') }),
+    cwd: TS_ROOT, encoding: 'utf8', timeout: 30_000,
+  })
+  expect(r.status, r.stderr).toBe(0)
+  return (JSON.parse(r.stdout) as { storeName: string }).storeName
 }
 
 /** A worker of the run registered through the library door, its process
@@ -128,8 +136,68 @@ export const workersDefiner = (reg: Registry<WorkersWorld>): void => {
   workerDedupSteps(define)
   failedRunSteps(define)
   sessionVariableSteps(define)
+  groupAndStreamSteps(define)
 
   // ── D294: the parent as declared, or as a hook registered it ──
+  //
+  // The main (Codex CLI, Antigravity CLI) is the party on the far side of
+  // the door: what it does is run the real `treecontext run` wrapper from
+  // its shell, with `--parent` and `--parent-cli` (the stand-in harness's
+  // runWorker, the ticket flags as written), from two real checkouts of
+  // one repository, each resolved by the production resolver to the one
+  // store. The wrapper mints each ticket from where it runs; each Then reads
+  // the store file, and the ticket each worker carried in its environment.
+
+  define(/^an? (Codex CLI|Antigravity CLI) main session "([^"]+)" that never spoke to the store$/, async (w, _main, parent) => {
+    await openGitSession(w, null, 'main')
+    const env = { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('GIT_'))),
+      GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' }
+    const wt = join(dirname(w.proj!), 'login-wt')
+    execFileSync('git', ['worktree', 'add', '-q', '-b', 'login', wt], { cwd: w.proj!, env })
+    w.facts!['checkouts'] = { main: w.proj!, login: realpathSync.native(wt) }
+    // Both checkouts are the one project: the resolver gives them one store.
+    expect(resolvedStoreName(w, realpathSync.native(wt))).toBe(resolvedStoreName(w, w.proj!))
+    expect(rawAll(w, 'SELECT 1 FROM session_registry WHERE session_id = ?', parent)).toHaveLength(0)
+    expect(rawAll(w, 'SELECT 1 FROM session_registry')).toHaveLength(0)
+  })
+
+  define(/^it starts two workers through the `treecontext run` wrapper with `--parent ([^`]+)` and `--parent-cli ([^`]+)`, one from a checkout on the branch "([^"]+)" and the other from a checkout on the branch "([^"]+)"$/, async (w, parent, cli, a, b) => {
+    const checkouts = w.facts!['checkouts'] as Record<string, string>
+    for (const [name, branch] of [['first', a], ['second', b]] as const) {
+      const cwd = checkouts[branch]!
+      expect(cwd, `no checkout on the branch "${branch}"`).toBeTruthy()
+      const o = await runWorker(w, {
+        spawner: 'wrapper', prompt: 'wire the submit button', cwd,
+        ticket: { run: RUN, key: 'login-form', role: 'builder', checkpointer: 'reviewer', parent: { id: parent, cli } },
+        plan: { first: { texts: [`note from the ${name} worker: wired the ${branch} branch's form`], print: `${name} done` } },
+      }, name)
+      expect(o.exitCode, o.stderr).toBe(0)
+      w.facts![`${name}-branch`] = branch
+      w.facts![`${name}-cwd`] = cwd
+    }
+  })
+
+  define(/^each worker's registration carries the parent id "([^"]+)", the CLI "([^"]+)", and the directory, worktree and branch its own ticket declared, marked declared, with the ticket's mint moment$/, (w, parent, cli) => {
+    for (const name of ['first', 'second']) {
+      const o = outOf(w, name)
+      const r = rawRegistration(w, w.legs![name]!)
+      expect([r['kind'], r['door'], r['parent_session'], r['parent_src'], r['identity']], name).toEqual(['worker', 'ticket', parent, 'declared', 'declared'])
+      // What the wrapper minted, as the worker carried it.
+      const carried = readTicket(o.log[0]!.ticket!)
+      expect(carried.valid, name).toBe(true)
+      const declared = JSON.parse(String(r['parent_declared'])) as Record<string, unknown>
+      expect(declared, `${name}: the registration's description is its own ticket's`).toEqual(carried.ticket.parent)
+      // And that is the main as its shell ran: the CLI its flag named, the
+      // checkout it ran from, the worktree and branch git reads there.
+      const cwd = w.facts![`${name}-cwd`] as string
+      expect([declared['id'], declared['cli'], declared['cwd'], declared['branch']], name).toEqual([parent, cli, cwd, w.facts![`${name}-branch`]])
+      expect(declared['worktree'], name).toBe(name === 'first' ? null : 'login-wt')
+      expect(r['ticket_minted_at'], `${name}: the mint moment`).toBe(carried.ticket.mintedAt)
+      expect(typeof r['ticket_minted_at']).toBe('number')
+    }
+    // Two tickets, two moments: each registration carries its own.
+    expect(rawRegistration(w, w.legs!['first']!)['ticket_minted_at']).not.toBe(rawRegistration(w, w.legs!['second']!)['ticket_minted_at'])
+  })
 
   define(/^the store holds no registration for "([^"]+)" and no row in any lane with the writer or the session "\1"$/, (w, parent) => {
     expect(rawAll(w, 'SELECT 1 FROM session_registry WHERE session_id = ?', parent)).toHaveLength(0)
@@ -547,9 +615,10 @@ export function ticketDoorSteps(define: (re: RegExp, fn: (w: WorkersWorld, ...ca
   // Code's own session-start hook, or the verbatim copy of the Claude Code
   // block `treecontext install --experimental-capture --agent codex` writes
   // into Codex's hooks.json, run as Codex runs it (its command, through a
-  // shell, the same JSON on stdin). The Antigravity row is not bound: this
-  // build writes no hooks for Antigravity (an archived-build platform, MCP
-  // config only), so there is no hook of its to register a parent through.
+  // shell, the same JSON on stdin). The outline has no Antigravity row
+  // (owner, 2026-11-09, under D288): an Antigravity CLI main registers no
+  // self, so no parent of it is ever registered; its case is the declared
+  // parent of the D294 outline, bound above through the wrapper.
   define(/^an? (Claude Code|Codex) session registered as the parent "([^"]+)"$/, async (w, cli, parent) => {
     await openRunWorld(w, { sessionStart: false })
     w.sessionId = parent
@@ -2291,5 +2360,162 @@ export function sessionVariableSteps(define: (re: RegExp, fn: (w: WorkersWorld, 
     expect(o.sessionId).toBeTruthy()
     expect(env['TREECONTEXT_WORKER_SESSION']).toBe(o.sessionId)
     expect(rawOne(w, "SELECT kind, door FROM session_registry WHERE session_id = ? AND agent_id = 'worker'", o.sessionId)).toMatchObject({ kind: 'worker', door: 'ticket' })
+  })
+}
+
+// ── D393: a signal's end takes the worker's process group with it ──────
+//
+// The long-running command is a real `sleep 600` the stand-in worker
+// starts in its own process group, which the door made the worker's (the
+// plan's `groupChild`); the binding finds it by the group's id, the
+// worker's pid, while the worker runs, and reads the host's process table
+// for the group afterwards. The signal is the wrapper's own `--timeout`, or
+// a SIGKILL this test sends to the worker's process, which the door never
+// sent: the harness or the system killing it.
+//
+// ── D397: the error stream after the run settled ───────────────────────
+//
+// The background process is a real node process the stand-in starts
+// holding its error stream alone (the plan's `bgStderr`), which outlives
+// the worker; the spawner is the library call, whose handed-on chunks the
+// binding reads after the run settled, for as long as this process lives.
+
+/** The live members of a process group, from the host's process table
+ *  (a zombie awaiting its reaper is not running). */
+function groupMembers(pgid: number): number[] {
+  const out = execFileSync('ps', ['-A', '-o', 'pid=,pgid=,stat='], { encoding: 'utf8' })
+  return out.split('\n').map((l) => l.trim().split(/\s+/))
+    .filter((p) => p.length >= 3 && Number(p[1]) === pgid && !p[2]!.startsWith('Z'))
+    .map((p) => Number(p[0]))
+}
+
+/** Whether a process is running: it exists and is not a zombie. */
+function running(pid: number): boolean {
+  try { process.kill(pid, 0) } catch (err) { if ((err as NodeJS.ErrnoException).code === 'ESRCH') return false }
+  if (process.platform === 'win32') return true
+  const r = spawnSync('ps', ['-o', 'stat=', '-p', String(pid)], { encoding: 'utf8' })
+  const stat = r.stdout.trim()
+  return stat !== '' && !stat.startsWith('Z')
+}
+
+/** The stand-in's first log line, once it has written it (it writes it
+ *  before it hangs). */
+async function firstStandinLine(logPath: string): Promise<StandinRecord> {
+  await waitForFile(logPath)
+  for (let i = 0; i < 200; i++) {
+    const text = readFileSync(logPath, 'utf8')
+    if (text.includes('\n')) return JSON.parse(text.split('\n')[0]!) as StandinRecord
+    await new Promise((r) => setTimeout(r, 25))
+  }
+  throw new Error(`the stand-in never finished its log line in ${logPath}`)
+}
+
+/** The numbers of the background writer's lines in a stretch of stream. */
+const backgroundLines = (text: string): number[] => [...text.matchAll(/^background line (\d+)$/gm)].map((m) => Number(m[1]))
+
+export function groupAndStreamSteps(define: (re: RegExp, fn: (w: WorkersWorld, ...caps: string[]) => void | Promise<void>) => void): void {
+  define(new RegExp(`^an? ${WORKER_CLI} worker started by the wrapper under the key "([^"]+)" that has started a long-running command in its own process group$`), async (w, _cli, key) => {
+    await openRunWorld(w)
+    // Owed a send-back were it to exit on its own, so "no send-back" below
+    // is the cut's doing.
+    w.facts!['spec'] = {
+      spawner: 'wrapper', prompt: 'wire the submit button', expectEnd: 'cut',
+      ticket: ticketFields(w, { key, checkpointer: 'builder', canWrite: true }),
+      plan: { first: { notes: 1, groupChild: true, exit: 'hang' }, rerun: { checkpoint: 'state: never written', print: 'never' } },
+    } satisfies WorkerSpec
+  })
+
+  define(/^(the wrapper's timeout|a kill the door did not send, sent to the worker's process) ends the worker$/, async (w, how) => {
+    const spec = specOf(w)
+    const byDoor = how === "the wrapper's timeout"
+    if (byDoor) spec.timeoutSecs = 8
+    const o = await runWorker(w, spec, 'worker', async (logPath) => {
+      const rec = await firstStandinLine(logPath)
+      const child = rec.groupChild
+      expect(child, 'the stand-in started no long-running command').toBeTypeOf('number')
+      w.defer(() => { try { process.kill(child!, 'SIGKILL') } catch { /* gone */ } })
+      // Before the signal: the command runs, in the worker's own group,
+      // whose id is the worker's pid (the door made it the leader).
+      const members = groupMembers(rec.pid)
+      expect(members, 'the worker leads no group of its own').toContain(rec.pid)
+      expect(members, 'the long-running command is not in the worker\'s group').toContain(child)
+      w.facts!['group'] = { leader: rec.pid, child }
+      if (!byDoor) process.kill(rec.pid, 'SIGKILL')
+    })
+    // Who sent it is in how the worker ended.
+    expect([o.exitCode, o.line.includes(`was ended by ${byDoor ? 'SIGTERM' : 'SIGKILL'}`)], o.stderr).toEqual([byDoor ? 143 : 137, true])
+  })
+
+  define(/^the worker's registration reads cut, with no summary row and no send-back$/, (w) => {
+    const o = outOf(w)
+    const reg = rawRegistration(w, w.legs!['worker']!)
+    expect([reg['kind'], reg['door'], reg['ended'], reg['send_backs']]).toEqual(['worker', 'ticket', 'cut', 0])
+    const lane = laneRows(w, w.legs!['worker']!.sessionId)
+    expect(lane.filter((r) => r.content.startsWith('first run note '))).toHaveLength(1)
+    expect(lane.filter((r) => r.kind === SUBAGENT_SUMMARY_KIND || r.kind === SEND_BACK_KIND)).toHaveLength(0)
+    expect(o.log.map((r) => r.rerun), 'the worker was run again').toEqual([false])
+    expect(o.line).toContain('a cut, so it is not sent back and left no summary row')
+  })
+
+  define(/^no process of the worker's process group is still running, the long-running command included$/, async (w) => {
+    const g = w.facts!['group'] as { leader: number; child: number } | undefined
+    expect(g, 'the group was never seen running').toBeTruthy()
+    // A member killed a moment ago may be a zombie awaiting its reaper.
+    let left = groupMembers(g!.leader)
+    for (let i = 0; i < 60 && (left.length > 0 || running(g!.child)); i++) {
+      await new Promise((r) => setTimeout(r, 50))
+      left = groupMembers(g!.leader)
+    }
+    expect(left, 'processes of the worker\'s group still running').toEqual([])
+    expect(running(g!.child), 'the long-running command is still running').toBe(false)
+  })
+
+  define(new RegExp(`^an? ${WORKER_CLI} worker started through the library call that starts a background process writing a line to its error stream every second, and then prints "([^"]+)" and exits with code (\\d+)$`), async (w, _cli, printed, code) => {
+    await openRunWorld(w)
+    w.facts!['spec'] = {
+      spawner: 'library', prompt: 'wire the submit button', ticket: ticketFields(w, { checkpointer: 'reviewer' }),
+      plan: { first: { bgStderr: { lines: 60, everyMs: 1000 }, print: printed, exit: Number(code) } },
+    } satisfies WorkerSpec
+  })
+
+  define(/^the run has settled and the background process writes three more lines$/, async (w) => {
+    const o = await runWorker(w, specOf(w))
+    const bg = o.log[0]?.background
+    expect(bg, 'the stand-in started no background process').toBeTypeOf('number')
+    w.defer(() => { try { process.kill(bg!, 'SIGKILL') } catch { /* gone */ } })
+    // The run has settled (its promise resolved) while the background
+    // process still holds the stream: what the spawner had by then.
+    expect(running(bg!), 'the background process was not running once the run had settled').toBe(true)
+    const atSettle = o.stderr
+    const deadline = Date.now() + 15_000
+    let after = ''
+    while (Date.now() < deadline) {
+      after = o.stderrSoFar!().slice(atSettle.length)
+      if (backgroundLines(after).length >= 3) break
+      await new Promise((r) => setTimeout(r, 100))
+    }
+    w.facts!['bg'] = { pid: bg, atSettle, after }
+  })
+
+  define(/^the spawner receives those three lines on its error stream$/, (w) => {
+    const { atSettle, after } = w.facts!['bg'] as { atSettle: string; after: string }
+    const before = backgroundLines(atSettle)
+    const later = backgroundLines(after)
+    expect(later.length, `the spawner heard ${later.length} lines after the run settled:\n${after}`).toBeGreaterThanOrEqual(3)
+    // The stream goes on where it was at the settle, no line lost.
+    const first = before.length > 0 ? before.at(-1)! + 1 : 1
+    expect(later.slice(0, 3)).toEqual([first, first + 1, first + 2])
+  })
+
+  define(/^the background process is still running, not ended by SIGPIPE$/, (w) => {
+    const { pid } = w.facts!['bg'] as { pid: number }
+    expect(running(pid), 'the background process was ended after the run settled').toBe(true)
+  })
+
+  define(/^the summary row the spawner's line points at reads "([^"]+)"$/, (w, text) => {
+    const o = outOf(w)
+    const row = summaryRowOf(w, o)
+    expect([row.content, row.kind, row.writer, row.session]).toEqual([text, SUBAGENT_SUMMARY_KIND, 'builder', o.sessionId])
+    expect(o.stdout).toBe(text)
   })
 }

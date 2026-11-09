@@ -631,12 +631,19 @@ the door and must scrub its own environment.
 **Things to know about a worker's end.**
 
 - Stderr is a pipe. When something the worker started still holds it, the
-  door waits up to 2 s after the worker exits. A background process the
-  worker started that keeps writing to stderr after the run ends gets
-  SIGPIPE, so such processes should redirect their stderr.
+  door waits up to 2 s after the worker exits. After the run ends the door
+  keeps passing that stderr on, so a background process the worker started
+  that keeps writing there is not sent SIGPIPE, for as long as the
+  spawner's process lives. `treecontext run` exits when its run ends, so
+  under the wrapper such a process should still redirect its stderr.
 - A worker the door itself signals (its `--timeout`, or the spawner's
   abort) is a cut whatever its exit code: no summary row, no send-back,
   and the next leg is a recovery leg.
+- On Linux and macOS a cut, and any end of the worker by a signal, whoever
+  sent it, also ends the worker's process group: what it started that is
+  still in that group gets SIGTERM, then SIGKILL a second later. On
+  Windows only the worker itself is ended. A process that left the group
+  (`setsid`, a detached spawn) is not reached.
 - A failed run's summary row keeps the end of stderr verbatim. If a CLI
   prints secrets or tokens to stderr, they land in the journal. Note that
   `codex exec` writes its whole progress transcript to stderr.

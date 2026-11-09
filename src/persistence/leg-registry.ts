@@ -559,7 +559,8 @@ export function recordWorkerProcess(db: RegistryHandle, ref: LegRef, proc: Worke
 export function retireLeg(db: RegistryHandle, ref: LegRef, how: Exclude<LegEnding, 'phantom'>, at: number): boolean {
   if (!hasLegColumns(db)) return false
   const r = db.prepare(
-    'UPDATE session_registry SET stopped_at = ?, ended = ? WHERE session_id = ? AND agent_id = ? AND stopped_at IS NULL AND ended IS NULL',
+    // D396: never a self (agent id ''), whose stop the store does not record.
+    "UPDATE session_registry SET stopped_at = ?, ended = ? WHERE session_id = ? AND agent_id = ? AND agent_id != '' AND stopped_at IS NULL AND ended IS NULL",
   ).run(at, how, ref.sessionId, ref.agentId) as { changes?: number }
   return (r.changes ?? 0) > 0
 }

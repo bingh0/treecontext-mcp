@@ -1,7 +1,7 @@
 /**
  * The ticket door, its process half (features/journal-workers.feature;
  * rulings D279, D288, D291, D292, D293, D295, D297, D298, D303, D307,
- * D315, D316, D317, D329, D332, D335, D340, D341, D342).
+ * D315, D316, D317, D329, D332, D335, D340, D341, D342, D393, D397).
  *
  * Whatever spawns a headless worker through the ticket door is the
  * library call here, spawnWorker, or the `treecontext run` wrapper, which
@@ -19,7 +19,9 @@
  *    first message on its stdin, and records the process it runs as: its
  *    id, host and the OS start moment and token (D297, D317);
  *  - at exit: an exit by signal, the spawner's timeout among them, is a
- *    cut, retired with no summary row and never sent back (D292); an exit
+ *    cut, retired with no summary row and never sent back (D292), and on
+ *    POSIX what is left of the worker's process group is ended with it,
+ *    whoever sent the signal (D393); an exit
  *    on its own, whatever its code, retires the worker with its last
  *    output as the summary row the pointer names (D288), unless the one
  *    send-back is owed (sendBackDecision), when the same leg is run once
@@ -188,7 +190,9 @@ export interface SpawnWorkerOptions {
   onStdout?: (chunk: Buffer) => void
   /** Each chunk of the worker's stderr as it arrives, as the worker wrote
    *  it (the wrapper passes it through); without it, the chunks go to this
-   *  process's stderr. The door keeps the stream's end either way (D384). */
+   *  process's stderr. The door keeps the stream's end either way (D384).
+   *  Chunks go on arriving after the run settled, for as long as something
+   *  the worker started still writes there and this process lives (D397). */
   onStderr?: (chunk: Buffer) => void
   /** The worker's stderr handed to the spawner (default), or not handed
    *  on at all. The door reads it in both cases. */
@@ -289,14 +293,47 @@ export const STDOUT_DRAIN_MS = 2000
 /** The worker runs as the leader of its own process group (POSIX), so a
  *  signal the door sends reaches every process the worker started, never
  *  only the direct child (D292: the spawner's timeout is a cut, of all of
- *  it). Windows has no process groups: the direct child alone. */
+ *  it). Windows has no process groups: the direct child alone (D393). */
 const GROUPS = process.platform !== 'win32'
+
+/** D393: how long what is left of a worker's group, once the worker
+ *  ended by a signal, gets between the door's SIGTERM to the group and its
+ *  SIGKILL. The run settles only after it, so a spawner that exits when its
+ *  run settles (the wrapper) never leaves the group's end undone. */
+export const GROUP_GRACE_MS = 1000
 
 function signalWorker(child: ReturnType<typeof spawn>, sig: NodeJS.Signals): void {
   try {
     if (GROUPS && child.pid !== undefined) process.kill(-child.pid, sig)
     else child.kill(sig)
   } catch { /* gone */ }
+}
+
+/** Whether any process is still in the group (a zombie awaiting its
+ *  reaper counts: macOS answers EPERM for one, not ESRCH). */
+function groupHasMembers(pgid: number): boolean {
+  try { process.kill(-pgid, 0); return true } catch (err) { return (err as NodeJS.ErrnoException).code !== 'ESRCH' }
+}
+
+/**
+ * D393: the end of what is left of a worker's process group once the
+ * worker itself ended by a signal, whoever sent it (the door at its
+ * timeout or the spawner's abort, the harness, the system). The leader is
+ * reaped, so the group is signalled by its number, and only while that
+ * number can be no one else's (reapedGroupIsOurs), checked before each
+ * signal: SIGTERM, then SIGKILL once the grace is out if a member is still
+ * there. Not reached: a process that left the group (`setsid`, a detached
+ * spawn), and on Windows anything but the direct child (D394).
+ */
+async function endGroup(pgid: number, probe: ProcessProbe, graceMs = GROUP_GRACE_MS): Promise<void> {
+  if (!reapedGroupIsOurs(pgid, probe)) return
+  try { process.kill(-pgid, 'SIGTERM') } catch { return }
+  const deadline = Date.now() + graceMs
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 25))
+    if (!groupHasMembers(pgid)) return
+  }
+  if (reapedGroupIsOurs(pgid, probe)) { try { process.kill(-pgid, 'SIGKILL') } catch { /* gone */ } }
 }
 
 /**
@@ -380,6 +417,9 @@ function launch(o: SpawnWorkerOptions, message: string, env: NodeJS.ProcessEnv, 
     let signalled = false
     let settled = false
     let drain: NodeJS.Timeout | null = null
+    // D393: the end of the worker's group, when it ended by a signal; the
+    // run settles only once that is done.
+    let groupEnd: Promise<void> = Promise.resolve()
     const settle = (): void => {
       if (drain) clearTimeout(drain)
       if (settled) return
@@ -389,8 +429,13 @@ function launch(o: SpawnWorkerOptions, message: string, env: NodeJS.ProcessEnv, 
       record.errorTail = tail.text()
       record.errorChars = tail.total
       try { child.stdout!.destroy() } catch { /* closed */ }
-      try { child.stderr!.destroy() } catch { /* closed */ }
-      resolve()
+      // D397: the error stream is not closed at the settle. Whatever still
+      // holds it (a background process the worker started) goes on being
+      // handed on as it writes, so it is not sent SIGPIPE while this
+      // process lives; unref'd, the stream keeps no process alive, so a
+      // spawner that exits when its run settles (the wrapper) is the limit.
+      try { (child.stderr as unknown as { unref?: () => void }).unref?.() } catch { /* closed */ }
+      void groupEnd.then(() => resolve())
     }
     child.on('error', (err) => {
       if (record.pid === null) { record.spawnError = errText(err); settled = true; resolve() }
@@ -398,6 +443,7 @@ function launch(o: SpawnWorkerOptions, message: string, env: NodeJS.ProcessEnv, 
     if (child.pid !== undefined) record.pid = child.pid
     child.stdout!.on('data', (c: Buffer) => { chunks.push(c); o.onStdout?.(c) })
     child.stderr!.on('data', (c: Buffer) => { if (!settled) tail.push(c); handOn?.(c) })
+    child.stderr!.on('error', () => { /* the stream ended on the worker's side */ })
     child.stdin!.on('error', () => { /* a worker that never reads its stdin closes it early */ })
     child.stdin!.end(deliver === 'stdin' ? message : '')
     const cut = (): void => {
@@ -418,11 +464,11 @@ function launch(o: SpawnWorkerOptions, message: string, env: NodeJS.ProcessEnv, 
       if (killer) clearTimeout(killer)
       record.exit = { code, signal }
       record.doorSignalled = signalled
-      // A worker the door signalled is cut whole: what is left of its group
-      // goes with it, so nothing it started outlives the cut. The leader is
-      // reaped by now, so the group is signalled by its number only while
-      // that number can be no one else's (reapedGroupIsOurs).
-      if (signalled && reapedGroupIsOurs(child.pid, probe)) signalWorker(child, 'SIGKILL')
+      // D393: a worker the door signalled, or one ended by any signal,
+      // whoever sent it, takes what is left of its process group with it.
+      // The leader is reaped by now, so the group is signalled by its
+      // number only while that number can be no one else's (endGroup).
+      if ((signalled || signal !== null) && child.pid !== undefined) groupEnd = endGroup(child.pid, probe)
       // The output already in the pipe is read; a grandchild still holding
       // the pipe keeps nobody waiting past the drain.
       if (!settled) drain = setTimeout(settle, STDOUT_DRAIN_MS)

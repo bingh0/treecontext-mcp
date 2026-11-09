@@ -23,7 +23,7 @@ import {
 } from '../src/first-moment.js'
 import {
   sendBackDecision, spawnWorker, claimTicket, NOT_STARTED_EXIT, TICKET_REFUSED_EXIT, TIMEOUT_GRACE_MS, STDOUT_DRAIN_MS, type SendBackInput,
-  reapedGroupIsOurs, StreamTail, summaryOf,
+  reapedGroupIsOurs, StreamTail, summaryOf, GROUP_GRACE_MS,
 } from '../src/ticket-door.js'
 import { workerEnvironment, CLIENT_SESSION_VARIABLE_NAMES } from '../src/client-session-env.js'
 import { decodeContent } from '../src/persistence/content-codec.js'
@@ -447,6 +447,50 @@ describe('the group is signalled after its leader is reaped only while its numbe
     }
   }, 30_000)
 
+  // D393: a worker ended by a signal the door did not send (the harness,
+  // the system) takes its group with it too: SIGTERM first, SIGKILL after
+  // the grace for a member still there. The leader writes its own pid and
+  // waits; the test kills it.
+  const killedFromOutside = async (s: FlatStore, script: string, leaderFile: string): Promise<Awaited<ReturnType<typeof spawnWorker>>> => {
+    const p = spawnWorker({ store: s, ticket: { run: 'r1', key: 'k', role: 'builder', checkpointer: 'builder', parent: { id: 'p1' } }, command: 'sh', args: ['-c', script] })
+    for (let i = 0; i < 200 && !existsSync(leaderFile); i++) await new Promise((res) => setTimeout(res, 25))
+    await new Promise((res) => setTimeout(res, 200))
+    process.kill(Number(readFileSync(leaderFile, 'utf8').trim()), 'SIGKILL')
+    return p
+  }
+
+  it.skipIf(process.platform === 'win32')('a worker killed by a signal the door did not send: its group gets SIGTERM, then its grace (D393)', async () => {
+    const s = await open()
+    const pidFile = join(tmpDir, 'child.pid')
+    const leader = join(tmpDir, 'leader.pid')
+    const mark = join(tmpDir, 'term')
+    try {
+      // The survivor notes the SIGTERM it is given and then exits.
+      const script = `(trap 'echo term > "${mark}"; exit 0' TERM; sh -c 'echo $PPID' > "${pidFile}"; while :; do sleep 0.05; done) </dev/null >/dev/null 2>&1 & cat >/dev/null; echo $$ > "${leader}"; wait`
+      const r = await killedFromOutside(s, script, leader)
+      expect([r.ended, r.runs[0]!.exit.signal, r.runs[0]!.doorSignalled, r.sentBack]).toEqual(['cut', 'SIGKILL', false, false])
+      expect(readFileSync(mark, 'utf8').trim(), 'the survivor was given SIGTERM before anything else').toBe('term')
+      expect(await waitGone(Number(readFileSync(pidFile, 'utf8').trim()))).toBe(true)
+    } finally { await s.close() }
+  }, 30_000)
+
+  it.skipIf(process.platform === 'win32')('a survivor that ignores the SIGTERM is killed once the grace is out (D393)', async () => {
+    const s = await open()
+    const pidFile = join(tmpDir, 'child.pid')
+    const leader = join(tmpDir, 'leader.pid')
+    try {
+      const script = `(trap "" TERM; exec sh -c 'echo $$ > "${pidFile}"; exec sleep 777') </dev/null >/dev/null 2>&1 & cat >/dev/null; echo $$ > "${leader}"; wait`
+      const t0 = Date.now()
+      const r = await killedFromOutside(s, script, leader)
+      const took = Date.now() - t0
+      expect([r.ended, r.runs[0]!.exit.signal]).toEqual(['cut', 'SIGKILL'])
+      const child = Number(readFileSync(pidFile, 'utf8').trim())
+      expect(await waitGone(child)).toBe(true)
+      // The run settled only after the grace, never before the group's end.
+      expect(took).toBeGreaterThanOrEqual(GROUP_GRACE_MS)
+    } finally { await s.close() }
+  }, 30_000)
+
   it('reads the number as ours only when the host says no process holds it', () => {
     const says = (v: boolean | null) => ({ ...hostProbe, exists: (): boolean | null => v })
     const groups = process.platform !== 'win32'
@@ -537,18 +581,29 @@ describe('the error stream is read through a pipe, and what that costs (D384)', 
     } finally { await s.close() }
   }, 30_000)
 
-  it('(b) a background process that writes to stderr after the run settled is ended by SIGPIPE on that write', async () => {
-    const s = await open()
-    try {
-      const mark = join(tmpDir, 'late-status')
-      const script = `cat >/dev/null; ( ( sleep 3.5; echo late >&2 ) >/dev/null; echo "status $?" > '${mark}' ) & exit 0`
-      const r = await spawnWorker({ store: s, ticket, command: 'sh', args: ['-c', script], stderr: 'ignore' })
-      strays.push(r.runs[0]!.pid!)
-      expect(existsSync(mark)).toBe(false)
-      for (let i = 0; i < 100 && !existsSync(mark); i++) await new Promise((res) => setTimeout(res, 100))
-      expect(readFileSync(mark, 'utf8').trim()).toBe('status 141')
-    } finally { await s.close() }
-  }, 30_000)
+  // D397, amending unit 5's cost (b): the door no longer closes its end at
+  // the settle, so a shell's background writer is heard, never SIGPIPE'd
+  // (it was ended with status 141 here before). The charter binds the same
+  // with a node writer through the library spawner (journal-workers).
+  for (const mode of ['handed on', 'ignored'] as const) {
+    it.skipIf(process.platform === 'win32')(`(b) a background process that writes to stderr after the run settled is not sent SIGPIPE (D397), the stream ${mode}`, async () => {
+      const s = await open()
+      try {
+        const mark = join(tmpDir, 'late-status')
+        const script = `cat >/dev/null; ( ( sleep 3.5; echo late >&2 ) >/dev/null; echo "status $?" > '${mark}' ) & exit 0`
+        const heard: Buffer[] = []
+        const r = await spawnWorker({
+          store: s, ticket, command: 'sh', args: ['-c', script],
+          ...(mode === 'ignored' ? { stderr: 'ignore' as const } : { onStderr: (c: Buffer): void => { heard.push(c) } }),
+        })
+        strays.push(r.runs[0]!.pid!)
+        expect(existsSync(mark), 'the run settled after the late write').toBe(false)
+        for (let i = 0; i < 100 && !existsSync(mark); i++) await new Promise((res) => setTimeout(res, 100))
+        expect(readFileSync(mark, 'utf8').trim()).toBe('status 0')
+        if (mode === 'handed on') expect(Buffer.concat(heard).toString('utf8')).toBe('late\n')
+      } finally { await s.close() }
+    }, 30_000)
+  }
 })
 
 describe('the cut marker counts characters (D384)', () => {

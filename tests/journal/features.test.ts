@@ -107,6 +107,10 @@ const HOST_SKIPS: Record<string, string> = process.platform === 'win32' ? {
   "a reused process number is told from the worker by the process's start moment": 'win32: no process start moment (process-probe.ts)',
   'a live worker with its own start moment stays live': 'win32: no process start moment (process-probe.ts)',
   "a worker's re-run for its missing checkpoint is the same leg in the same lane": 'win32: the scenario asserts each process carries its start moment (process-probe.ts)',
+  // D393: the promise is the worker's process group on Linux and macOS;
+  // on Windows the door makes no group and ends the direct child alone.
+  "a worker ended by the wrapper's timeout leaves no process of its group running [1]": 'win32: no process groups; only the direct child is ended (D393)',
+  "a worker ended by a kill the door did not send, sent to the worker's process leaves no process of its group running [2]": 'win32: no process groups; only the direct child is ended (D393)',
 } : {}
 const hostSkipped = new Set<string>()
 type TestFn = (name: string, fn: () => unknown) => unknown
@@ -204,28 +208,13 @@ runFeatures(join(HERE, '../../features'), {
     // scenarios reworded to sessions of one lane; D398: the skeleton's
     // reply names the legs whose summary row holds an error stream's end),
     // and they left this list.
-    {
-      feature: 'journal-workers',
-      scenarios: [
-        // Unit 7b: D294 (the @D294 scenario reworded into an outline with
-        // Codex CLI and Antigravity CLI mains spawning through
-        // `treecontext run --parent --parent-cli`), D393 (a real grandchild
-        // in the worker's process group), D397 (a real background process
-        // holding the worker's error stream).
-        'a parent no hook registered, a <main> main, is carried on each worker\'s registration as declared, never as a row of its own',
-        'a worker ended by <signal> leaves no process of its group running',
-        'a background process the worker left writing to its error stream is not cut off when the run settles',
-      ],
-    },
-    {
-      feature: 'journal-agent-surface',
-      scenarios: [
-        // Unit 7b: D382's fourth row, tagged @D291 (the send-back's re-run,
-        // read on the re-run's own first message through the real door);
-        // the outline's three bound rows wait with it, held by its title.
-        'the first message the ticket door composes for <case> opens with the line the block names',
-      ],
-    },
+    // Unit 7b bound its four on 2026-11-09 and they left this list too: the
+    // D294 outline (Codex CLI and Antigravity CLI mains through
+    // `treecontext run --parent --parent-cli`), D393 (a real `sleep` in the
+    // worker's process group, host-skipped on win32), D397 (a real
+    // background process holding the worker's error stream) and D382's
+    // fourth row, tagged @D291 (the re-run's own first message, through the
+    // real door).
     // The headless build (2026-11-07, D381-D390; fence: Sanctioned changes,
     // "The headless build"): scenarios added to bound files and five bound
     // scenarios reworded, unbound until the unit of the draft's build plan

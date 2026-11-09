@@ -118,8 +118,17 @@
  * (D389: a file it writes its whole environment to, as JSON, once it
  * has claimed its leg and before it writes anything; never printed, so no
  * variable of it can reach a summary row), `stderr` (D384: text written to its error stream, before `print`),
+ * `groupChild` (D393: before its log line, it starts a long-running
+ * command, `sleep 600`, in its own process group, which the door made
+ * the worker's, its stdio let go; the command's pid is in its log line as
+ * `groupChild`), `bgStderr` (D397: before its log line, it starts a
+ * background process holding its error stream and nothing else, which
+ * writes `background line <i>` there every `everyMs`, `lines` times, and
+ * outlives the worker; its pid is in its log line as `background`),
  * `print` (its last output), `exit` (a code, or `'hang'`). The run that
- * opens on the door's send-back message follows `rerun`.
+ * opens on the door's send-back message follows `rerun`. What it starts
+ * is a real process the binding finds, reads and ends; the stand-in never
+ * signals it and never leaves its group or session.
  *
  * standin-claude-p (STANDIN_CLAUDE_PLAN, `ClaudePPlan`): `tools` (Bash
  * calls, each a PostToolUse), `toolText` (their output, `{i}` the call's
@@ -306,6 +315,12 @@ export interface WorkerStep {
    *  instructions recorded; `ticket` / `lane` replace that server's worker
    *  variables, null leaves one out. */
   handshakes?: Array<{ ticket?: string | null; lane?: string | null }>
+  /** D393: a long-running command started in the worker's own process
+   *  group (`sleep 600`), its pid in the log line. */
+  groupChild?: boolean
+  /** D397: a background process writing to the worker's error stream,
+   *  `lines` times, every `everyMs`, its pid in the log line. */
+  bgStderr?: { lines: number; everyMs: number }
 }
 /** The hook-less stand-in's plan (STANDIN_PLAN). */
 export interface WorkerPlan { first: WorkerStep; rerun?: WorkerStep; claim?: { prompt?: string } }
@@ -346,6 +361,11 @@ export interface StandinRecord {
    *  `viaTools`): each treecontext_insert reply, parsed, as its CLI
    *  received it, in the order it wrote them. */
   inserts?: Array<Record<string, unknown>>
+  /** The hook-less stand-in's long-running command in its group (a
+   *  plan's `groupChild`), and its background error-stream writer (a
+   *  plan's `bgStderr`): their pids. */
+  groupChild?: number
+  background?: number
 }
 
 /** What spawns the worker: the wrapper, the library call, or nothing (a
@@ -392,6 +412,10 @@ export interface Outcome {
   log: StandinRecord[]
   logPath: string
   result: WorkerRunResult | null
+  /** The library spawner's error stream as handed on so far, read when
+   *  called: the door goes on handing it on after the run settled (D397).
+   *  Null for the wrapper, whose stream is its own process's. */
+  stderrSoFar: (() => string) | null
 }
 
 /** The wrapper's ticket flags for minted fields. */
@@ -414,10 +438,10 @@ let standinRuns = 0
  * `spawnWorker` in this process, the real `treecontext run` wrapper in a
  * subprocess under the sandboxed home, or no door at all (the stand-in
  * holds its ticket and claims it). `during` runs while it is alive (the
- * library's promise or the wrapper's process). The outcome is kept as
- * `out:<name>` and the leg as `legs[name]`.
+ * library's promise or the wrapper's process), given the stand-in's log
+ * path. The outcome is kept as `out:<name>` and the leg as `legs[name]`.
  */
-export async function runWorker(w: RunWorld, spec: WorkerSpec, name = 'worker', during?: () => Promise<void>): Promise<Outcome> {
+export async function runWorker(w: RunWorld, spec: WorkerSpec, name = 'worker', during?: (logPath: string) => Promise<void>): Promise<Outcome> {
   const logPath = join(w.home!, `standin-${++standinRuns}.jsonl`)
   const standinEnv = {
     STANDIN_DB: w.dbPath!, STANDIN_LOG: logPath, STANDIN_PLAN: JSON.stringify(spec.plan),
@@ -443,10 +467,11 @@ export async function runWorker(w: RunWorld, spec: WorkerSpec, name = 'worker', 
         ...(spec.clock ? { clock: spec.clock } : {}),
         onStderr: (c) => { errChunks.push(c) },
       })
-      await during?.()
+      await during?.(logPath)
       result = await p
     } finally { restore?.() }
-    out = { spawner: 'library', stdout: result.output, stderr: Buffer.concat(errChunks).toString('utf8'), line: result.line, exitCode: result.exitCode, result }
+    out = { spawner: 'library', stdout: result.output, stderr: Buffer.concat(errChunks).toString('utf8'), line: result.line, exitCode: result.exitCode, result,
+      stderrSoFar: () => Buffer.concat(errChunks).toString('utf8') }
   } else {
     const raw = typeof spec.ticket === 'string' ? spec.ticket : mintTicket(spec.ticket)
     let args: string[]
@@ -478,12 +503,12 @@ export async function runWorker(w: RunWorld, spec: WorkerSpec, name = 'worker', 
     child.stdout!.on('data', (c: Buffer) => { outBytes.push(c) })
     child.stderr!.on('data', (c: Buffer) => { errBytes.push(c) })
     const exited = new Promise<number | null>((resolve) => child.once('close', (code) => resolve(code)))
-    await during?.()
+    await during?.(logPath)
     const exitCode = await exited
     const stdout = Buffer.concat(outBytes).toString('utf8')
     const stderr = Buffer.concat(errBytes).toString('utf8')
     const line = stderr.split('\n').filter((l) => l.startsWith(DOOR_LINE_PREFIX)).at(-1) ?? ''
-    out = { spawner: spec.spawner, stdout, stderr, line, exitCode, result: null }
+    out = { spawner: spec.spawner, stdout, stderr, line, exitCode, result: null, stderrSoFar: null }
   }
   const log = existsSync(logPath)
     ? readFileSync(logPath, 'utf8').trim().split('\n').filter((l) => l !== '').map((l) => JSON.parse(l) as StandinRecord) : []

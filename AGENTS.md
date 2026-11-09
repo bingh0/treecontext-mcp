@@ -327,7 +327,11 @@ node dist/server/cli.js doctor      # after a build
   it, but only through `trustedWorkerLane`: the registration there must be
   the one the ticket in the same environment describes. Never honour the
   variable alone. The door spawns a worker as its own process group and
-  signals the group. A door that cannot write the store at a worker's exit records
+  signals the group; any exit of the worker by a signal, whoever sent it,
+  ends what is left of the group, SIGTERM then SIGKILL after the grace, by
+  its number only while `reapedGroupIsOurs` (D393). After the run settles
+  the worker's stderr is still handed on, unref'd, never closed (D397).
+  Nothing writes a self registration's `stopped_at` (D396). A door that cannot write the store at a worker's exit records
   nothing and leaves the leg for the phantom pass: never retry that
   write, never guess an exit moment
 - Platform events still stage (hook → staging → drain). The hooks door

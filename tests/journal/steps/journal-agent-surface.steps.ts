@@ -7,6 +7,7 @@ import { INSTRUCTIONS_BRIEF_LEXICAL, SKILL_REFERENCE_BODY, SKILL_REFERENCE_NAME,
 import { SESSION_REMINDER_TEXT, INSTRUCTIONS_CONTENT, MARKER_START, MARKER_END } from '../../../src/server/installer.js'
 import { CODEX_APPROVALS_FLOOR } from '../../../src/server/codex-client.js'
 import { mintTicket, readTicket, type TicketFields } from '../../../src/ticket.js'
+import { sendBackReason } from '../../../src/first-moment.js'
 import { type RunWorld, openRunWorld, briefFor, rawRegistration } from '../run-world.js'
 import { runWorker, hooksLeg, type WorkerSpec, type Outcome, type StandinRecord } from '../standins.js'
 import { DEFAULT_ROLE_WEIGHTS } from '../../../src/persistence/fts.js'
@@ -726,11 +727,40 @@ function workerOrientationSteps(reg: Registry<AgentSurfaceWorld>): void {
     w.facts!['spec'] = { spawner: 'wrapper', prompt: 'wire the submit button', ticket: raw, plan: { first: { invalidRow: true } } } satisfies WorkerSpec
     w.facts!['role'] = null
   })
+  // D291's send-back (owner, 2026-11-09, the fourth row): the worker owes
+  // the checkpoint under its key, exits on its own without one, and the
+  // real door runs it once more; the row's first message is the one the
+  // re-run's process received on its stdin, never the first run's.
+  reg.define(/^a worker run once more for a missing checkpoint$/, async (w: AgentSurfaceWorld) => {
+    await openRunWorld(w)
+    await briefFor(w, 'builder', RUN, KEY, { checkpointer: 'builder' })
+    w.facts!['spec'] = {
+      spawner: 'wrapper', prompt: 'wire the submit button', ticket: workerTicket({ checkpointer: 'builder', canWrite: true }),
+      plan: { first: { print: 'half wired' }, rerun: { checkpoint: 'state: submit wired after the send-back', print: 'submit wired' } },
+    } satisfies WorkerSpec
+    w.facts!['role'] = 'builder'
+    w.facts!['run-read'] = 'the re-run'
+  })
   reg.define(/^the ticket door starts the worker$/, async (w: AgentSurfaceWorld) => {
     await runWorker(w, w.facts!['spec'] as WorkerSpec)
   })
   reg.define(/^the worker's first message opens with the line the instruction block names$/, (w: AgentSurfaceWorld) => {
-    const message = standinOf(w).stdin
+    let message = standinOf(w).stdin
+    if (w.facts!['run-read'] === 'the re-run') {
+      // The re-run's own record: the second process the door started, the
+      // one that opened on the send-back, its stdin as it read it.
+      const log = (w.facts!['out:worker'] as Outcome).log
+      expect(log.map((r) => r.rerun), 'the door did not run the worker once more').toEqual([false, true])
+      expect(log[1]!.pid, 'the re-run is not a process of its own').not.toBe(log[0]!.pid)
+      message = log[1]!.stdin
+      expect(message, 'the re-run was given the first run\'s message').not.toBe(log[0]!.stdin)
+      expect(message, 'the re-run\'s message does not name the missing checkpoint').toContain(sendBackReason('builder', RUN, KEY))
+      // The order the build settled (2026-11-08, under D382): the worker's
+      // own line, then the reason, then the trail line.
+      const at = (needle: string): number => message.indexOf(needle)
+      expect(at(sendBackReason('builder', RUN, KEY)), 'the reason opens the re-run\'s message').toBeGreaterThan(0)
+      expect(at('treecontext: your trail is in the store')).toBeGreaterThan(at(sendBackReason('builder', RUN, KEY)))
+    }
     expect(message.length, 'the door gave the worker no first message').toBeGreaterThan(0)
     const openings = blockOpenings(INSTRUCTIONS_CONTENT)
     const matched = openings.map((o) => openingPattern(o).exec(message)).filter((m): m is RegExpExecArray => m !== null)

@@ -22,6 +22,7 @@
  * door (`runWorker`). STANDIN_DB is the store file; STANDIN_LOG the file
  * its record lines go to.
  */
+import { spawn } from 'node:child_process'
 import { appendFileSync, existsSync, writeFileSync } from 'node:fs'
 import { DatabaseSync } from 'node:sqlite'
 import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
@@ -35,6 +36,11 @@ import { Client } from '@modelcontextprotocol/client'
 import { CLI_TS, nodeTsArgs } from './cli-spawn.js'
 
 import type { WorkerPlan as Plan, WorkerStep as Step } from '../journal/standins.js'
+
+/** The background writer of a plan's `bgStderr`: `background line <i>` on
+ *  fd 2, every `everyMs`, `lines` times (argv: lines, everyMs). */
+const BACKGROUND_WRITER = `const fs = require('node:fs'); const n = Number(process.argv[1]); const ms = Number(process.argv[2]); let i = 0;
+const t = setInterval(() => { i++; fs.writeSync(2, 'background line ' + i + '\\n'); if (i >= n) clearInterval(t) }, ms)`
 
 const plan = JSON.parse(process.env['STANDIN_PLAN'] ?? '{"first":{}}') as Plan
 const dbPath = process.env['STANDIN_DB']
@@ -134,10 +140,24 @@ if (leg) {
   }
 }
 await store.close()
+// D393: a long-running command a worker's tool would start, in the
+// worker's own process group (the door made the worker its leader), its
+// stdio let go so it holds none of the worker's streams.
+const groupChild = step.groupChild ? spawn('sleep', ['600'], { stdio: 'ignore' }) : null
+groupChild?.unref()
+// D397: a background process holding the worker's error stream and nothing
+// else (as `nohup cmd > log &` leaves it), writing a numbered line there on
+// its own clock; it outlives the worker. A write to a closed stream throws
+// (EPIPE), which ends it.
+const background = step.bgStderr
+  ? spawn(process.execPath, ['-e', BACKGROUND_WRITER, String(step.bgStderr.lines), String(step.bgStderr.everyMs)], { stdio: ['ignore', 'ignore', 'inherit'] })
+  : null
+background?.unref()
 if (log) {
   appendFileSync(log, `${JSON.stringify({
     ...record, ...(Object.keys(reads).length > 0 ? { reads } : {}), ...(handshakes.length > 0 ? { handshakes } : {}),
     ...(inserts.length > 0 ? { inserts } : {}),
+    ...(groupChild?.pid !== undefined ? { groupChild: groupChild.pid } : {}), ...(background?.pid !== undefined ? { background: background.pid } : {}),
   })}\n`)
 }
 if (step.waitFor !== undefined) {

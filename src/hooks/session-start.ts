@@ -6,7 +6,7 @@ import { dbg } from '../debug.js'
 import { writeSessionBeacon } from '../session-beacon.js'
 import { readSessionBeacon } from '../session-beacon.js'
 import { buildClearPacket, localDateOf, markNudged, recordSessionLink, sessionChain, selfLines, CHAPTER_HOWTO } from '../checkpoints.js'
-import { hasRegistry, registerSelf, retireAllSubagents, stopSelf, type GitSelf } from '../persistence/session-registry.js'
+import { hasRegistry, registerSelf, retireAllSubagents, type GitSelf } from '../persistence/session-registry.js'
 import { retirePhantoms, NOTICED_BY_SESSION_START } from '../persistence/leg-registry.js'
 import { gitSelfOf } from './git-self.js'
 import { hookStoreOn, hookTreeOf } from './hook-store.js'
@@ -263,9 +263,8 @@ export async function main(preParsed?: Record<string, unknown>): Promise<void> {
             const n = retireAllSubagents(db, id, at)
             if (n > 0) dbg('hook:session-start', 'retired subagents left live', { session: id, retired: n })
           }
-          // A clear ends the session it continues: its self is stopped at
-          // the clear's moment, as its subagents are retired above.
-          if (predecessor && stopSelf(db, predecessor, at)) dbg('hook:session-start', 'stopped the self of the session this clear continues', { session: predecessor })
+          // D396: the self of the session a clear continues is left as it
+          // was; the store records no stop for a self until beta.5.
         }
       }
       else dbg('hook:session-start', 'no session registry in this store — session left unregistered', { dbPath })

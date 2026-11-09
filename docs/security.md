@@ -215,7 +215,9 @@ only through `trustedWorkerLane`, when a worker registration exists there
 and the ticket in the same environment is the one it was registered
 with. A process that inherited the variable with another ticket, or none,
 writes as itself. On POSIX the worker runs as its own process group and
-`--timeout` signals the whole group. The worker's stdout passes through
+`--timeout` signals the whole group; any end of the worker by a signal
+ends what is left of that group (D393). A process that left the group is
+not reached, and on Windows only the direct child is ended. The worker's stdout passes through
 byte for byte and is not captured as journal rows; at its exit the door
 writes the worker's output as its summary row.
 
