@@ -8,7 +8,17 @@ for the three-layer model.
 
 - `user-prompt-submit.ts` — captures user prompts → staging table
 - `post-tool-use.ts` — captures tool calls → staging table, with the
-  payload's `agent_id`/`agent_type` when a subagent made the call; on the
+  payload's `agent_id`/`agent_type` when a subagent made the call and the
+  client's `tool_use_id`; it serves three Claude Code events by
+  `hook_event_name`: `PostToolUse` (a call that succeeded),
+  `PostToolUseFailure` (a call that failed: the `error` text is the Output
+  section, staged with `outcome` `failed` or `interrupted`, D400) and
+  `PostToolBatch` (the batch's account: each call of `tool_calls` this
+  session has not staged, told by `tool_use_id`, with its `tool_response`
+  as the Output, `captured_from` `batch`, in one immediate transaction;
+  nothing on a store below schema 034; a failure is one gap record for the
+  batch before the lookup answered, one per call it was adding after,
+  D401); on the
   Agent tool's result (`tool_name` `Agent`, or `Task` before the rename),
   when the subagent it spawned (`tool_response.agentId`) was a leg, adds
   one line beside the result as `hookSpecificOutput.additionalContext`:

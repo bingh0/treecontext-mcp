@@ -203,7 +203,7 @@ describe('the tools door: a worker\'s session is its lane, and the notes say who
 })
 
 describe('migration 033: the worker index, every existing row\'s identity kept', () => {
-  it('a store at 32 climbs to 33 behind its backup, no row reclassified or re-keyed, the curated index untouched', async () => {
+  it('a store at 32 climbs through 33 (and on to 34) behind its backup, no row reclassified or re-keyed, the curated index untouched', async () => {
     const s = await open()
     registerSelf(s.store.database, 'cc-main', MAIN, 1)
     await s.insert('a curated note', { metadata: { _cc_session_id: 'cc-main', _writer: 'main', _writer_src: 'self' } })
@@ -235,7 +235,7 @@ describe('migration 033: the worker index, every existing row\'s identity kept',
     expect(new Set((before as Array<{ dedup_class: string }>).map((r) => r.dedup_class))).toEqual(new Set(['curated', 'auto', 'run']))
     try {
       const report = runMigrations(openNodeSqlite(db), { migrate: true })
-      expect(report.applied.map((a) => [a.version, a.kind])).toEqual([[33, 'additive']])
+      expect(report.applied.map((a) => [a.version, a.kind])).toEqual([[33, 'additive'], [34, 'additive']])
       expect(ident()).toEqual(before)
       expect(curatedSql()).toBe(curatedBefore)
       const sql = (db.prepare("SELECT sql FROM sqlite_master WHERE name = 'idx_nodes_worker_curated_fp'").get() as { sql: string }).sql

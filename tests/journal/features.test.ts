@@ -245,6 +245,18 @@ runFeatures(join(HERE, '../../features'), {
     // until the chunk-1 build landed node:sqlite the same day, and left the
     // register with it — bound against doctor's real report, the manifest
     // and the lockfile's production tree.
+    // Unit 8 (D400-D402, 2026-11-09): unit 8a bound journal-capture's
+    // three scenarios (failed calls, calls refused before running, a call
+    // journaled once) through the replay of recorded Claude Code events.
+    // The @D402 scenario's Given (the client's event list, kept with its
+    // version) and its guard are unit 8b's; its last step, doctor's report
+    // of an installation wired before a capture event was added, is built
+    // and bound as a plain test (tests/server/capture-events-doctor.test.ts)
+    // until 8b binds the scenario whole.
+    {
+      feature: 'journal-install',
+      scenarios: ['every hook event the client has is wired or named as not captured'],
+    },
     {
       feature: 'journal-search-modes',
       scenarios: [

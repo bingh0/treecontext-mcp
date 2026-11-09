@@ -55,6 +55,19 @@
  *  | `preCompact`                           | Claude Code compacting a session's context: it fires the    |
  *  |                                        | real PreCompact hook, then SessionStart with source         |
  *  |                                        | `compact` under the same session, in that order (D375)      |
+ *  | `replayRecordedSession`                | Claude Code firing a recorded session's hook events (D402): |
+ *  |                                        | each event of a file under tests/fixtures/claude-code-hooks,|
+ *  |                                        | in the client's order, handed to exactly the commands the   |
+ *  |                                        | block install writes registers for its `hook_event_name`    |
+ *  |                                        | (its matcher read as the client reads it), each run as the  |
+ *  |                                        | installed script runs it (`treecontext hook <event>`); an   |
+ *  |                                        | event the block does not register reaches no hook. It may   |
+ *  |                                        | rewrite only `cwd`, `transcript_path`,                      |
+ *  |                                        | `agent_transcript_path` and, when asked, `session_id`; it   |
+ *  |                                        | must never change a payload's shape, add, drop or edit a    |
+ *  |                                        | field, an input, a response, an error or an id, or run a    |
+ *  |                                        | hook the block does not name. The session reminder script   |
+ *  |                                        | only prints and writes nothing, so it is not run            |
  *
  * ── What a stand-in may do ────────────────────────────────────────────
  *
@@ -139,9 +152,9 @@
  * `invalidRow`, `waitBeforeStop` / `waitAfterStop`, `final` (its last
  * message), `exit`.
  */
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { WORKER_AGENT_ID, type LegRef, type LegRegistration } from '../../src/persistence/leg-registry.js'
 import { mintTicket, TICKET_ENV, type TicketFields } from '../../src/ticket.js'
 import { spawnWorker, DOOR_LINE_PREFIX, type WorkerRunResult } from '../../src/ticket-door.js'
@@ -151,6 +164,7 @@ import { placeBuiltPackage } from '../helpers/built-package.js'
 import { TS_ROOT } from './proc.js'
 import { type RunWorld, briefFor, subagentStartHook, liveProcess } from './run-world.js'
 import { type CaptureWorld, runHook, hookJson } from './capture-harness.js'
+import { claudeHooksBlock, hookScriptContent } from '../../src/server/installer.js'
 
 /** The registry and door acts a binding may make only through this
  *  module: each is a door's own act (a registration, a retirement, a
@@ -681,4 +695,123 @@ export async function startEntryAsClient(
     await new Promise<void>((r) => { if (child.exitCode !== null || child.signalCode !== null) r(); else child.once('exit', () => r()) })
     unplace()
   }
+}
+
+// ── Claude Code firing recorded hook events (D400, D401, D402) ─────────
+
+/** The recorded sessions: every hook event a real `claude -p` fired, in
+ *  order, as the client wrote it (tests/fixtures/claude-code-hooks). */
+export const RECORDED_HOOK_EVENTS = join(TS_ROOT, 'tests', 'fixtures', 'claude-code-hooks')
+
+/** One recorded session, line by line, each payload exactly as the client
+ *  wrote it. */
+export function recordedSession(version: string, file: string): Array<Record<string, unknown>> {
+  return readFileSync(join(RECORDED_HOOK_EVENTS, version, file), 'utf8').split('\n').filter((l) => l.trim() !== '')
+    .map((l) => JSON.parse(l) as Record<string, unknown>)
+}
+
+/** What a matcher entry is matched against, per event, as Claude Code's
+ *  hooks reference has it: the start's source, the compaction's trigger,
+ *  a tool event's tool name; an event with no matcher field matches every
+ *  entry. */
+function matcherSubject(payload: Record<string, unknown>): string | null {
+  switch (payload['hook_event_name']) {
+    case 'SessionStart': return typeof payload['source'] === 'string' ? payload['source'] : null
+    case 'PreCompact': return typeof payload['trigger'] === 'string' ? payload['trigger'] : null
+    case 'PreToolUse': case 'PostToolUse': case 'PostToolUseFailure': case 'PermissionRequest':
+      return typeof payload['tool_name'] === 'string' ? payload['tool_name'] : null
+    default: return null
+  }
+}
+
+/**
+ * The hook commands Claude Code would run for one event, read from the
+ * block install writes (`claudeHooksBlock`, the one definition the settings
+ * writer, the Codex copy and doctor all use): every command of every
+ * matcher entry under the event's name whose matcher matches, in order. An
+ * event the block does not name has none.
+ */
+export function installedCommandsFor(payload: Record<string, unknown>): string[] {
+  const block = claudeHooksBlock()
+  const event = String(payload['hook_event_name'] ?? '')
+  const subject = matcherSubject(payload)
+  const out: string[] = []
+  for (const m of block[event] ?? []) {
+    const matcher = m.matcher
+    const matches = matcher === undefined || matcher === '' || matcher === '*' || subject === null
+      || new RegExp(`^(?:${matcher})$`).test(subject)
+    if (matches) for (const h of m.hooks) out.push(h.command)
+  }
+  return out
+}
+
+/** The `treecontext hook <event>` an installed command runs: the script the
+ *  command names is the one install writes (`hookScriptContent`), whose
+ *  last act is `exec node <cli> hook <event>`; read from that body, never
+ *  from a table here. Null for a script that dispatches no hook (the
+ *  session reminder, which only prints). */
+export function hookDispatchOf(command: string): string | null {
+  const stem = /tc-([a-z-]+?)(?:\.cmd)?(?=["'\s]|$)/.exec(command)?.[1]
+  if (!stem || stem === 'session-reminder') return null
+  return /(?:"\$TC_CLI"|"%TC_CLI%") hook (\S+)/.exec(hookScriptContent(stem))?.[1] ?? null
+}
+
+/** One recorded event as the replay delivered it. */
+export interface ReplayedEvent {
+  /** Its line in the recorded file, from 0. */
+  line: number
+  event: string
+  /** The payload handed to the hooks (the recorded one, with only the
+   *  world's paths and session put in). */
+  payload: Record<string, unknown>
+  /** The `treecontext hook <event>` dispatches it reached, in order. */
+  hooks: string[]
+  /** The replay's clock around the hooks it ran (unix seconds). */
+  startedAt: number
+  endedAt: number
+  /** What each hook printed, in order. */
+  stdout: string[]
+}
+
+/**
+ * Claude Code firing a recorded session's hook events (D402): each event,
+ * in the order the client fired it, is handed to exactly the commands the
+ * block install writes registers for its `hook_event_name`
+ * (installedCommandsFor), each run as the installed script runs it: the
+ * real CLI's `hook <event>` (under tsx, this build's source), the payload on
+ * stdin, one at a time, as the client runs a hook to completion before the
+ * next event. An event the block does not register reaches no hook. The
+ * only rewrites are what must point at the test's world: `cwd`, the
+ * transcript paths (`transcript_path`, `agent_transcript_path`) and, with
+ * `sessionId`, the session id; the payload's shape, its tool calls, inputs,
+ * responses, errors and ids are the client's.
+ */
+export function replayRecordedSession(
+  w: CaptureWorld, events: Array<Record<string, unknown>>, opts: { sessionId?: string; lines?: (line: number, payload: Record<string, unknown>) => boolean } = {},
+): ReplayedEvent[] {
+  const env = sandboxedSpawnEnv(w.home!, { TREECONTEXT_BINDINGS_FILE: join(w.home!, '.treecontext', 'bindings.json') })
+  const out: ReplayedEvent[] = []
+  events.forEach((recorded, line) => {
+    if (opts.lines && !opts.lines(line, recorded)) return
+    const payload: Record<string, unknown> = { ...recorded, cwd: w.proj }
+    for (const k of ['transcript_path', 'agent_transcript_path']) {
+      if (typeof recorded[k] === 'string') payload[k] = join(w.proj!, basename(String(recorded[k])))
+    }
+    if (opts.sessionId !== undefined) payload['session_id'] = opts.sessionId
+    const hooks: string[] = []
+    const stdout: string[] = []
+    const startedAt = Date.now() / 1000
+    for (const command of installedCommandsFor(payload)) {
+      const dispatch = hookDispatchOf(command)
+      if (dispatch === null) continue
+      const r = spawnSync(process.execPath, nodeTsArgs(CLI_TS, ['hook', dispatch]), {
+        input: JSON.stringify(payload), env, cwd: TS_ROOT, encoding: 'utf8', timeout: 60_000,
+      })
+      if (r.status !== 0) throw new Error(`hook ${dispatch} for line ${line} (${String(payload['hook_event_name'])}) exited ${r.status}${r.error ? `: ${r.error.message}` : ''}\n${r.stderr ?? ''}`)
+      hooks.push(dispatch)
+      stdout.push(r.stdout ?? '')
+    }
+    out.push({ line, event: String(payload['hook_event_name']), payload, hooks, startedAt, endedAt: Date.now() / 1000, stdout })
+  })
+  return out
 }

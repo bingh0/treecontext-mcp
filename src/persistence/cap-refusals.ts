@@ -79,7 +79,9 @@ export function resolveStagedCapRefusals(db: RegistryHandle, sessionId: string):
   let rows: Array<{ content: string; tool_name: string; preview_len: number | null; agent_id: string | null }>
   try {
     rows = db.prepare(
-      `SELECT content, tool_name, preview_len, agent_id FROM staging WHERE session_id = ? AND tool_name LIKE '%treecontext_insert' ORDER BY id`,
+      // Only a call's own successful event is evidence (D400, D401).
+      `SELECT content, tool_name, preview_len, agent_id FROM staging WHERE session_id = ? AND tool_name LIKE '%treecontext_insert'
+          AND outcome IS NULL AND captured_from IS NULL ORDER BY id`,
     ).all(sessionId) as typeof rows
   } catch { return 0 }
   let n = 0

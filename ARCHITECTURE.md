@@ -55,8 +55,11 @@ library consumers ─ FlatStore.open()  (no server, no hooks, same store)
 - **The hook block** install writes into `~/.claude/settings.json`
   (`applyClaudeHookBlock`, `server/installer.ts`): SessionStart on the
   `startup`, `resume`, `clear` and `compact` matchers (reminder, then
-  session-start), PreCompact, PostToolUse, UserPromptSubmit, Stop,
-  SubagentStart and SubagentStop. The same block is copied verbatim into
+  session-start), PreCompact, PostToolUse, PostToolUseFailure and
+  PostToolBatch (one script for the three, by `hook_event_name`: a failed
+  call, D400, and the batch's account of calls no event of their own
+  captured, D401), UserPromptSubmit, Stop, SubagentStart and
+  SubagentStop. The same block is copied verbatim into
   Codex CLI's `~/.codex/hooks.json`, only behind `--experimental-capture`
   (Gemini CLI's translated copy went with its retirement, D399; uninstall
   sweeps one an earlier install left).

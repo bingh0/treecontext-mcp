@@ -15,7 +15,7 @@ import { ensureBaseSchema, runMigrations } from '../persistence/migrations.js'
 import { maxSupportedVersion } from '../persistence/migrations/index.js'
 import { hostname } from 'node:os'
 import { dbg, enableDebug } from '../debug.js'
-import { hookHandle, withHookDeadline, busySliceUntil, openWriteDeadline, HOOK_BUSY_SLICE_MS, HOOK_DEADLINE_FLOOR_MS } from './hook-deadline.js'
+import { hookHandle, withHookDeadline, hookDeadlineOf, busySliceUntil, openWriteDeadline, HOOK_BUSY_SLICE_MS, HOOK_DEADLINE_FLOOR_MS } from './hook-deadline.js'
 
 export { withHookDeadline, hookHandle, hookDeadlineOf, narrowHookDeadline, busySliceUntil, isHookBusy, openWriteDeadline, HOOK_BUSY_SLICE_MS, HOOK_DEADLINE_FLOOR_MS } from './hook-deadline.js'
 
@@ -360,12 +360,27 @@ export function writeStaging(dbPath: string, entry: StagingEntry, andThen?: (db:
     //    truncation cuts only at the display boundary, never an index
     //    boundary: an env cap is an index lever and does not apply on a
     //    store this old.
-    //  - v27+ (current): the payload's writer (agent_id, agent_type) and
+    //  - v27+: the payload's writer (agent_id, agent_type) and
     //    the row kind (D190, D147). An older store drops them: the row
     //    drains as the main agent's, which is the unstamped shape every
     //    row had before.
+    //  - v34+ (current): a tool call's id, its outcome and where it was
+    //    captured from (D400, D401). An older store drops them: the call
+    //    stages exactly as it did before this build (a failed call's row
+    //    still lands, unmarked), and the batch hook adds nothing there.
     const writerCols = entry.agentId != null || entry.agentType != null || entry.kind != null
+    const callCols = entry.toolUseId != null || entry.outcome != null || entry.capturedFrom != null
     const tiers: Array<{ cols: string; vals: string; run: Record<string, unknown>; note: string | null }> = [
+      ...(callCols ? [{
+        cols: ', index_len, preview_len, namespace, agent_id, agent_type, kind, tool_use_id, outcome, captured_from',
+        vals: ', @indexLen, @previewLen, @namespace, @agentId, @agentType, @kind, @toolUseId, @outcome, @capturedFrom',
+        run: {
+          ...params, indexLen: entry.indexLen ?? null, previewLen: entry.previewLen ?? null, namespace,
+          agentId: entry.agentId ?? null, agentType: entry.agentType ?? null, kind: entry.kind ?? null,
+          toolUseId: entry.toolUseId ?? null, outcome: entry.outcome ?? null, capturedFrom: entry.capturedFrom ?? null,
+        },
+        note: null,
+      }] : []),
       ...(writerCols ? [{
         cols: ', index_len, preview_len, namespace, agent_id, agent_type, kind',
         vals: ', @indexLen, @previewLen, @namespace, @agentId, @agentType, @kind',
@@ -373,12 +388,12 @@ export function writeStaging(dbPath: string, entry: StagingEntry, andThen?: (db:
           ...params, indexLen: entry.indexLen ?? null, previewLen: entry.previewLen ?? null, namespace,
           agentId: entry.agentId ?? null, agentType: entry.agentType ?? null, kind: entry.kind ?? null,
         },
-        note: null,
+        note: callCols ? 'pre-034 column fallback, call id and outcome dropped' : null,
       }] : []),
       {
         cols: ', index_len, preview_len, namespace', vals: ', @indexLen, @previewLen, @namespace',
         run: { ...params, indexLen: entry.indexLen ?? null, previewLen: entry.previewLen ?? null, namespace },
-        note: writerCols ? 'pre-027 column fallback, writer stamp dropped' : null,
+        note: writerCols ? 'pre-027 column fallback, writer stamp dropped' : callCols ? 'pre-034 column fallback, call id and outcome dropped' : null,
       },
       {
         cols: ', index_len, preview_len', vals: ', @indexLen, @previewLen',
@@ -435,6 +450,109 @@ export function writeStaging(dbPath: string, entry: StagingEntry, andThen?: (db:
       lost: `The ${entry.toolName ? `${entry.toolName} call` : entry.role === 'user' ? 'developer turn' : entry.role === 'snapshot' ? 'recovery snapshot claim' : 'assistant turn'} it captured was not staged.`,
       text: entry.content,
     })
+  } finally {
+    if (db) db.close()
+  }
+}
+
+/** The calls of one batch the client accounted for (PostToolBatch, D401),
+ *  each already composed as its staged row would be, with its id. */
+export interface BatchCall { toolUseId: string; entry: StagingEntry }
+
+/** What stageBatchAccount did: the calls it staged, the ones already
+ *  captured by an event of their own, or why it added nothing. */
+export type BatchOutcome =
+  | { staged: string[]; captured: string[] }
+  | { skipped: 'pre-034' | 'no-calls' }
+
+/** True when the store's staging table has the call id (migration 034).
+ *  Asked of the table, never of user_version: a hook runs at whatever
+ *  schema the store is at. */
+export function stagingHasCallId(db: DatabaseType): boolean {
+  return (db.prepare('PRAGMA table_info(staging)').all() as Array<{ name: string }>).some((c) => c.name === 'tool_use_id')
+}
+
+/**
+ * D401: the batch's account adds the calls no event of their own captured,
+ * told by the client's id for each call against what this session already
+ * staged. PostToolBatch fires after every call's own hooks have finished
+ * (live, Claude Code 2.1.319), and staged rows stay in staging after the
+ * drain (processed = 1) until the processed-row prune, a day later
+ * (store.ts purgeProcessedStaging), so a call its own event captured is
+ * always found here. A call whose own staging write failed left its gap
+ * record (D314), and its batch's account is then its entry.
+ *
+ * One connection, one immediate transaction: the lookup and the inserts
+ * see the same staging. On a store below 034 nothing is added, since what
+ * was captured cannot be told there. A failure before the lookup answered
+ * is one gap record for the batch (which of its calls were captured is not
+ * known, so none is claimed lost by name); a failure after it is one gap
+ * record per call the batch was adding, the calls that are in fact lost.
+ */
+export function stageBatchAccount(dbPath: string, sessionId: string | null, calls: BatchCall[]): BatchOutcome {
+  if (calls.length === 0 || !sessionId) return { skipped: 'no-calls' }
+  let db: DatabaseType | null = null
+  let missing: BatchCall[] | null = null
+  const at = calls[0]!.entry.timestamp
+  try {
+    db = openHookDb(dbPath)
+    if (!stagingHasCallId(db)) {
+      dbg('hook', 'batch account: staging predates the call id (034), nothing added', { dbPath })
+      return { skipped: 'pre-034' }
+    }
+    const handle = db
+    const namespace = resolveHookNamespace(dbPath, process.ppid, sessionId,
+      (a) => nsLeaseLiveFor(handle, a.namespace, a.server_pid, hostname()))
+    const ids = calls.map((c) => c.toolUseId)
+    const result = withHookDeadline(handle, hookDeadlineOf(handle) ?? Date.now() + HOOK_DB_TIMEOUT_MS, () => {
+      handle.exec('BEGIN IMMEDIATE')
+      const captured = new Set((handle.prepare(
+        `SELECT tool_use_id FROM staging WHERE session_id = ? AND tool_use_id IN (${ids.map(() => '?').join(', ')})`,
+      ).all(sessionId, ...ids) as Array<{ tool_use_id: string }>).map((r) => r.tool_use_id))
+      missing = calls.filter((c) => !captured.has(c.toolUseId))
+      const insert = handle.prepare(
+        `INSERT INTO staging (session_id, role, content, tool_name, timestamp, priority, processed, created_at,
+           index_len, preview_len, namespace, agent_id, agent_type, kind, tool_use_id, outcome, captured_from)
+         VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      for (const c of missing) {
+        const e = c.entry
+        insert.run(sessionId, e.role, e.content, e.toolName ?? null, e.timestamp, e.priority ?? 3, Date.now() / 1000,
+          e.indexLen ?? null, e.previewLen ?? null, e.namespace !== undefined ? e.namespace : namespace,
+          e.agentId ?? null, e.agentType ?? null, e.kind ?? null, c.toolUseId, e.outcome ?? null, e.capturedFrom ?? null)
+      }
+      handle.exec('COMMIT')
+      return { staged: missing.map((c) => c.toolUseId), captured: [...captured] }
+    })
+    dbg('hook', 'batch account staged', { dbPath, staged: result.staged.length, captured: result.captured.length })
+    return result
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    console.error(`[treecontext hook] Failed to stage the batch's account: ${msg}`)
+    const writer = calls[0]!.entry
+    const who = {
+      ...(writer.agentId ? { agentId: writer.agentId } : {}), ...(writer.agentType ? { agentType: writer.agentType } : {}),
+    }
+    // D314: never silently. Before the lookup answered, which calls were
+    // captured is unknown: one record for the batch, naming its calls.
+    // After it, each call the batch was adding is lost: one record each.
+    const lostCalls = missing as BatchCall[] | null
+    if (lostCalls === null) {
+      recordHookGap(dbPath, {
+        hook: 'post-tool-use', sessionId, ...who, at, error: msg,
+        lost: `The batch's account of ${calls.length} call${calls.length === 1 ? '' : 's'} was not checked against what was captured, so a call the client resolved without running may be missing: ${calls.map((c) => `${c.entry.toolName ?? 'tool'} ${c.toolUseId}`).join(', ')}.`,
+        text: null,
+      })
+    } else {
+      for (const c of lostCalls) {
+        recordHookGap(dbPath, {
+          hook: 'post-tool-use', sessionId, ...who, at, error: msg,
+          lost: `The ${c.entry.toolName ?? 'tool'} call ${c.toolUseId} the batch's account carried was not staged.`,
+          text: c.entry.content,
+        })
+      }
+    }
+    return { staged: [], captured: [] }
   } finally {
     if (db) db.close()
   }

@@ -74,6 +74,15 @@ export interface StagingEntry {
   /** Row kind the drain carries into metadata.kind (the subagent's
    *  summary, `subagent-summary`, D147). */
   kind?: string | null
+  /** The client's own id for a tool call (D400): every tool call captured
+   *  from schema 034 on carries it, whichever event carried the call. */
+  toolUseId?: string | null
+  /** How a tool call ended when its own event says it did not succeed:
+   *  `failed`, or `interrupted` (D400). null/absent on a successful call. */
+  outcome?: string | null
+  /** Where the row came from when it was not the call's own event:
+   *  `batch`, the client's account of the batch (D401). */
+  capturedFrom?: string | null
 }
 
 export interface StagingRow {
@@ -99,6 +108,12 @@ export interface StagingRow {
   agentType: string | null
   /** Row kind (see StagingEntry.kind). */
   kind: string | null
+  /** The client's id for the call (see StagingEntry.toolUseId). */
+  toolUseId: string | null
+  /** See StagingEntry.outcome. */
+  outcome: string | null
+  /** See StagingEntry.capturedFrom. */
+  capturedFrom: string | null
 }
 
 /** What the V2 echo heal did with one (echo, row) pair — every branch is
@@ -784,6 +799,9 @@ export class Persistence {
       entry.agentId ?? null,
       entry.agentType ?? null,
       entry.kind ?? null,
+      entry.toolUseId ?? null,
+      entry.outcome ?? null,
+      entry.capturedFrom ?? null,
     )
     const id = Number(result.lastInsertRowid)
     dbg('store', 'staging insert', { id, role: entry.role, toolName: entry.toolName, bytes: entry.content.length })
@@ -815,7 +833,8 @@ export class Persistence {
                       WHERE processed = 0 AND (claimed_by IS NULL OR claimed_at < ?)
                       ORDER BY timestamp, id LIMIT ?)
         RETURNING id, session_id, role, content, tool_name, timestamp, priority, processed,
-                  created_at, index_len, preview_len, attempts, namespace, agent_id, agent_type, kind`,
+                  created_at, index_len, preview_len, attempts, namespace, agent_id, agent_type, kind,
+                  tool_use_id, outcome, captured_from`,
     )
     const rows = this.sClaimStagingBatch.all(claimant, now, now - ttlSecs, limit)
     dbg('store', 'staging claim', { claimant, requested: limit, claimed: rows.length })
@@ -871,6 +890,9 @@ export class Persistence {
         agentId: r.agent_id == null ? null : String(r.agent_id),
         agentType: r.agent_type == null ? null : String(r.agent_type),
         kind: r.kind == null ? null : String(r.kind),
+        toolUseId: r.tool_use_id == null ? null : String(r.tool_use_id),
+        outcome: r.outcome == null ? null : String(r.outcome),
+        capturedFrom: r.captured_from == null ? null : String(r.captured_from),
       }
     })
   }
@@ -1146,8 +1168,8 @@ export class Persistence {
   private getInsertStagingStmt(): Statement {
     if (!this.sInsertStaging) {
       this.sInsertStaging = this.db.prepare(
-        'INSERT INTO staging (session_id, role, content, tool_name, timestamp, priority, index_len, preview_len, namespace, agent_id, agent_type, kind) ' +
-          'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO staging (session_id, role, content, tool_name, timestamp, priority, index_len, preview_len, namespace, agent_id, agent_type, kind, tool_use_id, outcome, captured_from) ' +
+          'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       )
     }
     return this.sInsertStaging

@@ -4,7 +4,7 @@
 
 Claude Code is the **verified reference platform** — the only platform
 whose capture adapter has passed a live-payload verification pass
-(`CAPTURE_PLATFORMS` in `src/server/installer.ts`). Seven hook events
+(`CAPTURE_PLATFORMS` in `src/server/installer.ts`). Nine hook events
 are installed (`applyClaudeHookBlock`, `src/server/installer.ts`):
 
 | Event | Matcher | Scripts run |
@@ -12,13 +12,16 @@ are installed (`applyClaudeHookBlock`, `src/server/installer.ts`):
 | `SessionStart` | `startup`, `resume`, `clear`, `compact` (one entry each) | `tc-session-reminder`, then `tc-session-start` |
 | `PreCompact` | none | `tc-pre-compact` |
 | `PostToolUse` | none | `tc-post-tool-use` |
+| `PostToolUseFailure` | none | `tc-post-tool-use` |
+| `PostToolBatch` | none | `tc-post-tool-use` |
 | `UserPromptSubmit` | none | `tc-user-prompt-submit` |
 | `Stop` | none | `tc-stop` |
 | `SubagentStart` | none | `tc-subagent-start` |
 | `SubagentStop` | none | `tc-subagent-stop` |
 
-Eight wrapper scripts back them (`CLAUDE_HOOK_SCRIPTS`): the seven
-dispatcher events plus the static `tc-session-reminder`.
+Eight wrapper scripts back them (`CLAUDE_HOOK_SCRIPTS`): seven
+dispatchers plus the static `tc-session-reminder`; `tc-post-tool-use`
+serves the three tool events, by the payload's `hook_event_name`.
 
 **Existing installs must re-run `treecontext install`** to receive
 `SubagentStart`, `SubagentStop` and the `clear`/`resume` wiring of
@@ -28,7 +31,10 @@ reinstall, a /clear gets no re-orientation packet and no subagent is
 registered. `treecontext doctor` says so: "hooks incomplete (missing:
 subagent-start, subagent-stop)" while those scripts are absent, and a
 "re-orientation hooks" warning naming the unwired matchers, both with
-the fix `treecontext install`.
+the fix `treecontext install`. Installs from before beta.4 have no
+`PostToolUseFailure` or `PostToolBatch`; doctor's "capture events" row
+names each event an install's settings lack and what is not journaled
+without it, with the fix `treecontext install --force --agent claude`.
 
 ## Setup
 
@@ -43,7 +49,7 @@ That is the whole setup. The installer (`src/server/installer.ts`):
   Node floor and run this package), falling back to runtime resolution (PATH → nvm/fnm → the
   install-time interpreter) if that one ever disappears, and dispatch
   `treecontext hook <event>`;
-- registers all seven events in `~/.claude/settings.json`, merging with
+- registers all nine events in `~/.claude/settings.json`, merging with
   your existing hooks rather than overwriting them (treecontext's own
   entries are rewritten to this build's form; yours are kept);
 - registers the MCP server in `~/.claude.json` — the file Claude Code
@@ -86,7 +92,21 @@ are found (`PACKAGE_DIRS`, `posixModuleGlobs`).
   `additionalContext`: the leg's return, its summary row with writer, run
   and key (D284, D285, D330). A background launch (`status:
   "async_launched"`) carries no pointer: its return is the platform's
-  task notification (D369).
+  task notification (D369). It serves two more events (D400, D401):
+  Claude Code fires `PostToolUse` only for a call that succeeded. A call
+  that fails (non-zero exit, timeout, a tool's error, an MCP tool's
+  `isError` or protocol error) fires `PostToolUseFailure`, captured the
+  same way with the client's `error` text as the Output section and
+  marked `outcome` `failed` (`interrupted` when `is_interrupt` is true).
+  A call the client resolves without running (input rejected, permission
+  denied, blocked by a PreToolUse hook) fires no event of its own; the
+  batch's account, `PostToolBatch`, lists every call of the batch after
+  their own hooks have finished, and the hook stages each call this
+  session has not already staged, told by `tool_use_id`, with the
+  client's `tool_response` as its Output and marked `captured_from`
+  `batch`. Every captured call carries `tool_use_id`. On a store below
+  schema 034 a failure stages unmarked and the batch adds nothing. The
+  live payloads are recorded under `tests/fixtures/claude-code-hooks/`.
 - **`stop`** — captures the assistant's final response of the turn: the
   payload's `last_assistant_message`, and only for a payload without it
   the last assistant text block of `transcript_path`

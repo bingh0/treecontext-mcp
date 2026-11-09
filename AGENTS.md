@@ -205,7 +205,10 @@ scenario, are in `docs/beta3-bindings-audit.md`.
   and `subagent-stop` register and retire subagents and are the hooks door
   of a leg (the inference from the role's brief, the first moment under
   the client's 10,000-character cap, the send-back once); `post-tool-use`
-  adds the leg's pointer beside the Agent tool's result; `session-start`
+  serves PostToolUse, PostToolUseFailure (D400) and PostToolBatch (D401,
+  the batch's account of calls no event of their own captured, told by
+  `tool_use_id` against staging) and adds the leg's pointer beside the
+  Agent tool's result; `session-start`
   retires a leg left live as cut and makes a `claude -p` child with a
   ticket a worker, never a self; `stop` sends that worker back once;
   `git-self.ts` reads where a session runs (worktree, branch) for its
@@ -335,6 +338,13 @@ node dist/server/cli.js doctor      # after a build
   Nothing writes a self registration's `stopped_at` (D396). A door that cannot write the store at a worker's exit records
   nothing and leaves the leg for the phantom pass: never retry that
   write, never guess an exit moment
+- A staged tool call carries the client's `tool_use_id`, and a failed
+  call's `outcome` or the batch's `captured_from` (staging columns,
+  migration 034). Only a call's own successful event is echo evidence: the
+  drain's heals, the status publisher, the stop hook's settle and the
+  staged cap-refusal read all skip a row with either mark (D400, D401). A
+  hook meeting a store below 034 drops the three columns (the tier walk)
+  and the batch adds nothing there
 - Platform events still stage (hook → staging → drain). The hooks door
   is the one place a hook writes journal rows directly: a leg's own rows
   (registration, the run's open, first moment, send-back, summary),

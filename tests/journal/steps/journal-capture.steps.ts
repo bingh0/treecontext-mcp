@@ -16,6 +16,7 @@ import { maxSupportedVersion } from '../../../src/persistence/migrations/index.j
 import { T0 } from '../world.js'
 import { RECOVERY_SNAPSHOT_SOURCE, RECOVERY_QUERIES_KEY, RECOVERY_QUOTE_CAP, RECOVERY_PREVIEW_LEN, RECOVERY_INDEX_LEN } from '../../../src/persistence/recovery-snapshot.js'
 import { ftsNodeIds } from '../../helpers/echo-capture.js'
+import { recordedSession, replayRecordedSession, type ReplayedEvent } from '../standins.js'
 import { type CaptureWorld, openCaptureSandbox, adoptCaptureStore, openCaptureWorld, spawnHook, spawnHooksAtOnce, spawnServeChild, waitForServeLog, drainStaging, type RawNode, rawJournal, bashPayload, writeTranscript, seedCheckpointAge, expectBookmarkAsked } from '../capture-harness.js'
 
 /** What the transcript still ends at when Stop fires: the turn before. */
@@ -61,6 +62,69 @@ function ftsRowsMatching(w: CaptureWorld, token: string): string[] {
   }
 }
 
+/** The recorded Claude Code sessions these bindings replay (D402). */
+const RECORDED_VERSION = '2.1.319'
+const SERIAL = 'serial-failures-and-denials.ndjson'
+const PARALLEL = 'parallel-batch-hook-block-mcp-errors-subagent.ndjson'
+/** The parallel session's first batch: Bash `echo par-ok-slow-hook`
+ *  (succeeds), Bash `ls /nonexistent-par` (exit 2), an Edit rejected for
+ *  its input, and a ToolSearch (succeeds). */
+const PARALLEL_OK = 'toolu_01ExmFevbQgvcsxnJm65RtcV'
+const PARALLEL_FAILED = 'toolu_01CJ3mnjPCSEkJMQDpg4Hs9a'
+const PARALLEL_REJECTED = 'toolu_01GNi6XzvVa1DEG9jzB5ePuH'
+const PARALLEL_TOOLSEARCH = 'toolu_01JgTCyS5FH3JHaaVBfwvfFH'
+
+interface NamedCall { id: string; tool: string; what: string }
+/** D400's failures, by the client's id (the fixture README's table). */
+const FAILED_CALLS: NamedCall[] = [
+  { id: 'toolu_01FvqNcZYBnuCsHBiwp6o3Mj', tool: 'Bash', what: 'a shell command that exits non-zero (ls, exit 2)' },
+  { id: 'toolu_01Uce7kGn9KwGNm8bkJRj8rr', tool: 'Bash', what: 'a shell command that exits non-zero (exit 7, stdout and stderr)' },
+  { id: 'toolu_01FE2NPXLRRYkKKuSzvA5WpZ', tool: 'Read', what: 'a file read that fails' },
+  { id: 'toolu_01VZtRcwK5BmD25XRcfhTkLj', tool: 'Bash', what: 'a command that times out' },
+  { id: 'toolu_011BwmKDpXffq2ToBYPufCmD', tool: 'mcp__probe__fail_iserror', what: 'an MCP tool answering isError' },
+  { id: 'toolu_01QcTUn2pcrYwiMYKGYEP5x5', tool: 'mcp__probe__fail_throw', what: 'an MCP tool answering a protocol error' },
+]
+/** D401's calls resolved without running, by the client's id. */
+const REFUSED_CALLS: NamedCall[] = [
+  { id: 'toolu_011vY6TQFTBGEGvzxAU1gH2z', tool: 'Edit', what: 'a call rejected for its input (serial)' },
+  { id: PARALLEL_REJECTED, tool: 'Edit', what: 'a call rejected for its input (in a parallel batch)' },
+  { id: 'toolu_016tYJEkXhrUAYW9DceAdgQY', tool: 'Write', what: 'a call denied permission (Write)' },
+  { id: 'toolu_01Eh6sZA8krzkd9tRXFMms21', tool: 'WebFetch', what: 'a call denied permission (WebFetch)' },
+  { id: 'toolu_01RdX9DY9gPKMbLdBeuKpre2', tool: 'Bash', what: 'a call a PreToolUse hook blocked' },
+  { id: 'toolu_01M7pR8G3pzPXhq8xQkcfzSY', tool: 'Write', what: "a subagent's call denied permission" },
+  { id: 'toolu_01VCEYEndqs8NLCYxquxWvuZ', tool: 'Edit', what: "a subagent's call rejected for its input" },
+]
+
+/** The replay scenarios' world (D400, D401). */
+type ReplayWorld = CaptureWorld & {
+  recorded?: Array<{ events: Array<Record<string, unknown>>; through?: number }>
+  replays?: ReplayedEvent[][]
+  calls?: Array<NamedCall & { payload: Record<string, unknown> }>
+  batchIds?: string[]
+}
+
+/** A named call as the recorded files hold it: the payload of the event
+ *  of `kind` carrying it (the call itself, from a batch's account). */
+function recordedCall(w: ReplayWorld, id: string, kind: 'PostToolUseFailure' | 'PostToolBatch'): { payload: Record<string, unknown> } {
+  for (const e of w.recorded!.flatMap((r) => r.events)) {
+    if (e['hook_event_name'] !== kind) continue
+    if (kind === 'PostToolBatch') {
+      const call = (e['tool_calls'] as Array<Record<string, unknown>>).find((t) => t['tool_use_id'] === id)
+      if (call) return { payload: call }
+    } else if (e['tool_use_id'] === id) {
+      return { payload: e }
+    }
+  }
+  throw new Error(`no ${kind} event in the recorded files carries ${id}`)
+}
+
+/** The one journal entry carrying the client's id for a call. */
+function onlyEntryOf(w: CaptureWorld, id: string): RawNode {
+  const rows = rawJournal(w).filter((r) => r.metadata['tool_use_id'] === id)
+  expect(rows, `the journal holds ${rows.length} entries for the call ${id}, not one`).toHaveLength(1)
+  return rows[0]!
+}
+
 export const captureDefiner = (reg: Registry<CaptureWorld>): void => {
   // ── a user message is captured verbatim ─────────────────────────────
   reg.define(/^a session where the user submits a prompt$/, async (w: CaptureWorld) => {
@@ -94,13 +158,23 @@ export const captureDefiner = (reg: Registry<CaptureWorld>): void => {
   })
 
   // ── a tool event is captured with both its input and its response ───
-  reg.define(/^a PostToolUse payload shaped exactly as Claude Code sends it$/, async (w: CaptureWorld) => {
+  // D402: "as Claude Code sends it" is a recorded event, never a payload
+  // written here: the serial session's one successful Bash call (`echo
+  // probe-ok`, its PostToolUse as Claude Code 2.1.319 fired it).
+  reg.define(/^a PostToolUse payload shaped exactly as Claude Code sends it$/, async (w: ReplayWorld) => {
     await openCaptureWorld(w)
-    w.toolCommand = 'npx vitest run tests/journal'
-    w.toolStdout = 'Test Files  2 passed (2)\n     Tests  48 passed | 42 todo (90)'
+    const events = recordedSession(RECORDED_VERSION, SERIAL)
+    const line = events.findIndex((e) => e['hook_event_name'] === 'PostToolUse' && e['tool_use_id'] === 'toolu_017WkjHRbHSjGabaDwQkTWJE')
+    expect(line, 'the recorded PostToolUse event is not in the fixture').toBeGreaterThanOrEqual(0)
+    w.recorded = [{ events: [events[line]!] }]
+    w.toolCommand = String((events[line]!['tool_input'] as Record<string, unknown>)['command'])
+    w.toolStdout = String((events[line]!['tool_response'] as Record<string, unknown>)['stdout'])
+    expect(w.toolCommand).toBe('echo probe-ok')
+    expect(w.toolStdout).toBe('probe-ok')
   })
-  reg.define(/^the hook stages it and ingestion runs$/, async (w: CaptureWorld) => {
-    spawnHook(w, 'post-tool-use', bashPayload(w, w.toolCommand!, w.toolStdout!))
+  reg.define(/^the hook stages it and ingestion runs$/, async (w: ReplayWorld) => {
+    const replayed = replayRecordedSession(w, w.recorded![0]!.events)
+    expect(replayed.map((r) => r.hooks), 'the PostToolUse event reached no hook install wires').toEqual([['post-tool-use']])
     await drainStaging(w)
   })
   reg.define(/^the journal entry carries the tool name, the input, and an Output section with the response$/, (w: CaptureWorld) => {
@@ -111,7 +185,7 @@ export const captureDefiner = (reg: Registry<CaptureWorld>): void => {
     expect(c).toContain('Input:')
     expect(c).toContain(w.toolCommand!)
     expect(c).toMatch(/Output:/)
-    expect(c).toContain('48 passed')
+    expect(c.slice(c.indexOf('\nOutput:'))).toContain(w.toolStdout!)
   })
 
   // ── an assistant response is captured at turn end ───────────────────
@@ -502,6 +576,145 @@ export const captureDefiner = (reg: Registry<CaptureWorld>): void => {
     expectCall('LS', w.proj!)
     expectCall('Grep', 'retentionSweep')
     expectCall('Read', join(w.proj!, 'README.md'))
+  })
+
+  // ── D400: a tool call that fails is journaled ───────────────────────
+  // The calls are named by the client's id, each checked against the
+  // recorded file: the Given's words pick them, the fixture must agree.
+  reg.define(/^the events Claude Code sent for a shell command that exits non-zero, a file read that fails, a command that times out and an MCP tool that answers with an error$/, async (w: ReplayWorld) => {
+    await openCaptureWorld(w)
+    w.recorded = [{ events: recordedSession(RECORDED_VERSION, SERIAL) }, { events: recordedSession(RECORDED_VERSION, PARALLEL) }]
+    w.calls = FAILED_CALLS.map((c) => ({ ...c, ...recordedCall(w, c.id, 'PostToolUseFailure') }))
+  })
+  reg.define(/^the hooks install wires receive those events and ingestion runs$/, async (w: ReplayWorld) => {
+    w.replays = w.recorded!.map((r) => replayRecordedSession(w, r.events, r.through !== undefined ? { lines: (line) => line <= r.through! } : {}))
+    await drainStaging(w)
+  })
+  reg.define(/^each failed call is in the journal with its tool name, its input and the client's error text as its output$/, (w: ReplayWorld) => {
+    for (const c of w.calls!) {
+      const row = onlyEntryOf(w, c.id)
+      expect(row.metadata['tool_name'], c.what).toBe(c.tool)
+      expect(row.content.startsWith(`Tool: ${c.tool}\n`), c.what).toBe(true)
+      const out = row.content.indexOf('\nOutput:\n')
+      expect(out, `${c.what}: no Output section`).toBeGreaterThan(0)
+      // The input, each of its fields as the client sent it.
+      for (const v of Object.values(c.payload['tool_input'] as Record<string, unknown>)) {
+        expect(row.content.slice(0, out), `${c.what}: the input lacks ${String(v)}`).toContain(String(v))
+      }
+      // The client's error text is the Output section, whole.
+      const error = c.payload['error']
+      expect(typeof error, `${c.what}: the recorded failure has no error text`).toBe('string')
+      expect(row.content.slice(out + '\nOutput:\n'.length), c.what).toBe(String(error).trimEnd())
+    }
+  })
+  reg.define(/^each is marked as failed and carries the client's own id for the call$/, (w: ReplayWorld) => {
+    for (const c of w.calls!) {
+      const row = onlyEntryOf(w, c.id)
+      expect(row.metadata['outcome'], c.what).toBe('failed')
+      expect(row.metadata['tool_use_id'], c.what).toBe(c.id)
+      expect(row.metadata['captured_from'], `${c.what}: the batch's account, not the failure's own event`).toBeUndefined()
+    }
+    // A call that succeeded, in the same sessions, carries its id and no
+    // outcome: the mark is the failure's, not every row's.
+    for (const id of ['toolu_017WkjHRbHSjGabaDwQkTWJE', 'toolu_01ExmFevbQgvcsxnJm65RtcV']) {
+      const ok = onlyEntryOf(w, id)
+      expect(ok.metadata['outcome'], `the successful call ${id} is marked`).toBeUndefined()
+    }
+  })
+  reg.define(/^each entry's moment is when its failure arrived$/, (w: ReplayWorld) => {
+    const ordered: Array<{ id: string; at: number; replayAt: number }> = []
+    for (const c of w.calls!) {
+      const delivered = w.replays!.flat().filter((r) => r.event === 'PostToolUseFailure' && r.payload['tool_use_id'] === c.id)
+      expect(delivered, `${c.what}: its failure was not delivered once`).toHaveLength(1)
+      expect(delivered[0]!.hooks, `${c.what}: its failure reached no hook`).toEqual(['post-tool-use'])
+      const at = onlyEntryOf(w, c.id).metadata['created_at'] as number
+      expect(at, `${c.what}: before its failure arrived`).toBeGreaterThanOrEqual(delivered[0]!.startedAt)
+      expect(at, `${c.what}: after its failure's hook ended`).toBeLessThanOrEqual(delivered[0]!.endedAt)
+      // Never the batch's moment: the batch that names it came after.
+      const batch = w.replays!.flat().find((r) => r.event === 'PostToolBatch'
+        && (r.payload['tool_calls'] as Array<Record<string, unknown>>).some((t) => t['tool_use_id'] === c.id))!
+      expect(at, `${c.what}: stamped at its batch`).toBeLessThan(batch.startedAt)
+      ordered.push({ id: c.id, at, replayAt: delivered[0]!.startedAt })
+    }
+    // The entries' order is the order the failures arrived in.
+    expect([...ordered].sort((a, b) => a.at - b.at).map((o) => o.id)).toEqual([...ordered].sort((a, b) => a.replayAt - b.replayAt).map((o) => o.id))
+  })
+
+  // ── D401: a call the client refused before running it ───────────────
+  reg.define(/^the events Claude Code sent for a call rejected for its input, a call denied permission and a call a hook blocked$/, async (w: ReplayWorld) => {
+    await openCaptureWorld(w)
+    w.recorded = [{ events: recordedSession(RECORDED_VERSION, SERIAL) }, { events: recordedSession(RECORDED_VERSION, PARALLEL) }]
+    w.calls = REFUSED_CALLS.map((c) => ({ ...c, ...recordedCall(w, c.id, 'PostToolBatch') }))
+    // None of them has an event of its own, as the client fired them.
+    for (const c of w.calls) {
+      const own = w.recorded.flatMap((r) => r.events).filter((e) => (e['hook_event_name'] === 'PostToolUse' || e['hook_event_name'] === 'PostToolUseFailure') && e['tool_use_id'] === c.id)
+      expect(own, `${c.what}: the client fired an event of its own for it`).toEqual([])
+    }
+  })
+  reg.define(/^each such call is in the journal with its tool name, its input and what the client told the model about it$/, (w: ReplayWorld) => {
+    for (const c of w.calls!) {
+      const row = onlyEntryOf(w, c.id)
+      expect(row.metadata['tool_name'], c.what).toBe(c.tool)
+      expect(row.content.startsWith(`Tool: ${c.tool}\n`), c.what).toBe(true)
+      const out = row.content.indexOf('\nOutput:\n')
+      expect(out, `${c.what}: no Output section`).toBeGreaterThan(0)
+      for (const v of Object.values(c.payload['tool_input'] as Record<string, unknown>)) {
+        expect(row.content.slice(0, out), `${c.what}: the input lacks ${String(v)}`).toContain(String(v))
+      }
+      const told = c.payload['tool_response']
+      expect(typeof told, `${c.what}: the batch's account gives no text`).toBe('string')
+      // Whole, as a successful call's response is: the entry's layout trims
+      // the text's trailing line break, as it always has.
+      expect(row.content.slice(out + '\nOutput:\n'.length), c.what).toBe(String(told).trimEnd())
+    }
+  })
+  reg.define(/^each says it was captured from the client's account of the batch and carries the client's own id for the call$/, (w: ReplayWorld) => {
+    for (const c of w.calls!) {
+      const row = onlyEntryOf(w, c.id)
+      expect(row.metadata['captured_from'], c.what).toBe('batch')
+      expect(row.metadata['tool_use_id'], c.what).toBe(c.id)
+      // It says what the client said and does not classify why.
+      expect(row.metadata['outcome'], c.what).toBeUndefined()
+    }
+  })
+
+  // ── D401: a call is journaled once, whichever events carried it ──────
+  reg.define(/^the events Claude Code sent for one batch of parallel calls, one succeeding, one failing and one rejected for its input$/, async (w: ReplayWorld) => {
+    await openCaptureWorld(w)
+    const events = recordedSession(RECORDED_VERSION, PARALLEL)
+    // The session up to and including its first batch's account.
+    const through = events.findIndex((e) => e['hook_event_name'] === 'PostToolBatch')
+    const batch = events[through]!['tool_calls'] as Array<Record<string, unknown>>
+    expect(batch.map((t) => t['tool_use_id'])).toEqual([PARALLEL_OK, PARALLEL_FAILED, PARALLEL_REJECTED, PARALLEL_TOOLSEARCH])
+    w.recorded = [{ events, through }]
+    w.batchIds = batch.map((t) => String(t['tool_use_id']))
+  })
+  reg.define(/^the journal holds exactly one entry for each call of the batch$/, (w: ReplayWorld) => {
+    for (const id of w.batchIds!) onlyEntryOf(w, id)
+    // And no entry for a call outside it, nor a second without its id.
+    const tool = rawJournal(w).filter((r) => typeof r.metadata['tool_name'] === 'string')
+    expect(tool.map((r) => r.metadata['tool_use_id']).sort()).toEqual([...w.batchIds!].sort())
+  })
+  reg.define(/^the succeeding and the failing call are the entries their own events produced, not the batch's account of them$/, (w: ReplayWorld) => {
+    const own = (id: string, event: string): void => {
+      const row = onlyEntryOf(w, id)
+      expect(row.metadata['captured_from'], `${id}: the batch's account landed for it`).toBeUndefined()
+      const delivered = w.replays!.flat().find((r) => r.event === event && r.payload['tool_use_id'] === id)!
+      const at = row.metadata['created_at'] as number
+      expect(at).toBeGreaterThanOrEqual(delivered.startedAt)
+      expect(at).toBeLessThanOrEqual(delivered.endedAt)
+      // Its own event's composition: the success's response, the failure's error.
+      const p = delivered.payload
+      const out = row.content.slice(row.content.indexOf('\nOutput:\n'))
+      if (event === 'PostToolUse') expect(out).toContain(String((p['tool_response'] as Record<string, unknown>)['stdout']))
+      else expect(out).toBe(`\nOutput:\n${String(p['error']).trimEnd()}`)
+    }
+    own(PARALLEL_OK, 'PostToolUse')
+    own(PARALLEL_FAILED, 'PostToolUseFailure')
+    expect(onlyEntryOf(w, PARALLEL_OK).metadata['outcome']).toBeUndefined()
+    expect(onlyEntryOf(w, PARALLEL_FAILED).metadata['outcome']).toBe('failed')
+    // The rejected call has no event of its own: its entry is the batch's.
+    expect(onlyEntryOf(w, PARALLEL_REJECTED).metadata['captured_from']).toBe('batch')
   })
 
   // ── outputs of repo-reading tools are trail, not treasure ───────────

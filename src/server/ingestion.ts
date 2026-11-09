@@ -696,6 +696,17 @@ export class IngestionLoop {
           // D147: the row's kind, as the hook staged it (the subagent's
           // summary).
           if (row.kind != null) meta.kind = row.kind
+          // D400, D401: the client's id for a tool call, how a call that did
+          // not succeed ended, and a row the batch's account added. A
+          // successful call's own row carries no outcome.
+          if (row.toolUseId != null) meta.tool_use_id = row.toolUseId
+          if (row.outcome != null) meta.outcome = row.outcome
+          if (row.capturedFrom != null) meta.captured_from = row.capturedFrom
+          // A treecontext tool's echo is evidence only when it is the call's
+          // own successful event: a failed call wrote nothing (D400), and
+          // the batch's account of a call is what the client told the model,
+          // never the call's own reply (D401). Neither heals or publishes.
+          const ownEcho = row.outcome == null && row.capturedFrom == null
           // D284, D309, D329: a leg's summary row is a row of its run,
           // carrying the run and the key read from the leg's registration
           // (leg-registry.ts legReturnStamp), never from the report's text;
@@ -765,7 +776,7 @@ export class IngestionLoop {
           // poisoned capture row; the echo node above landed regardless.
           // A worker's rows were stamped by its own lane, exactly; the heals
           // read a session's registry, which a worker's lane is not.
-          if (row.role === 'assistant' && isInsertEchoTool(row.toolName) && row.sessionId && workerLane === null) {
+          if (ownEcho && row.role === 'assistant' && isInsertEchoTool(row.toolName) && row.sessionId && workerLane === null) {
             try {
               // D359: a refused checkpoint's echo names its caller exactly and
               // carries the refusal's id: the pending refusal moves to that
@@ -842,7 +853,7 @@ export class IngestionLoop {
           // (review 2026-08-15, C#1). Without one there is nothing to
           // prove the echo describes THIS store, so there is nothing to
           // publish — and publishSessionNamespace would drop it anyway.
-          if (row.role === 'assistant' && isStatusEchoTool(row.toolName) && row.sessionId && this.storePath) {
+          if (ownEcho && row.role === 'assistant' && isStatusEchoTool(row.toolName) && row.sessionId && this.storePath) {
             this.publishSessionNamespace(
               row.sessionId,
               extractStatusNamespace(row.content, this.storePath, row.previewLen),

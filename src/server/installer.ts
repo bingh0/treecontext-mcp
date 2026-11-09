@@ -1995,6 +1995,37 @@ export function claudeSessionStartUnwired(settings: Record<string, unknown>): st
     && Array.isArray(e.hooks) && e.hooks.some((h) => typeof h.command === 'string' && h.command.includes(`${TC_HOOK_PREFIX}session-start`))))
 }
 
+/** The events of the block install writes today that hold none of
+ *  treecontext's entries in these settings, where they hold some: an
+ *  installation wired by a build from before an event was added (D402;
+ *  PostToolUseFailure and PostToolBatch, D400 and D401). Empty when the
+ *  settings hold no treecontext entry at all, which other rows report. */
+export function claudeCaptureEventsUnwired(settings: Record<string, unknown>): string[] {
+  const view = ownedHookView(settings['hooks'])
+  if (Object.keys(view).length === 0) return []
+  return Object.keys(claudeHooksBlock()).filter((event) => !(event in view))
+}
+
+/** What the journal misses while an event of the block is not wired,
+ *  for doctor's row; an event with no entry here is named alone. */
+const CLAUDE_EVENT_MISSED: Readonly<Record<string, string>> = {
+  PostToolUseFailure: 'a tool call that fails is not journaled',
+  PostToolBatch: 'a tool call the client resolved without running it (input rejected, permission denied, blocked by a hook) is not journaled',
+  SubagentStart: 'a subagent is not registered, so its rows are not stamped with it as writer',
+  SubagentStop: "a subagent's report is not journaled",
+  PostToolUse: 'no tool call is journaled',
+  UserPromptSubmit: "the developer's turns are not journaled",
+  Stop: "the assistant's responses are not journaled",
+  PreCompact: 'no recovery snapshot is written before a compaction',
+  SessionStart: 'no session is registered and no re-orientation packet is shown',
+}
+
+/** Doctor's words for the unwired events: each event and what is missed. */
+export function claudeUnwiredEventsDetail(events: string[]): string {
+  const what = events.map((e) => (CLAUDE_EVENT_MISSED[e] ? `${e} (${CLAUDE_EVENT_MISSED[e]})` : e))
+  return `wired by a build from before ${events.length === 1 ? 'this event was' : 'these events were'} added: ${what.join('; ')}`
+}
+
 /**
  * Merge treecontext's hook entries into a Claude-format hooks map, in place,
  * and return it: foreign entries kept, owned ones rewritten to this build's
@@ -2086,6 +2117,18 @@ function applyClaudeHookBlock(hooks: Record<string, ClaudeHookMatcher[]>): Recor
   ensureHookEntries(postToolUse, undefined, [postToolUseCmd])
   hooks.PostToolUse = postToolUse
 
+  // PostToolUseFailure (D400) and PostToolBatch (D401): Claude Code fires
+  // PostToolUse only for a call that succeeded; a failed call fires
+  // PostToolUseFailure, and a call the client resolved without running it
+  // is named only in the batch's account. The same script serves all
+  // three, by the payload's hook_event_name (hooks/post-tool-use.ts).
+  const postToolUseFailure = hooks.PostToolUseFailure ?? []
+  ensureHookEntries(postToolUseFailure, undefined, [postToolUseCmd])
+  hooks.PostToolUseFailure = postToolUseFailure
+  const postToolBatch = hooks.PostToolBatch ?? []
+  ensureHookEntries(postToolBatch, undefined, [postToolUseCmd])
+  hooks.PostToolBatch = postToolBatch
+
   // UserPromptSubmit hook: captures user messages into staging table
   const userPromptSubmit = hooks.UserPromptSubmit ?? []
   ensureHookEntries(userPromptSubmit, undefined, [userPromptSubmitCmd])
@@ -2116,6 +2159,8 @@ const CLAUDE_HOOK_PURPOSE: Readonly<Record<string, string>> = {
   SessionStart: 'orientation + snapshot',
   PreCompact: 'checkpoint before compaction',
   PostToolUse: 'conversation capture',
+  PostToolUseFailure: 'failed tool call capture',
+  PostToolBatch: 'capture of calls no event of their own reports',
   UserPromptSubmit: 'conversation capture',
   Stop: 'assistant response capture',
   SubagentStart: 'subagent registration',
@@ -6783,6 +6828,20 @@ export async function doctor(): Promise<DiagnosticResult[]> {
               check: `${agent.name}: re-orientation hooks`, status: 'warn',
               detail: `session-start is not wired on ${unwired.join(' and ')} — a /clear gets no re-orientation packet and the session no capture sign`,
               fix: 'treecontext install',
+            })
+          }
+        }
+        if (settingsPath && existsSync(settingsPath)) {
+          // D402: an installation wired by a build from before a capture
+          // event was added (PostToolUseFailure and PostToolBatch, D400 and
+          // D401) keeps the events it had and never hears the new one, so
+          // the calls only that event carries are never journaled.
+          const missing = claudeCaptureEventsUnwired(readJsonSafe(settingsPath))
+          if (missing.length > 0) {
+            results.push({
+              check: `${agent.name}: capture events`, status: 'warn',
+              detail: `not wired: ${claudeUnwiredEventsDetail(missing)}`,
+              fix: `treecontext install --force --agent ${agent.slug}`,
             })
           }
         }

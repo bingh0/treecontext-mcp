@@ -1,5 +1,5 @@
 import type { DatabaseSync as DatabaseType } from 'node:sqlite'
-import { resolveDbPath, writeStaging, parseHookInput, isDirectInvocation, payloadWriter, openHookDb, STOP_GUARD_TIMEOUT_MS } from './shared.js'
+import { resolveDbPath, writeStaging, stageBatchAccount, parseHookInput, isDirectInvocation, payloadWriter, openHookDb, STOP_GUARD_TIMEOUT_MS, type BatchCall } from './shared.js'
 import { legOf, hasLegColumns, legWriterOf } from '../persistence/leg-registry.js'
 import { returnPointerLine } from '../first-moment.js'
 import { SUBAGENT_SUMMARY_KIND } from '../run-kinds.js'
@@ -254,18 +254,206 @@ export function composeToolText(value: unknown): string {
   return lines.join('\n')
 }
 
+/** A tool call composed as its journal entry: the staged text and its
+ *  boundaries, and its priority. */
+export interface ToolEntry {
+  content: string
+  indexLen: number | null
+  previewLen: number | null
+  priority: number
+}
+
+/** The trail-class tools (repo readers): see composeToolEntry. */
+export const TRAIL_TOOLS: readonly string[] = ['Read', 'Glob', 'Grep', 'LS', 'View', 'ListDir']
+
+/**
+ * One tool call as its journal entry, whichever event carried it: a
+ * successful call's response, a failed call's error text (D400), or what
+ * the client told the model about a call it resolved without running
+ * (D401) is the Output section, under one layout, one trail and treasure
+ * rule and one set of boundaries.
+ */
+export function composeToolEntry(tool_name: string, tool_input: unknown, tool_output: unknown): ToolEntry {
+  // Trail-class tools (repo readers). The charter (journal-capture) says
+  // no invocation is ever filtered out — the trail is how a future agent
+  // reconstructs what was being worked on — but their OUTPUT is repo
+  // content at that moment, re-derivable from the working tree and git
+  // history, so it keeps only the bounded preview and never stages a
+  // full-fidelity tail. Execution/external outputs (Bash, web, MCP) are
+  // historical facts and keep the C4 tail below.
+  const isTrail = TRAIL_TOOLS.includes(tool_name)
+
+  // Priority assignment
+  let priority = 3
+  if (['Edit', 'Write', 'NotebookEdit'].includes(tool_name)) {
+    priority = 1
+  } else if (tool_name === 'Bash') {
+    priority = 2
+  }
+
+  // D270: an object or content-block payload is written as its text,
+  // never as its JSON encoding. Spoof note: echo-correlation's
+  // outputSection once relied on JSON escaping to keep a `\nOutput:`
+  // out of the Input section; its lastIndexOf still wins whenever a real
+  // Output exists. echoIndexBoundary (delete/merge/clear) cuts at the
+  // FIRST `\nOutput:`, so a multi-line argument holding a line `Output:`
+  // shortens that echo's boundary: narrower, never wider.
+  const safeToolInput = composeToolText(tool_input)
+  const safeToolOutput = composeToolText(tool_output)
+
+  // Preview: byte-for-byte the pre-C4 layout (and, for a string payload,
+  // the pre-C4 text) — it is the FTS index
+  // view, so ranking must not shift.
+  let preview = `Tool: ${tool_name}\n`
+  // D261: an import echo's argument is the handoff itself, so its index
+  // boundary stops at its label; the label gets its own line ahead of
+  // the Input so a prefix boundary can reach it. No other layout changes.
+  const importLabel = importEchoLabel(tool_name, tool_input)
+  if (importLabel !== null) preview += `${ECHO_LABEL_PREFIX}${importLabel}\n`
+  let inputOverflow = false
+  if (safeToolInput) {
+    inputOverflow = safeToolInput.length > TOOL_INPUT_PREVIEW_CAP
+    preview += `Input:\n${safeToolInput.substring(0, TOOL_INPUT_PREVIEW_CAP)}${inputOverflow ? '...' : ''}\n`
+  }
+  let shielded = false
+  let outputOverflow = false
+  if (safeToolOutput) {
+    // A shielded pointer is recognized whatever shape the client wrapped
+    // it in (D270), read from the payload before it was composed.
+    let handledAsShielded = false
+    const ref = shieldedPointerOf(tool_output)
+    if (ref) {
+      preview += `Output: [shielded to ${ref.file}, ${String(ref.bytes)} bytes]\n`
+      shielded = true
+      handledAsShielded = true
+    }
+    if (!handledAsShielded) {
+      outputOverflow = safeToolOutput.length > TOOL_OUTPUT_PREVIEW_CAP
+      preview += `Output:\n${safeToolOutput.substring(0, TOOL_OUTPUT_PREVIEW_CAP)}${outputOverflow ? '...' : ''}\n`
+    }
+  }
+  const previewTrimmed = preview.trim()
+
+  // C4: when the preview actually truncated something (JF-3 — never stage
+  // a tail for events that fit), append the full input/output after the
+  // boundary. A shielded OUTPUT never enters a tail — the file pointer is
+  // the full-fidelity mechanism for it — but a shielded output does not
+  // cover the INPUT, so an overflowed input still tails (input only).
+  //
+  // Two boundaries, both in UTF-16 code units on the exact staged string
+  // (JF-1): preview_len marks where the display preview ends (the read
+  // side slices hits there), index_len marks how far the FTS view
+  // reaches — up to activeIndexCap('tool') chars of preview PLUS tail,
+  // per the 2026-07-28 cap sweep (8000-char view ≈ full-text recall at a
+  // third of the latency). Pre-change rows carried only index_len at the
+  // preview boundary; both readers still honor that shape.
+  // JF-3 holds: an event that fits its caps stages NULL boundaries — its
+  // index text is the whole content, involves no mutable constant, and
+  // recomputes stably without a marker. A boundary is stamped only when
+  // it is load-bearing: a full tail follows the preview, or an env cap
+  // narrower than the preview itself bounds the view.
+  const indexCap = activeIndexCap('tool')
+  let content = previewTrimmed
+  let indexLen: number | null = indexCap < previewTrimmed.length ? indexCap : null
+  let previewLen: number | null = null
+  if (!isTrail && (inputOverflow || (!shielded && outputOverflow))) {
+    const tail =
+      `\n${FULL_TAIL_SEPARATOR}\n` +
+      (safeToolInput ? `Input:\n${safeToolInput}\n` : '') +
+      (safeToolOutput && !shielded ? `Output:\n${safeToolOutput}` : '')
+    let composed = previewTrimmed + tail
+    if (composed.length > STORE_SAFETY_CAP) {
+      const notice = '\n[full content truncated to fit store cap]'
+      composed = composed.slice(0, STORE_SAFETY_CAP - notice.length) + notice
+    }
+    if (composed.length > previewTrimmed.length) {
+      content = composed
+      previewLen = previewTrimmed.length
+      indexLen = Math.min(indexCap, composed.length)
+    }
+  }
+  return { content, indexLen, previewLen, priority }
+}
+
+/** The client's id for a call, when the payload names one. */
+function callIdOf(v: unknown): string | undefined {
+  return typeof v === 'string' && v.trim() !== '' ? v : undefined
+}
+
+/** The Claude Code events this hook serves, by `hook_event_name`: a call
+ *  that succeeded, a call that failed (D400), and the batch's account of
+ *  every call it resolved (D401). Any other name (an adapter's normalized
+ *  payload, a payload with none) is a call that succeeded, as before. */
+export const POST_TOOL_USE_FAILURE = 'PostToolUseFailure'
+export const POST_TOOL_BATCH = 'PostToolBatch'
+
+/** D400: how a failed call ended, as the client said it. */
+export function failureOutcome(input: Record<string, unknown>): 'failed' | 'interrupted' {
+  return input['is_interrupt'] === true ? 'interrupted' : 'failed'
+}
+
+/**
+ * D401: the batch's account, as the calls it would stage: each call of
+ * `tool_calls` with a tool name and the client's id, composed with what the
+ * client told the model (`tool_response`) as its Output, marked
+ * `captured_from` `batch`, at the batch's moment, as the batch payload's
+ * writer. Which of them are staged is decided against staging
+ * (stageBatchAccount).
+ */
+export function batchCallsOf(input: Record<string, unknown>, at: number): BatchCall[] {
+  const calls = Array.isArray(input['tool_calls']) ? input['tool_calls'] as unknown[] : []
+  const writer = payloadWriter(input)
+  const out: BatchCall[] = []
+  for (const c of calls) {
+    if (c === null || typeof c !== 'object' || Array.isArray(c)) continue
+    const call = c as Record<string, unknown>
+    const toolName = call['tool_name']
+    const toolUseId = callIdOf(call['tool_use_id'])
+    if (typeof toolName !== 'string' || toolName === '' || !toolUseId) continue
+    const e = composeToolEntry(toolName, call['tool_input'], call['tool_response'])
+    out.push({
+      toolUseId,
+      entry: {
+        sessionId: typeof input['session_id'] === 'string' ? input['session_id'] : null,
+        role: 'assistant', content: e.content, toolName, timestamp: at, priority: e.priority,
+        indexLen: e.indexLen, previewLen: e.previewLen, ...writer,
+        toolUseId, capturedFrom: 'batch',
+      },
+    })
+  }
+  return out
+}
+
 export function main(preParsed?: Record<string, unknown>) {
   try {
     const input = preParsed ?? parseHookInput()
+    const event = input.hook_event_name
+
+    // D401: the batch's account of every call it resolved, after each
+    // call's own hooks have finished; it adds only the calls no event of
+    // their own captured.
+    if (event === POST_TOOL_BATCH) {
+      const calls = batchCallsOf(input, Date.now() / 1000)
+      dbg('hook:post-tool', 'batch', { calls: calls.length })
+      if (calls.length > 0) {
+        stageBatchAccount(resolveDbPath(input.cwd), typeof input.session_id === 'string' ? input.session_id : null, calls)
+      }
+      process.exit(0)
+      return
+    }
+
     // Claude Code's PostToolUse payload carries the result as
     // `tool_response`; the codex/cursor normalizers map their shapes to
     // `tool_output`. Accept both — reading only `tool_output` left the
     // flagship platform's journal INPUT-ONLY (verified: hundreds of
-    // captured tool events, zero genuine Output sections).
+    // captured tool events, zero genuine Output sections). D400: a failed
+    // call's PostToolUseFailure carries no response; the client's `error`
+    // text is its Output.
+    const failed = event === POST_TOOL_USE_FAILURE
     const { session_id, cwd, tool_name, tool_input } = input
-    const tool_output = input.tool_output ?? input.tool_response
+    const tool_output = failed ? input.error : (input.tool_output ?? input.tool_response)
 
-    dbg('hook:post-tool', 'invoked', { tool_name: tool_name ?? null, cwd: cwd ?? null, hasInput: !!tool_input, hasOutput: !!tool_output })
+    dbg('hook:post-tool', 'invoked', { event: event ?? null, tool_name: tool_name ?? null, cwd: cwd ?? null, hasInput: !!tool_input, hasOutput: !!tool_output })
 
     if (!tool_name) {
       dbg('hook:post-tool', 'no tool_name — skipping')
@@ -273,107 +461,9 @@ export function main(preParsed?: Record<string, unknown>) {
       return
     }
 
-    // Trail-class tools (repo readers). The charter (journal-capture) says
-    // no invocation is ever filtered out — the trail is how a future agent
-    // reconstructs what was being worked on — but their OUTPUT is repo
-    // content at that moment, re-derivable from the working tree and git
-    // history, so it keeps only the bounded preview and never stages a
-    // full-fidelity tail. Execution/external outputs (Bash, web, MCP) are
-    // historical facts and keep the C4 tail below.
-    const trailTools = ['Read', 'Glob', 'Grep', 'LS', 'View', 'ListDir']
-    const isTrail = trailTools.includes(tool_name)
-
-    // Priority assignment
-    let priority = 3
-    if (['Edit', 'Write', 'NotebookEdit'].includes(tool_name)) {
-      priority = 1
-    } else if (tool_name === 'Bash') {
-      priority = 2
-    }
-
-    // D270: an object or content-block payload is written as its text,
-    // never as its JSON encoding. Spoof note: echo-correlation's
-    // outputSection once relied on JSON escaping to keep a `\nOutput:`
-    // out of the Input section; its lastIndexOf still wins whenever a real
-    // Output exists. echoIndexBoundary (delete/merge/clear) cuts at the
-    // FIRST `\nOutput:`, so a multi-line argument holding a line `Output:`
-    // shortens that echo's boundary: narrower, never wider.
-    const safeToolInput = composeToolText(tool_input)
-    const safeToolOutput = composeToolText(tool_output)
-
-    // Preview: byte-for-byte the pre-C4 layout (and, for a string payload,
-    // the pre-C4 text) — it is the FTS index
-    // view, so ranking must not shift.
-    let preview = `Tool: ${tool_name}\n`
-    // D261: an import echo's argument is the handoff itself, so its index
-    // boundary stops at its label; the label gets its own line ahead of
-    // the Input so a prefix boundary can reach it. No other layout changes.
-    const importLabel = importEchoLabel(tool_name, tool_input)
-    if (importLabel !== null) preview += `${ECHO_LABEL_PREFIX}${importLabel}\n`
-    let inputOverflow = false
-    if (safeToolInput) {
-      inputOverflow = safeToolInput.length > TOOL_INPUT_PREVIEW_CAP
-      preview += `Input:\n${safeToolInput.substring(0, TOOL_INPUT_PREVIEW_CAP)}${inputOverflow ? '...' : ''}\n`
-    }
-    let shielded = false
-    let outputOverflow = false
-    if (safeToolOutput) {
-      // A shielded pointer is recognized whatever shape the client wrapped
-      // it in (D270), read from the payload before it was composed.
-      let handledAsShielded = false
-      const ref = shieldedPointerOf(tool_output)
-      if (ref) {
-        preview += `Output: [shielded to ${ref.file}, ${String(ref.bytes)} bytes]\n`
-        shielded = true
-        handledAsShielded = true
-      }
-      if (!handledAsShielded) {
-        outputOverflow = safeToolOutput.length > TOOL_OUTPUT_PREVIEW_CAP
-        preview += `Output:\n${safeToolOutput.substring(0, TOOL_OUTPUT_PREVIEW_CAP)}${outputOverflow ? '...' : ''}\n`
-      }
-    }
-    const previewTrimmed = preview.trim()
-
-    // C4: when the preview actually truncated something (JF-3 — never stage
-    // a tail for events that fit), append the full input/output after the
-    // boundary. A shielded OUTPUT never enters a tail — the file pointer is
-    // the full-fidelity mechanism for it — but a shielded output does not
-    // cover the INPUT, so an overflowed input still tails (input only).
-    //
-    // Two boundaries, both in UTF-16 code units on the exact staged string
-    // (JF-1): preview_len marks where the display preview ends (the read
-    // side slices hits there), index_len marks how far the FTS view
-    // reaches — up to activeIndexCap('tool') chars of preview PLUS tail,
-    // per the 2026-07-28 cap sweep (8000-char view ≈ full-text recall at a
-    // third of the latency). Pre-change rows carried only index_len at the
-    // preview boundary; both readers still honor that shape.
-    // JF-3 holds: an event that fits its caps stages NULL boundaries — its
-    // index text is the whole content, involves no mutable constant, and
-    // recomputes stably without a marker. A boundary is stamped only when
-    // it is load-bearing: a full tail follows the preview, or an env cap
-    // narrower than the preview itself bounds the view.
-    const indexCap = activeIndexCap('tool')
-    let content = previewTrimmed
-    let indexLen: number | null = indexCap < previewTrimmed.length ? indexCap : null
-    let previewLen: number | null = null
-    if (!isTrail && (inputOverflow || (!shielded && outputOverflow))) {
-      const tail =
-        `\n${FULL_TAIL_SEPARATOR}\n` +
-        (safeToolInput ? `Input:\n${safeToolInput}\n` : '') +
-        (safeToolOutput && !shielded ? `Output:\n${safeToolOutput}` : '')
-      let composed = previewTrimmed + tail
-      if (composed.length > STORE_SAFETY_CAP) {
-        const notice = '\n[full content truncated to fit store cap]'
-        composed = composed.slice(0, STORE_SAFETY_CAP - notice.length) + notice
-      }
-      if (composed.length > previewTrimmed.length) {
-        content = composed
-        previewLen = previewTrimmed.length
-        indexLen = Math.min(indexCap, composed.length)
-      }
-    }
-
+    const { content, indexLen, previewLen, priority } = composeToolEntry(tool_name, tool_input, tool_output)
     const dbPath = resolveDbPath(cwd)
+    const toolUseId = callIdOf(input.tool_use_id)
 
     writeStaging(dbPath, {
       sessionId: session_id,
@@ -388,10 +478,14 @@ export function main(preParsed?: Record<string, unknown>) {
       // agent_type (probe of 2026-09-25); the row drains stamped with
       // that writer. The main agent's payload carries neither.
       ...payloadWriter(input),
+      // D400: the client's id for the call, on every captured call; a
+      // failed call's outcome.
+      ...(toolUseId ? { toolUseId } : {}),
+      ...(failed ? { outcome: failureOutcome(input) } : {}),
     })
 
     // D330: the pointer to a leg's return rides on the Agent tool's result.
-    const spawned = agentReturned(tool_name, tool_output)
+    const spawned = failed ? null : agentReturned(tool_name, tool_output)
     if (spawned && typeof session_id === 'string') {
       const line = legPointerFor(dbPath, session_id, spawned)
       if (line) {

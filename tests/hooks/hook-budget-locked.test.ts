@@ -31,6 +31,7 @@ import { sandboxedSpawnEnv } from '../helpers/cli-spawn.js'
 import { HOOK_DB_TIMEOUT_MS, STOP_GUARD_TIMEOUT_MS, openHookDb, writeStaging } from '../../src/hooks/shared.js'
 import { writeCheckpointInterval } from '../../src/checkpoints.js'
 import { buildVscodeHooksConfig } from '../../src/server/installer.js'
+import { recordedSession } from '../journal/standins.js'
 
 /** The rule: the smallest hook kill treecontext installs (VS Code's
  *  timeoutSec, read from the generated config) less a second to fail
@@ -89,7 +90,15 @@ const BUDGET_OF: Record<Hook, number> = {
   'session-start': HOOK_DB_TIMEOUT_MS,
 }
 
-const HOOKS: Array<{ hook: Hook; payload: (w: W) => Record<string, unknown> }> = [
+/** D400, D401: the failure and the batch's account the post-tool-use
+ *  script also serves, as Claude Code 2.1.319 sent them (recorded). */
+const SERIAL = recordedSession('2.1.319', 'serial-failures-and-denials.ndjson')
+const recordedLine = (event: string, id: string): Record<string, unknown> => SERIAL.find((e) => e['hook_event_name'] === event
+  && (e['tool_use_id'] === id || (Array.isArray(e['tool_calls']) && (e['tool_calls'] as Array<Record<string, unknown>>).some((c) => c['tool_use_id'] === id))))!
+
+const HOOKS: Array<{ hook: Hook; label?: string; payload: (w: W) => Record<string, unknown> }> = [
+  { hook: 'post-tool-use', label: 'post-tool-use (PostToolUseFailure)', payload: () => recordedLine('PostToolUseFailure', 'toolu_01FvqNcZYBnuCsHBiwp6o3Mj') },
+  { hook: 'post-tool-use', label: 'post-tool-use (PostToolBatch)', payload: () => recordedLine('PostToolBatch', 'toolu_01Eh6sZA8krzkd9tRXFMms21') },
   { hook: 'stop', payload: (w) => ({ hook_event_name: 'Stop', transcript_path: join(w.proj!, 't.jsonl'), last_assistant_message: 'the turn that ended' }) },
   { hook: 'subagent-stop', payload: (w) => ({ hook_event_name: 'SubagentStop', agent_id: 'a1', agent_type: 'builder', stop_hook_active: false, agent_transcript_path: join(w.proj!, 'a.jsonl'), last_assistant_message: 'the report' }) },
   { hook: 'subagent-start', payload: () => ({ hook_event_name: 'SubagentStart', agent_id: 'a1', agent_type: 'builder' }) },
@@ -104,7 +113,7 @@ describe.skipIf(process.platform === 'win32')('the real hooks against a whole-lo
     expect(BUDGET_OF.stop).toBeLessThan(RULE_MS - JITTER_MS)
   })
 
-  it.each(HOOKS.map((h) => [h.hook, h] as const))('%s: under the rule, and the lock adds no more than its budgets', async (_name, h) => {
+  it.each(HOOKS.map((h) => [h.label ?? h.hook, h] as const))('%s: under the rule, and the lock adds no more than its budgets', async (_name, h) => {
     const w = mkWorld()
     try {
       await openCaptureWorld(w)

@@ -318,7 +318,7 @@ describe('the registry around legs and workers', () => {
     expect(registration('w', WORKER_AGENT_ID)['run_key']).toBe('k')
   })
 
-  it('a store a pre-release build took to 31 without the later leg columns gains them all at 32 (the reconcile) and climbs on to 33, its rows intact', async () => {
+  it('a store a pre-release build took to 31 without the later leg columns gains them all at 32 (the reconcile) and climbs on to the head (34), its rows intact', async () => {
     const s = await open()
     await s.registerWorker({ sessionId: 'w', door: 'library', ticket: { parent: { id: 'p1' }, run: 'r1', key: 'k', role: 'builder' }, process: { pid: 4242, start: 1000, host: 'laptop' }, at: 1 })
     await s.close()
@@ -329,7 +329,7 @@ describe('the registry around legs and workers', () => {
       for (const c of ['proc_start_token', 'client_sessions']) db.exec(`ALTER TABLE session_registry DROP COLUMN ${c}`)
       setPragma(db, 'user_version = 31')
       const report = runMigrations(openNodeSqlite(db), { migrate: true })
-      expect(report.applied.map((a) => [a.version, a.kind])).toEqual([[32, 'additive'], [33, 'additive']])
+      expect(report.applied.map((a) => [a.version, a.kind])).toEqual([[32, 'additive'], [33, 'additive'], [34, 'additive']])
       const cols = (db.prepare('PRAGMA table_info(session_registry)').all() as Array<{ name: string }>).map((c) => c.name)
       for (const [name] of LEG_REGISTRY_COLUMNS) expect(cols, name).toContain(name)
       // A second run of the reconcile adds nothing and fails on nothing.
@@ -359,7 +359,7 @@ describe('the registry around legs and workers', () => {
       expect(retirePhantoms(db, { noticedBy: 'session-start hook', probe: probe({}) }).retired).toEqual([])
       expect(retireAllSubagents(db, 's1', 3)).toBe(1)
       const report = runMigrations(openNodeSqlite(db), { migrate: true })
-      expect(report.applied.map((a) => [a.version, a.kind])).toEqual([[31, 'additive'], [32, 'additive'], [33, 'additive']])
+      expect(report.applied.map((a) => [a.version, a.kind])).toEqual([[31, 'additive'], [32, 'additive'], [33, 'additive'], [34, 'additive']])
       expect(hasLegColumns(db)).toBe(true)
     } finally { db.close() }
     expect(registration('s1', 'a1')).toMatchObject({ agent_type: 'tester', stopped_at: 3, run: null, send_backs: 0 })

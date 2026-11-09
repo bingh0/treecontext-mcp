@@ -153,11 +153,19 @@ re-run it, Claude Code keeps summarising idle sessions.
 **Upgrading to `0.1.0-beta.4`.** Re-run `treecontext install`. What an
 upgrade changes:
 
-- The store's schema moves from v32 to v33 (migration 033: a headless
-  worker's notes dedup within its own lane) the first time a beta.4
-  server opens it, after the automatic copy of the store as it was,
-  `treecontext.db.pre-migration-v32.bak` beside it. The migration is
-  additive and changes no existing row. `0.1.0-beta.3.1` then refuses the
+- The store's schema moves from v32 to v34 (migration 033: a headless
+  worker's notes dedup within its own lane; migration 034: a staged tool
+  call carries the client's id for it and how it ended) the first time a
+  beta.4 server opens it, after the automatic copy of the store as it was,
+  `treecontext.db.pre-migration-v32.bak` beside it. Both migrations are
+  additive and change no existing row. Until a beta.4 server has opened
+  the store, its hooks capture a failed call as before the upgrade,
+  unmarked, and add nothing from the batch's account.
+- It wires two more Claude Code hook events, `PostToolUseFailure` and
+  `PostToolBatch`, so a failed call and a call the client resolved without
+  running it are journaled; until you re-run install, doctor's "capture
+  events" row names them, with `treecontext install --force --agent
+  claude`. `0.1.0-beta.3.1` then refuses the
   store (`SchemaVersionError`: the store is newer than the build), so going
   back to beta.3.1 means restoring that copy, without what was written
   after the upgrade.
@@ -204,7 +212,7 @@ This detects your installed agents and wires treecontext into them. Add
 | Path | What it is |
 | --- | --- |
 | `~/.claude.json` | registers the treecontext MCP server at user scope (the file Claude Code actually reads; `$CLAUDE_CONFIG_DIR/.claude.json` when that is set) |
-| `~/.claude/settings.json` | registers 7 hooks: `SessionStart`, `UserPromptSubmit`, `PostToolUse`, `Stop`, `PreCompact`, `SubagentStart`, `SubagentStop`; and sets `"idleCompaction": false` when the key is absent (see below) |
+| `~/.claude/settings.json` | registers 9 hooks: `SessionStart`, `UserPromptSubmit`, `PostToolUse`, `PostToolUseFailure`, `PostToolBatch`, `Stop`, `PreCompact`, `SubagentStart`, `SubagentStop` (the three tool events run one script, `tc-post-tool-use`); and sets `"idleCompaction": false` when the key is absent (see below) |
 | `~/.claude/hooks/tc-*` | the hook wrapper scripts themselves (`.cmd` on Windows) |
 | `~/.claude/skills/treecontext-reference/SKILL.md` | the reference skill your agent loads on demand |
 | `~/.claude/settings.json` (again) | `permissions.allow` gets `mcp__treecontext__treecontext_status`, `_query`, `_export` and `_insert`, the tool approvals below |
@@ -692,12 +700,18 @@ a test result.
 
 | Client | Hook events it offers | Documentation checked | Mode | Status |
 | --- | --- | --- | --- | --- |
-| Claude Code | SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Stop, PreCompact, SubagentStart, SubagentStop | hooks docs 2026-09-23; live probe 2026-09-25 on release 2.1.282 | reads the Claude settings file as-is (it owns `~/.claude/settings.json`, where install writes the hooks: SessionStart, UserPromptSubmit, PostToolUse, Stop, PreCompact, SubagentStart, SubagentStop; reinstall to add the two subagent hooks) | verified live |
+| Claude Code | SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, PostToolUseFailure, PostToolBatch, PermissionRequest, Stop, PreCompact, SubagentStart, SubagentStop, SessionEnd, and more | hooks docs 2026-09-23; live probe 2026-09-25 on release 2.1.282 | reads the Claude settings file as-is (it owns `~/.claude/settings.json`, where install writes the hooks: SessionStart, UserPromptSubmit, PostToolUse, PostToolUseFailure, PostToolBatch, Stop, PreCompact, SubagentStart, SubagentStop; reinstall to add the two subagent hooks and the two failed and refused call hooks; PostToolUseFailure and PostToolBatch recorded live on 2.1.319, 2026-11-09) | verified live |
 | Codex CLI | SessionStart, SessionEnd, UserPromptSubmit, PreToolUse, PostToolUse, PermissionRequest, PreCompact, PostCompact, SubagentStart, SubagentStop, Stop, Interrupt | learn.chatgpt.com/docs/hooks (no date shown), checked 2026-10-05 | copies the hooks into its own configuration (`~/.codex/hooks.json` or `[hooks]` in `~/.codex/config.toml`, repo `.codex/hooks.json`; same JSON contract as Claude Code) | documented only |
 | VS Code (Copilot agent mode) | SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, PreCompact, SubagentStart, SubagentStop, Stop | code.visualstudio.com/docs/copilot/customization/hooks and /docs/agents/reference/hooks-reference (dated 2026-09-30) | reads the Claude settings file when its Claude-hooks setting is on (`chat.useClaudeHooks`, off by default; read as-is, matcher values ignored; also reads `.github/hooks/*.json`) | documented only |
 | Cursor | sessionStart, sessionEnd, beforeSubmitPrompt, preToolUse, postToolUse, stop, preCompact, subagentStart, subagentStop, and more | cursor.com/docs/agent/hooks and /docs/reference/third-party-hooks (no date shown), checked 2026-10-05 | reads the Claude settings file by default (as-is, through its Include Third-Party configs setting) | documented only |
 | OpenCode | none: JS/TS plugins only, no shell hooks | opencode.ai/docs/plugins (updated 2026-10-03) | offers no shell hooks, so the tools are its whole surface (the MCP tools; JS/TS plugins are not hooks) | documented only |
 | Antigravity CLI | SessionStart, PreToolUse, PostToolUse, PreInvocation, PostInvocation, Stop | antigravity.google/docs/hooks (no date shown), checked 2026-11-08 | keeps its own hook configuration, which install leaves alone, so the tools are its whole surface (`~/.gemini/config/hooks.json`, workspace `.agents/hooks.json`; no adapter, nothing is captured) | documented only |
+
+Codex CLI's copy is the Claude Code block verbatim, `PostToolUseFailure`
+and `PostToolBatch` included. Codex CLI 0.167.0 does not have those two
+events and skips them without a warning (checked 2026-11-09 through its
+app server's `hooks/list`), so a failed call, or one Codex refused before
+running it, is not captured there.
 
 Gemini CLI left the matrix on 2026-11-09, archived: Google deprecated it
 for Antigravity CLI, and treecontext no longer wires it.
@@ -783,7 +797,13 @@ calls, no accounts, no analytics.
 **What gets captured:** your prompts, your agent's tool calls *including
 their inputs and outputs*, its end-of-turn responses, and any notes it
 writes. Tool output that merely re-reads your repo is stored as a bounded
-preview; execution and external output is kept in full.
+preview; execution and external output is kept in full. On Claude Code a
+call that fails is captured with the client's error text as its output
+(marked `outcome` `failed`, or `interrupted`), and a call the client
+resolved without running it (its input rejected, permission denied,
+blocked by a hook) is captured from the client's account of the batch
+(marked `captured_from` `batch`, with what the client told the model).
+Every captured call carries the client's id for it as `tool_use_id`.
 
 **So treat the journal as being as sensitive as the terminal it watched.**
 If a command printed a token, an environment dump or a customer record,

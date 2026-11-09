@@ -117,7 +117,11 @@ function retire(db: DatabaseType, sessionId: string, agentId: string, at: number
  */
 export function settleFromStagedEchoes(db: DatabaseType, ref: LegRef): number {
   const rows = db.prepare(
-    `SELECT content, tool_name, preview_len FROM staging WHERE session_id = ? AND agent_id = ? AND tool_name LIKE '%treecontext_insert' ORDER BY id`,
+    // A failed call's row and the batch's account of a call are not the
+    // call's own reply (D400, D401): only the own event of a call that
+    // succeeded is evidence.
+    `SELECT content, tool_name, preview_len FROM staging WHERE session_id = ? AND agent_id = ? AND tool_name LIKE '%treecontext_insert'
+        AND outcome IS NULL AND captured_from IS NULL ORDER BY id`,
   ).all(ref.sessionId, ref.agentId) as Array<{ content: string; tool_name: string; preview_len: number | null }>
   let settled = 0
   for (const r of rows) {

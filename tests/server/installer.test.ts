@@ -17,7 +17,7 @@ import {
   installClaudeHookScripts,
   claudeHookCommand, claudeHookDispatch, claudeHookCommandsWithoutExec, withoutExec, hookShellFor,
   removeGeminiHooks,
-  claudeHooksBlock, claudeHookSummaryLines, removeCodexHooks, parseJsonc,
+  claudeHooksBlock, claudeHookSummaryLines, claudeCaptureEventsUnwired, claudeUnwiredEventsDetail, removeCodexHooks, parseJsonc,
   upsertVscodeHooks, upsertCodexHooks, upsertCursorHooks,
   removeVscodeHooks, removeCursorHooks,
   buildVscodeHooksConfig, vscodeHooksComplete,
@@ -1323,6 +1323,36 @@ describe('upsertClaudeSettingsHooks', () => {
     expect(lines.map((l) => /^ {2}hooks: (\w+)/.exec(l)?.[1])).toEqual(events)
     expect(lines).toContain('  hooks: SubagentStart (subagent registration)')
     expect(lines).toContain('  hooks: SubagentStop (subagent report capture)')
+  })
+
+  // D400, D401: a failed call fires PostToolUseFailure and a call resolved
+  // without running is named only in PostToolBatch; the post-tool-use
+  // script serves both beside PostToolUse, by the payload's event name.
+  it('wires PostToolUseFailure and PostToolBatch beside PostToolUse, to the same script, and names them in the summary', () => {
+    const block = claudeHooksBlock()
+    const cmds = (e: string) => (block[e] ?? []).flatMap((m) => m.hooks.map((h) => h.command))
+    expect(cmds('PostToolUse')).toHaveLength(1)
+    expect(cmds('PostToolUse')[0]).toContain('tc-post-tool-use')
+    expect(cmds('PostToolUseFailure')).toEqual(cmds('PostToolUse'))
+    expect(cmds('PostToolBatch')).toEqual(cmds('PostToolUse'))
+    expect((block['PostToolUseFailure'] ?? []).every((m) => m.matcher === undefined)).toBe(true)
+    expect((block['PostToolBatch'] ?? []).every((m) => m.matcher === undefined)).toBe(true)
+    const lines = claudeHookSummaryLines()
+    expect(lines).toContain('  hooks: PostToolUseFailure (failed tool call capture)')
+    expect(lines).toContain('  hooks: PostToolBatch (capture of calls no event of their own reports)')
+  })
+
+  // D402: an installation wired before an event was added.
+  it('claudeCaptureEventsUnwired names the block\'s events a settings file holds none of ours under, and nothing for a file with none of ours', () => {
+    const full = { hooks: claudeHooksBlock() } as Record<string, unknown>
+    expect(claudeCaptureEventsUnwired(full)).toEqual([])
+    const older = { hooks: claudeHooksBlock() } as Record<string, Record<string, unknown>>
+    delete older['hooks']!['PostToolUseFailure']
+    delete older['hooks']!['PostToolBatch']
+    expect(claudeCaptureEventsUnwired(older)).toEqual(['PostToolUseFailure', 'PostToolBatch'])
+    expect(claudeUnwiredEventsDetail(['PostToolUseFailure', 'PostToolBatch'])).toMatch(/^wired by a build from before these events were added: PostToolUseFailure \(a tool call that fails is not journaled\); PostToolBatch \(/)
+    expect(claudeCaptureEventsUnwired({})).toEqual([])
+    expect(claudeCaptureEventsUnwired({ hooks: { PostToolUse: [{ hooks: [{ type: 'command', command: 'other-tool' }] }] } })).toEqual([])
   })
 
   // D251: on POSIX the hook command execs its wrapper; Windows is unchanged.
