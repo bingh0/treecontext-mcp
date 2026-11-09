@@ -193,6 +193,21 @@ Feature: Legs — a subagent's bounded unit of work, briefed at its start and ch
     And the orchestrator searching "login form" finds that report marked as the explorer subagent's summary
     And the explorer's stop is not blocked and no checkpoint is asked for
 
+  @D411
+  Scenario: a Codex CLI subagent is registered, retired and summarised, and is never a leg
+    Given a Codex CLI 0.167.0 main with its hooks trusted, and a brief row for the role Codex names its subagent, "default", naming the run "r1" and the key "login-form"
+    When the main spawns a subagent that finishes with its reply, as Codex sends its start and its stop
+    Then the store holds the subagent's registration under Codex's id for it, with no run and no key, retired at its stop
+    And the main searching the words of that reply finds it marked as the subagent's summary
+    And no first-moment row and no send-back were written for it
+    And the harness looking up the key "login-form" on the run "r1" does not count it among the run's legs
+    # Recorded live, 2026-11-09: the message Codex's spawn tool carries is
+    # an opaque blob, so no hook can read the subagent's brief, and Codex
+    # names every subagent's type "default". The brief names that role so
+    # that this scenario's negative could fail: a hook that inferred a leg
+    # from a brief would find this one. Legs on Codex wait for beta.5 (the
+    # fence).
+
   @D305
   Scenario: a subagent whose brief names a run and a key gets the leg contract
     Given a brief row for the builder role naming the run "r1" and the key "login-form", and checkpoint number 3 under that key

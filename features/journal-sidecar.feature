@@ -129,7 +129,7 @@ Feature: The sidecar pane — treecontext's half of a schema-blind display
     Then one pane lists that thread under its own topic
     And a thread that a later entry superseded is listed as closed rather than dropped
 
-  @D102
+  @D102 @D404
   Scenario: the trail pane reports what the journal is made of without grading it
     Given a journal of classified tool events alongside turns nothing classified
     When the drain writes the panes
@@ -137,10 +137,14 @@ Feature: The sidecar pane — treecontext's half of a schema-blind display
     And each share is taken against the events that were classified, not against the whole journal
     And none of those rows is coloured as a problem
     And the row a reader would misread says what produced its number
+    And each exit row says how many of its events took their class from the client's word and how many from their text
     # exit_type comes from matching substrings in tool output, so a grep
     # whose results mention an error is itself filed as one. Reporting that
     # as a defect rate would put a word search on screen dressed as a
-    # measurement. Composition is honest; grading it is not.
+    # measurement. Composition is honest; grading it is not. Since D404,
+    # where the client said how a call ended, the class is the client's
+    # word and not a word search, so the row says which of its counts are
+    # which.
     #
     # The denominator is load-bearing for the same reason: user turns and
     # curated notes carry no exit type, so counting them in would make every

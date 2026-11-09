@@ -78,12 +78,18 @@ re-decided, and the previous text is in git history.
   journal is a text store and the description is the searchable surface.
   (D28, 2026-07-23)
 - **Advertising unverified platform adapters** — Claude Code is the
-  verified reference platform; the codex, cursor, gemini, opencode, and
-  vscode adapters stay labeled unverified and unadvertised until each
-  earns a live-payload verification pass, and bringing an adapter onto
-  the charter's capture semantics is part of that pass; reaffirmed at the
-  re-scope (D109); the gemini adapter left the build when D399 retired
-  Gemini CLI.  (D30, 2026-07-23)
+  verified reference platform; a client's capture is advertised only
+  once the hooks install writes for it have earned a live-payload
+  verification pass, and bringing those hooks onto the charter's capture
+  semantics is part of that pass; reaffirmed at the re-scope (D109).
+  Codex CLI from 0.167.0 and Antigravity CLI from 1.5.3 earned theirs on
+  2026-11-09 (D406, D408, D413, D415), each through hooks install writes
+  that run the reference platform's hook scripts. No unwired adapter is
+  kept in the build as scaffolding: the gemini adapter left it when D399
+  retired Gemini CLI, and the codex, cursor, opencode and vscode adapters
+  left it with the experimental flag, the one door to them, since a
+  fence may decline a promise, never a writer (D406). (D30, 2026-07-23;
+  amended per D406, 2026-11-09)
 - **The tree-sitter code index** (`treecontext_code`, the grammars, the
   code backend and hints) — deprecated in full; owner's why: too low level
   for the lane this process operates at, and with million-token contexts
@@ -280,10 +286,12 @@ re-decided, and the previous text is in git history.
   CLI (Claude Code, Codex CLI, Antigravity CLI), on Linux and on macOS,
   has a worker start a long-running command through its own tool, cuts
   the worker, and reads whether the command is gone. (D394, 2026-11-09)
-- **A SessionEnd hook** — declined for now: install wires none, and
-  nothing marks a session ended at a plain exit. Session liveness, a
-  session's end as well as its start, is ruled once. Reopens in
-  `0.1.0-beta.5`, with workflows. (D395, 2026-11-09)
+- **A SessionEnd hook** — declined for now: install wires none, for
+  Claude Code or for Codex CLI, whose `SessionEnd` fires at the end of a
+  `codex exec` and stays off its block (D409), and nothing marks a
+  session ended at a plain exit. Session liveness, a session's end as
+  well as its start, is ruled once. Reopens in `0.1.0-beta.5`, with
+  workflows. (D395, D409, 2026-11-09)
 - **Self registrations' stop moment** — declined until `0.1.0-beta.5`:
   the store records no stop for a self registration, at a /clear or any
   other end, and no reader reads one; the /clear's stop of its
@@ -292,6 +300,27 @@ re-decided, and the previous text is in git history.
   build. A /clear still retires the predecessor's live subagents.
   Reopens with the SessionEnd hook above, in `0.1.0-beta.5`. (D396,
   2026-11-09)
+- **A recovery note after a Codex CLI compaction** — no recovery
+  snapshot is written after Codex compacts a session until a Codex
+  compaction has been recorded: the far-side pass of 2026-11-09 saw
+  Codex's `PreCompact` and `PostCompact` in its event list and never
+  fire. The build records one manual `/compact`; where its events take
+  Claude Code's shape, `PreCompact` is wired and this entry leaves the
+  fence; where they do not, both stay on Codex's list named as not
+  captured, with the reason, and the README says a Codex compaction
+  leaves no recovery note. Reopens with that recording, or when Codex's
+  compaction events are documented. (D409, 2026-11-09)
+- **A bookmark ask and a send-back from Codex CLI's stop hook** —
+  declined until `0.1.0-beta.5`: at a Codex turn's end treecontext's
+  hooks print nothing, so a Codex session is never asked for a bookmark
+  and a Codex worker is never sent back by its stop hook, the ticket
+  door's send-back being its one. Recorded live on 2026-11-09, Codex CLI
+  0.167.0: Codex honours a Stop hook's block, and `codex exec` prints
+  only its last reply, so the turn a block causes replaces a headless
+  run's real answer, while a hook cannot yet tell `codex exec` from
+  Codex's interactive interface. The bookmark interval stays Claude
+  Code's. Reopens in `0.1.0-beta.5`, or when a hook can tell a headless
+  Codex run from an interactive one. (D410, 2026-11-09)
 
 ## Named assumptions
 
@@ -324,6 +353,16 @@ re-decided, and the previous text is in git history.
   the store without the writer and moment the rest of the journal
   carries.
   (D283, 2026-10-29)
+- **agy's transcript keeps the layout recorded at `1.5.3`** — agy's
+  events carry no tool output and no reply, so capture reads both from
+  `transcript_full.jsonl`, one JSON line per step, the step a PostToolUse
+  names being the call's result: agy's file, not an interface it
+  documents or promises to keep. Where the layout is not the recorded
+  one, a call is kept with its name and arguments and says its output
+  was not captured, never dropped (D415), and doctor names agy's version
+  beside the one recorded. Reopens when agy documents a stable way to
+  read a call's output or a reply, or puts them in its events.
+  (D418, 2026-11-09)
 
 ## Out of reach by construction
 
@@ -371,20 +410,57 @@ re-decided, and the previous text is in git history.
   to a notification. Reopens if the client grows a hook on the task
   notification, or if the owner asks for late delivery at the parent's
   next hook. (D369 amends D285, 2026-11-01)
-- **Antigravity CLI's capture and its subagent roles** — Antigravity CLI
-  is an agent entry for the tools since D383: install writes its MCP
-  entry, four allow rules and its instruction block in
-  `~/.gemini/GEMINI.md`, its alone since Gemini CLI was retired (D399),
-  and doctor gives it a row. What stays out: install writes
-  no agy hooks and nothing of an agy session is captured, since no
-  adapter has earned a live-payload pass and its PostToolUse payload
-  carries no tool output; a main agy session registers no self and
-  spawns no registered worker but through `treecontext run`; subagent
-  legs through the hooks door and the pointer on a subagent's return are
-  not possible, agy having no SubagentStart, SubagentStop or return
-  event. Its headless workers are journaled through their tools, the
-  ticket door's rows and their summary. Reopens when a hooks adapter
-  earns its live-payload pass. (D370 amended by D383, 2026-11-07)
+- **Antigravity CLI's subagent legs, and what its hooks cannot see** —
+  Antigravity CLI is an agent entry for the tools since D383, and from
+  agy `1.5.3` a captured client: install writes its named hook beside the
+  developer's (D413), its sessions' prompts, tool calls with the output
+  agy's transcript holds by the end of each model call, and replies are
+  journaled (D415), and a main registers a self at its session start
+  without a subagent's start ever taking its identity over (D416); a
+  subagent is registered as a helper of the session that started it,
+  linked through the parent's `invoke_subagent` call, its role the
+  writer and the message it sends its parent its summary (D418). Amended
+  2026-11-09 by D413, D416 and D418: before them install wrote no agy
+  hooks, nothing of an agy session was captured, a main agy session
+  registered no self and a subagent had no registered role. What stays
+  out: subagent legs through the hooks door and the pointer on a
+  subagent's return, agy 1.5.3 having no SubagentStart, SubagentStop or
+  return event and nothing in a subagent's events naming its parent, so
+  no key, first moment or send-back can follow from one. An agy below `1.5.3` stays tools-only, its main
+  registering no self and its headless workers journaled through their
+  tools, the ticket door's rows and their summary. Reopens for legs at
+  `beta.5`, or when agy gains a subagent event or a parent link in a
+  subagent's events. (D370 amended by D383 and by D418, 2026-11-09)
+- **A call agy refuses in a headless run, and the rest of its turn** —
+  agy `1.5.3` auto-denies a call no rule allows in a headless run, prints
+  nothing, exits 0, and fires no PostToolUse, PostInvocation or Stop, so
+  neither the refused call nor the end of its turn reaches a hook; the
+  call exists only in agy's transcript, and a ticketed worker's summary
+  row carries agy's own line from its error stream (D384). Recovering the
+  call from the transcript at the conversation's next event, or by the
+  ticket door at the worker's exit, was not taken for beta.4 (D418).
+  A refusal in an interactive session, where the turn may go on, was not
+  recorded, and is not promised either: whether its call reaches a hook
+  or only the transcript is unknown. Reopens if agy fires an event for a
+  refused call, when an interactive refusal is recorded, or when the
+  owner asks for the transcript to be read for it. (D418, 2026-11-09)
+- **A recovery note after an Antigravity CLI compaction** — agy `1.5.3`
+  has no compaction event, so nothing marks a compaction of an agy
+  session and no recovery snapshot follows one; agy's list names the
+  absence (D417). Reopens if agy gains a compaction event. (D417,
+  2026-11-09)
+- **An outcome for an agy shell command** — agy sends a PostToolUse with
+  an empty `error` for a command that exits non-zero; the exit code is
+  only in the transcript's text, so the entry carries no outcome mark of
+  the client's and its ending is read from its text (D415). Reopens if
+  agy's event states a call's outcome. (D415, 2026-11-09)
+- **Legs on Codex CLI** — a Codex subagent is registered, retired and
+  kept as a summary since D411, and is never a leg: the message Codex's
+  spawn tool carries is an opaque blob no hook can read, so no key can be
+  inferred from its brief, and no first moment, send-back or pointer on
+  the spawn's return follows from one. Reopens if Codex hands a hook the
+  subagent's prompt, or with workflows in `0.1.0-beta.5`, where Claude
+  Code's legs are ruled again. (D411, 2026-11-09)
 
 ## Roads not taken
 
@@ -400,8 +476,17 @@ re-decided, and the previous text is in git history.
 - Declined alternative, Capture promised on Codex CLI, Gemini CLI, Cursor or VS Code —
   the compatibility matrix documents each client's hook support with the
   date of the documentation checked; a row never claims a test it does
-  not have, and capture is promised only where verified live, Claude
-  Code alone today. (D153, 2026-10-05)
+  not have, and capture is promised only where verified live: since D412
+  exactly three rows, Claude Code; Codex CLI from 0.167.0 with its hooks
+  trusted; Antigravity CLI from 1.5.3 with its named hook written, the
+  last two each resting on recordings of their own. (D153 amended by
+  D412, 2026-11-09)
+- Declined alternative, Trusting Codex's hooks on the developer's behalf
+  — install writing Codex's record of trusted hooks, or running Codex
+  with the flag that bypasses hook trust, so capture starts with no step
+  left: trust is the developer's answer to Codex, given in `/hooks`;
+  install says the step is left and doctor says whether it is done.
+  (D406, D407, 2026-11-09)
 - Declined alternative, The main checkout's status unscoped, its own pointers labelled and
   other lanes' chapters listed beside them — the main checkout is a lane
   like any worktree: scoped to its own by default, aware of the others by
@@ -600,7 +685,12 @@ re-decided, and the previous text is in git history.
 - Declined alternative, A `claude -p` child carrying both identities with
   the ticket's on top — the first moment spent twice; and, The hook wins
   and the ticket serves hook-less CLIs only — a Codex main's `claude -p`
-  workers land unparented in the main lane as "main". (D295, 2026-10-31)
+  workers land unparented in the main lane as "main". Since D410 a Codex
+  main from 0.167.0 with its hooks trusted registers itself, and since
+  D416 an Antigravity CLI main from 1.5.3 with its named hook; the reason
+  still holds for a Codex or Antigravity CLI main whose hooks do not
+  run, and the ticket still wins in a child. (D295, 2026-10-31; its
+  reason narrowed per D410 and D416, 2026-11-09)
 - Declined alternative, Only a named checkpointer's rows count as in
   effect, the stranger's listed apart — a legitimate unnamed
   technical-writer leg waits in the apart list too; and, The writer on the
@@ -945,6 +1035,121 @@ re-decided, and the previous text is in git history.
   for agy; no wip entry. The two step definitions the removed scenarios
   alone used (the translated copy's Given and its doctor-row Then) lose
   their Gemini alternatives. (D399, 2026-11-09)
+- **Codex CLI and Antigravity CLI capture** — the owner's rulings of
+  2026-11-09 bringing Codex capture and a Codex main's identity into
+  beta.4 ("I would rather slow the release and get it right"; "set a
+  minimum codex version in the docs") and agy's hooks with them ("do not
+  forget, any changes to tc doctor and install for adequate codex and agy
+  hook support"), drafted for the owner's read and revised after the
+  adversarial review of 2026-11-09, then the owner's rulings of the same
+  day on questions E, H, I and J ("agree"; "why not remove it if it's
+  unnecessary?"; "yes"; "yes"). It rewords bound scenarios, removes two
+  and removes the experimental flag (direction: rewords and removes).
+  journal-install's header, "unverified platforms get the MCP tools and
+  nothing else unless you opt in by name", now reads "a client gets the
+  MCP tools and nothing else until its capture has been verified live at
+  its version".
+  journal-install: "an unverified platform gets tools, not capture
+  hooks" (@D29) is now the outline "a client below the version its
+  capture was verified at gets tools, not capture hooks", rows Codex CLI
+  at 0.166.0 and Antigravity CLI at 1.5.2, its When now "install runs",
+  gaining @D406 and @D413; "experimental capture is an opt-in by name"
+  (@D29) is removed with the flag; "the experimental capture flag without
+  a named agent is refused" (@D57) is now the outline "the experimental
+  capture flag is refused, saying it is gone and naming each client's
+  floor, <named>", rows with no agent name, naming Codex CLI and naming
+  Antigravity CLI, gaining @D406; "install refuses the experimental flag
+  naming Gemini CLI, saying it is retired" (@D399) is now "install
+  refuses an install naming Gemini CLI, saying it is retired", its When
+  "install runs naming Gemini CLI"; the
+  outline "the server runs in capture mode for <agent> only where its
+  capture hooks are installed" gains @D406 and @D413, its final rows
+  "Claude Code | as usual | in capture mode", "Codex CLI | at version
+  0.167.0 | in capture mode", "Codex CLI | at version 0.166.0 | without
+  capture", "Antigravity CLI | as usual, its version reading 1.5.3 | in
+  capture mode", "Antigravity CLI | as usual, its version reading 1.5.2 |
+  without capture"; "install wires Antigravity CLI for the tools and
+  lets a headless agy worker use the four that read and write" gains
+  @D413, its Given now naming agy's version, 1.5.3, and its Then "no hook
+  of Antigravity CLI's is written" now "no hook of Antigravity CLI's is
+  written but treecontext's own named hook".
+  journal-clients: the outline "doctor reports <client> as a client that
+  <mode>" gains @D406 and @D414 and loses its Given "the installer ran
+  without the experimental flag", its final rows "Codex CLI | keeps its
+  own hook configuration, where install writes Codex's own block from
+  0.167.0 | `treecontext install --agent codex`", VS Code, Cursor and
+  OpenCode as before, and "Antigravity CLI | keeps its own hook
+  configuration, where install writes a named hook of its own beside the
+  developer's from 1.5.3 | `treecontext install --agent agy`"; "a copied
+  configuration that matches reads present and consistent" and "a copied
+  configuration that drifted reads inconsistent with its remedy" are now
+  "Codex's block that matches …" and "Codex's block that drifted …",
+  their Givens naming the block this build writes for Codex at 0.167.0,
+  the second's remedy `treecontext install --agent codex`, both gaining
+  @D407; "without the experimental flag a copying client gets tools only"
+  (@D208) is removed, Codex being the only copying client and capture its
+  default from 0.167.0, its floor now the reworded @D29 outline and
+  journal-install's "install writes no Codex CLI hook where <case> …";
+  "every matrix row carries its client, its events, its documentation
+  date and one status" (@D153) gains @D412, its last Then "exactly one row
+  reading "verified live", Claude Code" now "exactly three rows reading
+  "verified live", Claude Code, Codex CLI from 0.167.0 and Antigravity CLI
+  from 1.5.3, the rows for Codex CLI and Antigravity CLI each naming the
+  client version and date of the recording it rests on"; "doctor's row
+  for Antigravity CLI says whether a headless agy worker can use the
+  tools" gains @D414, its first row's "read that the tools are its whole
+  surface and headless workers can use the four tools" now "read that
+  headless workers can use the four tools, and say that a worker needing
+  any other tool returns nothing unless the developer allows that tool";
+  "the README's headless-workers section carries the steps for <worker>"
+  gains @D414, its `agy -p` row's "nothing" left to the developer now
+  "allowing in agy's settings every tool beyond the four the worker
+  needs, a shell command among them, since agy refuses it and the worker
+  returns nothing".
+  journal-workers: "a <worker> worker under a <parent> parent writes
+  into its own lane with its role as writer" gains the row "Antigravity
+  CLI | `claude -p`" and @D416, its parent registered through agy's
+  recorded SessionStart; the D298 outline's door row "hook-less door of a
+  `codex exec` worker" now "door of a `codex exec` worker whose hooks do
+  not run", the D298 title "a hook-less worker and a `claude -p` child
+  leave the same first-moment row …" now "a worker whose hooks do not run
+  and a `claude -p` child …", the D291 title "a hook-less worker that
+  finishes without a checkpoint …" now "a worker whose hooks do not run
+  that finishes …", and the D342 outline's two rows naming that door
+  reworded the same way (D410); the D294 outline's rows are unchanged, a
+  comment saying they are now a main whose hooks do not run.
+  journal-sidecar: "the trail pane reports what the journal is made of
+  without grading it" (@D102) gains @D404 and the Then "each exit row
+  says how many of its events took their class from the client's word
+  and how many from their text".
+  It adds, unbound: journal-install the @D409 list and census scenarios,
+  the @D406 outlines and scenarios (wired for capture; no hook below the
+  floor or in a file that does not parse; the earlier copy converged;
+  uninstall with and without install's record; a developer's hook added
+  after install; a reinstall's commands byte for byte; the hook scripts
+  kept), the @D413 scenarios and outline (the named hook beside the
+  developer's; none written, and why; uninstall, with install's record
+  and with it lost; taken back below 1.5.3; switched off by the developer;
+  converged), the @D417 list, and the Gemini sweep leaving agy's hooks
+  file alone (@D399 @D413); journal-clients the @D407 outline, the @D414
+  outline and scenarios, two @D412 scenarios and the agy README
+  scenario; journal-capture @D404's four scenarios, two @D408, five @D415
+  and two @D418; journal-orchestration three @D410 and two @D416;
+  journal-workers one @D410, one @D416 and @D403's four; journal-legs one
+  @D411; journal-agent-surface one @D412. They enter the suite through
+  scenario-scoped wip entries naming their build unit. Every step saying
+  an event is as Codex sends it binds to events recorded from Codex CLI
+  0.167.0 with its hooks trusted through `/hooks`, and every step saying
+  an event is as Antigravity sends it to events and transcripts recorded
+  from a real agy `1.5.3`, each kept with its version in that client's
+  own directory under tests/fixtures/, redacted and scanned before they
+  are committed, never to a payload written by hand; the guard of D402
+  holds each to its directory (D409, D417). The fence's Antigravity CLI
+  entry and the D30 entry are amended in place, the D153 and D295 roads
+  narrowed, and
+  Out-of-reach, Deferred and Named-assumption entries added. (D403, D404,
+  D406, D407, D408, D409, D410, D411, D412, D413, D414, D415, D416,
+  D417, D418, 2026-11-09)
 
 ---
 

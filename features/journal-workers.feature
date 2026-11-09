@@ -17,13 +17,16 @@ Feature: Workers — a headless worker on any CLI, through the ticket door
   D384 and D389 of 2026-11-07 (a failed worker's summary row; no
   client-session variable handed to a worker); D391, D393 and D397 of
   2026-11-09 (a worker's curated dedup in its own lane; a cut ends the
-  worker's process group; the error stream kept open after the run). The leg contract the worker fulfils is journal-legs; the
+  worker's process group; the error stream kept open after the run);
+  D403 of 2026-11-09, drafted (a worker in a sandbox that numbers its
+  own processes is not judged by a reader's process table; a phantom is
+  set right by its door's word at exit). The leg contract the worker fulfils is journal-legs; the
   run it belongs to is journal-runs. A worker here is bound through a
   stand-in headless process launched through the real door; what the
   model inside a real worker chooses to do is out of reach, so every
   outcome here is read from the door's output or the store.
 
-  @D288
+  @D288 @D416
   Scenario Outline: a <worker> worker under a <parent> parent writes into its own lane with its role as writer
     Given a <parent> session registered as the parent "p1"
     And a <worker> worker started with a ticket naming the parent "p1", the run "r1", the key "login-form", the role "builder" and the reviewer as the one who will checkpoint
@@ -32,14 +35,18 @@ Feature: Workers — a headless worker on any CLI, through the ticket door
     And the parent's lane holds none of the worker's 3 notes
 
     Examples:
-      | parent      | worker       |
-      | Claude Code | `codex exec` |
-      | Codex       | `claude -p`  |
-    # No Antigravity row (owner, 2026-11-09): an Antigravity CLI main
-    # registers no self and spawns no registered worker but through
-    # `treecontext run` (the fence's Antigravity CLI entry, D370 amended
-    # by D383), so no parent of it is "registered"; its main is the
-    # declared parent of the D294 outline below.
+      | parent          | worker       |
+      | Claude Code     | `codex exec` |
+      | Codex           | `claude -p`  |
+      | Antigravity CLI | `claude -p`  |
+    # No Antigravity row until beta.4 (owner, 2026-11-09): an Antigravity
+    # CLI main registered no self (the fence's Antigravity CLI entry, D370
+    # amended by D383). From agy 1.5.3 with treecontext's named hook, its
+    # SessionStart registers it (D416), so an agy main is a registered
+    # parent; one below 1.5.3, or with no hook, stays the declared parent
+    # of the D294 outline below. The Antigravity row's parent is
+    # registered by agy's recorded SessionStart replayed through the hook
+    # install writes, never by a registration the binding writes itself.
 
   @D288 @D384
   Scenario: a worker is retired at exit and its last output is the summary row the pointer names
@@ -77,11 +84,11 @@ Feature: Workers — a headless worker on any CLI, through the ticket door
 
     Examples:
       | door                                                                    |
-      | hook-less door of a `codex exec` worker                                 |
+      | door of a `codex exec` worker whose hooks do not run                    |
       | wrapper of a `claude -p` child, whose session-start hook links the lane |
 
   @D298
-  Scenario: a hook-less worker and a `claude -p` child leave the same first-moment row, readable with plain SQL alone
+  Scenario: a worker whose hooks do not run and a `claude -p` child leave the same first-moment row, readable with plain SQL alone
     Given a brief row and a checkpoint row under the key "login-form"
     When a `codex exec` worker and a `claude -p` child each start with the spawner's prompt "wire the submit button"
     Then a reader with the store file and plain SQL sees the two first-moment rows equal column for column apart from their writer stamps, lanes and moments
@@ -111,7 +118,7 @@ Feature: Workers — a headless worker on any CLI, through the ticket door
     And the harness looking up the key "login-form" sees the same flag in the run's facts
 
   @D291
-  Scenario Outline: a hook-less worker that finishes without a checkpoint is run once more by the <spawner> that started it
+  Scenario Outline: a worker whose hooks do not run that finishes without a checkpoint is run once more by the <spawner> that started it
     Given a `codex exec` worker started by the <spawner> under the key "login-form", with the ticket naming the worker as its checkpointer and declaring that it has a way to write
     When the worker exits with no checkpoint under the key "login-form" newer than its start
     Then the <spawner> runs the worker once more with the reason naming the missing checkpoint under "login-form"
@@ -181,6 +188,19 @@ Feature: Workers — a headless worker on any CLI, through the ticket door
     And the store holds no self registration and no beacon for it
     And every row the child writes carries the writer "builder" and the parent "p1" as declared
 
+  @D410 @D295
+  Scenario: a `codex exec` worker with Codex's hooks is never registered as a self, its hooks print it nothing, and what it does lands in its own lane
+    Given a `codex exec` worker at Codex CLI 0.167.0, with the hooks install wrote trusted, started by the wrapper under the key "login-form" with the role "builder"
+    When its hooks receive, as Codex sends them, its start, a shell command it runs and the end of its turn
+    Then the store holds no self registration for its Codex session and one first-moment row in the worker's lane
+    And the shell command and the turn's last assistant message are in the worker's lane with the writer "builder"
+    And none of its hooks printed anything to Codex, its first moment being the door's
+    # Recorded live, 2026-11-09, Codex CLI 0.167.0: under `treecontext
+    # run … -- codex exec`, every hook's environment held the ticket and
+    # the worker's lane, the hooks running outside the sandbox (D410).
+    # The fixture is the build's to take. A worker's hooks print nothing:
+    # a Codex main's fresh start is handed the packet, a worker never.
+
   @D295 @D298
   Scenario: a `claude -p` child started by the wrapper is told who it is in one line, and its first moment is not spent twice
     Given a `claude -p` worker started by the wrapper under the key "login-form", with a brief and a checkpoint in effect
@@ -214,6 +234,10 @@ Feature: Workers — a headless worker on any CLI, through the ticket door
       | main            | cli   |
       | Codex CLI       | codex |
       | Antigravity CLI | agy   |
+    # Since D410 and D416 these rows are a Codex CLI or Antigravity CLI
+    # main whose hooks do not run: below its floor, with its hooks
+    # untrusted (Codex) or with no named hook (agy). A main whose hooks
+    # run registers itself (journal-orchestration).
 
   @D294
   Scenario: a parent a hook did register is linked by id, never copied
@@ -276,6 +300,65 @@ Feature: Workers — a headless worker on any CLI, through the ticket door
     Then the worker's registration still reads live
     And the reply says the worker cannot be told from a successor that took its number
 
+  @D403
+  Scenario Outline: a live worker is never retired as a phantom by a reader whose processes are numbered apart from its own, <case>
+    Given a worker under the key "login-form", still running, started through the `treecontext run` wrapper <worker>
+    When the harness <reader> looks up the key "login-form"
+    Then the worker's registration still reads live
+
+    Examples:
+      | case                        | worker                                                       | reader                                                       |
+      | the worker inside a sandbox | inside a sandbox on this host that numbers its own processes | on this host, outside the sandbox,                           |
+      | the reader inside a sandbox | on this host, outside any sandbox,                           | inside a sandbox on this host that numbers its own processes |
+      | the worker registered by an earlier build, the reader inside a sandbox | on this host, outside any sandbox, by a build that recorded no numbering, | inside a sandbox on this host that numbers its own processes |
+    # Found live, 2026-11-09, on Linux: a `treecontext run` inside Codex
+    # CLI's sandbox registered its worker with the number the sandbox gave
+    # it (13) and the machine's real name; the next `treecontext run` from
+    # a plain shell looked up process 13 in the machine's own numbering,
+    # found an unrelated process with another start moment, and retired the
+    # running worker as a phantom. The second row is the same mistake the
+    # other way round: inside the sandbox the machine's processes are not
+    # there at all, so a reader in it would take every running worker
+    # outside for gone. A sandbox of this kind exists on Linux only; the
+    # scenario is Linux's, and on a host that cannot make one (CI runners
+    # that restrict unprivileged user namespaces) it shows as skipped or
+    # wip, never green.
+
+  @D403
+  Scenario: a reader inside a sandbox says a worker outside it cannot be checked from there
+    Given a worker under the key "login-form", still running, registered on this host outside any sandbox
+    When the harness inside a sandbox on this host that numbers its own processes looks up the key "login-form"
+    Then the reply says the worker runs where this reader cannot see its process, so it cannot be checked from here
+
+  @D403
+  Scenario: a worker whose sandbox has ended is retired as a phantom by a reader that can see the sandbox is gone
+    Given a worker under the key "login-form" registered from inside a sandbox on this host that numbers its own processes
+    And the sandbox has since ended with every process in it, nothing having retired the worker
+    When the harness on this host, outside the sandbox, looks up the key "login-form"
+    Then the worker's registration reads retired as a phantom, with the moment it was noticed and the harness's lookup as what noticed it
+    # Resolved from the record (D403): a reader outside the sandbox can
+    # see it, and without this a sandbox killed together with its door
+    # leaves the worker live for good, which D307 relies on the phantom
+    # pass to close.
+
+  @D403
+  Scenario Outline: a worker taken for a phantom while it ran is set right by its door when it <ends>
+    Given a worker under the key "login-form", still running, registered from inside a sandbox on this host by a build that recorded no numbering
+    And a reader on this host, outside the sandbox, has retired it as a phantom
+    When the worker <ends>
+    Then the worker's registration reads <ending> at the moment it ended, no longer a phantom
+    And it still shows when it was taken for a phantom and what took it for one
+    And <summary>
+
+    Examples:
+      | ends                                    | ending  | summary                                     |
+      | exits on its own after printing "done"  | retired | the worker's summary row holds "done"       |
+      | is ended by a signal                    | cut     | the worker left no summary row              |
+    # Found with the scenarios above: the door, at the worker's real exit,
+    # wrote the summary row and then found the registration already ended,
+    # so the store held a phantom with a summary row, a leg that both left
+    # no trace and returned. The door saw the end; the pass guessed it.
+
   @D342 @D303
   Scenario Outline: a worker whose ticket is <damage> is registered with what was read, told its instructions were invalid, and ends visibly through the <door>
     Given a ticket in the environment, <damage>, so that the <door> cannot read it whole
@@ -288,9 +371,9 @@ Feature: Workers — a headless worker on any CLI, through the ticket door
 
     Examples:
       | damage                                                                  | door                                     |
-      | truncated after the role "builder"                                      | hook-less door of a `codex exec` worker  |
+      | truncated after the role "builder"                                      | door of a `codex exec` worker whose hooks do not run |
       | hand-edited so that the run is missing                                  | session-start hook of a `claude -p` child |
-      | minted in an older shape that still reads as the role "reviewer"        | hook-less door of a `codex exec` worker  |
+      | minted in an older shape that still reads as the role "reviewer"        | door of a `codex exec` worker whose hooks do not run |
       | truncated after the role "builder"                                      | session-start hook of a `claude -p` child |
 
   @D303
@@ -462,3 +545,14 @@ Feature: Workers — a headless worker on any CLI, through the ticket door
     # it settles (D397). The binding needs a real background process the
     # stand-in worker starts, holding the worker's error stream, read by
     # the test after the run settled.
+
+  # An `agy -p` worker with treecontext's named hook (D416, 2026-11-09,
+  # beta.4): the ticket wins, as for a `claude -p` child (D295).
+
+  @D416 @D295
+  Scenario: an `agy -p` worker started by `treecontext run` is never a self, and its captured calls land in its own lane
+    Given an `agy -p` worker started by the wrapper with a ticket naming the parent "p1", the run "r1", the key "login-form" and the role "builder", on an Antigravity CLI whose named hook install wrote
+    When the worker's events, as Antigravity sends them, reach the hook install writes, the worker runs a shell command and inserts a note, and ingestion runs
+    Then the store holds no self registration for the worker's conversation
+    And the shell command's entry and the note sit in the worker's own lane, stamped with the writer "builder" and the parent session "p1"
+    And the main lane holds none of the worker's rows

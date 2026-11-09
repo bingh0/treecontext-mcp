@@ -300,6 +300,34 @@ Feature: Orchestration inside one store — lanes that stay their own
     Then the store holds a registration of that session whose worktree and branch equal what git reports for that directory
     And a chapter summary written through the tools from that session is stamped with "feature-login"
 
+  @D410
+  Scenario: a Codex CLI main registers itself at its start and the server stamps its rows from it
+    Given a Codex CLI 0.167.0 session starting in a worktree of its checkout, as recorded, with the hooks install wrote trusted
+    When its session-start hook receives the start as Codex sends it
+    Then the store holds a self registration of that Codex session whose worktree and branch equal what git reports for that directory
+    And a chapter summary written through the tools from that session is stamped with that worktree's name, never "unregistered"
+
+  @D410 @D167
+  Scenario: a Codex CLI main's fresh start is handed its lane's chapter
+    Given a store holding a live chapter summary of the main checkout's lane
+    And a Codex CLI 0.167.0 main starting fresh in the main checkout, with the hooks install wrote trusted
+    When its session-start hook receives the start as Codex sends it
+    Then the hook's reply hands Codex, as context to add to the session, the packet a Claude Code session gets at a fresh start, opening with that chapter as the lane's own
+    # Recorded live, 2026-11-09, Codex CLI 0.167.0: a SessionStart hook's
+    # added context reached the model. Only a fresh start was recorded;
+    # what a resumed Codex session is handed is not promised (D410).
+
+  @D410
+  Scenario: at a Codex CLI turn's end treecontext's hooks print nothing
+    Given a Codex CLI 0.167.0 main with the hooks install wrote trusted, whose turn has run long enough that a Claude Code session would be asked for a bookmark
+    When its stop hook receives the turn's end as Codex sends it
+    Then the hook printed nothing, and asked Codex for no bookmark and no further turn
+    # Recorded live, 2026-11-09: Codex honours a Stop hook's block, and
+    # `codex exec` prints only the last reply, so the turn a block causes
+    # replaces a headless run's real answer. A hook cannot yet tell
+    # `codex exec` from Codex's interactive interface, so the Stop hook's
+    # bookmark ask and send-back wait for beta.5 on Codex (the fence).
+
   @D190
   Scenario: a subagent's tool-written note carries its own writer though it shares the session
     Given a tester subagent and its orchestrator sharing one session id and one server
@@ -368,3 +396,35 @@ Feature: Orchestration inside one store — lanes that stay their own
     When the orchestrator searches and hits A
     Then the orchestrator sees A referenced by B with B's writer, age and first line, and a count of 1
     And the orchestrator does not see C until it fetches B by id
+
+  # Antigravity CLI's main (D416, 2026-11-09, beta.4): with treecontext's
+  # named hook installed, an agy main registers itself at its session
+  # start, keyed by its conversation, as a Claude Code main does.
+
+  @D416 @D190
+  Scenario: an Antigravity CLI main registers itself at its session start and the server stamps its notes from it
+    Given an Antigravity session starting in a worktree of its checkout, its SessionStart as Antigravity sends it
+    When the hook install writes for Antigravity CLI receives it, and the session writes a chapter summary through the tools
+    Then the store holds a self registration keyed by the session's conversation id, whose worktree and branch equal what git reports for that directory
+    And the chapter summary is stamped as that session's own, in that worktree's lane, never as writer unknown
+    # Before beta.4 an agy main registered nothing: its chapter summaries
+    # read as written by an unplaced client (the fence's Antigravity CLI
+    # entry, amended by D416).
+
+  @D416 @D418
+  Scenario Outline: an Antigravity CLI main whose subagent has started still writes as itself, <linked>
+    Given an Antigravity main session registered at its SessionStart, which starts a subagent through agy's own subagent tool, the subagent's events as Antigravity sends them reaching the hook install writes
+    And <link>
+    When the main writes a chapter summary through the tools after the subagent's session has started
+    Then the chapter summary is stamped as the main's own, in the main's lane
+    And no row the main writes is stamped as the subagent's
+
+    Examples:
+      | linked                         | link                                                                     |
+      | the subagent linked            | the parent's call result naming the subagent has been read               |
+      | the subagent not yet linked    | the parent's call result naming the subagent has not yet been read       |
+    # One agy process hosts the subagent's conversation as well as the
+    # main's, and agy ran its hooks through `sh` in the recording of
+    # 2026-11-09. A subagent's start that took over the identity keyed to
+    # that process would stamp every later note of the main as the
+    # subagent's (D416).

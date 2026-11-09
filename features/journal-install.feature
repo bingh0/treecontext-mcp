@@ -6,8 +6,9 @@ Feature: Journal install — setup is auditable, reversible, and honest
   rather than overwrites, backs up rather than clobbers, converges
   rather than duplicates, and uninstall walks every step back. And it is
   honest about verification: a capture hook sitting in your settings
-  reads as a promise that capture is running, so unverified platforms
-  get the MCP tools and nothing else unless you opt in by name.
+  reads as a promise that capture is running, so a client gets the MCP
+  tools and nothing else until its capture has been verified live at its
+  version.
 
   What counts as evidence here is narrower than elsewhere in this suite.
   For the store, the SQLite file is ground truth. For the installer it is
@@ -133,6 +134,27 @@ Feature: Journal install — setup is auditable, reversible, and honest
     # event treecontext does not wire is a decision with a reason on it,
     # never an omission.
 
+  @D409
+  Scenario: every hook event Codex CLI has is wired or named as not captured
+    Given the list of Codex CLI's hook events, kept with the Codex version it was read from
+    When it is compared with the hooks install writes for Codex
+    Then every event on the list is either wired or named with what the journal does not capture because of it
+    And every event install writes for Codex is on the list
+    And the list names PostToolUseFailure and PostToolBatch as events Codex does not have, with what the journal does not capture on Codex because of it
+
+  @D409
+  Scenario: the capture census counts a Codex session's calls and says which it could only infer
+    Given the transcript of a headless Codex session and the store its hooks wrote, both recorded, in which Codex called a tool directly and ran shell commands through its code mode
+    When the capture census counts the session's calls against the store
+    Then the census counts the direct call as found by Codex's id for it
+    And it counts each code-mode call as matched by inference, and says how many were inferred and why
+    # Recorded live, 2026-11-09, Codex CLI 0.167.0: Codex runs most tool
+    # calls inside a script of its own, and the id its hooks carry for such
+    # a call is found nowhere in its transcript. The census over a live
+    # Codex session is a release dogfood check, as D402's census is: run
+    # by the dogfood routine against the installed build before the
+    # release, never by this scenario, which reads what was recorded.
+
   @D53
   Scenario: an unwritable agent config fails loudly and changes nothing
     Given an agent config whose file or directory denies writes
@@ -164,29 +186,41 @@ Feature: Journal install — setup is auditable, reversible, and honest
     # reinstall is the documented repair and upgrade path; the agents
     # beside the named one must never be collateral.
 
-  @D29
-  Scenario: an unverified platform gets tools, not capture hooks
-    Given a detected agent whose capture adapter has never run against a live session
-    When install runs without the experimental capture flag
-    Then the agent is wired for the MCP tools
-    But no capture hooks are written for it
+  @D29 @D406 @D413
+  Scenario Outline: a client below the version its capture was verified at gets tools, not capture hooks
+    Given <client> whose version reads <version>
+    When install runs
+    Then <client> is wired for the MCP tools
+    But no capture hook of treecontext's is written for it
+    And the developer sees install say in one line that <client> stays tools-only until <floor>
 
-  @D29
-  Scenario: experimental capture is an opt-in by name
-    Given the same unverified agent
-    When install runs with the experimental capture flag naming that agent
-    Then its capture hooks are written
-    And the output states plainly that capture there is unverified
+    Examples:
+      | client          | version | floor   |
+      | Codex CLI       | 0.166.0 | 0.167.0 |
+      | Antigravity CLI | 1.5.2   | 1.5.3   |
+    # Reworded 2026-11-09 (D406, D413): the agent whose capture adapter
+    # had never run against a live session is now a client below the
+    # first version a live run verified, and no flag opts it in: the
+    # experimental flag that did is gone (D406).
 
-  @D57
-  Scenario: the experimental capture flag without a named agent is refused
-    Given a machine with an unverified agent detected
-    When install runs with the experimental capture flag and no agent name
-    Then the install is refused before anything is written
-    And the refusal says the opt-in must name an agent
-    # Ruled 2026-08-01: the bare flag would opt in every detected
-    # unverified platform at once — a blanket switch contradicting the
-    # header's "unless you opt in by name". The name is the consent.
+  @D57 @D406
+  Scenario Outline: the experimental capture flag is refused, saying it is gone and naming each client's floor, <named>
+    Given a machine with Claude Code, Codex CLI 0.167.0 and Antigravity CLI 1.5.3 installed
+    When install runs with the experimental capture flag <named>
+    Then the install is refused before anything is written, and the install run exits non-zero
+    And the developer sees one line saying the flag is gone and that each captured client is wired by default from its version floor, naming Codex CLI 0.167.0 and Antigravity CLI 1.5.3
+
+    Examples:
+      | named                   |
+      | and no agent name       |
+      | naming Codex CLI        |
+      | naming Antigravity CLI  |
+    # Ruled 2026-08-01 (D57): the bare flag was refused, because it
+    # would opt in every detected unverified platform at once; the name
+    # was the consent. Reworded 2026-11-09 (D406): no client is left for
+    # the flag to opt in, and the owner removed it ("why not remove it if
+    # it's unnecessary?"), so every form of it is refused, in a line that
+    # tells a script's author what replaced it.
 
   @D51
   Scenario: doctor proves health rather than inferring it
@@ -363,7 +397,7 @@ Feature: Journal install — setup is auditable, reversible, and honest
       | Codex CLI   | starting the server in capture mode         | a pinned store and a policy flag                                                      |
       | Claude Code | naming an interpreter that no longer exists | a pinned store and an environment block                                               |
 
-  @D386
+  @D386 @D406 @D413
   Scenario Outline: the server runs in capture mode for <agent> only where its capture hooks are installed
     Given <agent> is installed
     When install runs <how>
@@ -373,9 +407,112 @@ Feature: Journal install — setup is auditable, reversible, and honest
     Examples:
       | agent           | how                                         | mode            |
       | Claude Code     | as usual                                    | in capture mode |
-      | Codex CLI       | without the experimental flag               | without capture |
-      | Codex CLI       | with the experimental flag naming Codex CLI | in capture mode |
-      | Antigravity CLI | as usual                                    | without capture |
+      | Codex CLI       | at version 0.167.0                          | in capture mode |
+      | Codex CLI       | at version 0.166.0                          | without capture |
+      | Antigravity CLI | as usual, its version reading 1.5.3         | in capture mode |
+      | Antigravity CLI | as usual, its version reading 1.5.2         | without capture |
+
+  # Codex capture (D406, 2026-11-09): from Codex CLI 0.167.0, hooks are a
+  # stable feature of the client, so install writes Codex a block of its
+  # own by default. Codex runs a hook only once the developer has trusted
+  # it, and Codex alone records that trust: install never writes it.
+
+  @D406
+  Scenario: install wires Codex CLI 0.167.0 for capture with its own hooks, and names the one step left
+    Given Codex CLI 0.167.0 is installed, its hooks file holding a hook of the developer's that Codex counts as trusted, and its `config.toml` holding a hook of the developer's
+    When install runs
+    Then Codex's `hooks.json` holds treecontext's hooks, in groups of their own after the developer's, for exactly the events Codex's list marks wired, with no PostToolUseFailure or PostToolBatch
+    And every hook of treecontext's names Codex CLI in its command
+    And the developer's own hooks, in `hooks.json` and in `config.toml`, read as the developer left them, and Codex still counts the first trusted
+    And Codex's record of trusted hooks holds nothing install wrote
+    And the developer sees install say in one line that Codex runs none of treecontext's hooks until they are trusted, with `/hooks` in Codex
+    # Recorded live, 2026-11-09, Codex CLI 0.167.0: an untrusted hook
+    # fires nothing and says nothing, and Codex keys its trust by the
+    # hook's place in the file as well as its text. A hook install moved
+    # would read untrusted to Codex though nobody changed it.
+
+  @D406
+  Scenario Outline: install writes no Codex CLI hook where <case>, takes back what install wrote, and says why
+    Given Codex CLI where <case>, its hooks file holding <held>
+    When install runs
+    Then Codex's hooks file holds <after>
+    And the server Codex's entry starts runs without capture
+    And the developer sees install say in one line that Codex CLI stays tools-only, <why>
+
+    Examples:
+      | case                          | held                                                                                                                    | after                                                  | why                                                                    |
+      | its version reads 0.166.0     | treecontext's hooks an earlier install recorded writing at 0.167.0, beside a hook of the developer's                    | the developer's hook alone, as the developer left it   | naming 0.166.0 and that capture needs Codex CLI 0.167.0 or later       |
+      | its version cannot be read    | the verbatim copy of the Claude Code block an earlier build wrote under the experimental flag, beside a hook of the developer's | the developer's hook alone, as the developer left it | saying its version could not be read                            |
+      | its hooks file does not parse | a hook of the developer's and treecontext's hooks an earlier install wrote                                              | byte for byte what it held                             | quoting the parse error                                                |
+    # One rule below a floor for both clients (D406, D413): install takes
+    # back what install wrote, the hooks its record names or the old copy
+    # known by its commands, and never a hook of the developer's. A file
+    # that does not parse is the developer's to fix: install touches
+    # nothing in it.
+
+  @D406 @D385
+  Scenario: a reinstall turns the copy an earlier build wrote into Codex's own block
+    Given Codex CLI 0.167.0 whose hooks file holds the verbatim copy of the Claude Code block an earlier build wrote under the experimental flag, beside a hook of the developer's
+    When install runs again
+    Then Codex's hooks file holds Codex's own block once and nothing else of treecontext's, PostToolUseFailure and PostToolBatch gone
+    And the developer's own hook reads as the developer left it
+    And the developer sees install name the hooks Codex must be asked to trust again
+
+  @D406 @D51
+  Scenario Outline: uninstall takes back the hooks install wrote for Codex CLI and keeps the developer's, <case>
+    Given Codex CLI 0.167.0 whose hooks file holds <ours>, after a hook of the developer's written before install ran
+    When uninstall runs
+    Then Codex's hooks file holds the developer's hook alone, at the place it had
+    And Codex still counts the developer's hook trusted
+    And Codex's treecontext entry is gone
+
+    Examples:
+      | case                              | ours                                                                                                         |
+      | install's record naming its hooks | the hooks install wrote and recorded writing                                                                 |
+      | no record naming them             | the verbatim copy of the Claude Code block an earlier build wrote under the experimental flag, before install kept a record |
+
+  @D406
+  Scenario: a hook the developer added after install keeps its words, and the developer is told when Codex will ask to trust it again
+    Given Codex CLI 0.167.0 wired by install, and a hook of the developer's added after install for the same event and the same matcher as one of treecontext's, which Codex counts as trusted
+    When install runs again and then uninstall runs
+    Then after the reinstall the developer's hook is where it was, Codex still counts it trusted, and install named no hook of the developer's
+    And after the uninstall the developer's hook is in Codex's hooks file with its command as the developer wrote it
+    And the developer sees uninstall name the developer's hook if taking treecontext's out moved it, saying Codex will ask to trust it again
+    # Codex keys its trust by a hook's place: file, event, group and
+    # index. Install never puts a hook into a group of the developer's,
+    # and a hook the developer adds after install is the one case where a
+    # group of treecontext's can sit before one of theirs; taking it out
+    # then moves theirs, and the developer must be told, not left to find
+    # an untrusted hook firing nothing.
+
+  @D406 @D385
+  Scenario Outline: a reinstall where <case> <outcome>
+    Given Codex CLI 0.167.0 wired by install, every hook of treecontext's trusted
+    When <change>, and install runs again
+    Then <then>
+
+    Examples:
+      | case                                                      | outcome                                   | change                                               | then                                                                                                   |
+      | nothing changed                                           | leaves every hook's command as it was     | nothing changes                                      | every hook of treecontext's has its command byte for byte as it was, Codex still trusts each, and install names no hook to trust again |
+      | an upgrade moved the Node interpreter the hooks name      | names each hook Codex will ask to trust again | the Node interpreter the hooks name moves with an upgrade | install names each hook whose command changed and says Codex will ask to trust it again with `/hooks` |
+    # The owner's Node upgrade routine moves the interpreter and reruns
+    # install; a hook whose command text changes reads untrusted to Codex.
+    # Nothing changed must mean nothing changed, byte for byte.
+
+  @D406 @D413 @D51
+  Scenario Outline: the hook scripts a client's hooks run are there whenever a client's hooks name them, <case>
+    Given <machine>
+    When <act>
+    Then every hook script <hooks> run is there and runs
+
+    Examples:
+      | case                                            | machine                                                                      | act                                     | hooks                                              |
+      | on a machine where Codex CLI is the only client | a machine with Codex CLI 0.167.0 installed and no other client               | install runs                            | Codex CLI's hooks                                  |
+      | on a machine where agy is the only client       | a machine with Antigravity CLI 1.5.3 installed and no other client           | install runs                            | Antigravity CLI's named hook                       |
+      | after Claude Code alone is uninstalled          | a machine with Claude Code, Codex CLI 0.167.0 and Antigravity CLI 1.5.3 wired by install | uninstall runs naming Claude Code alone | Codex CLI's hooks and Antigravity CLI's named hook |
+    # The scripts live with Claude Code's today, and a scoped uninstall
+    # of Claude Code took them with it; the other clients' hooks would
+    # then run a script that is not there, and capture nothing.
 
   @D381 @D390
   Scenario: install lets a headless Codex worker use the tools that read and write, and leaves the four that remove or bring in rows asking
@@ -408,13 +545,13 @@ Feature: Journal install — setup is auditable, reversible, and honest
     # refusing the keys; dropped, by a dated docket line, if the oldest
     # Codex at hand reads them.
 
-  @D383 @D390
+  @D383 @D390 @D413
   Scenario: install wires Antigravity CLI for the tools and lets a headless agy worker use the four that read and write
-    Given a machine with Antigravity CLI installed
+    Given a machine with Antigravity CLI installed, its version reading 1.5.3
     When install runs
     Then Antigravity CLI's own listing of its MCP servers reports the treecontext server
     And its permission settings allow status, query, export and insert of the treecontext server, and no other treecontext tool
-    And no hook of Antigravity CLI's is written
+    And no hook of Antigravity CLI's is written but treecontext's own named hook
     And the instruction block Antigravity CLI reads is present once
 
   @D399 @D51
@@ -424,10 +561,19 @@ Feature: Journal install — setup is auditable, reversible, and honest
     Then no Gemini CLI configuration is written
     And Antigravity CLI is wired for the tools
 
+  @D399 @D413
+  Scenario: the sweep for Gemini CLI leaves Antigravity CLI's hooks file alone
+    Given Antigravity CLI 1.5.3 wired by install, its hooks file holding treecontext's named hook beside a hook of the developer's, and Gemini CLI's settings holding what an earlier install wrote for it
+    When uninstall runs naming Gemini CLI
+    Then Antigravity CLI's hooks file is byte for byte as it was
+    And Gemini CLI's settings hold nothing of treecontext's
+    # Both live under `~/.gemini`: the archived sweep takes Gemini CLI's
+    # settings file and wrappers, never agy's `config/hooks.json`.
+
   @D399
-  Scenario: install refuses the experimental flag naming Gemini CLI, saying it is retired
+  Scenario: install refuses an install naming Gemini CLI, saying it is retired
     Given a machine with Gemini CLI's command and its own files present
-    When install runs with the experimental flag naming Gemini CLI
+    When install runs naming Gemini CLI
     Then the install run exits non-zero
     And the developer sees one line saying Gemini CLI is retired, naming Antigravity CLI and the command that removes an old entry
     And no Gemini CLI configuration is written
@@ -573,3 +719,88 @@ Feature: Journal install — setup is auditable, reversible, and honest
     When the client is upgraded to 2.1.302 and the developer runs install again
     Then the settings file carries the idle-compaction key set to off
     And the developer sees install say in one line that idle compaction was turned off
+
+  # Antigravity CLI's hooks (D413, D417, 2026-11-09, beta.4): install
+  # writes agy a named hook of its own into agy's own hooks file, in agy's
+  # own shape, beside the developer's hooks and never over them, from the
+  # first agy version whose hooks were recorded live, 1.5.3. A file agy
+  # cannot parse silences every hook in it, so install never writes into
+  # one; PreToolUse must decide a call's permission, so install never
+  # wires it.
+
+  @D413
+  Scenario: install writes Antigravity CLI its own named hook beside the developer's
+    Given an Antigravity CLI whose version reads 1.5.3, whose hooks file holds the developer's own named hook for PostToolUse, and a workspace whose `.agents/hooks.json` holds a hook of the developer's
+    When install runs
+    Then the hooks file holds treecontext's named hook for SessionStart, PreInvocation, PostToolUse, PostInvocation and Stop, and no hook of treecontext's for PreToolUse
+    And every command of treecontext's named hook names Antigravity CLI
+    And the developer's named hook reads as it was, and the workspace's `.agents/hooks.json` is byte for byte as it was
+    And a real agy run fires both the developer's hook and treecontext's, and agy's log records no error for the file
+    And the developer sees install say which Antigravity CLI events it wired and in which file
+    # Found on the far-side pass of 2026-11-09 (agy 1.5.3): agy's hooks
+    # file is keyed by hook name, not by event as Claude Code's is, and a
+    # file in Claude Code's shape is refused whole, with a line only in
+    # agy's own log. The run in the third Then is agy's, not a stand-in:
+    # the file's shape is what agy accepts, and only agy can say so.
+
+  @D413
+  Scenario Outline: install writes no Antigravity CLI hook where <case>, and says why
+    Given an Antigravity CLI where <case>
+    When install runs
+    Then the hooks file is byte for byte as it was, or still absent
+    And the server Antigravity CLI's entry starts runs without capture
+    And the developer sees install say in one line that Antigravity CLI stays tools-only, <why>
+
+    Examples:
+      | case                                                             | why                                                                                                                     |
+      | the version reads 1.5.2                                          | naming 1.5.2 and 1.5.3 as the first version whose hooks install writes                                                  |
+      | the version cannot be read                                       | saying the version could not be read                                                                                    |
+      | the hooks file holds the developer's hook and does not parse     | quoting the parse error and saying agy runs none of the hooks in that file, the developer's included, until it is fixed |
+      | the hooks file holds a hook of the developer's named treecontext | saying the name is taken by a hook install did not write                                                                |
+
+  @D413 @D51
+  Scenario: uninstall takes back the named hook install wrote and nothing else
+    Given an Antigravity CLI at 1.5.3 whose hooks file install created, and another whose hooks file held the developer's own named hook before install
+    When install runs and then uninstall runs on each
+    Then the hooks file install created is gone
+    And the other hooks file holds the developer's named hook as it was, and nothing of treecontext's
+
+  @D413 @D51
+  Scenario: with install's own record lost, uninstall knows treecontext's named hook by its commands and keeps the file
+    Given an Antigravity CLI at 1.5.3 whose hooks file install created and wrote its named hook into, and install's own record since lost
+    When uninstall runs
+    Then the hooks file holds nothing of treecontext's
+    And the hooks file is still there, install's record no longer saying install created it
+
+  @D413
+  Scenario: an Antigravity CLI below 1.5.3 has the named hook an earlier install wrote taken back
+    Given an Antigravity CLI whose hooks file holds treecontext's named hook an earlier install wrote at 1.5.3, beside the developer's own named hook, and whose version now reads 1.5.2
+    When install runs
+    Then the hooks file holds the developer's named hook as it was, and nothing of treecontext's
+    And the developer sees install say in one line that Antigravity CLI stays tools-only, naming 1.5.2 and 1.5.3
+
+  @D413 @D385
+  Scenario: a named hook the developer switched off stays off through a reinstall
+    Given an Antigravity CLI at 1.5.3 whose hooks file holds treecontext's named hook, which the developer set to `enabled: false`
+    When install runs again
+    Then treecontext's named hook is still switched off
+    And the developer sees install say that capture on Antigravity CLI is switched off there by the developer
+
+  @D413 @D385
+  Scenario: a reinstall converges the named hook an earlier build wrote and keeps the developer's
+    Given an Antigravity CLI at 1.5.3 whose hooks file holds a treecontext named hook an earlier build wrote, wired for fewer events, beside the developer's own named hook
+    When install runs again without force
+    Then treecontext's named hook is the one this build writes
+    And the developer's named hook reads as it was
+
+  @D417 @D402
+  Scenario: every hook event Antigravity CLI has is wired or named as not captured
+    Given the list of Antigravity CLI's hook events, kept with the agy version it was read from
+    When it is compared with the named hook install writes for Antigravity CLI
+    Then every event on the list is either wired or named with what the journal does not capture because of it
+    And every event install wires for Antigravity CLI is on the list
+    And PreToolUse is on the list as not wired, because its hook must decide the call's permission
+    And PostInvocation is on the list as wired, because a call's output is in agy's transcript only by the end of the model call that made it
+    # D402's guard for a second client. agy has six events and none for a
+    # prompt, a subagent, a compaction or a failed call: the list is where
+    # each of those absences is written down beside what it costs.

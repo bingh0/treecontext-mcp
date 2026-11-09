@@ -37,6 +37,21 @@ Feature: Journal agent surface — the parts the agent reads are product
     # Telling the agent to run a tool the backend does not register
     # erodes trust in every other line of the instructions.
 
+  @D412
+  Scenario: the handshake names the clients whose sessions are captured
+    Given a server running on the lexical backend
+    When the MCP handshake sends its instructions
+    Then they say that hooks capture a session on Claude Code, and on Codex CLI or Antigravity CLI where their hooks are installed and running, and that elsewhere only what the agent inserts is kept
+    And they say that the re-orientation packet reaches a Claude Code session, and a Codex CLI main at a fresh start, never an Antigravity CLI agent
+    # The line read "On Claude Code, hooks auto-capture …; elsewhere only
+    # what you insert is kept" until D412: true of its day, and a Codex
+    # agent told it is uncaptured inserts what its hooks already keep.
+    # The server cannot know whether a client's hooks are trusted or
+    # written, so the line is conditional, and the README carries the
+    # versions. A Codex main is handed the packet at a fresh start (D410);
+    # agy's SessionStart may be able to add to a session, unrecorded, so
+    # an agy agent is handed none in beta.4 (D416).
+
   @D39
   Scenario: the media guidance in the lexical instructions is honest
     Given a server running on the lexical backend

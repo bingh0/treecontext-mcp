@@ -117,6 +117,80 @@ Feature: Journal capture — everything worth recalling enters the journal
     Then the journal holds exactly one entry for each call of the batch
     And the succeeding and the failing call are the entries their own events produced, not the batch's account of them
 
+  @D404
+  Scenario: a call the client says succeeded is classed a success, whatever its output says
+    Given the events Claude Code sent for calls that succeeded with output that reads like trouble: a shell command printing "error: 0 found, 0 failed", a shell command printing "warning: deprecated", an MCP tool answering "failed call seen" and a file read of a file that holds a Python traceback
+    When the hooks install wires receive those events and ingestion runs
+    Then each call's entry is classed a success, never an error or a soft fail
+    And each says its class is the client's word
+    # Found on the installed build, 2026-11-09: successful
+    # treecontext_status and treecontext_export calls were classed errors,
+    # a doctor run a soft fail, and a treecontext_insert whose note said
+    # "failed call seen" an error, because the class of a call with no
+    # failure mark was still read from its text. On Claude Code a call that
+    # failed, a shell command's non-zero exit and timeout among them,
+    # arrives by an event of its own (D400), so a call that arrives as a
+    # success is one. The events here must be recorded from a real client
+    # before this scenario is bound: no recording kept today holds a
+    # success whose output carries those words.
+
+  @D404
+  Scenario: a call whose client says nothing of how it ended is still classed by its output
+    Given a tool event from a client whose events do not say whether a call succeeded, its output reading "error: no such table"
+    When ingestion runs
+    Then the call's entry is classed an error
+    And it says its class was read from its output
+    # Codex CLI is such a client for shell commands: its hook reports a
+    # non-zero exit as an ordinary result, with no exit code. Classing
+    # every event that carries no failure mark a success would file that
+    # client's failing commands as clean; where the client is silent, the
+    # text is still the only witness, and the entry says so.
+
+  @D404 @D406
+  Scenario: a failing Codex shell command replayed through Codex's hooks is classed by its text, never by the client's word
+    Given the events Codex CLI sent for a shell command that exits non-zero, as recorded
+    When the hooks install writes for Codex receive those events and ingestion runs
+    Then the call's entry takes the class its text decides
+    And it says its class was read from its output, never that the client stated it
+    # Codex's payloads are shaped like Claude Code's, and its failing
+    # command arrives by PostToolUse. A hook that took its client from the
+    # payload would read that PostToolUse as Claude Code's stated success.
+    # The hook takes its client from the command install wrote for Codex.
+
+  @D404
+  Scenario: on a store whose schema keeps no stated-success mark, a call that succeeded is classed by its text
+    Given a store at the schema before this build's, met by a hook of this build
+    And the events Claude Code sent, as recorded, for a call that succeeded
+    When the hook receives those events and ingestion runs once the server has opened the store
+    Then the call's entry takes the class its text decides
+    And it says its class was read from its output
+    # A hook meeting an older store drops the marks it cannot write (the
+    # tier walk, D400), so the drain cannot tell a stated success there.
+
+  @D408
+  Scenario: a Codex session's prompt, tool calls and last reply are journaled
+    Given the events Codex CLI sent, as recorded, for sessions that submit a prompt, run a shell command, call treecontext's insert tool and end their turns
+    When the hooks install writes for Codex receive those events and ingestion runs
+    Then the journal holds the prompt with role "user"
+    And each tool call with its tool name, its input, what Codex returned as its output and Codex's own id for the call
+    And the turn's last assistant message as Codex sent it at the turn's end
+    And each entry's moment is when its event arrived
+    # Recorded live, 2026-11-09, Codex CLI 0.167.0. The last reply is read
+    # from the event's own payload: Codex's documentation calls its
+    # transcript file no stable interface.
+
+  @D408
+  Scenario: a Codex shell command that fails is journaled with what Codex said, and no outcome the client never gave
+    Given the events Codex CLI sent, as recorded, for a shell command that exits non-zero and a write its sandbox refused
+    When the hooks install writes for Codex receive those events and ingestion runs
+    Then each call is in the journal with its command and the text Codex returned as its output
+    And neither entry carries a failed mark, since Codex states no outcome for a shell command
+    And each entry takes the exit class its text decides
+    # Codex sends a shell command's result as one plain text: no exit
+    # code, no split between output and errors, and a failure arrives as
+    # an ordinary PostToolUse. The journal keeps what was said and invents
+    # nothing; the README says what a Codex entry does not hold.
+
   @D270
   Scenario: a tool event's output is captured as text, a line a line
     Given a shell command whose output spans several lines and carries a tab
@@ -286,3 +360,89 @@ Feature: Journal capture — everything worth recalling enters the journal
     # migration, a big store open — was never heard, and the server
     # outlived it forever holding the store open. A dead peer earns a
     # shutdown whether it dies mid-session or mid-startup.
+
+  # Antigravity CLI (D415, D418, 2026-11-09, beta.4): agy's events carry
+  # the prompt on every event and no tool output, no reply and no call id;
+  # the output and the reply are in agy's transcript of the conversation,
+  # which the step a PostToolUse names points into. The step is written
+  # by the end of the model call that made the call, not when its
+  # PostToolUse fires (recorded 2026-11-09). Every event and
+  # transcript here is agy's own, recorded from a real agy 1.5.3 and kept
+  # with its version under tests/fixtures, replayed through the hook
+  # install writes.
+
+  @D415
+  Scenario: an Antigravity session's prompt, tool calls and reply are journaled with the output agy's transcript holds
+    Given the events and the transcript of an Antigravity session, as Antigravity sends them, that runs a shell command, reads a file, inserts a note through treecontext and replies
+    When the hook install writes for Antigravity CLI receives those events and ingestion runs
+    Then the journal holds the session's prompt once, with role "user"
+    And each tool call is in the journal with agy's tool name, its arguments and an Output section holding what the transcript records for it
+    And the reply is in the journal with role "assistant"
+    And every hook answered agy with a JSON object and decided no permission
+
+  @D415
+  Scenario: a call's output is read from agy's transcript at the end of the model call that made it
+    Given the events of an Antigravity session, as Antigravity sends them, and its transcript as it stood when each event fired, the call's result missing at its PostToolUse and present at the PostInvocation that follows
+    When the hook install writes for Antigravity CLI receives those events and ingestion runs
+    Then the call is in the journal once, with an Output section holding the result the transcript recorded
+    And the entry's moment is when the call's PostToolUse arrived
+    # Recorded live, 2026-11-09, agy 1.5.3: at PostToolUse the transcript
+    # ends at the response that made the call; the result is there at the
+    # PostInvocation that follows, in every run. With parallel calls a
+    # later PostToolUse may or may not see an earlier call's result.
+
+  @D415
+  Scenario: a prompt Antigravity repeats on every event is journaled once per turn
+    Given the events of an Antigravity session of two turns, as Antigravity sends them, whose second prompt is the same text as its first
+    When the hook install writes for Antigravity CLI receives those events and ingestion runs
+    Then the journal holds two prompt entries with role "user", one for each turn
+    # agy has no prompt event: `lastUserInput` rides on every event of a
+    # turn, around every model call. Journaled on each event, one prompt
+    # would be ten entries; told apart by its text alone, a prompt typed
+    # twice would be one. Recorded 2026-11-09 (agy 1.5.3, `agy -c -p`): a
+    # second turn fires no SessionStart and opens with a model call
+    # numbered 0 again, which is where its prompt is journaled.
+
+  @D415
+  Scenario: a call whose output agy's transcript does not hold is kept, and says its output was not captured
+    Given the events of an Antigravity session, as Antigravity sends them, whose transcript cannot be read, or holds no result for a call by the conversation's Stop
+    When the hook install writes for Antigravity CLI receives those events and ingestion runs
+    Then each tool call is in the journal with agy's tool name and its arguments, saying its output was not captured
+    And the journal holds a capture-gap entry naming the reply that could not be read
+    And no tool call of the session is missing from the journal
+
+  @D415
+  Scenario: a shell command that fails on Antigravity is journaled with what it printed, its ending read from its text
+    Given the events and the transcript of a shell command that exits non-zero, as Antigravity sends them
+    When the hook install writes for Antigravity CLI receives those events and ingestion runs
+    Then the call is in the journal with an Output section holding the exit code and what the command printed, as the transcript records them
+    And the entry carries no outcome mark of the client's, agy having stated none
+    # agy sends a PostToolUse with an empty `error` for a command that
+    # exits non-zero; the exit code is only in the transcript's text.
+    # Where the client states nothing, the text decides (D404).
+
+  @D418
+  Scenario: an Antigravity subagent is kept as a helper of the session that started it, linked through the call that started it
+    Given the events and transcripts of an Antigravity session that starts a subagent and of the subagent's own conversation, as Antigravity sends them
+    When the hook install writes for Antigravity CLI receives those events and ingestion runs
+    Then the parent's journal holds the subagent call with its prompt and role as input and an Output section naming the subagent's conversation
+    And the subagent is registered as a helper of the parent session, linked through that call, with the role the call names as its writer, and retired at its conversation's end
+    And the message the subagent sent its parent is kept as the subagent's summary
+    And the parent searching its own lane finds that summary, and not the subagent's tool calls, unless it asks for the helper's trail
+    And no key, first moment, send-back or pointer is recorded for the subagent
+    # agy 1.5.3 has no subagent event, and nothing in the subagent's
+    # events names its parent: the link is the parent's call, whose
+    # result names the child's conversation, and the report is the
+    # message the child sends the parent. Legs on agy are fenced to beta.5
+    # (the fence's Antigravity CLI entry, D418).
+
+  @D418
+  Scenario: an Antigravity subagent whose link is not yet read is journaled as writer unknown, and linked once it is
+    Given the events of an Antigravity subagent's conversation, as Antigravity sends them, arriving before the parent's call result naming it can be read
+    When the hook install writes for Antigravity CLI receives the subagent's events and ingestion runs
+    Then the subagent's rows sit in no checkout's lane, read as writer unknown, and none is stamped as the parent's
+    And once the parent's call result naming it is read, the subagent is registered as a helper of the parent session, linked through that call
+    # The recorded order, the parent's call and its model call's end
+    # before the child's first event, is one run's (D418). Where it does
+    # not hold, the child waits unlinked rather than passing for a main of
+    # the checkout or for its parent.
