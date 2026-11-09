@@ -225,6 +225,48 @@ Feature: Journal storage — the store is durable, bounded, and honest about los
     # hundred-session default keeps its 20 000. Eviction stays
     # whole-session and the newest is never taken.
 
+  # A `.git` that is no repository (D419, 2026-11-09). A store and its
+  # config file follow one project directory (D255); a directory is a
+  # project's root because a repository is there, never because something
+  # is named `.git`. Found on the desktop: Codex CLI's sandbox leaves
+  # empty directories named `.git` in a writable root as mount points,
+  # and every project below one took the stub's directory for its root.
+
+  @D419
+  Scenario Outline: a project below a directory holding <stub> binds its own store and reads its own config file
+    Given a directory holding <stub>, and below it a project with no repository whose config file sets the byte budget to 256 MiB and the session cap to 12
+    When the server is started from that project and opens its store
+    Then the project's store is bound to the project directory itself, never to the directory above it
+    And status over that server reports a budget of 256 MiB and a session cap of 12
+
+    Examples:
+      | stub                                               |
+      | an empty directory named `.git`                    |
+      | a file named `.git` that git does not accept       |
+
+  @D419
+  Scenario Outline: a project inside a repository resolves to the repository's root, with <stub> <where>
+    Given a repository whose root's config file sets the byte budget to 256 MiB and the session cap to 12, a project directory inside it, and <stub> <where>
+    When the server is started from that project directory and opens its store
+    Then the project's store is bound to the repository's root
+    And status over that server reports a budget of 256 MiB and a session cap of 12
+
+    Examples:
+      | stub                                         | where                                                 |
+      | an empty directory named `.git`              | in a directory between the project and the root       |
+      | a file named `.git` that git does not accept | in a directory between the project and the root       |
+      | an empty directory named `.git`              | in the directory above the repository's root          |
+    # Git passes over an empty `.git` directory on its way up, but stops
+    # at a `.git` file it cannot read; where git stops, treecontext's own
+    # look upward must not take the file for a root either.
+
+  @D419
+  Scenario: doctor names a `.git` it passed over because it is no repository
+    Given a directory holding an empty directory named `.git`, and below it a project with no repository
+    When doctor runs from that project
+    Then doctor says the `.git` above the project was ignored because it is no repository, naming its path
+    And doctor names the project directory itself as the project the store is bound to
+
   @D59
   Scenario: an additive migration also runs behind a backup
     Given a store one additive migration behind the current schema

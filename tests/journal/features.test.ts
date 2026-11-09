@@ -249,9 +249,9 @@ runFeatures(join(HERE, '../../features'), {
     // three scenarios (failed calls, calls refused before running, a call
     // journaled once) through the replay of recorded Claude Code events;
     // unit 8b bound the @D402 scenario (the event list and its guard).
-    // Beta.4 charter (3), 2026-11-09 (D403, D404, D406-D418; fence: Sanctioned
+    // Beta.4 charter (3), 2026-11-09 (D403, D404, D406-D419; fence: Sanctioned
     // changes, the entries of that date): new and reworded scenarios, unbound
-    // until the unit that owns each (unit 9 D403-D404, unit 10 D406-D412,
+    // until the unit that owns each (unit 9 D403-D404 and D419, unit 10 D406-D412,
     // unit 11 D413-D418; a scenario tagged for two units sits with the later).
     // Scenario-scoped so the rest of each file keeps gating. The reworded
     // scenarios' old step definitions were deleted with no consumer left; the
@@ -375,6 +375,15 @@ runFeatures(join(HERE, '../../features'), {
         // Unit 11: unit 11 (D413-D418, Antigravity CLI 1.5.3 captured through a named hook, its output read from agy's transcript).
         "an Antigravity CLI main registers itself at its session start and the server stamps its notes from it",
         "an Antigravity CLI main whose subagent has started still writes as itself, <linked>",
+      ],
+    },
+    {
+      feature: 'journal-storage',
+      scenarios: [
+        // Unit 9: unit 9 (D419 a `.git` that is no repository is not a project root).
+        "a project below a directory holding <stub> binds its own store and reads its own config file",
+        "a project inside a repository resolves to the repository's root, with <stub> <where>",
+        "doctor names a `.git` it passed over because it is no repository",
       ],
     },
     {
