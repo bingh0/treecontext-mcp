@@ -583,93 +583,21 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
   // opt-in writes capture hooks is a copying client, and its hooks are its
   // copy of the Claude Code block (D154, D225). Both halves of the opt-in
   // run on the same agent.
-  const unverifiedAgent = async (w: InstallWorld): Promise<void> => {
-    await openInstallWorld(w, ['.claude'])
-    mkdirSync(dirname(agentConfigPath('codex', w.ihome!)), { recursive: true })
-  }
-  const codexHooksJson = (w: InstallWorld): string => join(dirname(agentConfigPath('codex', w.ihome!)), 'hooks.json')
 
-  reg.define(/^a detected agent whose capture adapter has never run against a live session$/, unverifiedAgent)
 
-  reg.define(/^install runs without the experimental capture flag$/, (w: InstallWorld) => {
-    w.irun = tcCli(w, ['install', '--yes'])
-    expect(w.irun.status).toBe(0)
-  })
 
-  reg.define(/^the agent is wired for the MCP tools$/, (w: InstallWorld) => {
-    const toml = readFileSync(agentConfigPath('codex', w.ihome!), 'utf8')
-    expect(toml).toMatch(/^\[mcp_servers\.treecontext\]/m)
-  })
 
-  reg.define(/^no capture hooks are written for it$/, (w: InstallWorld) => {
-    expect(existsSync(codexHooksJson(w))).toBe(false)
-    const tables = [...readFileSync(agentConfigPath('codex', w.ihome!), 'utf8').matchAll(/^\[([^\]]+)\]/gm)].map(m => m[1]!)
-    expect(tables.every(t => t.startsWith('mcp_servers')), `config.toml tables: ${tables.join(', ')}`).toBe(true)
-  })
 
-  reg.define(/^the same unverified agent$/, unverifiedAgent)
 
-  reg.define(/^install runs with the experimental capture flag naming that agent$/, (w: InstallWorld) => {
-    w.irun = tcCli(w, ['install', '--yes', '--agent', 'codex', '--experimental-capture'])
-    expect(w.irun.status).toBe(0)
-  })
 
-  reg.define(/^its capture hooks are written$/, (w: InstallWorld) => {
-    // Written: Codex's own hooks.json holds the copy, and doctor reads it
-    // present and consistent with the block this build installs.
-    expect(existsSync(codexHooksJson(w))).toBe(true)
-    const copy = JSON.parse(readFileSync(codexHooksJson(w), 'utf8')) as { hooks?: Record<string, unknown> }
-    expect(Object.keys(copy.hooks ?? {})).toEqual(expect.arrayContaining(['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'PreCompact', 'Stop']))
-    const doctor = tcCli(w, ['doctor'])
-    const row = doctor.stdout.split('\n').find(l => /^\[\w+\]\s+Codex CLI:/.test(l))
-    expect(row, doctor.out).toMatch(/present and consistent with the Claude Code block/)
-    // "Written" has to mean written RUNNABLE: every command the copy names
-    // is a script install wrote, and each script's pinned interpreter and
-    // module are absolute and exist — the same oracle the charter scenario
-    // applies to the Claude scripts. The .ts twin is accepted for the reason
-    // the charter step documents: this suite drives the TypeScript source.
-    const named = [...JSON.stringify(copy).matchAll(/hooks(?:[\\/]|\\\\)+(tc-[a-z-]+)/g)].map(m => m[1]!)
-    expect(named.length, 'the copy names no script').toBeGreaterThan(0)
-    const ext = process.platform === 'win32' ? '.cmd' : ''
-    for (const n of new Set(named)) {
-      expect(existsSync(join(w.ihome!, '.claude', 'hooks', `${n}${ext}`)), `the copy runs ${n}, which install did not write`).toBe(true)
-    }
-    // The orientation reminder only prints text; every other script execs
-    // an interpreter, and those are graded.
-    const scripts = installedCommands(w.ihome!).filter(f => named.includes(f.source.replace(/\.cmd$/, '')))
-    expect(new Set(scripts.map(s => s.source)).size, 'no script the copy runs could be graded').toBe(new Set(named).size - 1)
-    for (const { source, command } of scripts) {
-      expect(command, `bare interpreter in ${source}`).not.toBe('node')
-      expect(isAbsolute(command), `not an absolute command in ${source}: ${command}`).toBe(true)
-      const exists = existsSync(command)
-        || (command.endsWith('.js') && existsSync(command.replace(/\.js$/, '.ts')))
-      expect(exists, `command in ${source} does not exist: ${command}`).toBe(true)
-    }
-  })
 
-  reg.define(/^the output states plainly that capture there is unverified$/, (w: InstallWorld) => {
-    expect(w.irun!.out).toMatch(/unverified/i)
-  })
 
-  reg.define(/^a machine with an unverified agent detected$/, async (w: InstallWorld) => {
-    await openInstallWorld(w, ['.claude'])
-    mkdirSync(dirname(agentConfigPath('vscode', w.ihome!)), { recursive: true })
-    w.iBefore = treeOf(w.ihome!)
-  })
 
   reg.define(/^install runs with the experimental capture flag and no agent name$/, (w: InstallWorld) => {
     w.irun = tcCli(w, ['install', '--yes', '--experimental-capture'])
   })
 
-  reg.define(/^the install is refused before anything is written$/, (w: InstallWorld) => {
-    expect(w.irun!.status).not.toBe(0)
-    expect(treeOf(w.ihome!)).toEqual(w.iBefore!)
-  })
 
-  reg.define(/^the refusal says the opt-in must name an agent$/, (w: InstallWorld) => {
-    expect(w.irun!.out).toMatch(/--agent/)
-    expect(w.irun!.out).toMatch(/name an agent|by name/i)
-  })
 
   // ── @D402: the client's hook event list ─────────────────────────────
   // The list is tests/fixtures/claude-code-hooks/events.json; the wired
@@ -2128,12 +2056,6 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
     join(w.ihome!, '.gemini', 'config', 'GEMINI.md'), join(w.ihome!, '.gemini', 'config', 'AGENTS.md'),
   ]
 
-  reg.define(/^a machine with Antigravity CLI installed$/, async (w: InstallWorld) => {
-    await openInstallWorld(w, [])
-    putAgyOnPath(w)
-    seedAgyHome(w)
-    w.iClient = 'Antigravity CLI'
-  })
 
   reg.define(/^Antigravity CLI's own listing of its MCP servers reports the treecontext server$/, (w: InstallWorld) => {
     expect(w.irun!.status, w.irun!.out).toBe(0)
@@ -2158,20 +2080,6 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
     expect(installRecord(w).toolApprovals?.written?.['agy']?.[agySettingsFile(w)]?.items).toEqual(FOUR.map(agyRule))
   })
 
-  reg.define(/^no hook of Antigravity CLI's is written$/, (w: InstallWorld) => {
-    // The needle fires: install did write under ~/.gemini for agy.
-    expect(existsSync(join(w.ihome!, '.gemini', 'config', 'mcp_config.json')), 'install wrote nothing for agy').toBe(true)
-    // agy's global hook file, its workspace hook file, Gemini CLI's settings
-    // (whose hooks agy does not read but a copy would land in), and no
-    // treecontext wrapper for agy among the hook scripts.
-    expect(existsSync(join(w.ihome!, '.gemini', 'config', 'hooks.json')), 'install wrote agy hooks').toBe(false)
-    expect(existsSync(join(TS_ROOT, '.agents', 'hooks.json')), 'install wrote workspace hooks').toBe(false)
-    expect(existsSync(join(w.ihome!, '.gemini', 'settings.json')), 'install wrote a Gemini settings file').toBe(false)
-    expect(Object.keys(agySettings(w)).sort(), "agy's settings hold a key install was not asked to write").toEqual(['permissions', 'trustedWorkspaces'])
-    const hooksDir = join(w.ihome!, '.claude', 'hooks')
-    expect(existsSync(hooksDir) ? readdirSync(hooksDir).filter(f => /agy|antigravity/.test(f)) : []).toEqual([])
-    expect(w.irun!.stdout).toContain(`hooks: none — Antigravity CLI keeps its own hook configuration (${join(w.ihome!, '.gemini', 'config', 'hooks.json')}), which install leaves alone`)
-  })
 
   reg.define(/^the instruction block Antigravity CLI reads is present once$/, (w: InstallWorld) => {
     const blocks = agyRuleFiles(w).flatMap(f => existsSync(f) ? readFileSync(f, 'utf8').split(MARKER_START).length - 1 : 0)
@@ -2224,9 +2132,6 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
     markGeminiPresent(w)
   })
 
-  reg.define(/^install runs with the experimental flag naming Gemini CLI$/, (w: InstallWorld) => {
-    w.irun = tcCli(w, ['install', '--yes', '--agent', 'gemini', '--experimental-capture'])
-  })
 
   reg.define(/^no Gemini CLI configuration is written$/, (w: InstallWorld) => {
     // The world means Gemini CLI to be there: its own file and its command.

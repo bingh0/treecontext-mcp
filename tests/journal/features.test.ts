@@ -249,6 +249,134 @@ runFeatures(join(HERE, '../../features'), {
     // three scenarios (failed calls, calls refused before running, a call
     // journaled once) through the replay of recorded Claude Code events;
     // unit 8b bound the @D402 scenario (the event list and its guard).
+    // Beta.4 charter (3), 2026-11-09 (D403, D404, D406-D418; fence: Sanctioned
+    // changes, the entries of that date): new and reworded scenarios, unbound
+    // until the unit that owns each (unit 9 D403-D404, unit 10 D406-D412,
+    // unit 11 D413-D418; a scenario tagged for two units sits with the later).
+    // Scenario-scoped so the rest of each file keeps gating. The reworded
+    // scenarios' old step definitions were deleted with no consumer left; the
+    // doctor-per-client outline's Then lost its definition too (its Codex and
+    // Antigravity rows' modes are reworded; its VS Code, Cursor and OpenCode rows
+    // wait with it, and their Given lost the removed installer step).
+    {
+      feature: 'journal-capture',
+      scenarios: [
+        // Unit 9: unit 9 (D403 a sandboxed worker is never a phantom and a phantom is set right by its door; D404 a call's class is the client's word where the client states it).
+        "a call the client says succeeded is classed a success, whatever its output says",
+        "a call whose client says nothing of how it ended is still classed by its output",
+        "on a store whose schema keeps no stated-success mark, a call that succeeded is classed by its text",
+        // Unit 10: unit 10 (D406-D412, Codex CLI 0.167.0 captured through its own hooks, doctor reading Codex's trust, the experimental capture flag removed).
+        "a Codex session's prompt, tool calls and last reply are journaled",
+        "a Codex shell command that fails is journaled with what Codex said, and no outcome the client never gave",
+        "a failing Codex shell command replayed through Codex's hooks is classed by its text, never by the client's word",
+        // Unit 11: unit 11 (D413-D418, Antigravity CLI 1.5.3 captured through a named hook, its output read from agy's transcript).
+        "an Antigravity session's prompt, tool calls and reply are journaled with the output agy's transcript holds",
+        "a call's output is read from agy's transcript at the end of the model call that made it",
+        "a prompt Antigravity repeats on every event is journaled once per turn",
+        "a call whose output agy's transcript does not hold is kept, and says its output was not captured",
+        "a shell command that fails on Antigravity is journaled with what it printed, its ending read from its text",
+        "an Antigravity subagent is kept as a helper of the session that started it, linked through the call that started it",
+        "an Antigravity subagent whose link is not yet read is journaled as writer unknown, and linked once it is",
+      ],
+    },
+    {
+      feature: 'journal-sidecar',
+      scenarios: [
+        // Unit 9: unit 9 (D403 a sandboxed worker is never a phantom and a phantom is set right by its door; D404 a call's class is the client's word where the client states it).
+        "the trail pane reports what the journal is made of without grading it",
+      ],
+    },
+    {
+      feature: 'journal-workers',
+      scenarios: [
+        // Unit 9: unit 9 (D403 a sandboxed worker is never a phantom and a phantom is set right by its door; D404 a call's class is the client's word where the client states it).
+        "a live worker is never retired as a phantom by a reader whose processes are numbered apart from its own, <case>",
+        "a reader inside a sandbox says a worker outside it cannot be checked from there",
+        "a worker whose sandbox has ended is retired as a phantom by a reader that can see the sandbox is gone",
+        "a worker taken for a phantom while it ran is set right by its door when it <ends>",
+        // Unit 10: unit 10 (D406-D412, Codex CLI 0.167.0 captured through its own hooks, doctor reading Codex's trust, the experimental capture flag removed).
+        "a `codex exec` worker with Codex's hooks is never registered as a self, its hooks print it nothing, and what it does lands in its own lane",
+        "the first-moment row is the first row of the worker's lane through the <door>",
+        "a worker whose ticket is <damage> is registered with what was read, told its instructions were invalid, and ends visibly through the <door>",
+        // Unit 11: unit 11 (D413-D418, Antigravity CLI 1.5.3 captured through a named hook, its output read from agy's transcript).
+        "a <worker> worker under a <parent> parent writes into its own lane with its role as writer",
+        "an `agy -p` worker started by `treecontext run` is never a self, and its captured calls land in its own lane",
+      ],
+    },
+    {
+      feature: 'journal-agent-surface',
+      scenarios: [
+        // Unit 10: unit 10 (D406-D412, Codex CLI 0.167.0 captured through its own hooks, doctor reading Codex's trust, the experimental capture flag removed).
+        "the handshake names the clients whose sessions are captured",
+      ],
+    },
+    {
+      feature: 'journal-clients',
+      scenarios: [
+        // Unit 10: unit 10 (D406-D412, Codex CLI 0.167.0 captured through its own hooks, doctor reading Codex's trust, the experimental capture flag removed).
+        "every matrix row carries its client, its events, its documentation date and one status",
+        "Codex's block that matches reads present and consistent",
+        "Codex's block that drifted reads inconsistent with its remedy",
+        "doctor's row for Codex CLI says whether Codex runs treecontext's hooks, when <state>",
+        "the README says from which Codex CLI capture runs, the step install leaves, and what a Codex entry does not hold",
+        "the orchestration matrix's Codex CLI cells say what a Codex hook can and cannot do",
+        // Unit 11: unit 11 (D413-D418, Antigravity CLI 1.5.3 captured through a named hook, its output read from agy's transcript).
+        "doctor reports <client> as a client that <mode>",
+        "doctor's row for Antigravity CLI says whether a headless agy worker can use the tools, when <state>",
+        "doctor's row for Antigravity CLI says what it found of agy's hooks, when <state>",
+        "the README and doctor say a headless agy worker returns nothing when it reaches for a tool agy does not allow",
+        "the README names the oldest Antigravity CLI whose hooks install writes, and what its capture leaves out",
+      ],
+    },
+    {
+      feature: 'journal-install',
+      scenarios: [
+        // Unit 10: unit 10 (D406-D412, Codex CLI 0.167.0 captured through its own hooks, doctor reading Codex's trust, the experimental capture flag removed).
+        "every hook event Codex CLI has is wired or named as not captured",
+        "the capture census counts a Codex session's calls and says which it could only infer",
+        "the experimental capture flag is refused, saying it is gone and naming each client's floor, <named>",
+        "install wires Codex CLI 0.167.0 for capture with its own hooks, and names the one step left",
+        "install writes no Codex CLI hook where <case>, takes back what install wrote, and says why",
+        "a reinstall turns the copy an earlier build wrote into Codex's own block",
+        "uninstall takes back the hooks install wrote for Codex CLI and keeps the developer's, <case>",
+        "a hook the developer added after install keeps its words, and the developer is told when Codex will ask to trust it again",
+        "a reinstall where <case> <outcome>",
+        "install refuses an install naming Gemini CLI, saying it is retired",
+        // Unit 11: unit 11 (D413-D418, Antigravity CLI 1.5.3 captured through a named hook, its output read from agy's transcript).
+        "a client below the version its capture was verified at gets tools, not capture hooks",
+        "the server runs in capture mode for <agent> only where its capture hooks are installed",
+        "the hook scripts a client's hooks run are there whenever a client's hooks name them, <case>",
+        "install wires Antigravity CLI for the tools and lets a headless agy worker use the four that read and write",
+        "the sweep for Gemini CLI leaves Antigravity CLI's hooks file alone",
+        "install writes Antigravity CLI its own named hook beside the developer's",
+        "install writes no Antigravity CLI hook where <case>, and says why",
+        "uninstall takes back the named hook install wrote and nothing else",
+        "with install's own record lost, uninstall knows treecontext's named hook by its commands and keeps the file",
+        "an Antigravity CLI below 1.5.3 has the named hook an earlier install wrote taken back",
+        "a named hook the developer switched off stays off through a reinstall",
+        "a reinstall converges the named hook an earlier build wrote and keeps the developer's",
+        "every hook event Antigravity CLI has is wired or named as not captured",
+      ],
+    },
+    {
+      feature: 'journal-legs',
+      scenarios: [
+        // Unit 10: unit 10 (D406-D412, Codex CLI 0.167.0 captured through its own hooks, doctor reading Codex's trust, the experimental capture flag removed).
+        "a Codex CLI subagent is registered, retired and summarised, and is never a leg",
+      ],
+    },
+    {
+      feature: 'journal-orchestration',
+      scenarios: [
+        // Unit 10: unit 10 (D406-D412, Codex CLI 0.167.0 captured through its own hooks, doctor reading Codex's trust, the experimental capture flag removed).
+        "a Codex CLI main registers itself at its start and the server stamps its rows from it",
+        "a Codex CLI main's fresh start is handed its lane's chapter",
+        "at a Codex CLI turn's end treecontext's hooks print nothing",
+        // Unit 11: unit 11 (D413-D418, Antigravity CLI 1.5.3 captured through a named hook, its output read from agy's transcript).
+        "an Antigravity CLI main registers itself at its session start and the server stamps its notes from it",
+        "an Antigravity CLI main whose subagent has started still writes as itself, <linked>",
+      ],
+    },
     {
       feature: 'journal-search-modes',
       scenarios: [

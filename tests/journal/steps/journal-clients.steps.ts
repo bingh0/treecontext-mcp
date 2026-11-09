@@ -169,14 +169,6 @@ function doctorRow(out: string, check: string): string {
   return body.join('\n')
 }
 
-/** Treecontext-owned hook commands in a JSON hook configuration, if any. */
-function ownedHookCommands(path: string): string[] {
-  if (!existsSync(path)) return []
-  const text = readFileSync(path, 'utf8')
-  return [...text.matchAll(/"command"\s*:\s*"([^"]*)"/g)].map(m => m[1]!)
-    .filter(c => /hooks[\\/]+(codex|gemini)[\\/]|tc-(codex|gemini)-|treecontext hook/.test(c))
-}
-
 /**
  * The documented clients other than Claude Code, as a test reads them:
  * the slug the CLI takes and what in the README matrix and doctor's row its
@@ -186,13 +178,6 @@ function ownedHookCommands(path: string): string[] {
 const CLIENT_SLUG: Record<string, string> = {
   'Codex CLI': 'codex', 'VS Code': 'vscode', 'Cursor': 'cursor', 'OpenCode': 'opencode',
   'Antigravity CLI': 'agy',
-}
-const MODE_FAMILY: Record<string, RegExp[]> = {
-  'Codex CLI': [/copies the hooks into its own configuration/],
-  'VS Code': [/reads the Claude settings file\b.*\bwhen\b/, /chat\.useClaudeHooks/],
-  'Cursor': [/reads the Claude settings file\b.*\bby default\b/],
-  'OpenCode': [/no shell hooks/, /tools are its whole surface/],
-  'Antigravity CLI': [/keeps its own hook configuration, which install leaves alone/, /tools are its whole surface/, /nothing is captured/],
 }
 
 /**
@@ -315,10 +300,6 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
       expect(STATUSES, `${r.client}: status "${r.status}" is not one status`).toContain(r.status)
     }
   })
-  reg.define(/^the developer sees exactly one row reading "verified live", Claude Code$/, (w: ClientsWorld) => {
-    const live = w.matrix!.filter(r => r.status === 'verified live')
-    expect(live.map(r => r.client)).toEqual(['Claude Code'])
-  })
 
   // ── the orchestration matrix, its own table (D370) ─────────────────────
   reg.define(/^the documentation's orchestration matrix$/, (w: ClientsWorld) => {
@@ -368,39 +349,6 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
     for (const c of impossible) expect(c, `${c} names no gap`).toMatch(/not possible: no \w/)
   })
 
-  // ── without the experimental flag a copying client gets tools only (D208)
-  reg.define(/^Codex CLI is installed$/, async (w: ClientsWorld) => {
-    await openInstallWorld(w, ['.codex'])
-  })
-  reg.define(/^the developer runs the installer without the experimental flag$/, (w: ClientsWorld) => {
-    w.irun = tcCli(w, ['install', '--yes'])
-    expect(w.irun.status, w.irun.out).toBe(0)
-    expect(w.irun.out, 'install did not detect Codex CLI').toMatch(/Detected agents:.*Codex CLI/)
-  })
-  reg.define(/^the developer sees Codex CLI wired for the tools and no capture hooks copied$/, (w: ClientsWorld) => {
-    const toml = readFileSync(agentConfigPath('codex', w.ihome!), 'utf8')
-    expect(toml, 'Codex CLI has no treecontext MCP server').toMatch(/^\[mcp_servers\.treecontext\]/m)
-    expect(toml).toMatch(/^command = ".+"/m)
-    // No copy in either place Codex reads hooks from, and no wrapper a copy
-    // would point at.
-    expect(ownedHookCommands(join(w.ihome!, '.codex', 'hooks.json')), 'capture hooks were copied into hooks.json').toEqual([])
-    // config.toml holds the MCP registration and nothing else of ours: every
-    // table install wrote there is an mcp_servers table, so no [hooks] copy.
-    const tables = [...toml.matchAll(/^\[([^\]]+)\]/gm)].map(m => m[1]!)
-    expect(tables.length).toBeGreaterThan(0)
-    expect(tables.filter(t => !t.startsWith('mcp_servers')), 'config.toml carries a table other than the MCP registration').toEqual([])
-    const hooksDir = join(w.ihome!, '.claude', 'hooks')
-    const wrappers = existsSync(hooksDir) ? readdirSync(hooksDir).filter(f => f.startsWith('tc-codex-')) : []
-    expect(wrappers, 'codex hook wrappers were written').toEqual([])
-    expect(w.irun!.out).toMatch(/hooks: skipped — automatic capture is unverified on Codex CLI/)
-  })
-  reg.define(/^the developer running doctor sees the Codex CLI row name the flagged command as the way to copy them$/, (w: ClientsWorld) => {
-    const run = tcCli(w, ['doctor'])
-    w.doctorOut = run.out
-    const row = doctorRow(run.out, 'Codex CLI')
-    expect(row, 'the Codex row does not say the hooks were not copied').toMatch(/hooks not copied/)
-    expect(row, 'the Codex row does not name the flagged command').toContain('to copy them: treecontext install --agent codex --experimental-capture')
-  })
 
   // ── a teammate on another agent reads and writes through the tools (D152)
   reg.define(/^a teammate on Antigravity CLI with the treecontext server configured and no hooks$/, async (w: ClientsWorld) => {
@@ -543,25 +491,6 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
       expect(existsSync(vscodeSettings(w.ihome!))).toBe(false)
     }
   })
-  reg.define(/^the installer ran without the experimental flag$/, (w: ClientsWorld) => {
-    w.irun = tcCli(w, ['install', '--yes'])
-    expect(w.irun.status, w.irun.out).toBe(0)
-    expect(w.irun.out, `install did not detect ${w.clientName}`).toMatch(new RegExp(`Detected agents:.*${w.clientName}`))
-    // Said in so many words for every client with hooks to skip; agy's
-    // hooks are its own, and install says it leaves them alone (D383).
-    if (w.clientName === 'Antigravity CLI') {
-      expect(w.irun.out).toContain(`hooks: none — Antigravity CLI keeps its own hook configuration (${clientHookFile('agy', w.ihome!)}), which install leaves alone; the MCP tools are its whole surface`)
-      expect(readFileSync(clientHookFile('agy', w.ihome!)!, 'utf8'), "install touched agy's own hook file").toBe(AGY_DEVELOPER_HOOKS)
-    } else if (w.clientName !== 'OpenCode') {
-      expect(w.irun.out).toContain(`hooks: skipped — automatic capture is unverified on ${w.clientName}`)
-    }
-    // The client's own hook configuration still holds nothing of ours: the
-    // installer writes nothing for an as-is client and copies nothing
-    // without the flag (D208).
-    const slug = CLIENT_SLUG[w.clientName!]!
-    expect(treecontextHookMentions(clientHookFile(slug, w.ihome!)), `install wrote hooks for ${w.clientName}`).toEqual([])
-    if (slug === 'codex') expect(treecontextHookMentions(join(w.ihome!, '.codex', 'config.toml'))).toEqual([])
-  })
   reg.define(/^the developer runs doctor$/, (w: ClientsWorld) => {
     // A client row with the D161 clause is cut into its halves; Claude
     // Code's row has none, and a sandbox scenario names no client.
@@ -572,23 +501,6 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
     const run = tcCli(w, ['doctor'])
     expect(run.status, run.out).toBe(0)
     w.doctorOut = run.stdout
-  })
-  reg.define(new RegExp(`^the developer sees doctor's row for ${CLIENT_RE} say the client (.+)$`), (w: ClientsWorld, ...captures) => {
-    const [client, mode] = captures as string[]
-    expect(client).toBe(w.clientName)
-    const c = w.clause!
-    // The mode is the README matrix's Mode cell, exactly — so a reworded
-    // parenthetical on either side fails — and carries the feature's phrase.
-    const readmeRow = parseMatrix(readFileSync(join(TS_ROOT, 'README.md'), 'utf8')).find(r => r.client.startsWith(client!))
-    expect(readmeRow, `the README matrix has no row for ${client}`).toBeDefined()
-    expect(c.mode).toBe(readmeRow!.mode)
-    expect(c.mode).toContain(mode)
-    for (const re of MODE_FAMILY[client!]!) {
-      expect(c.mode, `doctor's mode for ${client}`).toMatch(re)
-      expect(readmeRow!.mode, `the README's mode for ${client}`).toMatch(re)
-    }
-    // Doctor never claims capture is verified on any of these (D153).
-    expectNoVerifiedClaim(c.row)
   })
   reg.define(/^the row states the current installation state$/, (w: ClientsWorld) => {
     const c = w.clause!
@@ -643,34 +555,6 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
     expectNoVerifiedClaim(after.row)
   })
 
-  // ── a copied configuration, verbatim (Codex CLI), read present and
-  //    consistent or inconsistent with its remedy (D161) ──
-  reg.define(/^(Codex CLI) is installed and its hook configuration holds (a copy identical to|a copy that differs from) the Claude Code block$/, async (w: ClientsWorld, ...captures) => {
-    const [client, how] = captures as string[]
-    w.clientName = client!
-    const slug = CLIENT_SLUG[client!]!
-    await openInstallWorld(w, [])
-    mkdirSync(clientDir(slug, w.ihome!), { recursive: true })
-    // The block as the real installer writes it today, then the copy written
-    // through the real door: the flagged install names the client, which
-    // writes the copy and the server entry in capture mode together (D386).
-    // The oracle (the block verbatim) grades what it wrote; a drifted copy is
-    // that installed copy changed afterwards.
-    let run = tcCli(w, ['install', '--yes', '--agent', 'claude'])
-    expect(run.status, run.out).toBe(0)
-    run = tcCli(w, ['install', '--yes', '--agent', slug, '--experimental-capture'])
-    expect(run.status, run.out).toBe(0)
-    w.claudeBlock = (JSON.parse(readFileSync(join(w.ihome!, '.claude', 'settings.json'), 'utf8')) as { hooks: HookBlock }).hooks
-    const hookFile = clientHookFile(slug, w.ihome!)!
-    const written = JSON.parse(readFileSync(hookFile, 'utf8')) as Record<string, unknown> & { hooks: HookBlock }
-    expect(written.hooks, 'the flagged install did not copy the Claude Code block verbatim').toEqual(w.claudeBlock)
-    const copy: HookBlock = structuredClone(written.hooks)
-    // An older copy: taken before the block gained its Stop hook.
-    if (how === 'a copy that differs from') delete copy['Stop']
-    // Every other key of the file stays as install wrote it.
-    writeFileSync(hookFile, JSON.stringify({ ...written, hooks: copy }, null, 2))
-    expect(treecontextHookMentions(clientHookFile(slug, w.ihome!)).length, 'the copy holds no treecontext hook').toBeGreaterThan(0)
-  })
   reg.define(/^the developer sees doctor's row for (Codex CLI) read present and (consistent|inconsistent)$/, (w: ClientsWorld, ...captures) => {
     const [client, verdict] = captures as string[]
     expect(client).toBe(w.clientName)
@@ -690,24 +574,6 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
       // It says where the copy went wrong, in the client's own event names.
       expect(c.state).toMatch(/differs on Stop\b/)
     }
-  })
-  reg.define(/^the row names the command that rewrites the copy$/, (w: ClientsWorld) => {
-    const c = w.clause!
-    const slug = CLIENT_SLUG[w.clientName!]!
-    const command = `treecontext install --agent ${slug} --experimental-capture`
-    expect(c.remedy).toBe(`to rewrite the copy: ${command}`)
-    expect(c.fix).toBe(command)
-    // Run it as printed: the copy is rewritten to the block install writes
-    // today — the oracle's verbatim block — and doctor reads it present and
-    // consistent.
-    runNamedCommand(w, command)
-    const path = clientHookFile(slug, w.ihome!)!
-    const written = JSON.parse(readFileSync(path, 'utf8')) as { hooks?: HookBlock }
-    expect(written.hooks).toEqual(w.claudeBlock)
-    const after = readClause(w, w.clientName!)
-    expect(after.state).toMatch(/: present and consistent with/)
-    expect(after.status).toBe('ok')
-    expectNoVerifiedClaim(after.row)
   })
 
   // ── doctor's Codex row says whether a headless worker can use the tools

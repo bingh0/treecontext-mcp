@@ -791,10 +791,6 @@ export function ticketDoorSteps(define: (re: RegExp, fn: (w: WorkersWorld, ...ca
     expect([reg['checkpointer'], reg['send_backs']]).toEqual(['builder', 1])
   })
 
-  define(new RegExp(`^a worker starts through the hook-less door of a ${WORKER_CLI} worker with the spawner's prompt "([^"]+)"$`), async (w, _cli, prompt) => {
-    await startByDoor(w, { role: 'builder', prompt, spawner: 'wrapper', checkpointer: 'reviewer', plan: { first: {} } })
-  })
-
   define(new RegExp(`^an? ${WORKER_CLI} worker starts with an empty spawner's prompt$`), async (w, _cli) => {
     await startByDoor(w, { role: 'builder', prompt: '', spawner: 'wrapper', checkpointer: 'reviewer', plan: { first: {} } })
   })
@@ -1313,21 +1309,6 @@ export function ticketDoorSteps(define: (re: RegExp, fn: (w: WorkersWorld, ...ca
     const t = mintTicket({ run: RUN, key: 'login-form', role, checkpointer: role, parent: { id: 'p1' } })
     return t.slice(0, t.indexOf(`"role":"${role}"`) + `"role":"${role}"`.length)
   }
-
-  define(new RegExp(`^a ticket in the environment, (truncated after the role "builder"|minted in an older shape that still reads as the role "reviewer"), so that the hook-less door of a ${WORKER_CLI} worker cannot read it whole$`), async (w, damage, _cli) => {
-    await openRunWorld(w)
-    const raw = damage!.startsWith('truncated')
-      ? truncatedAfterRole('builder')
-      // An older treecontext's shape: no version this build knows, the
-      // task by another name, the parent as a bare session.
-      : JSON.stringify({ ticket_version: 0, v: 0, role: 'reviewer', task: 'login-form', session: 'p1' })
-    w.facts!['raw'] = raw
-    w.facts!['spec'] = { spawner: 'wrapper', prompt: 'wire the submit button', ticket: raw, plan: { first: { invalidRow: true, print: 'my instructions were invalid; stopped' } } } satisfies WorkerSpec
-  })
-
-  define(new RegExp(`^the worker starts through the hook-less door of a ${WORKER_CLI} worker$`), async (w, _cli) => {
-    await runWorker(w, specOf(w))
-  })
 
   define(/^the worker's registration sits in its own lane with every field the door could read, each unreadable field marked absent, and the raw ticket text kept$/, (w) => {
     const raw = w.facts!['raw'] as string
