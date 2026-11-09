@@ -853,12 +853,13 @@ describe('removeInstructions', () => {
     expect(content).toContain('# Footer')
   })
 
-  it('deletes file if treecontext block was the only content', () => {
+  it('leaves a file the developer had empty when the treecontext block was all it held (install did not create it)', () => {
     const p = join(dir, 'AGENTS.md')
     writeFileSync(p, '<!-- treecontext:start -->\nstuff\n<!-- treecontext:end -->\n')
     const r = removeInstructions(p, false)
     expect(r).not.toBeNull()
-    expect(existsSync(p)).toBe(false)
+    expect(existsSync(p)).toBe(true)
+    expect(readFileSync(p, 'utf8')).toBe('')
   })
 
   it('returns null when file does not exist', () => {

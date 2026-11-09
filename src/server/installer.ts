@@ -1004,13 +1004,15 @@ export function upsertJsonMcp(
   return { type: 'mcp-config', path, status, ...(detail ? { detail } : {}) }
 }
 
-export function removeJsonMcp(path: string, rootKey: string, dryRun: boolean): ActionResult | null {
+export function removeJsonMcp(path: string, rootKey: string, dryRun: boolean, dropEmptyRoot = false): ActionResult | null {
   if (!existsSync(path)) return null
   const data = readJsonSafe(path)
   const servers = (data[rootKey] ?? {}) as Record<string, unknown>
   if (!servers.treecontext) return null
   delete servers.treecontext
-  data[rootKey] = servers
+  // The archived sweep takes a root key it emptied, as treecontext's alone.
+  if (dropEmptyRoot && Object.keys(servers).length === 0) delete data[rootKey]
+  else data[rootKey] = servers
   if (!dryRun) atomicWrite(path, JSON.stringify(data, null, 2) + '\n')
   return { type: 'mcp-config', path, status: dryRun ? 'dry-run' : 'updated', detail: 'removed' }
 }
@@ -2722,11 +2724,17 @@ export function removeInstructions(path: string, dryRun: boolean): ActionResult 
   const re = new RegExp(`\\n*${escapeRegex(MARKER_START)}[\\s\\S]*?${escapeRegex(MARKER_END)}\\n*`)
   const cleaned = content.replace(re, '\n').trim()
 
+  // The file goes only when install's record says install created it and the
+  // block was all it held; a file the developer had stays, even left empty.
   if (!dryRun) {
     if (cleaned) {
       atomicWrite(path, cleaned + '\n')
-    } else {
+      forgetCreatedFile(path)
+    } else if (installCreated(path)) {
       unlinkSync(path)
+      forgetCreatedFile(path)
+    } else {
+      atomicWrite(path, '')
     }
   }
   return { type: 'instructions', path, status: dryRun ? 'dry-run' : 'updated', detail: 'removed' }
@@ -3366,6 +3374,15 @@ export function leftoverGeminiCli(): string[] | null {
     .map(ext => join(homedir(), '.claude', HOOK_SCRIPTS_DIR_NAME, `${TC_HOOK_PREFIX}gemini-${stem}${ext}`)))
     .filter(p => existsSync(p))
   if (wrappers.length > 0) found.push(`${wrappers.length} Gemini CLI hook wrapper${wrappers.length === 1 ? '' : 's'} in ${join(homedir(), '.claude', HOOK_SCRIPTS_DIR_NAME)}`)
+  // The block in ~/.gemini/GEMINI.md is Antigravity CLI's: a leftover only
+  // where Antigravity CLI is not wired.
+  const agy = getAgent('agy')
+  const block = agy ? getInstructionsPath(agy, process.platform as Platform) : null
+  if (agy && block && existsSync(block) && !hasTreecontextEntry(agy, process.platform as Platform)) {
+    try {
+      if (readFileSync(block, 'utf8').includes(MARKER_START)) found.push(`the treecontext block in ${block}`)
+    } catch { /* unreadable: nothing it can name */ }
+  }
   return found.length > 0 ? found : null
 }
 
@@ -3507,19 +3524,23 @@ export async function install(opts: InstallOptions): Promise<AgentInstallResult[
   if (opts.agents && opts.agents.length > 0) {
     // Gemini CLI is retired (D399): install never wires it, flag or not, and
     // naming it is refused in so many words rather than as an unknown agent.
-    if (opts.agents.includes('gemini')) {
+    const named = opts.agents.map(s => s.toLowerCase())
+    if (named.includes('gemini')) {
       console.error(RETIRED_GEMINI_LINE)
       const err = new Error(`Gemini CLI is retired: install does not wire it${opts.experimentalCapture ? ', with or without --experimental-capture' : ''}`)
       ;(err as Error & { code?: string }).code = 'INSTALL_RETIRED'
       throw err
     }
-    agents = opts.agents
+    agents = named
       .map(slug => getAgent(slug))
       .filter((a): a is AgentDefinition => a !== undefined)
     if (agents.length === 0) {
       console.error(`No matching agents found for: ${opts.agents.join(', ')}`)
       console.error(`Available: ${AGENTS.map(a => a.slug).join(', ')}`)
-      return []
+      // Named alone, an agent that is none of the table's is a failed command, not an empty one.
+      const err = new Error(`unknown agent: ${opts.agents.join(', ')}`)
+      ;(err as Error & { code?: string }).code = 'INSTALL_UNKNOWN'
+      throw err
     }
   } else {
     agents = detectAgents(platform)
@@ -3820,7 +3841,10 @@ export async function install(opts: InstallOptions): Promise<AgentInstallResult[
     if (agent.instructions) {
       const instrPath = getInstructionsPath(agent, platform)
       if (instrPath) {
+        const existedBefore = existsSync(instrPath)
         const instrResult = upsertInstructions(instrPath, opts.force, opts.dryRun)
+        // A file install makes is install's to delete again (see removeInstructions).
+        if (!existedBefore && !opts.dryRun && existsSync(instrPath)) recordCreatedFile(instrPath)
         agentResult.actions.push(instrResult)
         console.log(`  instructions: ${instrPath} [${instrResult.status}]`)
       }
@@ -3971,18 +3995,23 @@ export async function uninstall(opts: {
   const results: AgentInstallResult[] = []
 
   let agents: AgentDefinition[]
+  // Names that are no agent of the table, and no archived platform either:
+  // named alone they fail the command.
+  const unknownNamed: string[] = []
   if (opts.agents && opts.agents.length > 0) {
     agents = opts.agents
-      .map(slug => {
+      .map(typed => {
+        const slug = typed.toLowerCase()
         const a = getAgent(slug)
         // Parity with install: a silently dropped unknown slug reads as
         // "uninstalled" to the user who typed it (fifth-pass review). The
         // archived-build five are the expected case here.
         if (!a) {
+          if (slug !== 'gemini' && !legacyMcpConfigs(platform).some(l => l.slug === slug)) unknownNamed.push(typed)
           const swept = opts.hooksOnly ? 'run it without --hooks-only to sweep its old configuration' : 'its old configuration is swept below'
           console.log(slug === 'gemini'
             ? `gemini: Gemini CLI is retired (D399) — ${swept}`
-            : `unknown agent: ${slug}` +
+            : `unknown agent: ${typed}` +
               (legacyMcpConfigs(platform).some(l => l.slug === slug)
                 ? ` (archived-build platform — ${swept})`
                 : ''),
@@ -4231,6 +4260,23 @@ export async function uninstall(opts: {
   // must not be. Idempotent, so an agent the loop DID handle contributes
   // nothing here.
   if (fullScope) {
+    // Treecontext's own scripts in ~/.claude/hooks, where Claude Code's own
+    // branch above never ran (its config is gone, or install never wired it):
+    // an install for another agent alone wrote them, so a full uninstall takes
+    // them, sparing the launcher while another agent's entry still names it.
+    if (!opts.hooksOnly && !agents.some(a => a.slug === 'claude')) {
+      const removing = new Set(agents.map(a => a.slug))
+      const launcherUsers = AGENTS.filter(a => !removing.has(a.slug) && hasTreecontextEntry(a, platform))
+      const copies = copiesRunningClaudeScripts(platform, removing)
+      const orphaned = removeClaudeHookScripts(opts.dryRun, false, copies.length > 0, launcherUsers.length > 0)
+      if (orphaned.length > 0) {
+        results.push({ agent: 'Claude Code (hook scripts)', slug: 'claude', actions: orphaned })
+        console.log(`Claude Code: orphaned hook scripts removed from ${join(homedir(), '.claude', HOOK_SCRIPTS_DIR_NAME)}`)
+      }
+      if (launcherUsers.length > 0) {
+        console.log(`kept the MCP launcher ${mcpLauncherPath()}: ${launcherUsers.map(a => a.name).join(', ')} still start${launcherUsers.length === 1 ? 's' : ''} treecontext through it`)
+      }
+    }
     for (const agent of Object.keys(AGENT_HOOK_WRAPPER_STEMS) as AgentHookAgent[]) {
       const swept = removeAgentHookWrappers(agent, opts.dryRun)
       if (swept.length === 0) continue
@@ -4252,7 +4298,7 @@ export async function uninstall(opts: {
   if (!opts.hooksOnly) {
     for (const legacy of legacyMcpConfigs(platform)) {
       const actions: ActionResult[] = []
-      const removed = existsSync(legacy.path) ? removeJsonMcp(legacy.path, legacy.rootKey, opts.dryRun) : null
+      const removed = existsSync(legacy.path) ? removeJsonMcp(legacy.path, legacy.rootKey, opts.dryRun, legacy.slug === 'gemini') : null
       if (removed) {
         actions.push(removed)
         console.log(`${legacy.slug} (archived): mcp removed from ${legacy.path}`)
@@ -4263,6 +4309,14 @@ export async function uninstall(opts: {
           actions.push(hooks)
           console.log(`${legacy.slug} (archived): hooks removed from ${legacy.path}`)
         }
+        // A settings file install's record says it created, now `{}`, goes.
+        if (!opts.dryRun && (removed || hooks)) {
+          const gone = removeCreatedIfEmpty(legacy.path, false)
+          if (gone) {
+            actions.push(gone)
+            console.log(`${legacy.slug} (archived): deleted ${legacy.path} — install created it, and it is left empty`)
+          }
+        }
         const wrappers = removeAgentHookWrappers('gemini', opts.dryRun)
         if (wrappers.length > 0) {
           actions.push(...wrappers)
@@ -4271,10 +4325,12 @@ export async function uninstall(opts: {
         // A full uninstall owns the block an earlier install wrote into
         // `~/.gemini/GEMINI.md` for Gemini CLI as well: with Antigravity CLI
         // not wired (else its own branch above took the block), nothing reads
-        // it for treecontext. A run naming agents leaves the file to agy's.
+        // it for treecontext. A run naming other agents leaves the file to agy's;
+        // one naming `gemini` sweeps it, where Antigravity CLI is not wired.
         const agy = getAgent('agy')
         const block = agy ? getInstructionsPath(agy, platform) : null
-        if (fullScope && block && !agents.some(a => a.slug === 'agy')) {
+        const namedGemini = (opts.agents ?? []).some(s => s.toLowerCase() === 'gemini')
+        if ((fullScope || namedGemini) && block && agy && !agents.some(a => a.slug === 'agy') && !hasTreecontextEntry(agy, platform)) {
           const instr = removeInstructions(block, opts.dryRun)
           if (instr) {
             actions.push(instr)
@@ -4284,6 +4340,12 @@ export async function uninstall(opts: {
       }
       if (actions.length > 0) results.push({ agent: `${legacy.slug} (archived)`, slug: legacy.slug, actions })
     }
+  }
+
+  if (agents.length === 0 && unknownNamed.length > 0 && opts.agents && unknownNamed.length === opts.agents.length) {
+    const refused = `unknown agent: ${unknownNamed.join(', ')}; available: ${AGENTS.map(a => a.slug).join(', ')}`
+    console.error(refused)
+    results.push({ agent: unknownNamed.join(', '), slug: unknownNamed[0]!, actions: [], refused })
   }
 
   const lostNote = lostRecord && lostRecord.length > 0 ? ' install\'s record could not be read, so what it would have named was left: see the warning above.' : ''
@@ -6979,11 +7041,13 @@ export async function doctor(): Promise<DiagnosticResult[]> {
   // and nothing else. Install leaves it, so doctor names the way out.
   {
     const leftover = leftoverGeminiCli()
+    const agyDef = getAgent('agy')
+    const agyWired = !!agyDef && hasTreecontextEntry(agyDef, platform)
     if (leftover) {
       results.push({
         check: 'Gemini CLI',
         status: 'warn',
-        detail: `Gemini CLI is retired; an earlier install left ${andList(leftover)}, which nothing of treecontext's uses any more (install leaves ${leftover.length === 1 ? 'it' : 'them'} alone; ~/.gemini/GEMINI.md is Antigravity CLI's and stays)`,
+        detail: `Gemini CLI is retired; an earlier install left ${andList(leftover)}, which nothing of treecontext's uses any more (install leaves ${leftover.length === 1 ? 'it' : 'them'} alone${agyWired ? "; ~/.gemini/GEMINI.md is Antigravity CLI's and stays" : ''})`,
         fix: GEMINI_SWEEP_COMMAND,
       })
     }

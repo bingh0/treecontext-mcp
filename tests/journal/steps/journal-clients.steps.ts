@@ -1235,6 +1235,8 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
     out['agy mcp list'] = JSON.stringify(agyMcpList(w).servers)
     return out
   }
+  /** The `tc-gemini-*` wrappers an earlier install left in ~/.claude/hooks. */
+  const geminiWrapperFiles = (w: ClientsWorld): string[] => readdirSync(join(w.ihome!, '.claude', 'hooks')).filter(f => f.startsWith('tc-gemini-'))
   /** Doctor's rows naming Gemini CLI, each with the fix line under it. */
   const geminiRows = (out: string): Array<{ row: string; fix: string | null }> => {
     const lines = out.split('\n')
@@ -1250,12 +1252,13 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
     expect(run.stdout).toMatch(/^Detected agents: Claude Code Antigravity CLI$/m)
     expect(agyMcpList(w).servers.map(s => s.name), 'agy lists no treecontext server').toEqual(['treecontext'])
     w.retiredWiring = wiringOf(w)
-    layEarlierGeminiInstall(w.ihome!, GEMINI_DEVELOPER)
+    layEarlierGeminiInstall(w.ihome!, GEMINI_DEVELOPER, { wrappers: true })
     // The fixture holds what the Then reads gone: the entry, and hooks that
     // run Claude Code's scripts.
     const laid = JSON.parse(readFileSync(geminiSettings(w), 'utf8')) as { mcpServers: Record<string, unknown>; hooks: Record<string, unknown> }
     expect(Object.keys(laid.mcpServers).sort()).toEqual(['their-server', 'treecontext'])
     expect(Object.keys(laid.hooks).sort()).toEqual(['AfterTool', 'BeforeAgent', 'BeforeTool', 'PreCompress', 'SessionStart'])
+    expect(geminiWrapperFiles(w), 'the fixture laid no Gemini CLI wrappers').toHaveLength(4)
   })
   reg.define(/^the developer runs doctor, then the command its Gemini CLI row names, then doctor again$/, (w: ClientsWorld) => {
     const first = tcCli(w, ['doctor'])
@@ -1282,13 +1285,22 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
     const path = geminiSettings(w)
     expect(only!.row).toContain(`its treecontext entry in ${path}`)
     expect(only!.row).toContain(`a copy of the treecontext hooks in ${path}`)
+    // The wrapper clause: counted, and where they are.
+    expect(only!.row).toContain(`4 Gemini CLI hook wrappers in ${join(w.ihome!, '.claude', 'hooks')}`)
+    // Antigravity CLI is wired here, so its block in GEMINI.md is not named as a leftover and the row says it stays.
+    // step-lint: allow unearned-absence -- the needle is the clause doctor prints where Antigravity CLI is not wired (tests/server/gemini-retired-sweep.test.ts reads it there), and the same row's positive on the "stays" clause below proves this run's row is the wired one
+    expect(only!.row).not.toContain('the treecontext block in')
+    expect(only!.row).toContain("~/.gemini/GEMINI.md is Antigravity CLI's and stays")
     expect(only!.fix).toBe('treecontext uninstall --agent gemini')
   })
+
   reg.define(/^after the command Gemini CLI's settings hold the developer's own keys and nothing of treecontext's$/, (w: ClientsWorld) => {
     const after = JSON.parse(readFileSync(geminiSettings(w), 'utf8')) as unknown
     // The developer's keys, exactly as they were, and nothing else: the
     // entry and every hook of the copy are gone, theirs kept.
     expect(after).toEqual(GEMINI_DEVELOPER)
+    // The command took the wrappers the row named, too.
+    expect(geminiWrapperFiles(w)).toEqual([])
   })
   reg.define(/^Claude Code's and Antigravity CLI's wiring is as install left it$/, (w: ClientsWorld) => {
     expect(wiringOf(w)).toEqual(w.retiredWiring)

@@ -270,7 +270,7 @@ describe.skipIf(process.platform === 'win32')('a Gemini CLI entry an earlier ins
     const un = spawnCli(['uninstall', '--yes', '--agent', 'gemini'], { home: h })
     expect(un.status, un.out).toBe(0)
     expect(un.stdout).toContain('gemini: Gemini CLI is retired (D399) — its old configuration is swept below')
-    expect(JSON.parse(readFileSync(join(h, '.gemini', 'settings.json'), 'utf8'))).toEqual({ theme: 'Default', mcpServers: {} })
+    expect(JSON.parse(readFileSync(join(h, '.gemini', 'settings.json'), 'utf8'))).toEqual({ theme: 'Default' })
     expect(geminiRow(spawnCli(['doctor'], { home: h }).stdout)).toEqual([])
     // agy's wiring and its block are as install left them.
     expect([mcpPath(h), settingsPath(h), join(h, '.gemini', 'GEMINI.md')].map(f => readFileSync(f, 'utf8'))).toEqual(agyFiles)
@@ -329,9 +329,9 @@ describe.skipIf(process.platform === 'win32')("agy's instruction block beside Ge
     const run = spawnCli(['uninstall', '--yes'], { home: h })
     expect(run.status, run.out).toBe(0)
     expect(readFileSync(join(h, '.gemini', 'GEMINI.md'), 'utf8')).toBe('# notes\n')
-    // A run that names an agent leaves the file to agy's own uninstall.
+    // A run that names another agent leaves the file to agy's own uninstall.
     writeFileSync(join(h, '.gemini', 'GEMINI.md'), `# notes\n\n${MARKER_START}\nold block\n<!-- treecontext:end -->\n`)
-    expect(spawnCli(['uninstall', '--yes', '--agent', 'gemini'], { home: h }).status).toBe(0)
+    expect(spawnCli(['uninstall', '--yes', '--agent', 'codex'], { home: h }).status).toBe(0)
     expect(readFileSync(join(h, '.gemini', 'GEMINI.md'), 'utf8')).toContain(MARKER_START)
   })
 })

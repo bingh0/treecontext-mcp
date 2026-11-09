@@ -1553,7 +1553,7 @@ async function main(): Promise<void> {
   if (args.command === 'install') {
     const { install } = await import('./installer.js')
     // Gemini CLI is retired (D399): install said why on stderr; the run fails.
-    const retired = (e: unknown): boolean => !!e && typeof e === 'object' && 'code' in e && e.code === 'INSTALL_RETIRED'
+    const retired = (e: unknown): boolean => !!e && typeof e === 'object' && 'code' in e && (e.code === 'INSTALL_RETIRED' || e.code === 'INSTALL_UNKNOWN')
     await install({
       yes: args.yes,
       dryRun: args.dryRun,
