@@ -808,6 +808,9 @@ export class IngestionLoop {
                   echoSessionId: row.sessionId,
                   echoTs: row.timestamp,
                   deduplicated: echo.deduplicated,
+                  // D391: a hit's echo heals only from the survivor's lane.
+                  agentId: row.agentId ?? null,
+                  agentType: row.agentType ?? null,
                 })
                 dbg('ingest', 'echo heal', { node: echo.nodeId, outcome, deduplicated: echo.deduplicated })
                 // §7.8: the correlation itself — this session's call

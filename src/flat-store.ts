@@ -46,8 +46,9 @@ import { stampEchoBoundaries } from './persistence/echo-index.js'
 import { roleWeightVector } from './persistence/fts.js'
 import { BOOKMARK_KIND, checkpointKindOf, placeChaptersAboveBookmarks, searchCheckpointKindOf, sessionChainWith } from './checkpoints.js'
 import { metadataFilterSql } from './persistence/metadata-filter.js'
-import { AMBIGUOUS_LANE, UNKNOWN_LANE, UNKNOWN_WRITER_LABEL, UNREGISTERED_SRC, RETIRED_ACROSS_KEY, SUPERSEDES_ACROSS_KEY, PRE_STAMP_HOW, MAIN_LANE, isSessionOwnRow, isUnknownWriter, laneLabelOf, laneOfRow, laneWriterOf, referencedBy, refIdsOf, summarizeLanes, type LaneSummary } from './references.js'
+import { AMBIGUOUS_LANE, UNKNOWN_LANE, UNKNOWN_WRITER_LABEL, UNREGISTERED_SRC, RETIRED_ACROSS_KEY, SUPERSEDES_ACROSS_KEY, PRE_STAMP_HOW, MAIN_LANE, isSessionOwnRow, isUnknownWriter, laneLabelOf, laneOfRow, laneWriterOf, referencedBy, refIdsOf, summarizeLanes, writerOf, type LaneSummary } from './references.js'
 import { checkoutOfLane, isPlacedLane, laneRowsSql, placedLaneOf, placementsOf, type PlacedLane } from './persistence/lane-scope.js'
+import { WORKER_CURATED_CLASS } from './persistence/curated-index.js'
 import { resolveWriter, selfOf, selfWriterOf, agentWriterOf, stampMetadata, legTraceOf, hasMainCheckoutSession, registryHeldSession, MAIN_WRITER, STORE_WRITER, type WriterStamp, type GitSelf } from './persistence/session-registry.js'
 import {
   legOf, legsOfRun, workersOfParent, registerSubagentLeg, registerWorkerLeg, recordWorkerProcess, recordOpenedRun, recordSendBack,
@@ -477,7 +478,8 @@ export class FlatStore implements MemoryStore {
    *  see FlatStoreOptions.maintenanceHeartbeat. */
   private readonly maintenanceHeartbeat: (() => void) | null
   // Dedup enforcement lives in the STORE (G2, store-as-arbiter): curated
-  // dedup is the partial unique index idx_nodes_curated_fp; the auto
+  // dedup is the partial unique index idx_nodes_curated_fp (a ticket-door
+  // worker's, idx_nodes_worker_curated_fp, by its session, D391); the auto
   // window is the dedup_anchors table, keyed (tree_id, session_key,
   // fingerprint) — the double-fire being suppressed is a same-session
   // phenomenon, and a fingerprint-only key would let a foreign session
@@ -550,6 +552,8 @@ export class FlatStore implements MemoryStore {
     }
     // A recovery row dedups by its claim (D375); a run's rows by identity
     // alone, never by text (D329).
+    // D391: a worker's curated row dedups within its own session alone.
+    if (cls === WORKER_CURATED_CLASS) return this.persistence.workerHolder(treeId, sessionOf(meta), fp) !== undefined
     if (cls !== 'curated') return this.recoveryHolder(treeId, meta) !== undefined
     return this.persistence.curatedHolder(treeId, fp) !== undefined
   }
@@ -1521,8 +1525,10 @@ export class FlatStore implements MemoryStore {
     const createdAt = opts?.createdAt ?? now
     const fp = contentFingerprint(content)
 
-    // D2 dedup matrix, enforced by the STORE (G2): curated dedups globally
-    // via the partial unique index — INSERT … ON CONFLICT DO NOTHING, and
+    // D2 dedup matrix, enforced by the STORE (G2): curated dedups across
+    // sessions via the partial unique index, except a ticket-door worker's,
+    // which dedups in its own session (D391, curated-index.ts) — INSERT …
+    // ON CONFLICT DO NOTHING, and
     // changes = 0 IS the dedup hit, true for every writer in every
     // process. Auto-capture dedups only within DEDUP_WINDOW_SECS of the
     // LAST SEEN occurrence (the window slides — three double-fires each
@@ -1691,7 +1697,11 @@ export class FlatStore implements MemoryStore {
         // re-recording a fact with next_session/active is how an agent
         // re-arms an old note as a pointer. (The auto hit deliberately
         // does NOT merge pointer flags — bound asymmetry, amendment 7.)
-        const survivor = this.persistence.curatedHolder(this.treeId, fp)
+        // D391: a worker's slot is its session's; every other curated
+        // row's is the tree's.
+        const survivor = dedupClassOf(source, meta) === WORKER_CURATED_CLASS
+          ? this.persistence.workerHolder(this.treeId, sessionOf(meta), fp)
+          : this.persistence.curatedHolder(this.treeId, fp)
         if (survivor === undefined) {
           // Structurally unreachable inside this transaction: the refusal
           // proves the survivor exists. Refuse loudly over dropping data.
@@ -1705,9 +1715,17 @@ export class FlatStore implements MemoryStore {
             `Curated dedup refused insert but no survivor row found (fingerprint ${fp}, node ${nodeId})`,
           )
         }
-        this.mergePointerFlags(survivor, meta)
+        // D391: the survivor's writer and lane, as every reader reads a
+        // lane (D379), and the caller's; the pointer tags are armed only
+        // when the two are one lane, never on another lane's row.
+        const held = this.survivorOf(survivor, writerLaneOf())
+        if (held.sameLane) this.mergePointerFlags(survivor, meta)
+        const flags = held.sameLane ? {} : this.unarmedFlags(meta)
         const sup = this.applySupersedes(withPriorBookmarks(survivor), survivor)
-        return { nodeId: survivor, path: [survivor], depth: 0, deduplicated: true, driftDetected: false, staleNodes: [], ...withForeign(sup, missed, false), ...this.unrecordedRefs(meta, survivor) }
+        return {
+          nodeId: survivor, path: [survivor], depth: 0, deduplicated: true, driftDetected: false, staleNodes: [], ...withForeign(sup, missed, false),
+          ...this.unrecordedRefs(meta, survivor), survivor: held, ...flags,
+        }
       }
       if (isAuto) this.persistence.upsertAnchor(this.treeId, sessionOf(meta), fp, nodeId, createdAt)
 
@@ -1752,8 +1770,10 @@ export class FlatStore implements MemoryStore {
     return result
   }
 
-  /** On a curated dedup hit whose incoming metadata carries resume-pointer
-   *  tags, arm those tags on the existing node. Metadata-only update; the
+  /** On a curated dedup hit in the survivor's own lane whose incoming
+   *  metadata carries resume-pointer tags, arm those tags on the existing
+   *  node; a hit in another lane never calls this (D391, D169: nothing
+   *  outside the writer's lane is modified). Metadata-only update; the
    *  touched keys (next_session/status) never enter indexTextFor, so the
    *  contentless FTS recompute stays byte-identical (FG-2 safe). */
   private mergePointerFlags(nodeId: string, incoming: Record<string, unknown> | null): void {
@@ -1771,6 +1791,34 @@ export class FlatStore implements MemoryStore {
     this.db
       .prepare('UPDATE nodes SET metadata_json = ?, updated_at = ? WHERE node_id = ? AND tree_id = ?')
       .run(JSON.stringify(meta), Date.now() / 1000, nodeId, this.treeId)
+  }
+
+  /** The surviving row of a curated dedup hit, as the reply names it
+   *  (D391): its writer as shown (references.ts writerOf), its lane as
+   *  every reader reads it (laneOfRow, its session's placement read from
+   *  the registry, D379), and the caller's lane. One lane only when both
+   *  are told and equal: a writer the store could not tell apart owns no
+   *  lane (AMBIGUOUS_LANE), so it shares none. */
+  private survivorOf(nodeId: string, callerLane: string): NonNullable<InsertResult['survivor']> {
+    const row = this.db.prepare('SELECT metadata_json, session_key FROM nodes WHERE node_id = ? AND tree_id = ?')
+      .get(nodeId, this.treeId) as { metadata_json: string | null; session_key: string | null } | undefined
+    const meta = parseMeta(row?.metadata_json ?? null)
+    const lane = laneOfRow(meta, placementsOf(this.db, [row?.session_key]).get(row?.session_key ?? ''))
+    return {
+      writer: writerOf(meta), lane: laneLabelOf(lane), callerLane: laneLabelOf(callerLane),
+      sameLane: lane === callerLane && lane !== AMBIGUOUS_LANE,
+    }
+  }
+
+  /** The resume-pointer tags an insert carried that a dedup hit in another
+   *  lane left off the survivor (D391, D169): disclosed as the references
+   *  are, never armed. */
+  private unarmedFlags(incoming: Record<string, unknown> | null): { flagsNotArmed?: string[] } {
+    const out = [
+      ...(incoming?.['next_session'] === true ? ['next_session'] : []),
+      ...(incoming?.['status'] === 'active' ? ['status'] : []),
+    ]
+    return out.length > 0 ? { flagsNotArmed: out } : {}
   }
 
   /** On a dedup hit no row lands, so the incoming entry's references go

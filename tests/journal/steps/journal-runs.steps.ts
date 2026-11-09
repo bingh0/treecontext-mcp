@@ -1266,16 +1266,22 @@ export const runsDefiner = (reg: Registry<RunsWorld>): void => {
     expect(line).toBe("First moments carry the spawners' prompts as written and may hold what was pasted into them.")
     expect(line.split('\n')).toHaveLength(1)
     // A ticket-door first moment is the prompt itself, so there is no
-    // door's-line note to make.
+    // door's-line note to make; the builder printed and exited 0, so its
+    // summary row holds no error stream and there is no such note either.
     expect(reply.json['door_lines']).toBeUndefined()
+    expect(reply.json['error_tails']).toBeUndefined()
   })
 
   define(/^no acknowledgement is asked for$/, (w) => {
     const reply = w.facts!['export-reply'] as ToolReply
     expect(reply.isError).toBe(false)
     expect(reply.json['warning']).toBeUndefined()
-    // The whole reply: the file, the run, the form, the counts, the message and the one line; no warning to acknowledge.
-    expect(Object.keys(reply.json).sort()).toEqual(['entries', 'file', 'first_moments', 'form', 'message', 'run'])
+    // The whole reply: the file, the run, the form, the counts, the message
+    // and the lines about what it holds (the first moments, and, when the
+    // scenario's run has a failed worker, its error tail, D398); no warning
+    // to acknowledge.
+    const notes = (w.facts!['expect-error-tails'] === true ? ['error_tails'] : [])
+    expect(Object.keys(reply.json).sort()).toEqual(['entries', 'file', 'first_moments', 'form', 'message', 'run', ...notes].sort())
     expect(reply.json['file']).toBe('handoffs/r1.json')
     expect(existsSync(join(w.proj!, 'handoffs', 'r1.json'))).toBe(true)
   })
@@ -1835,6 +1841,76 @@ export const runsDefiner = (reg: Registry<RunsWorld>): void => {
     expect(legs.filter(([, marks]) => marks.some((m) => line.includes(m))).map(([name]) => name)).toEqual(['reviewer'])
     // And the list the line gives is exactly that one leg, one of two first moments.
     expect(/^1 of the 2 first moments is the door's own line, not a prompt \((.*)\): /.exec(line)?.[1]).toBe(`reviewer (agent ${w.legs!['reviewer']!.agentId})`)
+  })
+
+  // ── D398: the reply names the legs whose summary row holds an error tail ──
+  //
+  // Both workers run through the real ticket door (the library spawner),
+  // the hook-less stand-in writing to its error stream and exiting as told;
+  // the door writes each summary row at exit (D384). The builder owes no
+  // checkpoint (the reviewer is the checkpointer), so it is not sent back
+  // and its summary row is its one run's.
+
+  define(/^a run "([^"]+)" with a builder worker that wrote the output of its test command, "([^"]+)", to its error stream and exited with code (\d+), and a reviewer worker that printed "([^"]+)" and exited with code (\d+)$/, async (w, run, output, code, printed, code2) => {
+    await openRunWorld(w)
+    const ticket = (role: string) => ({ run: run!, key: 'login-form', role, checkpointer: 'reviewer', parent: { id: w.sessionId! } })
+    const builder = await runWorker(w, {
+      spawner: 'library', prompt: `run the login tests for ${run}`, ticket: ticket('builder'),
+      plan: { first: { stderr: `${output}\n  expected 200, got 403\n`, exit: Number(code) } },
+    }, 'builder')
+    expect(builder.exitCode).toBe(Number(code))
+    const reviewer = await runWorker(w, {
+      spawner: 'library', prompt: `review the login form for ${run}`, ticket: ticket('reviewer'),
+      plan: { first: { checkpoint: 'state of login-form: reviewed, the CSRF test fails', print: printed!, exit: Number(code2) } },
+    }, 'reviewer')
+    expect(reviewer.exitCode).toBe(Number(code2))
+    const summaries = rawAll<{ node_id: string; session_key: string }>(w,
+      "SELECT node_id, session_key FROM nodes WHERE json_extract(metadata_json, '$.kind') = 'subagent-summary' AND json_extract(metadata_json, '$.run') = ? ORDER BY rowid", run)
+    expect(summaries.map((r) => r.session_key)).toEqual([w.legs!['builder']!.sessionId, w.legs!['reviewer']!.sessionId])
+    // The builder's row holds the end of its error stream after the door's
+    // line; the reviewer's is its output alone.
+    const b = rawContentOf(w, summaries[0]!.node_id)
+    expect(b).toContain(`treecontext: the worker exited with code ${code} having printed nothing; its error stream, all `)
+    expect(b).toContain(output!)
+    expect(rawContentOf(w, summaries[1]!.node_id)).toBe(printed)
+    w.ids!['builder-summary'] = summaries[0]!.node_id
+    w.ids!['reviewer-summary'] = summaries[1]!.node_id
+    w.facts!['test-output'] = output
+    w.facts!['expect-error-tails'] = true
+  })
+
+  define(/^the file holds the builder's summary row whole, the end of its error stream included, with nothing redacted$/, (w) => {
+    const file = w.facts!['export-file'] as RunFile
+    const row = file.nodes.find((n) => n.nodeId === w.ids!['builder-summary'])
+    expect(row, "the builder's summary row is in the skeleton").toBeTruthy()
+    expect(row!.content).toBe(rawContentOf(w, w.ids!['builder-summary']!))
+    expect(row!.content).toContain(`${String(w.facts!['test-output'])}\n  expected 200, got 403`)
+    expect(file.nodes.find((n) => n.nodeId === w.ids!['reviewer-summary'])!.content).toBe(rawContentOf(w, w.ids!['reviewer-summary']!))
+  })
+
+  define(/^the reply carries one line naming the builder leg as the one whose summary row holds the end of its worker's error stream, saying that a CLI may write command output there$/, (w) => {
+    const reply = w.facts!['export-reply'] as ToolReply
+    const keys = Object.keys(reply.json)
+    const line = reply.json['error_tails']
+    expect(typeof line, JSON.stringify(reply.json)).toBe('string')
+    expect(String(line).split('\n')).toHaveLength(1)
+    // After the line about first moments (and D368's, were there one).
+    expect(keys.indexOf('error_tails')).toBeGreaterThan(keys.indexOf('first_moments'))
+    expect(keys.indexOf('first_moments')).toBeGreaterThan(-1)
+    expect(String(line)).toContain(`builder worker in session ${w.legs!['builder']!.sessionId}`)
+    expect(String(line)).toContain("holds the end of its worker's error stream")
+    expect(String(line)).toContain('a CLI may write command output there')
+    expect(String(line)).toContain('nothing is redacted and nothing is left out')
+  })
+
+  define(/^that line names the builder leg alone$/, (w) => {
+    const line = String((w.facts!['export-reply'] as ToolReply).json['error_tails'])
+    const legs: Array<[string, string[]]> = [
+      ['builder', ['builder', w.legs!['builder']!.sessionId]],
+      ['reviewer', ['reviewer', w.legs!['reviewer']!.sessionId]],
+    ]
+    expect(legs.filter(([, marks]) => marks.some((m) => line.includes(m))).map(([name]) => name)).toEqual(['builder'])
+    expect(/^1 of the 2 summary rows holds the end of its worker's error stream \((.*)\): /.exec(line)?.[1]).toBe(`builder worker in session ${w.legs!['builder']!.sessionId}`)
   })
 
   // ── D318: the file's own head says what its first moments are ──

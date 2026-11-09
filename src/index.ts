@@ -45,9 +45,9 @@ export type { CheckpointRecord, BriefRecord, RunReadHandle, ImportedLeg } from '
 // D310, D318, D343): the one logic under the export tool, the shell and
 // the library, and a leg's registration as a row of the file.
 export { exportRun, buildHandoff, checkRunForm, SECRETS_WARNING, RUN_SECRETS_WARNING, IMPORT_DOOR, IMPORT_IDENTITY } from './handoff.js'
-export type { RunExportRequest, RunExportResult, BuildHandoffOptions, BuiltHandoff, HandoffForm } from './handoff.js'
+export type { RunExportRequest, RunExportResult, BuildHandoffOptions, BuiltHandoff, HandoffForm, RunLines } from './handoff.js'
 export {
-  SKELETON_KINDS, FIRST_MOMENTS_NOTE, PROMPT_UNSEEN_SENTENCE, isDoorLine, doorLineNote, legFactsOf, legFromFacts,
+  SKELETON_KINDS, FIRST_MOMENTS_NOTE, PROMPT_UNSEEN_SENTENCE, isDoorLine, doorLineNote, holdsErrorTail, errorTailNote, legFactsOf, legFromFacts,
   registrationNode, registrationRowId, differingFacts,
 } from './run-export.js'
 export type { RunForm } from './run-export.js'

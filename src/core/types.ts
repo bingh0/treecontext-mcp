@@ -34,6 +34,17 @@ export interface InsertResult {
    *  were not recorded anywhere — the survivor is never modified to hold
    *  them. Present only when there were any. */
   refsNotRecorded?: string[]
+  /** D391: on a curated dedup hit, the surviving row as the reply names
+   *  it: its writer as shown, its lane as every reader reads it (D379),
+   *  the caller's lane, where nothing landed, and whether the two are one
+   *  lane (the only case in which the insert's pointer tags are armed on
+   *  the survivor). */
+  survivor?: { writer: string; lane: string; callerLane: string; sameLane: boolean }
+  /** D391: on a dedup hit in another lane, the resume-pointer tags the
+   *  insert carried (`next_session`, `status`) that were left off the
+   *  survivor, never armed on another lane's row. Present only when there
+   *  were any. */
+  flagsNotArmed?: string[]
   /** D378: pre-stamp chapters an unplaced writer retired across the
    *  boundary, apart from `superseded` (the lane's own), each recorded
    *  under `_retired_across`. Present only when there were any. */

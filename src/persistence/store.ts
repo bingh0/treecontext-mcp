@@ -16,11 +16,12 @@ import { sessionOf, dedupClassOf, reliedCountOf, liftBoundary } from '../dedup-i
 import { attributeColumn, columnForIndex, columnIndex, ftsColumnValues, FTS_COLUMNS } from './fts-columns.js'
 import { runMigrations, currentSchemaVersion, ensureBaseSchema, type MigrationOptions } from './migrations.js'
 import { ECHO_HEAL_WINDOW_SECS } from './capture-constants.js'
-import { healWriterFromEcho as healWriter, type WriterHealResult } from './writer-heal.js'
+import { healWriterFromEcho as healWriter, echoLanes, type WriterHealResult } from './writer-heal.js'
+import { AMBIGUOUS_LANE } from '../references.js'
 import { resolveCapRefusal, type CapMove } from './cap-refusals.js'
 import { legReturnStamp, type LegRef } from './leg-registry.js'
 import { dbg } from '../debug.js'
-import { CURATED_INDEX_WHERE } from './curated-index.js'
+import { CURATED_INDEX_WHERE, WORKER_CURATED_CLASS, WORKER_INDEX_WHERE } from './curated-index.js'
 
 // ── Row types ───────────────────────────────────────────────────────
 
@@ -113,6 +114,7 @@ export type EchoHealOutcome =
   | 'not-curated'     // auto row: anchors embed session_key, never healed
   | 'not-found'       // no such node (row evicted since the echo staged)
   | 'unreadable'      // metadata_json failed to parse: skipped, not clobbered
+  | 'other-lane'      // a dedup hit's echo from another lane than the survivor's (D391)
 
 /** Outcomes that vouch for the echo↔row correlation strongly enough to
  *  publish (session → namespace) evidence from it (§7.8). An
@@ -143,6 +145,7 @@ export class Persistence {
 
   // Prepared statements (lazy)
   private sInsertNode: Statement | null = null
+  private sInsertWorkerNode: Statement | null = null
   private sUpdateNode: Statement | null = null
   private sDeleteNode: Statement | null = null
   private sGetRowid: Statement | null = null
@@ -152,6 +155,7 @@ export class Persistence {
   private sDeleteFts: Statement | null = null
   private sNodeExists: Statement | null = null
   private sCuratedHolder: Statement | null = null
+  private sWorkerHolder: Statement | null = null
   private sGetAnchor: Statement | null = null
   private sSlideAnchor: Statement | null = null
   private sUpsertAnchor: Statement | null = null
@@ -278,14 +282,16 @@ export class Persistence {
    *  an unsearchable row occupying a fingerprint slot. */
   insertNode(treeId: number, node: PersistedNode): boolean {
     return this.db.transaction(() => {
-      const stmt = this.getInsertStmt()
+      const arb = this.arbiterFor(node)
+      // D391: a worker's curated row's slot is its session's, so its
+      // conflict target is the worker index (curated-index.ts).
+      const stmt = arb.dedupClass === WORKER_CURATED_CLASS ? this.getWorkerInsertStmt() : this.getInsertStmt()
       // Column attribution happens ONCE, here, from the current metadata, and
       // is persisted as index_col. It is never recomputed later — supersede/
       // demotion rewrite metadata (status, _demoted) after insert, and doing
       // that recompute at delete/update time would silently target the wrong
       // nodes_fts column and leave ghost index entries (FG-2).
       const col = attributeColumn(node.metadata)
-      const arb = this.arbiterFor(node)
       const result = stmt.run(
         node.nodeId,
         treeId,
@@ -408,6 +414,10 @@ export class Persistence {
     if (cls === 'curated' && this.curatedHolder(node.treeId, arb.fingerprint, node.nodeId) !== undefined) {
       cls = 'curated_dup'
     }
+    // The same escape for a worker's slot, which is its session's (D391).
+    if (cls === WORKER_CURATED_CLASS && this.workerHolder(node.treeId, arb.sessionKey, arb.fingerprint, node.nodeId) !== undefined) {
+      cls = 'curated_dup'
+    }
     return [arb.fingerprint, cls, arb.sessionKey, arb.reliedCount, arb.indexLen, arb.previewLen]
   }
 
@@ -505,6 +515,10 @@ export class Persistence {
     echoTs: number
     /** The response's dedup flag: true = this call did not create the row. */
     deduplicated: boolean
+    /** The echo's caller agent fields (none for the session's own agent):
+     *  a dedup hit's echo heals only from the survivor's lane (D391). */
+    agentId?: string | null
+    agentType?: string | null
     windowSecs?: number
   }): EchoHealOutcome {
     const windowSecs = opts.windowSecs ?? ECHO_HEAL_WINDOW_SECS
@@ -541,7 +555,7 @@ export class Persistence {
    * branch ladder could not tell guess candidates from causal ones).
    */
   private computeEchoHeal(
-    opts: { nodeId: string; echoSessionId: string; echoTs: number; deduplicated: boolean },
+    opts: { nodeId: string; echoSessionId: string; echoTs: number; deduplicated: boolean; agentId?: string | null; agentType?: string | null },
     windowSecs: number,
   ): { outcome: EchoHealOutcome; write?: { metaJson: string; sessionKey: string } } {
     this.sEchoHealSelect ??= this.db.prepare(
@@ -575,6 +589,16 @@ export class Persistence {
     // today's ambiguity) and sanity-bounds the creator case (same host
     // clock; observed skew ≤ 0.1 s).
     if (Math.abs(opts.echoTs - row.created_at) > windowSecs) return { outcome: 'outside-window' }
+    // D391: a dedup hit's echo changes the surviving row only when the
+    // insert came from the survivor's own lane, as when two sessions of
+    // one lane insert it within the window (D86); a hit from another lane
+    // modifies nothing of that lane's row, its ledger and disclosure
+    // included. The caller is read from the echo's own agent fields and
+    // the registry, the lanes as every reader reads them (D379).
+    if (opts.deduplicated) {
+      const lanes = echoLanes(this.db, { nodeMeta: meta, echoSessionId: opts.echoSessionId, agentId: opts.agentId ?? null, agentType: opts.agentType ?? null })
+      if (lanes.caller !== lanes.row || lanes.row === AMBIGUOUS_LANE) return { outcome: 'other-lane' }
+    }
 
     // `_cc_session_echo_asserts` is a V2 key: no row healed by the
     // PREVIOUS code carries it. Reading only that key would recompute a
@@ -663,6 +687,18 @@ export class Persistence {
     const row = this.sCuratedHolder.get(treeId, fingerprint, exceptNodeId ?? null) as
       | { node_id: string }
       | undefined
+    return row?.node_id
+  }
+
+  /** Who holds a worker's curated slot (D391): the row of this tree, this
+   *  session and this fingerprint under the worker index's predicate, the
+   *  one copy of it insertNode's worker conflict target agrees with. */
+  workerHolder(treeId: number, sessionKey: string, fingerprint: string, exceptNodeId?: string): string | undefined {
+    this.sWorkerHolder ??= this.db.prepare(
+      `SELECT node_id FROM nodes WHERE tree_id = ? AND session_key = ? AND fingerprint = ? AND ${WORKER_INDEX_WHERE} ` +
+        "AND node_id != COALESCE(?, '')",
+    )
+    const row = this.sWorkerHolder.get(treeId, sessionKey, fingerprint, exceptNodeId ?? null) as { node_id: string } | undefined
     return row?.node_id
   }
 
@@ -1013,6 +1049,24 @@ export class Persistence {
       )
     }
     return this.sInsertNode
+  }
+
+  /** The insert of a worker's curated row (D391): its conflict target is
+   *  the worker index (migration 033), so only a twin in the same session
+   *  is silently refused; a curated twin elsewhere is no conflict at all,
+   *  the curated index not covering this class. Prepared on first use. */
+  private getWorkerInsertStmt(): Statement {
+    if (!this.sInsertWorkerNode) {
+      this.sInsertWorkerNode = this.db.prepare(
+        'INSERT INTO nodes (node_id, tree_id, parent_id, depth, is_leaf, content, summary, ' +
+          'created_at, updated_at, summary_stale, ' +
+          'read_only, decay_exempt, decay_rate, utility_score, source_label, metadata_json, index_col, ' +
+          'fingerprint, dedup_class, session_key, relied_count, index_len, preview_len) ' +
+          'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ' +
+          `ON CONFLICT(tree_id, session_key, fingerprint) WHERE ${WORKER_INDEX_WHERE} DO NOTHING`,
+      )
+    }
+    return this.sInsertWorkerNode
   }
 
   private getUpdateStmt(): Statement {

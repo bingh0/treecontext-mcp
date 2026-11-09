@@ -16,6 +16,7 @@ import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
 import { FlatStore } from '../../src/flat-store.js'
 import { IngestionLoop } from '../../src/server/ingestion.js'
 import { extractInsertEcho, isInsertEchoTool } from '../../src/server/echo-correlation.js'
+import { registerSelf, registerSubagent, type GitSelf } from '../../src/persistence/session-registry.js'
 
 const dirs: string[] = []
 afterAll(() => {
@@ -50,6 +51,15 @@ function rawNode(store: FlatStore, nodeId: string): { session_key: string; meta:
 }
 
 const HEX = 'abcdef0123456789abcdef0123456789'
+
+const MAIN: GitSelf = { worktree: null, branch: 'main', cwd: '/repo', toplevel: '/repo', commonDir: '/repo/.git' }
+const WORKTREE: GitSelf = { worktree: 'subproject', branch: 'sub', cwd: '/subproject', toplevel: '/subproject', commonDir: '/repo/.git' }
+
+/** Sessions started in one checkout, as the SessionStart hook registers
+ *  them: sessions of one lane (D391). */
+function selves(store: FlatStore, where: GitSelf, ...sessions: string[]): void {
+  for (const s of sessions) registerSelf(store.store.database, s, where, 1)
+}
 
 describe('extractInsertEcho: the Output section names the node', () => {
   it('extracts node_id and deduplicated from the platform response shape', () => {
@@ -187,6 +197,7 @@ describe('healCuratedSessionIdentity: precedence, window, idempotency', () => {
 
   it('a dedup-hit echo in-window discloses ambiguity without moving the primary attribution', async () => {
     const store = await freshStore()
+    selves(store, MAIN, 'cc-creator', 'cc-second')
     const id = await curatedRow(store, {})
     store.store.healCuratedSessionIdentity({ nodeId: id, echoSessionId: 'cc-creator', echoTs: T + 1, deduplicated: false })
     expect(store.store.healCuratedSessionIdentity({ nodeId: id, echoSessionId: 'cc-second', echoTs: T + 2, deduplicated: true })).toBe('ambiguous')
@@ -201,6 +212,7 @@ describe('healCuratedSessionIdentity: precedence, window, idempotency', () => {
 
   it('replaying a dedup-hit echo never duplicates its candidate', async () => {
     const store = await freshStore()
+    selves(store, MAIN, 'cc-creator', 'cc-second')
     const id = await curatedRow(store, {})
     store.store.healCuratedSessionIdentity({ nodeId: id, echoSessionId: 'cc-creator', echoTs: T + 1, deduplicated: false })
     // A second session asserting a row the creator already owns IS the
@@ -215,6 +227,7 @@ describe('healCuratedSessionIdentity: precedence, window, idempotency', () => {
 
   it('echoes arriving out of order converge on the same state: creator primary, both disclosed', async () => {
     const store = await freshStore()
+    selves(store, MAIN, 'cc-creator', 'cc-second')
     const id = await curatedRow(store, {})
     // Dedup echo drains first (claim order is timestamp order, but two
     // sessions' echoes can stage out of order), creator echo second.
@@ -236,6 +249,7 @@ describe('healCuratedSessionIdentity: precedence, window, idempotency', () => {
   // from scratch would drop an already-disclosed candidate.
   it('a legacy echo-healed row carries its disclosed candidates across the upgrade', async () => {
     const store = await freshStore()
+    selves(store, MAIN, 'cc-A', 'cc-C')
     const id = await curatedRow(store, {
       _cc_session_id: 'cc-A', _cc_session_src: 'echo',
       _cc_session_ambiguous: true, _cc_session_candidates: ['cc-A', 'cc-B'],
@@ -252,6 +266,7 @@ describe('healCuratedSessionIdentity: precedence, window, idempotency', () => {
   // (Fable review 2026-08-20, F4: that gate re-opened the drop).
   it('a legacy beacon-unanimous row with echo-accrued candidates keeps them across the upgrade', async () => {
     const store = await freshStore()
+    selves(store, MAIN, 'cc-A', 'cc-C')
     const id = await curatedRow(store, {
       _cc_session_id: 'cc-A', _cc_session_src: 'beacon-unanimous',
       _cc_session_ambiguous: true, _cc_session_candidates: ['cc-A', 'cc-B'],
@@ -274,6 +289,35 @@ describe('healCuratedSessionIdentity: precedence, window, idempotency', () => {
     const { meta } = rawNode(store, id)
     expect(meta['_cc_session_id']).toBe('cc-C')
     expect(meta['_cc_session_candidates']).toBeUndefined()
+    await store.close()
+  })
+
+  // D391: a dedup hit's echo changes the survivor only from its own lane.
+  it('a dedup-hit echo from another lane changes nothing of the survivor, its ledger and disclosure included', async () => {
+    const store = await freshStore()
+    selves(store, MAIN, 'cc-creator')
+    selves(store, WORKTREE, 'cc-worktree')
+    const id = await curatedRow(store, {})
+    store.store.healCuratedSessionIdentity({ nodeId: id, echoSessionId: 'cc-creator', echoTs: T + 1, deduplicated: false })
+    const before = rawNode(store, id)
+    expect(store.store.healCuratedSessionIdentity({ nodeId: id, echoSessionId: 'cc-worktree', echoTs: T + 2, deduplicated: true })).toBe('other-lane')
+    expect(rawNode(store, id)).toEqual(before)
+    expect(before.meta['_cc_session_echo_asserts']).toEqual(['cc-creator'])
+    expect(before.meta['_cc_session_ambiguous']).toBeUndefined()
+    await store.close()
+  })
+
+  it('a subagent\'s dedup-hit echo, its agent fields beside its parent\'s session, is another lane\'s than the main row it hit', async () => {
+    const store = await freshStore()
+    selves(store, MAIN, 'cc-creator')
+    registerSubagent(store.store.database, 'cc-creator', 'a-tester', 'tester', MAIN, 2)
+    const id = await curatedRow(store, {})
+    store.store.healCuratedSessionIdentity({ nodeId: id, echoSessionId: 'cc-creator', echoTs: T + 1, deduplicated: false })
+    const before = rawNode(store, id)
+    expect(store.store.healCuratedSessionIdentity({ nodeId: id, echoSessionId: 'cc-creator', echoTs: T + 2, deduplicated: true, agentId: 'a-tester', agentType: 'tester' })).toBe('other-lane')
+    expect(rawNode(store, id)).toEqual(before)
+    // The session's own agent repeating it is the same lane, and asserts.
+    expect(store.store.healCuratedSessionIdentity({ nodeId: id, echoSessionId: 'cc-creator', echoTs: T + 2, deduplicated: true })).toBe('already-final')
     await store.close()
   })
 

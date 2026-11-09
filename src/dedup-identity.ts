@@ -8,6 +8,8 @@
  */
 import { isIdentityRow, RUN_DEDUP_CLASS } from './run-kinds.js'
 import { recoveryIdentityOf } from './persistence/recovery-snapshot.js'
+import { WORKER_CURATED_CLASS } from './persistence/curated-index.js'
+import { WORKER_AGENT_ID } from './persistence/leg-registry.js'
 
 /** Sentinel session key for rows with no resolvable session identity.
  *  Deliberately not NULL: dedup windows, retention grouping, and the
@@ -53,7 +55,7 @@ export function isAutoCaptureSource(source: string | null | undefined): boolean 
 export function dedupClassOf(
   sourceLabel: string | null | undefined,
   meta: Record<string, unknown> | null,
-): 'auto' | 'curated' | typeof RUN_DEDUP_CLASS {
+): 'auto' | 'curated' | typeof RUN_DEDUP_CLASS | typeof WORKER_CURATED_CLASS {
   if (isAutoCaptureSource(effectiveSource(sourceLabel, meta))) return 'auto'
   // D329: a run's rows (a checkpoint, a brief, a run's open and close) are
   // identified by their place in the run, never by their text: two legs
@@ -63,7 +65,27 @@ export function dedupClassOf(
   // snapshot and the claiming session, never by its text, so a second
   // lane's recovery that reads like the first's is still written in its
   // own claiming session (FlatStore.recoveryHolder is its identity dedup).
-  return isIdentityRow(meta) || recoveryIdentityOf(meta) !== null ? RUN_DEDUP_CLASS : 'curated'
+  if (isIdentityRow(meta) || recoveryIdentityOf(meta) !== null) return RUN_DEDUP_CLASS
+  // D391: a ticket-door worker's curated row dedups in its own lane, its
+  // session, never against another lane's (curated-index.ts).
+  return isWorkerLaneStamp(meta) ? WORKER_CURATED_CLASS : 'curated'
+}
+
+/**
+ * Whether a row carries the store's stamp of a ticket-door worker's own
+ * lane (D288, D391): `_writer_agent_id` `worker` and `_writer_src`
+ * `declared`, the stamp the store writes only from the registry's worker
+ * registration (session-registry.ts resolveWriter for the lane serve
+ * trusts, FlatStore's leg stamp for the library door), in a session of its
+ * own, never a handoff lane (an import keeps its sender's stamps under
+ * `_handoff_claims`, D360). A hooks-door subagent leg carries its own
+ * agent id, so it is not one (D392).
+ */
+export function isWorkerLaneStamp(meta: Record<string, unknown> | null): boolean {
+  if (!meta) return false
+  if (meta['_writer_agent_id'] !== WORKER_AGENT_ID || meta['_writer_src'] !== 'declared') return false
+  const session = sessionOf(meta)
+  return session !== NO_SESSION && !session.startsWith('handoff:')
 }
 
 /** The dedup class as the shipped ladder rungs 021–023 computed it,

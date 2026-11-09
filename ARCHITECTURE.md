@@ -181,7 +181,11 @@ platform event ─ hook (per fire) ─▶ staging table ─▶ drain ─▶ node
   `persistence/curated-index.ts`): an imported entry is present or new
   by identity — its id held in any lane, or named by any lane's
   `_merged_from_node_id` — and by content only when the file carries no
-  id. No process-local
+  id. A ticket-door worker's curated rows take the `worker_curated`
+  class, unique per `(tree_id, session_key, fingerprint)` (migration
+  033, D391): a worker dedups in its own lane, its session, and never
+  against another lane's row. A curated hit arms pointer tags and its
+  echo heals the survivor only from the survivor's own lane. No process-local
   maps; every writer inherits both rules.
 
 Charter promises: `journal-capture.feature`; mechanics:
@@ -260,7 +264,9 @@ Charter promises: `journal-capture.feature`; mechanics:
   unit (`run-export.ts`, `exportRun`): `form: "skeleton"` by default
   (the run's open and close, briefs, checkpoints, every leg's first
   moment whole and summary row, and each leg's registration as a
-  `leg-registration` row; no captured tool output) or `"whole"` behind
+  `leg-registration` row; no captured tool output but the error-stream
+  end a failed worker's summary row holds, which the reply and the head
+  name under `error_tails`, D398) or `"whole"` behind
   the same acknowledgement, with `--run R` from a shell. The importing
   store keeps the ids, lands the rows in `handoff:` lanes with the
   sender's stamps, trace and checkpoint numbers under `_handoff_claims`,

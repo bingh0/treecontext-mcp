@@ -15,6 +15,7 @@ import type { Registry } from 'gherkin-node-test/vitest'
 import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
 import { FlatStore } from '../../src/flat-store.js'
 import { DEDUP_WINDOW_SECS } from '../../src/persistence/capture-constants.js'
+import { registerSelf, type GitSelf } from '../../src/persistence/session-registry.js'
 
 type InsertOpts = Parameters<FlatStore['insert']>[1]
 type InsertResult = Awaited<ReturnType<FlatStore['insert']>>
@@ -29,9 +30,22 @@ interface World {
   anchorNodeId?: string | undefined
   secondUserId?: string
   originalId?: string
+  /** The sessions of one lane a curated Given's inserts came from (D391). */
+  laneSessions?: string[]
 }
 
 const T0 = 1_700_000_000
+
+/** The main checkout, as the SessionStart hook registers a session's self
+ *  there: two sessions so registered are two sessions of one lane, the
+ *  main checkout's (D391, D379). */
+const MAIN_CHECKOUT: GitSelf = { worktree: null, branch: 'main', cwd: '/repo', toplevel: '/repo', commonDir: '/repo/.git' }
+
+/** A curated note's metadata as a session's own agent writes it through
+ *  the library: its session named, no writer claimed. */
+function sessionNote(session: string, type: string): Record<string, unknown> {
+  return { type, _cc_session_id: session }
+}
 
 function autoMeta(session: string, role = 'user'): Record<string, unknown> {
   return { source: 'auto-capture', role, session_id: session }
@@ -97,6 +111,16 @@ export const flatStoreDedupDefiner = (reg: Registry<World>): void => {
     expect(second!.deduplicated).toBe(true)
     expect(second!.nodeId).toBe(first!.nodeId)
     expect(w.store!.status().totalNodes).toBe(1)
+    if (w.laneSessions) {
+      // The curated case: the second insert came from the later session,
+      // and the hit says it is the survivor's own lane, the first
+      // session's row unchanged in its session.
+      const [a, b] = w.laneSessions
+      expect(w.pendingInserts!.map((i) => i.opts?.metadata?.['_cc_session_id'])).toEqual([a, b])
+      expect(second!.survivor).toEqual({ writer: a, lane: 'main', callerLane: 'main', sameLane: true })
+      const row = w.store!.store.database.prepare('SELECT session_key FROM nodes WHERE node_id = ?').get(first!.nodeId) as { session_key: string }
+      expect(row.session_key).toBe(a)
+    }
   })
 
   reg.define(/^three identical auto-captured messages each spaced just inside the window of the previous$/, async (w) => {
@@ -149,9 +173,12 @@ export const flatStoreDedupDefiner = (reg: Registry<World>): void => {
   reg.define(/^an agent-authored note and an identical insert in a later session$/, async (w) => {
     w.path = freshDbPath(w)
     w.store = await openStore(w, w.path)
+    // Two sessions of the main checkout, the later one started an hour on.
+    w.laneSessions = ['cc-morning', 'cc-afternoon']
+    for (const [i, sess] of w.laneSessions.entries()) registerSelf(w.store.store.database, sess, MAIN_CHECKOUT, T0 + i * 3600)
     w.pendingInserts = [
-      { content: '## DECISION: the flange is locked', opts: { metadata: { type: 'decision' } } },
-      { content: '## DECISION: the flange is locked', opts: { metadata: { type: 'decision' } } },
+      { content: '## DECISION: the flange is locked', opts: { createdAt: T0 + 10, metadata: sessionNote('cc-morning', 'decision') } },
+      { content: '## DECISION: the flange is locked', opts: { createdAt: T0 + 3610, metadata: sessionNote('cc-afternoon', 'decision') } },
     ]
   })
 
@@ -199,8 +226,10 @@ export const flatStoreDedupDefiner = (reg: Registry<World>): void => {
   reg.define(/^a store containing auto-capture and curated rows with known fingerprints$/, async (w) => {
     w.path = freshDbPath(w)
     w.store = await openStore(w, w.path)
+    w.laneSessions = ['cc-before', 'cc-after']
+    for (const [i, sess] of w.laneSessions.entries()) registerSelf(w.store.store.database, sess, MAIN_CHECKOUT, T0 + i)
     await w.store.insert('auto probe row', { createdAt: T0, metadata: autoMeta('s') })
-    await w.store.insert('curated probe note', { metadata: { type: 'note' } })
+    await w.store.insert('curated probe note', { metadata: sessionNote('cc-before', 'note') })
     await w.store.close()
   })
 
@@ -209,9 +238,13 @@ export const flatStoreDedupDefiner = (reg: Registry<World>): void => {
   })
 
   reg.define(/^time-bounded and global dedup behave identically to before the reopen$/, async (w) => {
-    // Curated: still globally idempotent.
-    const curated = await w.store!.insert('curated probe note', { metadata: { type: 'note' } })
+    // Curated: still idempotent across sessions, the feature's "global"
+    // (its title, since D391: "across sessions for curated"): the same
+    // note from another session of the lane, after the reopen, finds the
+    // row the first session wrote before it.
+    const curated = await w.store!.insert('curated probe note', { metadata: sessionNote('cc-after', 'note') })
     expect(curated.deduplicated).toBe(true)
+    expect(curated.survivor).toMatchObject({ writer: 'cc-before', lane: 'main', sameLane: true })
     // Auto inside the window of the stored occurrence: dedups.
     const autoNear = await w.store!.insert('auto probe row', {
       createdAt: T0 + DEDUP_WINDOW_SECS - 5,
@@ -238,6 +271,10 @@ export const flatStoreDedupDefiner = (reg: Registry<World>): void => {
     const again = await w.store!.insert('the plan for tomorrow morning', { metadata: { next_session: true } })
     expect(again.deduplicated).toBe(true)
     expect(again.nodeId).toBe(w.originalId)
+    // The survivor's own lane: neither row names a writer or a session,
+    // so both are the main lane's (D379), and nothing is left unarmed.
+    expect(again.survivor).toMatchObject({ lane: 'main', callerLane: 'main', sameLane: true })
+    expect(again.flagsNotArmed).toBeUndefined()
   })
 
   reg.define(/^no new node is created and the original carries the pointer tags again$/, (w) => {

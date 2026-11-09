@@ -502,7 +502,11 @@ the library, `FlatStore.lookupKeyReply({ run, key })`.
 **Export a run as a unit.** `treecontext export handoffs/login-run.json
 --run login` writes that run's skeleton: the open and close, every brief,
 every checkpoint, each leg's first moment and summary, and the legs'
-registrations, with no captured tool output. `--run login --whole --yes`
+registrations, with no captured tool output. The one exception is a
+worker that failed or printed nothing: its summary row holds the end of
+its error stream, where a CLI may write command output, and the export's
+reply and the file's head name each such leg, nothing redacted.
+`--run login --whole --yes`
 adds every row of every leg, after the same secrets warning. The agent
 does the same with `treecontext_export` and `run` (`form: "whole"` with
 `secrets_acknowledged: true`). Importing the file puts the run in a lane

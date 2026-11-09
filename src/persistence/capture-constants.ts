@@ -153,7 +153,8 @@ export const STAGING_CLAIM_TTL_SECS = 120
  *  within this window of the existing occurrence dedups (suppresses
  *  Stop-hook double-fire); outside it, a genuine recurrence gets its own
  *  node. Compared on CAPTURE timestamps, never drain-time wall clock
- *  (JF-4). Curated content ignores this — global idempotent dedup. */
+ *  (JF-4). Curated content ignores this — idempotent dedup across
+ *  sessions (a ticket-door worker's within its own lane, D391). */
 export const DEDUP_WINDOW_SECS = 300
 
 /** V2 echo-heal correlation window (seconds; docs/session-identity.md

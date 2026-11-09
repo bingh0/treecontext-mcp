@@ -904,6 +904,96 @@ export const orchestrationDefiner = (reg: Registry<OrchestrationWorld>): void =>
     expect(lines[at + 1]).toMatch(new RegExp(`^ {2}referenced by: ${w.noteId}, tester, \\d+ minutes? old: "plan: rework the login form`))
   })
 
+  // ── D391: a dedup hit modifies no other lane's row, and says so ──
+  //
+  // Both lanes are real checkouts of one repository, each session started
+  // there by the real SessionStart hook, each insert through the tools of a
+  // server opened under that session (laneNote, laneChapter): the stamp is
+  // the registry's. The survivor is read with SQL before and after the hit.
+  reg.define(/^the note "([^"]+)" written by the worktree "([^"]+)"'s own agent$/, async (w, text$, name$) => {
+    await openGitWorld(w)
+    w.laneSessions = { main: w.sessionId! }
+    const lane = `worktree:${String(name$)}`
+    w.entries = { [lane]: await laneNote(w, lane, String(text$)) }
+  })
+  reg.define(/^the chapter summary "([^"]+)" in the worktree "([^"]+)", which the worktree's own agent has since superseded$/, async (w, text$, name$) => {
+    await openGitWorld(w)
+    w.laneSessions = { main: w.sessionId! }
+    const lane = `worktree:${String(name$)}`
+    const old = await laneChapter(w, lane, String(text$))
+    // The worktree's own agent retires it, through the tools of its own
+    // session's server (laneChapter left that client open).
+    const reply = await insert(w, 'plan: wire the login form and its CSRF test', { next_session: true }, [old.id])
+    expect(reply).toMatchObject({ writer: lane, writer_src: 'self', superseded: [old.id] })
+    const m = rawMeta(w, old.id)
+    expect(m['next_session']).toBeUndefined()
+    expect(m['superseded_by']).toBe(reply['node_id'])
+    w.entries = { [lane]: old, [`${lane}#newer`]: { id: reply['node_id'] as string, text: 'plan: wire the login form and its CSRF test' } }
+    w.chapterRow = rawRow(w, old.id)
+  })
+  reg.define(/^a session in the main checkout inserts "([^"]+)" through the tools( with next_session set)?$/, async (w, text$, pointer$) => {
+    await mcpOver(w, { ccSessionId: w.laneSessions!['main']! })
+    w.clientSession = w.laneSessions!['main']!
+    w.noteReply = await insert(w, String(text$), pointer$ ? { next_session: true } : {})
+    expect(w.noteReply['deduplicated'], JSON.stringify(w.noteReply)).toBe(true)
+  })
+  reg.define(/^the reply says the insert was deduplicated onto the worktree's row, naming its writer and the lane "([^"]+)"$/, (w, lane$) => {
+    const lane = String(lane$)
+    const own = w.entries![lane]!
+    const reply = w.noteReply!
+    expect([reply['deduplicated'], reply['node_id']]).toEqual([true, own.id])
+    // The survivor's writer and lane, as the row holds them and the
+    // registry places its session: never the caller's stamp.
+    expect(rawMeta(w, own.id)['_writer']).toBe(lane)
+    expect([reply['writer'], reply['lane']]).toEqual([lane, lane])
+    expect(reply['writer_src']).toBeUndefined()
+    expect(String(reply['dedup_note'])).toContain(`as entry ${own.id}, written by ${lane} in the lane "${lane}"`)
+  })
+  reg.define(/^the reply says that nothing landed in the main checkout's lane$/, (w) => {
+    const reply = w.noteReply!
+    expect([reply['landed'], reply['caller_lane']]).toEqual([false, 'main'])
+    expect(String(reply['dedup_note'])).toMatch(/so no new entry was written: nothing landed in your lane \("main"\)\.$/)
+  })
+  reg.define(/^the store holds one row of that text, in the worktree's lane$/, (w) => {
+    const lane = Object.keys(w.entries!).find((k) => k.startsWith('worktree:'))!
+    const own = w.entries![lane]!
+    const rows = storedRows(w, '1').filter((r) => decodeContent(r.content) === own.text)
+    expect(rows.map((r) => r.node_id)).toEqual([own.id])
+    const row = rawRow(w, own.id)
+    expect(row['session_key']).toBe(w.laneSessions![lane])
+    expect(rawMeta(w, own.id)).toMatchObject({ _writer: lane, _writer_src: 'self' })
+    // And the main checkout's session holds no row of it.
+    expect(storedRows(w, 'session_key = ?', w.laneSessions!['main']!).filter((r) => decodeContent(r.content) === own.text)).toHaveLength(0)
+  })
+  reg.define(/^the worktree's chapter summary is unchanged byte for byte and is still no live pointer$/, (w) => {
+    const lane = Object.keys(w.entries!).find((k) => k.startsWith('worktree:') && !k.endsWith('#newer'))!
+    const id = w.entries![lane]!.id
+    expect(w.noteReply!['node_id']).toBe(id)
+    const now = rawRow(w, id)
+    for (const k of Object.keys(w.chapterRow!)) {
+      const before = w.chapterRow![k]
+      const after = now[k]
+      if (Buffer.isBuffer(before) || before instanceof Uint8Array) expect(Buffer.from(after as Uint8Array).equals(Buffer.from(before)), k).toBe(true)
+      else expect(after, k).toEqual(before)
+    }
+    const m = rawMeta(w, id)
+    expect(m['next_session']).toBeUndefined()
+    expect(m['status']).not.toBe('active')
+    // The reply says the tag went nowhere, as the refs of a hit do.
+    expect(w.noteReply!['flags_not_armed']).toEqual(['next_session'])
+    expect(String(w.noteReply!['flags_note'])).toContain(`That entry is another lane's ("${lane}")`)
+  })
+  reg.define(/^the main checkout's status lists no pointer to it$/, async (w) => {
+    const lane = Object.keys(w.entries!).find((k) => k.startsWith('worktree:') && !k.endsWith('#newer'))!
+    const id = w.entries![lane]!.id
+    const own = pointersOf(await statusOf(w, w.laneSessions!['main']!)).map((p) => p.node_id)
+    const every = pointersOf(await statusOf(w, w.laneSessions!['main']!, { scope: 'all' })).map((p) => p.node_id)
+    expect(own).not.toContain(id)
+    expect(every).not.toContain(id)
+    // Every lane is read: the worktree's own newer chapter is listed.
+    expect(every).toContain(w.entries![`${lane}#newer`]!.id)
+  })
+
   // ── D376: a lane read from the registry ──
   //
   // The undetermined writers: a client the server cannot place writes
@@ -1661,6 +1751,15 @@ async function laneChapter(w: OrchestrationWorld, lane: string, text: string): P
   await mcpOver(w, { ccSessionId: laneSession(w, lane) })
   const reply = await insert(w, text, { next_session: true })
   expect(reply).toMatchObject({ writer: lane, writer_src: 'self' })
+  return { id: reply['node_id'] as string, text }
+}
+
+/** A plain note written through the tools by the session the world keeps
+ *  for `lane`, stamped from the registry with that lane's writer. */
+async function laneNote(w: OrchestrationWorld, lane: string, text: string): Promise<{ id: string; text: string }> {
+  await mcpOver(w, { ccSessionId: laneSession(w, lane) })
+  const reply = await insert(w, text, {})
+  expect(reply).toMatchObject({ writer: lane, writer_src: 'self', deduplicated: false })
   return { id: reply['node_id'] as string, text }
 }
 

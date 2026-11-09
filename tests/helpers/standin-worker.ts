@@ -72,6 +72,8 @@ if (step.envTo !== undefined) writeFileSync(step.envTo, JSON.stringify(process.e
 const label = step.label ?? (rerun ? 'second run' : 'first run')
 const at = (): Record<string, number> => (step.at !== undefined ? { createdAt: step.at } : {})
 const reads: { query?: Record<string, unknown>; status?: Record<string, unknown> } = {}
+// Each treecontext_insert reply its CLI received, parsed, in order (D391).
+const inserts: Array<Record<string, unknown>> = []
 const handshakes: string[] = []
 const ownEnv = (): Record<string, string> =>
   Object.fromEntries(Object.entries(process.env).filter((e): e is [string, string] => e[1] !== undefined))
@@ -103,12 +105,12 @@ if (leg && (step.viaTools || step.reads)) {
   const client = new Client({ name: 'standin-worker', version: '0' })
   await client.connect(transport)
   try {
-    for (const text of step.texts ?? []) await client.callTool({ name: 'treecontext_insert', arguments: { content: text } })
-    for (let i = 1; i <= (step.notes ?? 0); i++) {
-      await client.callTool({ name: 'treecontext_insert', arguments: { content: `${label} note ${i} of ${leg.sessionId}: step ${i} of the work` } })
-    }
     const replyOf = (res: unknown): Record<string, unknown> =>
       JSON.parse(((res as { content: Array<{ text: string }> }).content[0]!).text) as Record<string, unknown>
+    for (const text of step.texts ?? []) inserts.push(replyOf(await client.callTool({ name: 'treecontext_insert', arguments: { content: text } })))
+    for (let i = 1; i <= (step.notes ?? 0); i++) {
+      inserts.push(replyOf(await client.callTool({ name: 'treecontext_insert', arguments: { content: `${label} note ${i} of ${leg.sessionId}: step ${i} of the work` } })))
+    }
     if (step.reads?.query) reads.query = replyOf(await client.callTool({ name: 'treecontext_query', arguments: step.reads.query }))
     if (step.reads?.status) reads.status = replyOf(await client.callTool({ name: 'treecontext_status', arguments: step.reads.status }))
   } finally { await client.close() }
@@ -135,6 +137,7 @@ await store.close()
 if (log) {
   appendFileSync(log, `${JSON.stringify({
     ...record, ...(Object.keys(reads).length > 0 ? { reads } : {}), ...(handshakes.length > 0 ? { handshakes } : {}),
+    ...(inserts.length > 0 ? { inserts } : {}),
   })}\n`)
 }
 if (step.waitFor !== undefined) {

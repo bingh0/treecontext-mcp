@@ -25,7 +25,7 @@ import { fileURLToPath } from 'node:url'
 import { sessionOf, NO_SESSION } from './dedup-identity.js'
 import { WRITER_STAMP_KEYS } from './persistence/session-registry.js'
 import { SUBAGENT_SUMMARY_KIND, LEG_REGISTRATION_KEY, FIRST_MOMENT_KIND } from './run-kinds.js'
-import { FIRST_MOMENTS_NOTE, doorLineNote, firstMomentLegName, type RunForm } from './run-export.js'
+import { FIRST_MOMENTS_NOTE, doorLineNote, errorTailNote, firstMomentLegName, summaryLegName, type RunForm } from './run-export.js'
 
 /** Where an import came from and who ran it — the importer's own marks. */
 export interface HandoffSource {
@@ -228,7 +228,7 @@ export function importStep(path: string | null, outsideProject = false): string 
     + `or run in this project's directory: treecontext import ${shellWord(path)}`
 }
 
-function holdsSentence(form: HandoffForm, n: number, run?: string, nodes: readonly unknown[] = []): string {
+function holdsSentence(form: HandoffForm, n: number, run?: string, nodes: readonly unknown[] = [], errorTails = false): string {
   const entries = `${n} ${n === 1 ? 'entry' : 'entries'}`
   if (run !== undefined) {
     const kinds = new Set((nodes as Array<{ metadata?: Record<string, unknown> | null }>).map((x) => x.metadata?.['kind']))
@@ -237,6 +237,8 @@ function holdsSentence(form: HandoffForm, n: number, run?: string, nodes: readon
     return form === 'skeleton'
       ? `${entries}: the skeleton of the run ${JSON.stringify(run)}: ${opened}every brief, every checkpoint, every leg's first-moment `
         + "row whole and summary row, and each leg's registration as data; no captured tool output"
+        // D398: but the end of a failed worker's error stream, named under error_tails.
+        + (errorTails ? ' but the end of the error stream the summary rows named under error_tails hold' : '')
       : `${entries}: the run ${JSON.stringify(run)} whole, every row of every leg, captured tool output included, which can hold secrets, tokens and keys`
   }
   return form === 'summaries'
@@ -263,6 +265,9 @@ export interface BuildHandoffOptions {
   run?: string
 }
 
+/** A run export's reply lines by their keys (BuiltHandoff.runLines). */
+export interface RunLines { first_moments?: string; door_lines?: string; error_tails?: string }
+
 export interface BuiltHandoff {
   /** The file's (or the inline reply's) exact text. */
   text: string
@@ -272,10 +277,15 @@ export interface BuiltHandoff {
   total: number
   /** Entries left out by the inline cap (always 0 for a file). */
   omitted: number
-  /** A run's export: the lines its reply carries beyond the counts (D318):
-   *  what the first moments are, and which of them are a door's line and
-   *  not a prompt. Empty for every other export. */
+  /** A run's export: the lines its reply carries beyond the counts (D318),
+   *  in order: what the first moments are, which of them are a door's line
+   *  and not a prompt (D368), and which summary rows hold the end of their
+   *  worker's error stream (D398). Empty for every other export. */
   notes: string[]
+  /** The same lines under the keys the reply and the file's head carry
+   *  them by, in the same order: `first_moments`, `door_lines`,
+   *  `error_tails`, each present only when its line is. */
+  runLines: RunLines
   /** A run's export: the runs its legs opened, which the skeleton does not
    *  carry (D311, D360), and the one line that says so; empty and null
    *  when it opened none. */
@@ -319,7 +329,8 @@ export function buildHandoff(store: HandoffExporter, opts: BuildHandoffOptions):
   const { nodes, total } = rows
   const innerRuns = rows.innerRuns ?? []
   const omitted = total - nodes.length
-  const notes = opts.run !== undefined ? runNotes(nodes) : []
+  const runLines = opts.run !== undefined ? runNotes(nodes, form) : {}
+  const notes = Object.values(runLines)
   const innerRunsLine = innerRuns.length > 0
     ? `This run opened the ${innerRuns.length === 1 ? 'run' : 'runs'} ${innerRuns.join(', ')}, which this file does not carry: export ${innerRuns.length === 1 ? 'it' : 'each'} by name.`
     : null
@@ -329,14 +340,15 @@ export function buildHandoff(store: HandoffExporter, opts: BuildHandoffOptions):
     exported_at: at,
     project: opts.project,
     treecontext_version: treecontextVersion(),
-    holds: holdsSentence(form, nodes.length, opts.run, nodes),
+    holds: holdsSentence(form, nodes.length, opts.run, nodes, runLines.error_tails !== undefined),
     to_import: importStep(opts.path, opts.outsideProject === true),
     form,
-    // D318's line and, after it, D368's door-line note: the head carries
-    // them as the tool's reply does, each under its own key, so a reader of
-    // the file alone reads the same two lines (`first_moments`, `door_lines`).
+    // D318's line and, after it, D368's door-line note and D398's error-
+    // tail note: the head carries them as the tool's reply does, each under
+    // its own key, so a reader of the file alone reads the same lines
+    // (`first_moments`, `door_lines`, `error_tails`).
     ...(opts.run !== undefined
-      ? { run: opts.run, first_moments: notes[0], ...(notes[1] ? { door_lines: notes[1] } : {}), ...(innerRuns.length > 0 ? { inner_runs: innerRuns } : {}) }
+      ? { run: opts.run, ...runLines, ...(innerRuns.length > 0 ? { inner_runs: innerRuns } : {}) }
       : {}),
     node_count: nodes.length,
     version: 1,
@@ -350,19 +362,31 @@ export function buildHandoff(store: HandoffExporter, opts: BuildHandoffOptions):
   }
   const file = { ...head, nodes }
   const text = inline ? JSON.stringify(file) : `${JSON.stringify(file, null, 2)}\n`
-  return { text, entries: nodes.length, total, omitted, notes, innerRuns, innerRunsLine }
+  return { text, entries: nodes.length, total, omitted, notes, runLines, innerRuns, innerRunsLine }
 }
 
-/** The lines a run export's reply carries (D318): one that says what the
- *  first moments are, and one for each kind of first moment that is a
- *  door's line and not a prompt. Only when the file holds first moments. */
-function runNotes(nodes: unknown[]): string[] {
-  const firsts = (nodes as Array<{ content?: unknown; metadata?: Record<string, unknown> | null }>)
+/** The lines a run export's reply carries (D318, D368, D398): one that
+ *  says what the first moments are and one for the first moments that are
+ *  a door's line and not a prompt, when the file holds first moments; and
+ *  in the skeleton, one for the summary rows that hold the end of their
+ *  worker's error stream, when any does. */
+function runNotes(nodes: unknown[], form: HandoffForm): RunLines {
+  const rows = nodes as Array<{ content?: unknown; metadata?: Record<string, unknown> | null }>
+  const firsts = rows
     .filter((n) => n.metadata?.['kind'] === FIRST_MOMENT_KIND && typeof n.content === 'string')
     .map((n) => ({ content: n.content as string, leg: firstMomentLegName(n.metadata ?? null) }))
-  if (firsts.length === 0) return []
-  const door = doorLineNote(firsts)
-  return [FIRST_MOMENTS_NOTE, ...(door !== null ? [door] : [])]
+  const summaries = rows
+    .filter((n) => n.metadata?.['kind'] === SUBAGENT_SUMMARY_KIND && typeof n.content === 'string')
+    .map((n) => ({ content: n.content as string, leg: summaryLegName(n.metadata ?? null) }))
+  const door = firsts.length > 0 ? doorLineNote(firsts) : null
+  // The whole form holds every captured row behind its acknowledgement;
+  // the error-tail line is the skeleton's, the form said to hold none.
+  const tails = form === 'skeleton' ? errorTailNote(summaries) : null
+  return {
+    ...(firsts.length > 0 ? { first_moments: FIRST_MOMENTS_NOTE } : {}),
+    ...(door !== null ? { door_lines: door } : {}),
+    ...(tails !== null ? { error_tails: tails } : {}),
+  }
 }
 
 /** A path resolved against the project directory, or the refusal. */

@@ -125,6 +125,7 @@ export const workersDefiner = (reg: Registry<WorkersWorld>): void => {
   ticketDoorSteps(define)
   claudeChildSteps(define)
   workerLaneSteps(define)
+  workerDedupSteps(define)
   failedRunSteps(define)
   sessionVariableSteps(define)
 
@@ -1852,6 +1853,85 @@ function owingSpec(w: WorkersWorld): WorkerSpec {
 // reads through its own tools, as a hook-less worker's CLI does (a real
 // `treecontext serve` it starts with the ticket and the lane the door
 // named): the replies are what that serve said to it, recorded whole.
+
+// ── D391, D288: a worker's curated dedup is its own lane's ──
+//
+// The main session is a real git checkout's, started by the real
+// SessionStart hook and writing through the tools of a server opened under
+// its session; each worker runs through the real ticket door (the library
+// spawner) and writes through its own tools, a real `treecontext serve` it
+// starts with the ticket and the lane the door named, the reply its CLI
+// received recorded whole (the stand-in's `inserts`). Both workers take the
+// role "builder", so the writer stamp alone cannot tell their rows apart:
+// only the lane, the worker's whole session, does. Every Then reads the
+// store file with SQL.
+
+/** The worker's run: one note through its own tools, then "done". */
+async function workerInserts(w: WorkersWorld, name: string, text: string): Promise<void> {
+  const out = await runWorker(w, {
+    spawner: 'library', prompt: 'record what you found about the login form',
+    ticket: ticketFields(w, { run: 'r-dedup', key: 'login-form', role: 'builder', checkpointer: 'builder' }),
+    plan: { first: { viaTools: true, texts: [text], print: 'done' } },
+  }, name)
+  expect(out.exitCode).toBe(0)
+  const replies = out.log[0]?.inserts ?? []
+  expect(replies, 'the reply its CLI received').toHaveLength(1)
+  w.facts![`insert:${name}`] = replies[0]
+  w.facts!['dedup-text'] = text
+}
+
+/** The rows of a text, with their lane, stamp and dedup class, from the file. */
+function rowsOfText(w: WorkersWorld, text: string): Array<{ node_id: string; session_key: string; cls: string; m: Record<string, unknown> }> {
+  return rawAll<{ node_id: string; session_key: string; cls: string; c: Buffer | string; m: string }>(w,
+    'SELECT node_id, session_key, dedup_class AS cls, content AS c, metadata_json AS m FROM nodes ORDER BY created_at, rowid')
+    .filter((r) => decodeContent(r.c) === text)
+    .map((r) => ({ node_id: r.node_id, session_key: r.session_key, cls: r.cls, m: JSON.parse(r.m) as Record<string, unknown> }))
+}
+
+export function workerDedupSteps(define: (re: RegExp, fn: (w: WorkersWorld, ...caps: string[]) => void | Promise<void>) => void): void {
+  define(/^the main session in the main checkout that has inserted the note "([^"]+)"$/, async (w, text) => {
+    await openGitSession(w, `cc-${randomUUID().slice(0, 12)}`, 'main')
+    const client = await mcpOver(w, { ccSessionId: w.sessionId! })
+    const reply = parseTool(await client.callTool({ name: 'treecontext_insert', arguments: { content: text } }))
+    expect(reply).toMatchObject({ deduplicated: false, writer: 'main', writer_src: 'self' })
+    w.facts!['first'] = { lane: w.sessionId!, writer: 'main', src: 'self', id: reply['node_id'] }
+  })
+  define(/^a `codex exec` worker that has inserted the note "([^"]+)"$/, async (w, text) => {
+    await openGitSession(w, `cc-${randomUUID().slice(0, 12)}`, 'main')
+    await workerInserts(w, 'first', text!)
+    const reply = w.facts!['insert:first'] as Record<string, unknown>
+    expect(reply).toMatchObject({ deduplicated: false, writer: 'builder', writer_src: 'declared' })
+    w.facts!['first'] = { lane: outOf(w, 'first').sessionId!, writer: 'builder', src: 'declared', id: reply['node_id'] }
+  })
+  define(/^a (?:second )?`codex exec` worker inserts "([^"]+)" through its tools$/, async (w, text) => {
+    await workerInserts(w, 'second', text!)
+  })
+  define(/^the store holds two rows of that text, one in each lane, each stamped with its own writer$/, (w) => {
+    const first = w.facts!['first'] as { lane: string; writer: string; src: string; id: string }
+    const second = outOf(w, 'second').sessionId!
+    const rows = rowsOfText(w, w.facts!['dedup-text'] as string)
+    expect(rows.map((r) => r.session_key)).toEqual([first.lane, second])
+    expect(first.lane).not.toBe(second)
+    const [a, b] = rows as [typeof rows[0], typeof rows[0]]
+    expect(a.node_id).toBe(first.id)
+    expect([a.m['_writer'], a.m['_writer_src']]).toEqual([first.writer, first.src])
+    // The worker's row: its role as writer, the door's agent id, its own
+    // session, which is its lane (D288), under its registration.
+    expect([b.m['_writer'], b.m['_writer_src'], b.m['_writer_agent_id'], b.m['_door']]).toEqual(['builder', 'declared', WORKER_AGENT_ID, 'tools'])
+    expect(rawOne(w, "SELECT kind, agent_type FROM session_registry WHERE session_id = ? AND agent_id = 'worker'", second)).toMatchObject({ kind: 'worker', agent_type: 'builder' })
+    // A worker's row dedups in its own lane's class; the main session's in the curated one.
+    expect(b.cls).toBe('worker_curated')
+    expect(a.cls).toBe(first.writer === 'main' ? 'curated' : 'worker_curated')
+  })
+  define(/^the second insert's reply says its row landed, not that it was deduplicated$/, (w) => {
+    const reply = w.facts!['insert:second'] as Record<string, unknown>
+    const rows = rowsOfText(w, w.facts!['dedup-text'] as string)
+    expect(reply['deduplicated']).toBe(false)
+    expect(reply['node_id']).toBe(rows[1]!.node_id)
+    expect([reply['writer'], reply['writer_src']]).toEqual(['builder', 'declared'])
+    for (const k of ['landed', 'lane', 'caller_lane', 'dedup_note']) expect(reply[k], k).toBeUndefined()
+  })
+}
 
 const ORIENTATION_QUERY = 'what was I working on, what was the next step'
 

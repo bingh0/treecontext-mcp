@@ -1,10 +1,11 @@
+import { randomBytes } from 'node:crypto'
 import { join } from 'node:path'
 import { expect } from 'vitest'
 import { type Registry } from 'gherkin-node-test/vitest'
 import { createServer } from '../../../src/server/server.js'
 import { writeSessionBeacon } from '../../../src/session-beacon.js'
 import { mcpOver, parseTool, reopenAsLaterSession, exportNode, rawAll } from '../world.js'
-import { type CaptureWorld, openCaptureWorld, spawnHook, drainStaging } from '../capture-harness.js'
+import { type CaptureWorld, openCaptureWorld, spawnHook, drainStaging, runHook } from '../capture-harness.js'
 
 // ── journal-session-echo ────────────────────────────────────────────────
 //
@@ -94,6 +95,22 @@ export const sessionEchoDefiner = (reg: Registry<SessionEchoWorld>): void => {
 
   const NOTE = 'ECHO NOTE: the valve ruling was recorded before the beacon could say who wrote it'
 
+  /** A session started in the project's checkout by the real SessionStart
+   *  hook, which registers its self there (D190): sessions started so are
+   *  sessions of one lane, the checkout's (D391, D379). */
+  function startInCheckout(w: SessionEchoWorld, sessionId: string): void {
+    runHook(w, 'session-start', { session_id: sessionId, hook_event_name: 'SessionStart', source: 'startup', cwd: w.proj })
+  }
+
+  /** The lane the registry places each session in, read with SQL: its
+   *  self registration's worktree, none being the main checkout. */
+  function placedLanes(w: SessionEchoWorld, ...sessions: string[]): Array<string | null> {
+    return sessions.map((s) => {
+      const r = rawAll<{ worktree: string | null }>(w, "SELECT worktree FROM session_registry WHERE session_id = ? AND agent_id = ''", s)[0]
+      return r === undefined ? null : r.worktree === null ? 'main' : `worktree:${r.worktree}`
+    })
+  }
+
   reg.define(/^a curated insert whose ladder resolution came up absent$/, async (w: SessionEchoWorld) => {
     await openCaptureWorld(w)
     await insertThroughServer(w, NOTE)
@@ -170,6 +187,37 @@ export const sessionEchoDefiner = (reg: Registry<SessionEchoWorld>): void => {
       metadata: { _cc_session_id: 'cc-old-owner', _cc_session_src: 'beacon-unanimous' },
     })
     w.eNoteId = r.nodeId
+  })
+  reg.define(/^a new identical insert from another session of the same lane that deduplicated onto it$/, async (w: SessionEchoWorld) => {
+    // The old row's session and the new one, both started in the one
+    // checkout: one lane, as the registry places them.
+    w.eSessionB = `cc-${randomBytes(6).toString('hex')}`
+    startInCheckout(w, 'cc-old-owner')
+    startInCheckout(w, w.eSessionB)
+    expect(placedLanes(w, 'cc-old-owner', w.eSessionB)).toEqual(['main', 'main'])
+    const client = await mcpOver(w, { ccSessionId: w.eSessionB, info: { storePath: w.dbPath! } })
+    const res = await client.callTool({ name: INSERT_TOOL, arguments: { content: NOTE } })
+    const parsed = parseTool(res)
+    expect(parsed['deduplicated'], 'the second insert must dedup onto the survivor').toBe(true)
+    expect(parsed['node_id']).toBe(w.eNoteId)
+    // A hit in its own lane, as the reply says (D391).
+    expect([parsed['lane'], parsed['caller_lane'], parsed['landed']]).toEqual(['main', 'main', false])
+    w.eToolResponse = (res as { content: unknown }).content
+  })
+  reg.define(/^two sessions of one lane that insert identical content within one correlation window$/, async (w: SessionEchoWorld) => {
+    await openCaptureWorld(w)
+    w.eSessionB = `cc-${randomBytes(6).toString('hex')}`
+    startInCheckout(w, w.sessionId!)
+    startInCheckout(w, w.eSessionB)
+    expect(placedLanes(w, w.sessionId!, w.eSessionB)).toEqual(['main', 'main'])
+    // The first session's insert, its attribution left to its echo.
+    await insertThroughServer(w, NOTE)
+    spawnHook(w, 'post-tool-use', echoPayload(w, { content: NOTE }))
+    const clientB = await mcpOver(w, { claudeCwd: w.proj!, info: { storePath: w.dbPath! } })
+    const resB = await clientB.callTool({ name: INSERT_TOOL, arguments: { content: NOTE } })
+    w.eToolResponse = (resB as { content: unknown }).content
+    spawnHook(w, 'post-tool-use', echoPayload(w, { content: NOTE }, w.eSessionB))
+    w.eDedupResponse = parseTool(resB)
   })
   reg.define(/^the drain processes the new insert's echo$/, async (w: SessionEchoWorld) => {
     spawnHook(w, 'post-tool-use', echoPayload(w, { content: NOTE }, w.eSessionB))

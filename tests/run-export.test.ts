@@ -16,7 +16,9 @@ import { openNodeSqlite } from '../src/persistence/node-sqlite.js'
 import { FlatStore } from '../src/flat-store.js'
 import { buildHandoff, exportRun, checkRunForm, RUN_SECRETS_WARNING, writeHandoffFile, resolveProjectPath, isHandoffFile } from '../src/handoff.js'
 import { RUN_ROWS_SQL, HANDOFF_CLAIMS_KEY } from '../src/runs.js'
-import { FIRST_MOMENTS_NOTE, PROMPT_UNSEEN_SENTENCE, isDoorLine, doorLineNote, registrationRowId } from '../src/run-export.js'
+import { FIRST_MOMENTS_NOTE, PROMPT_UNSEEN_SENTENCE, isDoorLine, doorLineNote, registrationRowId, holdsErrorTail, errorTailNote } from '../src/run-export.js'
+import { failedRunLine } from '../src/first-moment.js'
+import { summaryOf } from '../src/ticket-door.js'
 import { hooksFirstMomentText } from '../src/flat-store.js'
 import { WORKER_AGENT_ID } from '../src/persistence/leg-registry.js'
 import { SUBAGENT_SUMMARY_KIND } from '../src/handoff.js'
@@ -494,5 +496,90 @@ describe('the export tool and the shell take the run', () => {
     const nope = spawnCli(['export', 'handoffs/n.json', '--run', 'nope', '--store', dbOf('a'), '--project-dir', proj, '--no-debug'], { home, cwd: proj })
     expect(nope.status).toBe(1)
     expect(existsSync(join(proj, 'handoffs', 'n.json'))).toBe(false)
+  })
+})
+
+describe('the skeleton names the legs whose summary row holds an error stream\'s end (D398)', () => {
+  /** makeRun, then a third worker whose run failed: its summary row is the
+   *  door's, composed as the ticket door composes it at exit (summaryOf). */
+  async function withFailedWorker(s: FlatStore): Promise<{ made: Made; failed: { sessionId: string; agentId: string } }> {
+    const made = await makeRun(s)
+    // makeRun closed the run; a worker of it still runs and exits (a
+    // review after the close, as a harness might).
+    const leg = await s.registerWorker({
+      door: 'library', ticket: { parent: { id: 'p1' }, run: 'r1', key: 'login-form', role: 'tester', checkpointer: 'builder', mintedAt: 4_499 },
+      process: here, at: 4_500,
+    })
+    const ref = { sessionId: leg.sessionId, agentId: WORKER_AGENT_ID }
+    const tail = 'FAIL src/login.test.ts\n  token sk-proj-abcdefgh12345678 rejected'
+    await s.retireWorker(ref, { output: summaryOf({ output: '', exit: { code: 1, signal: null }, errorTail: tail, errorChars: tail.length }), how: 'retired', summary: true, at: 4_600 })
+    return { made, failed: ref }
+  }
+
+  it('the failed-run line is told apart by its shape: all of the stream, its end, never the empty stream', () => {
+    expect(holdsErrorTail(failedRunLine({ code: 1, printedNothing: true, tail: 'boom', total: 4 }))).toBe(true)
+    expect(holdsErrorTail(`done\n\n${failedRunLine({ code: 2, printedNothing: false, tail: 'x'.repeat(2000), total: 9000 })}`)).toBe(true)
+    expect(holdsErrorTail(failedRunLine({ code: 0, printedNothing: true, tail: '', total: 0 }))).toBe(false)
+    expect(holdsErrorTail(failedRunLine({ code: 3, printedNothing: false, tail: '', total: 0 }))).toBe(false)
+    // A worker's own output quoting the words is not the door's line.
+    expect(holdsErrorTail('I saw "treecontext: the worker exited with code 1; its error stream, all 3 characters of it:" in a log')).toBe(false)
+    expect(errorTailNote([{ content: 'builder done', leg: 'builder' }])).toBeNull()
+  })
+
+  it('the reply, the CLI and the file\'s head carry the line, naming the failed leg alone; nothing is redacted', async () => {
+    const proj = join(tmpDir, 'proj')
+    mkdirSync(proj, { recursive: true })
+    const s = await open('a')
+    const { made, failed } = await withFailedWorker(s)
+    const out = exportRun(s, { run: 'r1', project: 'proj', path: 'handoffs/r1.json', abs: join(proj, 'handoffs', 'r1.json') })
+    await s.close()
+    expect(out.status).toBe('built')
+    if (out.status !== 'built') return
+    const line = out.built.runLines.error_tails!
+    expect(Object.keys(out.built.runLines)).toEqual(['first_moments', 'error_tails'])
+    expect(out.built.notes).toEqual([FIRST_MOMENTS_NOTE, line])
+    expect(line).toMatch(new RegExp(`^1 of the 3 summary rows holds the end of its worker's error stream \\(tester worker in session ${failed.sessionId}\\): a CLI may write command output there`))
+    for (const ref of [made.builder, made.reviewer]) expect(line).not.toContain(ref.sessionId)
+    // The file: its head carries the line beside the other two, says what
+    // it holds, and the summary row is whole, the token in it unredacted.
+    const file = JSON.parse(readFileSync(join(proj, 'handoffs', 'r1.json'), 'utf8')) as Record<string, unknown> & { nodes: Array<{ content: string; metadata: Record<string, unknown> }> }
+    expect(file['error_tails']).toBe(line)
+    expect(Object.keys(file).indexOf('error_tails')).toBe(Object.keys(file).indexOf('first_moments') + 1)
+    expect(String(file['holds'])).toContain('no captured tool output but the end of the error stream the summary rows named under error_tails hold')
+    const summary = file.nodes.find((n) => n.metadata['kind'] === SUBAGENT_SUMMARY_KIND && n.metadata['_cc_session_id'] === failed.sessionId)
+    expect(summary?.content).toContain('token sk-proj-abcdefgh12345678 rejected')
+    // The shell's door prints the same lines.
+    const home = join(tmpDir, 'home')
+    mkdirSync(home, { recursive: true })
+    const sk = spawnCli(['export', 'handoffs/by-shell.json', '--run', 'r1', '--store', dbOf('a'), '--project-dir', proj, '--no-debug'], { home, cwd: proj })
+    expect(sk.status, sk.out).toBe(0)
+    expect(sk.stdout.split('\n')).toContain(line)
+  })
+
+  it('the tool\'s reply carries the line after the first moments\' one; a run with no such leg has none', async () => {
+    const proj = join(tmpDir, 'proj')
+    mkdirSync(proj, { recursive: true })
+    const s = await open('a')
+    await withFailedWorker(s)
+    await makeRun(s, 'r2')
+    const server = createServer(s, { projectDir: proj })
+    const [a, b] = InMemoryTransport.createLinkedPair()
+    await server.connect(b)
+    const client = new Client({ name: 't', version: '0' })
+    await client.connect(a)
+    const call = async (args: Record<string, unknown>): Promise<Record<string, unknown>> =>
+      JSON.parse(((await client.callTool({ name: 'treecontext_export', arguments: args })) as { content: Array<{ text: string }> }).content[0]!.text) as Record<string, unknown>
+    const r1 = await call({ run: 'r1', path: 'handoffs/r1.json' })
+    expect(Object.keys(r1).indexOf('error_tails')).toBe(Object.keys(r1).indexOf('first_moments') + 1)
+    expect(String(r1['error_tails'])).toContain('tester worker in session')
+    const r2 = await call({ run: 'r2', path: 'handoffs/r2.json' })
+    expect(r2['first_moments']).toBe(FIRST_MOMENTS_NOTE)
+    expect(r2['error_tails']).toBeUndefined()
+    // The whole form says captured output is in it, behind its warning: no
+    // error-tail line there.
+    const whole = await call({ run: 'r1', form: 'whole', path: 'handoffs/w.json', secrets_acknowledged: true })
+    expect(whole['error_tails']).toBeUndefined()
+    await client.close()
+    await s.close()
   })
 })

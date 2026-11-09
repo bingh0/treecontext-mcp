@@ -9,8 +9,11 @@
  *    checkpoint under every key in order, every leg's first-moment row
  *    whole (D318) and summary row, and each leg's registration as data;
  *    enough to resume or review the run elsewhere, and no captured tool
- *    output. No acknowledgement is asked for it, so its reply says in one
- *    line what the first moments are (FIRST_MOMENTS_NOTE).
+ *    output but the end of a failed worker's error stream its summary row
+ *    holds (D384, D398). No acknowledgement is asked for it, so its reply
+ *    says in one line what the first moments are (FIRST_MOMENTS_NOTE), in
+ *    another which first moments are a door's line (D368), and in a third
+ *    which summary rows hold an error stream's end (D398).
  *  - `whole`: the skeleton plus every row of every leg's lane, behind the
  *    same secrets acknowledgement as the whole journal (D177).
  *
@@ -36,7 +39,7 @@ import {
   LEG_REGISTRATION_KIND, LEG_REGISTRATION_KEY, RUN_META_KEY, KEY_META_KEY, HANDOFF_CLAIMS_KEY,
 } from './run-kinds.js'
 import { STORE_WRITER } from './persistence/session-registry.js'
-import { legWriterOf, type LegRegistration, type LegKind, type LegDoor, type LegIdentity, type KeySource, type LegEnding } from './persistence/leg-registry.js'
+import { legWriterOf, WORKER_AGENT_ID, type LegRegistration, type LegKind, type LegDoor, type LegIdentity, type KeySource, type LegEnding } from './persistence/leg-registry.js'
 
 /** The forms of a run's export (D300). */
 export type RunForm = 'skeleton' | 'whole'
@@ -85,6 +88,58 @@ export function doorLineNote(rows: ReadonlyArray<{ content: string; leg: string 
   const tails = [...new Set(doors.map((r) => doorLineTail(r.content)))].map((t) => `"${t}"`).join(' or ')
   return `${doors.length} of the ${rows.length} first moments ${doors.length === 1 ? 'is' : 'are'} the door's own line, not a prompt (${legs}): `
     + `the prompt of ${doors.length === 1 ? 'that leg' : 'those legs'} rode on the Agent tool or the client's own argument and is not in the row, which ends ${tails}.`
+}
+
+/** D398: the shape of the failed-run line (first-moment.ts failedRunLine,
+ *  D384) when it holds the end of the error stream, all of it or its last
+ *  characters, never the empty stream's line: the one pattern a reader of
+ *  a summary row tells such a row by. Spelled here rather than beside the
+ *  composer because first-moment.ts reads runs.ts, which reads this
+ *  module; tests/run-export.test.ts holds the two together. */
+const ERROR_TAIL_LINE = /^treecontext: the worker exited with code -?\d+(?: having printed nothing)?; (?:its error stream, all \d+ characters of it|the last \d+ of the \d+ characters it wrote to its error stream, the earlier part was left out):$/m
+
+/** Whether a summary row holds the end of its worker's error stream: it
+ *  carries the failed-run line with a stream after it (D384, D398). */
+export function holdsErrorTail(content: string): boolean {
+  return ERROR_TAIL_LINE.test(content)
+}
+
+/**
+ * D398: the one reply line for the summary rows that hold the end of their
+ * worker's error stream (D384, D397: a worker that failed or printed
+ * nothing), told by the failed-run line (holdsErrorTail):
+ * which legs, and that a CLI may write command output there, so for those
+ * legs the skeleton carries captured output after all; nothing is redacted
+ * and nothing left out. Null when no summary row holds one.
+ */
+export function errorTailNote(rows: ReadonlyArray<{ content: string; leg: string }>): string | null {
+  const tails = rows.filter((r) => holdsErrorTail(r.content))
+  if (tails.length === 0) return null
+  const legs = [...new Set(tails.map((r) => r.leg))].join(', ')
+  const one = tails.length === 1
+  return `${tails.length} of the ${rows.length} summary rows ${one ? 'holds' : 'hold'} the end of ${one ? 'its' : 'their'} worker's error stream (${legs}): `
+    + `a CLI may write command output there, so for ${one ? 'that leg' : 'those legs'} this skeleton carries captured output after all, `
+    + 'as written: nothing is redacted and nothing is left out.'
+}
+
+/** How a summary row's leg is named in the reply (D398): its writer, and
+ *  its agent id, or for a ticket-door worker (its agent id the door's
+ *  `worker`) its session, which is its lane. An imported row is named
+ *  from its sender's stamps under the file's claims. */
+export function summaryLegName(meta: Record<string, unknown> | null): string {
+  const claims = meta?.[HANDOFF_CLAIMS_KEY]
+  const claimed = claims !== null && typeof claims === 'object' && !Array.isArray(claims) ? claims as Record<string, unknown> : {}
+  const stamp = (k: string): string | null => {
+    const own = meta?.[k]
+    if (typeof own === 'string' && own !== '') return own
+    const c = claimed[k]
+    return typeof c === 'string' && c !== '' ? c : null
+  }
+  const writer = stamp('_writer') ?? 'a leg'
+  const agentId = stamp('_writer_agent_id')
+  const session = typeof meta?.['session_id'] === 'string' ? meta['session_id'] : stamp('_cc_session_id')
+  if (agentId !== null && agentId !== WORKER_AGENT_ID) return `${writer} (agent ${agentId})`
+  return session !== null ? `${writer} worker in session ${session}` : `${writer} worker`
 }
 
 // ── A leg's registration, as a row ─────────────────────────────────

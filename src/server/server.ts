@@ -634,10 +634,31 @@ export function createServer(
           deduplicated: result.deduplicated,
           drift_detected: result.driftDetected,
         }
-        // D190: the writer the store stamped, said back — and when it
-        // could not tell the caller apart from the session's other live
-        // subagents, said so, never presented as fact.
-        if (stamp.src !== 'unregistered') {
+        // D391: a curated dedup hit landed no row, so the reply names the
+        // row that holds the text, its writer and its lane as every reader
+        // reads it (D379), never the caller's stamp, and says that nothing
+        // landed in the caller's lane.
+        const held = result.deduplicated ? result.survivor : undefined
+        if (held) {
+          response.writer = held.writer
+          response.lane = held.lane
+          response.caller_lane = held.callerLane
+          response.landed = false
+          response.dedup_note = held.sameLane
+            ? `This text is already in your own lane ("${held.lane}") as entry ${result.nodeId}, written by ${held.writer}, `
+              + 'so no new entry was written: nothing new landed in your lane.'
+            : `This text is already in the journal as entry ${result.nodeId}, written by ${held.writer} in the lane "${held.lane}", `
+              + `so no new entry was written: nothing landed in your lane ("${held.callerLane}").`
+          if (result.flagsNotArmed && result.flagsNotArmed.length > 0) {
+            response.flags_not_armed = result.flagsNotArmed
+            response.flags_note = `That entry is another lane's ("${held.lane}"), so the resume-pointer tags this insert carried `
+              + `(${result.flagsNotArmed.join(', ')}) were not armed on it: nothing outside your lane is modified. `
+              + 'Reword the entry to record it in your own lane.'
+          }
+        } else if (stamp.src !== 'unregistered') {
+          // D190: the writer the store stamped, said back — and when it
+          // could not tell the caller apart from the session's other live
+          // subagents, said so, never presented as fact.
           response.writer = stamp.writer ?? null
           response.writer_src = stamp.src
           if (stamp.src === 'ambiguous') {
@@ -1397,7 +1418,8 @@ export function createServer(
         + 'writes the journal, so it stays available under the read_only policy — but with '
         + 'path it does write that file, read_only or not. With run, the handoff is that run: '
         + 'by default its skeleton (open and close, briefs, checkpoints, every leg\'s first moment and '
-        + 'summary, the legs\' registrations; no captured tool output), or form "whole" for every row of every leg.',
+        + 'summary, the legs\' registrations; no captured tool output, except the end of the error stream a failed '
+        + 'worker\'s summary row holds, which the reply names), or form "whole" for every row of every leg.',
       inputSchema: z.object({
       node_id: z.string().optional().describe(
         'Entry to fetch. Omit to export a handoff.',
@@ -1512,7 +1534,9 @@ export function createServer(
           return text({
             file: target.rel, run, form: out.form, entries: out.built.entries,
             message: `Wrote ${out.built.entries} ${out.built.entries === 1 ? 'entry' : 'entries'} of the run ${JSON.stringify(run)} (${out.form}) to ${target.rel}.`,
-            ...(out.built.notes.length > 0 ? { first_moments: out.built.notes[0], ...(out.built.notes[1] ? { door_lines: out.built.notes[1] } : {}) } : {}),
+            // D318, D368, D398: what the first moments are, which are a
+            // door's line, which summary rows hold an error stream's end.
+            ...out.built.runLines,
             ...(out.built.innerRunsLine !== null ? { inner_runs: out.built.innerRunsLine } : {}),
           })
         }

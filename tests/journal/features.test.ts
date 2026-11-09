@@ -198,11 +198,15 @@ runFeatures(join(HERE, '../../features'), {
     // D294 outline). Scenario-scoped so the rest of each file keeps gating.
     // The reworded scenarios' old step definitions were deleted with no
     // consumer left; their units rebind them.
+    // Unit 7a bound its six scenarios on 2026-11-09 (D391: a worker's
+    // curated dedup is its own lane's, a hit's reply names the survivor's
+    // writer and lane and arms no other lane's pointer, the two @D86
+    // scenarios reworded to sessions of one lane; D398: the skeleton's
+    // reply names the legs whose summary row holds an error stream's end),
+    // and they left this list.
     {
       feature: 'journal-workers',
       scenarios: [
-        // Unit 7a: D391 (a worker's curated dedup is its own lane's).
-        'a <second> writing the same text as <first> leaves its own row in its own lane',
         // Unit 7b: D294 (the @D294 scenario reworded into an outline with
         // Codex CLI and Antigravity CLI mains spawning through
         // `treecontext run --parent --parent-cli`), D393 (a real grandchild
@@ -211,32 +215,6 @@ runFeatures(join(HERE, '../../features'), {
         'a parent no hook registered, a <main> main, is carried on each worker\'s registration as declared, never as a row of its own',
         'a worker ended by <signal> leaves no process of its group running',
         'a background process the worker left writing to its error stream is not cut off when the run settles',
-      ],
-    },
-    {
-      feature: 'journal-orchestration',
-      scenarios: [
-        // Unit 7a: D391 (a hit's reply names the survivor's writer and
-        // lane; a hit arms no other lane's pointer).
-        "a dedup hit's reply names the surviving row's writer and lane and says nothing landed in the caller's",
-        "a dedup hit never arms another lane's resume pointer",
-      ],
-    },
-    {
-      feature: 'journal-session-echo',
-      scenarios: [
-        // Unit 7a: D391 (two @D86 scenarios reworded to sessions of one
-        // lane, their Givens' old step definitions deleted).
-        'a dedup-hit echo cannot re-stamp the older original',
-        'identical concurrent inserts from two sessions of one lane disclose their ambiguity',
-      ],
-    },
-    {
-      feature: 'journal-runs',
-      scenarios: [
-        // Unit 7a: D398 (the skeleton's reply names the legs whose summary
-        // row holds the end of an error stream).
-        'the export\'s reply names the legs whose summary row carries the end of an error stream, and no other',
       ],
     },
     {

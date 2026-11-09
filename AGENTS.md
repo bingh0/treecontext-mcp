@@ -195,7 +195,7 @@ scenario, are in `docs/beta3-bindings-audit.md`.
 - `src/persistence/reference-index.ts` — the `node_refs` reverse index and
   the triggers that keep it
 - `src/persistence/curated-index.ts` — the partial curated unique index,
-  spelled once
+  and a ticket-door worker's by its session (D391), spelled once
 - `src/persistence/metadata-filter.ts` — a metadata filter's flat keys as
   SQL predicates (D268); the rest stays on the pool post-filter
 - `src/hooks/` — journaling hooks. Claude Code is the verified reference
@@ -360,7 +360,14 @@ node dist/server/cli.js doctor      # after a build
   they carry
 - The curated unique index is partial: `dedup_class = 'curated'` outside
   handoff lanes (`CURATED_INDEX_WHERE`). Inside a handoff lane identity
-  decides, not content; any rebuild must reuse the shared DDL
+  decides, not content; any rebuild must reuse the shared DDL. A
+  ticket-door worker's curated row is `worker_curated`, unique by its
+  session (`WORKER_INDEX_DDL`, migration 033, D391): the class is read
+  from the store's own worker stamp (`isWorkerLaneStamp`), never a caller's
+- A curated dedup hit arms the insert's pointer tags on the survivor only
+  in the survivor's own lane (`laneOfRow`), and its echo heals the survivor
+  only from that lane (D391); the reply names the survivor's writer and
+  lane, never the caller's stamp
 - A pointer's lane is the registry's placement of its session first
   (`placementsOf`, read once per call), the writer stamp only where the
   registry places the session nowhere (D379, `laneOfRow`). A row with no

@@ -100,7 +100,8 @@
  * `checkpoints` (under its ticket's key, each superseding the one before
  * by the store's own rule), `invalidRow` (the one row an invalid ticket
  * asks for), `viaTools` (notes and texts through a real `treecontext
- * serve` instead of the library), `reads` (after its writes, the reads
+ * serve` instead of the library, each reply its CLI received recorded
+ * whole in its log line as `inserts`, in order), `reads` (after its writes, the reads
  * a worker's CLI makes through those same tools: `query` a
  * treecontext_query call with these arguments, `status` a
  * treecontext_status call; each reply recorded whole in its log line as
@@ -341,6 +342,10 @@ export interface StandinRecord {
   /** The hook-less stand-in's handshake reads (a plan's `handshakes`):
    *  each server's `initialize` instructions, whole, in the plan's order. */
   handshakes?: string[]
+  /** The hook-less stand-in's inserts through its own tools (a plan's
+   *  `viaTools`): each treecontext_insert reply, parsed, as its CLI
+   *  received it, in the order it wrote them. */
+  inserts?: Array<Record<string, unknown>>
 }
 
 /** What spawns the worker: the wrapper, the library call, or nothing (a

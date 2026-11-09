@@ -32,7 +32,7 @@
  * finds the lane unchanged and changes nothing.
  */
 import type { Database } from './database.js'
-import { isSessionOwnRow, laneOfRow, laneWriterOf, MAIN_LANE, RETIRED_ACROSS_KEY, SUPERSEDES_ACROSS_KEY } from '../references.js'
+import { isSessionOwnRow, laneOfRow, laneWriterOf, MAIN_LANE, UNKNOWN_LANE, RETIRED_ACROSS_KEY, SUPERSEDES_ACROSS_KEY } from '../references.js'
 import { placementsOf, type PlacedLane } from './lane-scope.js'
 import { sessionOf, NO_SESSION } from '../dedup-identity.js'
 import { agentWriterOf, selfOf, selfWriterOf } from './session-registry.js'
@@ -93,6 +93,34 @@ function laneReader(db: Database): LaneOf {
     if (!placed.has(session)) placed.set(session, placementsOf(db, [session]).get(session))
     return laneOfRow(meta, placed.get(session))
   }
+}
+
+/**
+ * The lane of an insert echo's caller (D391), read as the writer heal
+ * names the writer: the caller's own agent fields (a subagent's role),
+ * else a worker's session (its role), else the session's self as the
+ * registry places it (`main` or `worktree:<name>`); a session the
+ * registry does not place is the undetermined writers' lane, as its insert
+ * was stamped. And the lane of the row the echo names, as every reader
+ * reads it (D379). The two decide whether a dedup hit's echo may change
+ * the surviving row: only from the survivor's own lane.
+ */
+export function echoLanes(db: Database, opts: {
+  nodeMeta: Record<string, unknown> | null; echoSessionId: string; agentId: string | null; agentType: string | null
+}): { caller: string; row: string } {
+  const laneOf = laneReader(db)
+  const isAgent = opts.agentId !== null || opts.agentType !== null
+  let caller: string
+  if (isAgent) caller = laneWriterOf({ _writer: agentWriterOf(opts.agentType, opts.agentId) })
+  else {
+    const worker = (() => { try { return workerOfSession(db, opts.echoSessionId) } catch { return null } })()
+    if (worker) caller = laneWriterOf({ _writer: legWriterOf(worker) })
+    else {
+      const self = (() => { try { return selfOf(db, opts.echoSessionId) } catch { return null } })()
+      caller = self ? laneWriterOf({ _writer: selfWriterOf(self) }) : UNKNOWN_LANE
+    }
+  }
+  return { caller, row: laneOf(opts.nodeMeta) }
 }
 
 /**
