@@ -350,6 +350,48 @@ Feature: Orchestration inside one store — lanes that stay their own
     And the tester's entry carries the pointer to the chapter
     And the orchestrator's next packet after a /clear lists the tester's entry under referenced-by
 
+  @D420 @D240
+  Scenario Outline: an orchestrator's bookmark written while one subagent was live supersedes its own earlier one once its echo names the orchestrator, <how>
+    Given the orchestrator's bookmark "next: wire the submit button" in the main lane
+    And one tester subagent live, the orchestrator silent since it started
+    When the orchestrator inserts the bookmark "next: write the form's tests" through the tools, <how>
+    Then the reply says the supersession of "next: wire the submit button" is pending until the call's echo names the writer, and never that it was left live as another writer's
+    When the call's echo is captured and ingestion runs
+    Then "next: wire the submit button" is retired, superseded by "next: write the form's tests"
+    And the orchestrator calling status sees "next: write the form's tests" as the main lane's one live bookmark
+
+    Examples:
+      | how                                   |
+      | naming the earlier one in supersedes  |
+      | naming nothing to supersede           |
+    # Found 2026-11-09 (D420): the store stamped such a bookmark as the
+    # subagent's until its echo, and its reply told the orchestrator the
+    # earlier bookmark was another writer's, left live. The echo heal
+    # already retires a target named in supersedes; a bookmark's own
+    # retirement of its lane's earlier one was never run again at the heal.
+
+  @D420 @D169
+  Scenario Outline: a supersession held under a provisional stamp leaves <owner>'s entry live after the echo
+    Given <target>
+    And one tester subagent live, the orchestrator silent since it started
+    When the orchestrator inserts a bookmark through the tools superseding that entry, and the call's echo is captured and ingestion runs
+    Then that entry is still live and unchanged
+    And the orchestrator's bookmark records it as referenced, where its writer sees it as referenced-by
+
+    Examples:
+      | owner                    | target                                                                   |
+      | the tester               | the tester subagent's bookmark "tests: three of five pass"                |
+      | the worktree "subproject" | the chapter summary "plan: wire the login form" in the worktree "subproject" |
+
+  @D420
+  Scenario: a supersession whose echo never comes stays pending, and says so
+    Given the orchestrator's bookmark "next: wire the submit button" in the main lane
+    And one tester subagent live, the orchestrator silent since it started
+    When the orchestrator inserts a bookmark superseding it through the tools, and no echo of that call is ever captured
+    Then "next: wire the submit button" is still live
+    And the new bookmark shows its supersession of "next: wire the submit button" as pending
+    And the orchestrator calling status sees that supersession listed as pending, naming "next: wire the submit button"
+
   @D391 @D169
   Scenario: a dedup hit's reply names the surviving row's writer and lane and says nothing landed in the caller's
     Given the note "the login form posts to /api/session" written by the worktree "subproject"'s own agent

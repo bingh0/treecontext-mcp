@@ -249,9 +249,9 @@ runFeatures(join(HERE, '../../features'), {
     // three scenarios (failed calls, calls refused before running, a call
     // journaled once) through the replay of recorded Claude Code events;
     // unit 8b bound the @D402 scenario (the event list and its guard).
-    // Beta.4 charter (3), 2026-11-09 (D403, D404, D406-D419; fence: Sanctioned
+    // Beta.4 charter (3), 2026-11-09 (D403, D404, D406-D420; fence: Sanctioned
     // changes, the entries of that date): new and reworded scenarios, unbound
-    // until the unit that owns each (unit 9 D403-D404 and D419, unit 10 D406-D412,
+    // until the unit that owns each (unit 9 D403-D404, D419 and D420, unit 10 D406-D412,
     // unit 11 D413-D418; a scenario tagged for two units sits with the later).
     // Scenario-scoped so the rest of each file keeps gating. The reworded
     // scenarios' old step definitions were deleted with no consumer left; the
@@ -368,6 +368,10 @@ runFeatures(join(HERE, '../../features'), {
     {
       feature: 'journal-orchestration',
       scenarios: [
+        // Unit 9: unit 9 (D420 a supersession made under a provisional stamp is applied when the echo names the writer).
+        "an orchestrator's bookmark written while one subagent was live supersedes its own earlier one once its echo names the orchestrator, <how>",
+        "a supersession held under a provisional stamp leaves <owner>'s entry live after the echo",
+        "a supersession whose echo never comes stays pending, and says so",
         // Unit 10: unit 10 (D406-D412, Codex CLI 0.167.0 captured through its own hooks, doctor reading Codex's trust, the experimental capture flag removed).
         "a Codex CLI main registers itself at its start and the server stamps its rows from it",
         "a Codex CLI main's fresh start is handed its lane's chapter",
