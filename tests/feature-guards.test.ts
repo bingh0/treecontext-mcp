@@ -473,12 +473,24 @@ describe('a step that says an event is as Claude Code sends it replays a recordi
   // that text (one must, so does the executor); and that its body, up to the
   // next `reg.define(`, calls one of the two helpers and that the file
   // imports it from the stand-ins module.
+  // A body that writes a payload field as an object key (`tool_response:`,
+  // `hook_event_name:` ...) beside the helper fails: a literal payload next
+  // to an unused recording. And the recordings are branded by
+  // `recordedSession`, which `replayRecordedSession` insists on.
   // Not seen: a claim in other words ("the real payload", "a Claude
   // Code-shaped payload" is in a scenario title, not a step), a step's claim
   // carried by a neighbouring step, what the body does with the recorded
   // event after taking it (a call to the helper beside a hand-written
   // payload would pass), and a definition built from a computed regex.
-  const CLAIM = /\bas Claude Code sen(?:ds|t)\b/i
+  // Every step that says what Claude Code sends, sent, fires or fired (found
+  // by a grep of features/: "as Claude Code sends it", "the events Claude
+  // Code sent for ...").
+  const CLAIM = /\bClaude Code\b[^.]*?\b(?:sends?|sent|fires?|fired)\b/i
+  /** The five steps the corpus holds today; a new one is a deliberate change here. */
+  const CLAIMS_TODAY = 5
+  const withoutComments = (src: string): string => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|\s)\/\/.*$/gm, '$1')
+  /** A payload field written as an object key: a literal payload in the body. */
+  const LITERAL_PAYLOAD = /\b(?:tool_response|tool_input|tool_output|hook_event_name|last_assistant_message|prompt)\s*:/
   const HELPERS = /\b(?:recordedSession|replayRecordedSession)\s*\(/
 
   interface Definition { file: string; regex: RegExp; body: string; imports: boolean }
@@ -511,18 +523,24 @@ describe('a step that says an event is as Claude Code sends it replays a recordi
   const unreplayed = (cs: Array<{ text: string }>, defs: Definition[]): string[] => cs.flatMap(({ text }) => {
     const bound = defs.filter((d) => d.regex.test(text))
     if (bound.length === 0) return [`${text}: no step definition matches`]
-    return bound.filter((d) => !(HELPERS.test(d.body) && d.imports)).map((d) => `${text}: bound in ${d.file} without replaying a recording`)
+    return bound.filter((d) => !(HELPERS.test(withoutComments(d.body)) && d.imports && !LITERAL_PAYLOAD.test(withoutComments(d.body)))).map((d) => `${text}: bound in ${d.file} without replaying a recording (no helper call outside comments, no import from the stand-ins, or a payload field written as a literal)`)
   })
 
   test('every such step is bound by a definition that replays a recording', () => {
-    expect(claims.length, 'no "as Claude Code sends it" step found: the phrasing the guard reads has moved').toBeGreaterThanOrEqual(2)
+    expect(claims.length, `the steps that say what Claude Code sends or sent are not the ${CLAIMS_TODAY} the guard was written against; found:\n${claims.map((c) => `${c.f}:${c.n} ${c.text}`).join('\n')}`).toBe(CLAIMS_TODAY)
     expect(unreplayed(claims, definitions), 'a step says its payload is as Claude Code sends it but its binding does not take it from tests/fixtures/claude-code-hooks').toEqual([])
   })
 
   test('the matcher is not vacuous: a literal-payload binding is found, a replaying one is not', () => {
     const literal = definitionsIn('x.steps.ts', "reg.define(/^a payload as Claude Code sends it$/, (w) => {\n  w.payload = { tool_response: 'hand written' }\n})\n")
     const replay = definitionsIn('y.steps.ts', "import { recordedSession } from '../journal/standins.js'\nreg.define(/^a payload as Claude Code sends it$/, (w) => {\n  w.payload = recordedSession('2.1.319', 'f.ndjson')[0]\n})\n")
+    const commented = definitionsIn('z.steps.ts', "import { recordedSession } from '../journal/standins.js'\nreg.define(/^a payload as Claude Code sends it$/, (w) => {\n  // recordedSession('2.1.319', 'f') is what this should call\n  w.payload = { tool_response: 'hand written' }\n})\n")
+    const unused = definitionsIn('u.steps.ts', "import { recordedSession } from '../journal/standins.js'\nreg.define(/^a payload as Claude Code sends it$/, (w) => {\n  w.payload = { tool_response: 'hand written' } /* recordedSession( */\n})\n")
+    const beside = definitionsIn('v.steps.ts', "import { recordedSession } from '../journal/standins.js'\nreg.define(/^a payload as Claude Code sends it$/, (w) => {\n  recordedSession('2.1.319', 'f')\n  w.payload = { tool_response: 'hand written' }\n})\n")
     const claim = [{ text: 'a payload as Claude Code sends it' }]
+    expect(unreplayed(claim, beside)).toHaveLength(1)
+    expect(unreplayed(claim, commented)).toHaveLength(1)
+    expect(unreplayed(claim, unused)).toHaveLength(1)
     expect(unreplayed(claim, literal)).toHaveLength(1)
     expect(unreplayed(claim, replay)).toEqual([])
     expect(unreplayed(claim, [])).toHaveLength(1)

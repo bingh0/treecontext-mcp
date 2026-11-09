@@ -708,26 +708,32 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
     const settingsPath = join(w.ihome!, '.claude', 'settings.json')
     // step-lint: allow unearned-absence -- the same step, with two events removed, finds the row by this same text (the findIndex below): the needle fires
     expect(tcCli(w, ['doctor']).stdout, 'a fresh install already reports unwired events').not.toMatch(/capture events/)
-    const settings = JSON.parse(readFileSync(settingsPath, 'utf8')) as { hooks: Record<string, unknown> }
-    const missing = ['PostToolUseFailure', 'PostToolBatch']
-    for (const ev of missing) {
+    // Each event of the block install writes, in turn: removed from a wired
+    // sandbox, doctor names exactly that event (its row's items, split on
+    // "; ", lead with the event name), the fix command it prints is run
+    // and the row is gone. A list inside doctor's function that held only
+    // today's two newest events would fail here for the rest.
+    const wired = Object.keys(claudeHooksBlock())
+    expect(wired.length).toBeGreaterThan(2)
+    for (const ev of wired) {
+      const settings = JSON.parse(readFileSync(settingsPath, 'utf8')) as { hooks: Record<string, unknown> }
       expect(Object.keys(settings.hooks), `install no longer wires ${ev}`).toContain(ev)
       delete settings.hooks[ev]
+      writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n')
+      const doc = tcCli(w, ['doctor']).stdout.split('\n')
+      const i = doc.findIndex((l) => /capture events: not wired: wired by a build from before this event was added/.test(l))
+      expect(i, `doctor did not name the old wiring without ${ev}:\n${doc.join('\n')}`).toBeGreaterThanOrEqual(0)
+      const named = doc[i]!.split('added: ')[1]!.split('; ').map((item) => item.split(' (')[0])
+      expect(named, `the row for a settings file without ${ev}`).toEqual([ev])
+      const fix = /^\s+fix: (treecontext install --force --agent claude)$/.exec(doc[i + 1] ?? '')
+      expect(fix, `the row names no wiring command:\n${doc.join('\n')}`).not.toBeNull()
+      // The named command, run in the sandbox, wires it and the row is gone.
+      expect(tcCli(w, [...fix![1]!.split(' ').slice(1), '--yes']).status).toBe(0)
+      const after = JSON.parse(readFileSync(settingsPath, 'utf8')) as { hooks: Record<string, unknown> }
+      expect(Object.keys(after.hooks)).toContain(ev)
+      // step-lint: allow unearned-absence -- the same loop turn found the row by this same text (the findIndex above): the needle fires
+      expect(tcCli(w, ['doctor']).stdout).not.toMatch(/capture events/)
     }
-    writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n')
-    const doc = tcCli(w, ['doctor']).stdout.split('\n')
-    const i = doc.findIndex((l) => /capture events: not wired: wired by a build from before these events were added/.test(l))
-    expect(i, `doctor did not name the old wiring:\n${doc.join('\n')}`).toBeGreaterThanOrEqual(0)
-    for (const ev of missing) expect(doc[i], `the row does not name ${ev}`).toContain(ev)
-    const fix = /^\s+fix: (treecontext install --force --agent claude)$/.exec(doc[i + 1] ?? '')
-    expect(fix, `the row names no wiring command:\n${doc.join('\n')}`).not.toBeNull()
-    // The named command, run in the sandbox, wires them and the row is gone.
-    const args = fix![1]!.split(' ').slice(1)
-    expect(tcCli(w, [...args, '--yes']).status).toBe(0)
-    const after = JSON.parse(readFileSync(settingsPath, 'utf8')) as { hooks: Record<string, unknown> }
-    for (const ev of missing) expect(Object.keys(after.hooks)).toContain(ev)
-    // step-lint: allow unearned-absence -- the same step, with two events removed, finds the row by this same text (the findIndex below): the needle fires
-    expect(tcCli(w, ['doctor']).stdout).not.toMatch(/capture events/)
   })
 
   // ── doctor ──────────────────────────────────────────────────────────

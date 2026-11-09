@@ -6,6 +6,7 @@
     "hooks reference, code.claude.com/docs/en/hooks, read 2026-11-09",
     "live headless runs recorded in 2.1.319/"
   ],
+  "provenance": "Event names come from the client's hooks reference and the recordings; `when`, `disposition` and `lost` are treecontext's own words. Nothing mechanical sees an event the client has that neither this list nor a recording names, so the hooks reference is re-read at every client upgrade (the census's version line is the reminder).",
   "events": [
     {
       "event": "SessionStart",
@@ -59,7 +60,7 @@
       "event": "PreCompact",
       "when": "before the client compacts the context",
       "disposition": "wired",
-      "observed": false
+      "observed": true
     },
     {
       "event": "Setup",
@@ -79,7 +80,7 @@
       "event": "PreToolUse",
       "when": "before a tool call runs",
       "disposition": "not-captured",
-      "lost": "a call's start. Every call's end is captured (PostToolUse, PostToolUseFailure, or the batch's account), so a call still running when the client dies leaves no entry",
+      "lost": "a call's start. A call's end is captured through PostToolUse, PostToolUseFailure or the batch's account in every case the recordings show (an interrupted call was never recorded), so a call still running when the client dies leaves no entry",
       "observed": true
     },
     {
@@ -191,8 +192,8 @@
       "event": "PostCompact",
       "when": "a compaction ends",
       "disposition": "not-captured",
-      "lost": "the end of a compaction; the SessionStart that follows it (source compact) is what the journal acts on",
-      "observed": false
+      "lost": "the end of a compaction, and the client's own summary of the compacted conversation (`compact_summary`), which is not journaled; the SessionStart that follows it (source compact) is what the journal acts on",
+      "observed": true
     },
     {
       "event": "PreModelSwitch",

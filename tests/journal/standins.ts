@@ -712,8 +712,15 @@ export const RECORDED_HOOK_EVENTS = join(TS_ROOT, 'tests', 'fixtures', 'claude-c
  *  wrote it. */
 export function recordedSession(version: string, file: string): Array<Record<string, unknown>> {
   return readFileSync(join(RECORDED_HOOK_EVENTS, version, file), 'utf8').split('\n').filter((l) => l.trim() !== '')
-    .map((l) => JSON.parse(l) as Record<string, unknown>)
+    .map((l) => { const e = JSON.parse(l) as Record<string, unknown>; RECORDED.add(e); return e })
 }
+
+/** The events `recordedSession` returned, by identity (module-private): a
+ *  payload built or copied by hand is not in it, and `replayRecordedSession`
+ *  refuses it, so a binding cannot pass a hand-written payload off as the
+ *  client's. */
+const RECORDED = new WeakSet<object>()
+export function isRecordedEvent(e: object): boolean { return RECORDED.has(e) }
 
 /** What a matcher entry is matched against, per event, as Claude Code's
  *  hooks reference has it: the start's source, the compaction's trigger,
@@ -794,6 +801,9 @@ export interface ReplayedEvent {
 export function replayRecordedSession(
   w: CaptureWorld, events: Array<Record<string, unknown>>, opts: { sessionId?: string; lines?: (line: number, payload: Record<string, unknown>) => boolean } = {},
 ): ReplayedEvent[] {
+  for (const e of events) {
+    if (!RECORDED.has(e)) throw new Error('replayRecordedSession was handed an event that did not come from recordedSession: a payload written or copied by hand is never the client\'s (D402)')
+  }
   const env = sandboxedSpawnEnv(w.home!, { TREECONTEXT_BINDINGS_FILE: join(w.home!, '.treecontext', 'bindings.json') })
   const out: ReplayedEvent[] = []
   events.forEach((recorded, line) => {

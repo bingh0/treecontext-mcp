@@ -48,6 +48,18 @@ call: the batch's PostToolBatch arrived 3 s later, after it. The settings
 also registered an event name the client does not have; the client ignored
 it and fired the rest.
 
+`manual-compaction.ndjson` (model: haiku), two runs of one session: a first
+run with one Bash call, then `claude -p '/compact' --resume <session>`:
+
+| Step | Events the client fired, in order |
+| --- | --- |
+| First run | SessionStart (`source` startup), UserPromptSubmit, PreToolUse, PostToolUse, PostToolBatch, Stop, SessionEnd |
+| The resumed run compacting | SessionStart (`source` resume), PreCompact (`trigger` manual), SessionStart (`source` compact), PostCompact (carrying `compact_summary`), SessionEnd |
+
+All under the one session id. No UserPromptSubmit and no Stop fired for the
+`/compact` run.
+
 What these sessions do not hold: a developer's interrupt (`is_interrupt`
-true), an interactive denial, and an auto-mode classifier denial
-(`PermissionDenied`).
+true), an interactive denial, an auto-mode classifier denial
+(`PermissionDenied`), and a compaction the client starts by itself
+(`trigger` auto).

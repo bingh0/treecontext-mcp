@@ -26,9 +26,10 @@ import { extractInsertEcho } from '../../src/server/echo-correlation.js'
 import { LeaseClient, DRAIN_LEASE_TTL_SECS } from '../../src/persistence/leases.js'
 import { maxSupportedVersion } from '../../src/persistence/migrations/index.js'
 import { decodeContent } from '../../src/persistence/content-codec.js'
-import { recordedSession } from '../journal/standins.js'
+import { recordedSession, replayRecordedSession } from '../journal/standins.js'
+import { type CaptureWorld, openCaptureWorld } from '../journal/capture-harness.js'
 
-interface World {
+interface World extends CaptureWorld {
   defer: (fn: () => void | Promise<void>) => void
   dbPath?: string
   row?: { content: string; index_len?: number | null } | undefined
@@ -40,6 +41,7 @@ interface World {
   /** The Claude Code scenario: a recorded PostToolUse event, whose result
    *  arrives under tool_response (D402: never a payload written here). */
   recordedStdout?: string
+  recordedEvent?: Record<string, unknown>
   /** The D270 scenarios: whole Claude Code-shaped payloads (tool_name,
    *  tool_input, tool_response), staged in order by the When step. */
   payloads?: Array<Record<string, unknown>>
@@ -152,6 +154,16 @@ export const toolEventFidelityDefiner = (reg: Registry<World>): void => {
   })
 
   reg.define(/^the post-tool-use hook stages it$/, (w) => {
+    if (w.recordedEvent) {
+      // The recorded event reaches the hook through what install wires, as
+      // a spawned `treecontext hook post-tool-use` writing the world's
+      // store. Outside this world: the client itself, and the store the
+      // hook would resolve for a real project (a sandboxed home stands in).
+      const replayed = replayRecordedSession(w, [w.recordedEvent])
+      expect(replayed.map((r) => r.hooks), 'the recorded event reached no post-tool-use hook').toEqual([['post-tool-use']])
+      w.row = readRow(w.dbPath!)
+      return
+    }
     if (w.payloads) {
       runPayloads(w)
       return
@@ -322,15 +334,17 @@ export const toolEventFidelityDefiner = (reg: Registry<World>): void => {
     expect(row.content).not.toContain('B'.repeat(1001))
   })
 
-  reg.define(/^a PostToolUse payload carrying the result under tool_response, as Claude Code sends it$/, (w) => {
-    w.dbPath = freshHookDb(w)
+  reg.define(/^a PostToolUse payload carrying the result under tool_response, as Claude Code sends it$/, async (w) => {
+    // The world is a capture world (a real store under a sandboxed home):
+    // the event goes through the hooks install wires, by the replay.
+    await openCaptureWorld(w)
     // D402: the recorded event (Claude Code 2.1.319, the serial session's
     // successful Bash call), exactly as the client wrote it to the hook.
     const event = recordedSession('2.1.319', 'serial-failures-and-denials.ndjson')
       .find((e) => e['hook_event_name'] === 'PostToolUse' && e['tool_use_id'] === 'toolu_017WkjHRbHSjGabaDwQkTWJE')
     expect(event, 'the recorded PostToolUse event is not in the fixture').toBeDefined()
     expect(Object.keys(event!['tool_response'] as object), 'the recorded result is not under tool_response').toContain('stdout')
-    w.payloads = [event!]
+    w.recordedEvent = event!
     w.recordedStdout = String((event!['tool_response'] as Record<string, unknown>)['stdout'])
   })
 

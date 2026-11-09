@@ -2570,7 +2570,10 @@ describe('agent hook wrappers (vscode/codex/cursor; gemini\'s swept only)', () =
     [keyof typeof AGENT_HOOK_WRAPPER_STEMS, readonly string[]]
   >).flatMap(([agent, stems]) => stems.map(stem => [agent, stem] as [keyof typeof AGENT_HOOK_WRAPPER_STEMS, string]))
 
-  it.each(combos)('%s/%s: pins TC_NODE and TC_CLI, dispatches through the variables', (agent, stem) => {
+  // Gemini CLI's stems write no wrapper any more (D399): the archived sweep
+  // that removes an earlier build's `tc-gemini-*` wrappers is asserted
+  // elsewhere; what a wrapper install never writes is not graded here.
+  it.each(combos.filter(([agent]) => agent !== 'gemini'))('%s/%s: pins TC_NODE and TC_CLI, dispatches through the variables', (agent, stem) => {
     const body = agentHookWrapperContent(agent, stem)
 
     // Read the pin with the product's own parser, so a shape drift that
@@ -2598,26 +2601,14 @@ describe('agent hook wrappers (vscode/codex/cursor; gemini\'s swept only)', () =
       expect(body).toMatch(/\nexit 0\n/)
     }
 
-    // The grader's verdict on a stale pin depends on whether the fallback
-    // search lands on a copy, and that search reads the machine's managed
-    // layouts under the home directory (and two system roots). Run from the
-    // source tree the pin names src/hooks/<agent>/<stem>.js, which never
-    // exists, so the verdict is the search's alone. It is decided in a
-    // sandboxed home, never by whatever global install the developer's
-    // machine happens to hold (the real machine made this assertion pass for
-    // gemini until an older install holding dist/hooks/gemini went away).
+    // The grader's verdict is decided in a sandboxed home, never by
+    // whatever global install the developer's machine holds: run from the
+    // source tree the pin is satisfied by the entry point's .ts twin, and
+    // the sandbox keeps the managed-layout search from reading the machine.
     const home = mkdtempSync(join(tmpdir(), 'tc-wrapper-grade-'))
     const restore = redirectHome(home)
     resetManagedLayoutScan()
     try {
-      const systemCopy = ['/opt/homebrew/lib/node_modules', '/usr/local/lib/node_modules']
-        .some(r => ['treecontext', 'treecontext-mcp'].some(n => existsSync(join(r, n, 'dist', 'hooks', agent, `${stem}.js`))))
-      if (agent === 'gemini') {
-        // Retired (D399): no build emits dist/hooks/gemini, so a wrapper an
-        // earlier build wrote is unrecoverable and the grader says so.
-        if (!systemCopy) expect(hookScriptIssue(body)).toMatch(/no fallback copy was found in a managed layout/)
-        return
-      }
       // A live agent: the pin is present (a source run counts the entry
       // point's .ts twin as present, a built one has the .js), so the
       // wrapper is healthy whatever the machine's managed layouts hold.

@@ -42,8 +42,11 @@ applied to what came in and never to what the drain wrote. "Real
 payloads in" means recorded from the client and replayed through what
 install wires (`tests/fixtures/claude-code-hooks/`, `replayRecordedSession`),
 never written by hand; the client's hook events are listed beside what
-install wires (`events.json`, D402), and `npm run dogfood:census` counts a
-real session's tool calls against the store by the client's call id.
+install wires (`events.json`, D402), held against the block and the
+recordings, and `npm run dogfood:census` counts a real session's tool calls
+against the store by the client's call id. The list does not see an event the
+client has that neither it nor a recording names: the hooks reference is
+re-read at every client upgrade.
 
 **Why a green suite can lie.** The review discipline is the failure
 ladder, the `cino:` and `blind:` addresses in gherkin-node-test's

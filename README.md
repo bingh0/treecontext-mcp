@@ -307,12 +307,20 @@ Claude Code wired by an older build (a capture event added since) with the
 command that wires it. To check what was actually journaled, run
 `npm run dogfood:census -- --transcript <session.jsonl>` from a checkout of
 this repository: it counts a real Claude Code session's tool calls (its
-transcript, subagents included) against the store by the client's call id
-and lists every call that is neither stored, staged, nor a deduplicated or
-pre-id entry; it exits 1 when one is missing. `--live` runs one headless
-session with a success, a failure and a refusal of each kind against the
-installed build, and also names any hook event the client fired that
-`tests/fixtures/claude-code-hooks/events.json` does not hold.
+transcript, subagents included) against the store. A call matched by the
+client's call id is observed; one matched by session, tool, time and input
+text (a call from before ids were stored, or a deduplicated one) is inferred
+and unverified. It exits 0 only when every call is observed, 1 when a call is
+missing, 3 when some are only inferred. `--live` runs one headless session
+with a success, a failure and a refusal of each kind against the installed
+build (it writes a store and a binding under `~/.treecontext` and a
+transcript under `~/.claude/projects`; `--help` names the command that
+removes the store). The repository's list of Claude Code's hook events
+(`tests/fixtures/claude-code-hooks/events.json`) is held against what install
+wires and what the recordings show, but nothing mechanical sees an event the
+client has that neither names, so the hooks reference is re-read at every
+client upgrade; `--live` prints a reminder when the client's version differs
+from the list's.
 
 Your data lives at:
 

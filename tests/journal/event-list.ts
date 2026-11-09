@@ -14,7 +14,7 @@ import { claudeHooksBlock } from '../../src/server/installer.js'
 import { RECORDED_HOOK_EVENTS } from './standins.js'
 
 export interface ListedEvent { event: string; when: string; disposition: string; lost?: string; observed: boolean }
-export interface EventList { client: string; version: string; read_at: string; sources: string[]; events: ListedEvent[] }
+export interface EventList { client: string; version: string; read_at: string; sources: string[]; provenance: string; events: ListedEvent[] }
 
 export const EVENT_LIST_PATH = join(RECORDED_HOOK_EVENTS, 'events.json')
 
@@ -48,6 +48,7 @@ export function provenanceProblems(list: EventList): string[] {
   if (!/^\d+\.\d+\.\d+/.test(String(list.version))) out.push('the list names no client version')
   if (!/^\d{4}-\d{2}-\d{2}$/.test(String(list.read_at))) out.push('the list names no date it was read at')
   if (!Array.isArray(list.sources) || list.sources.length === 0) out.push('the list names no sources')
+  if (typeof list.provenance !== 'string' || !/re-read/.test(list.provenance)) out.push('the list carries no provenance note saying the hooks reference is re-read at every client upgrade')
   const seen = new Set<string>()
   for (const e of list.events) {
     if (seen.has(e.event)) out.push(`${e.event} is on the list twice`)
@@ -89,6 +90,11 @@ export function recordingProblems(list: EventList, recorded: Set<string> = recor
   const out: string[] = []
   for (const ev of recorded) if (!list.events.some((e) => e.event === ev)) out.push(`a recording shows ${ev}, which is not on the list`)
   for (const e of list.events) {
+    // A wired event no recording shows may be a misspelling in both the
+    // list and the block: every wired event must have been recorded. There
+    // is no exception list; one is added here, named with its reason, only
+    // for an event that cannot yet be recorded.
+    if (e.disposition === 'wired' && !recorded.has(e.event)) out.push(`${e.event} is wired but no recording shows it`)
     if (e.observed !== recorded.has(e.event)) out.push(`${e.event} says observed=${String(e.observed)} but the recordings ${recorded.has(e.event) ? 'show' : 'do not show'} it`)
   }
   return out
