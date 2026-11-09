@@ -16,8 +16,8 @@ import {
   upsertClaudeSettingsHooks, removeClaudeSettingsHooks, unrunnableHookCommands,
   installClaudeHookScripts,
   claudeHookCommand, claudeHookDispatch, claudeHookCommandsWithoutExec, withoutExec, hookShellFor,
-  upsertGeminiHooks, removeGeminiHooks,
-  claudeHooksBlock, claudeHookSummaryLines, translateHookBlockForGemini, removeCodexHooks, parseJsonc,
+  removeGeminiHooks,
+  claudeHooksBlock, claudeHookSummaryLines, removeCodexHooks, parseJsonc,
   upsertVscodeHooks, upsertCodexHooks, upsertCursorHooks,
   removeVscodeHooks, removeCursorHooks,
   buildVscodeHooksConfig, vscodeHooksComplete,
@@ -31,7 +31,7 @@ import {
   AGENT_HOOK_WRAPPER_STEMS, agentHookWrapperPath, agentHookWrapperContent,
   installAgentHookWrappers, removeAgentHookWrappers, removeClaudeHookScripts, meetsNodeFloor } from '../../src/server/installer.js'
 import { SKILL_REFERENCE_NAME } from '../../src/server/instructions.js'
-import { AGENTS, getAgent, detectAgents, getConfigPath } from '../../src/server/agents.js'
+import { AGENTS, getAgent, detectAgents, getConfigPath, legacyMcpConfigs } from '../../src/server/agents.js'
 import { redirectHome } from '../helpers/home.js'
 import { itPosix } from '../helpers/platform.js'
 
@@ -1447,46 +1447,33 @@ describe('removeClaudeSettingsHooks', () => {
   })
 })
 
-describe('upsertGeminiHooks', () => {
+// The copy writer's merge rules, read through the copying client that is
+// left (Codex CLI's hooks.json, its events under `hooks`). They were pinned
+// through Gemini CLI's translated copy until its retirement (D399); the
+// writer and the ownership predicate are the same.
+describe('the hook copy writer (upsertCodexHooks)', () => {
   let dir: string
 
   beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'tc-inst-')) })
   afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
 
-  it('writes the Claude Code block translated to Gemini event names (D154)', () => {
-    const p = join(dir, 'settings.json')
-    writeFileSync(p, '{}')
-    const r = upsertGeminiHooks(p, false)
-    expect(r.status).toBe('updated')
-    const hooks = readJson(p).hooks as Record<string, unknown[]>
-    // Renamed events, the same entries: the copy runs the Claude Code hook
-    // scripts, so PreCompress carries tc-pre-compact.
-    expect(hooks).toEqual(translateHookBlockForGemini(claudeHooksBlock()))
-    // No AfterAgent: Claude's Stop has no Gemini counterpart until a live
-    // probe (D225).
-    expect(Object.keys(hooks).sort()).toEqual(['AfterTool', 'BeforeAgent', 'PreCompress', 'SessionStart'])
-    expect(JSON.stringify(hooks.PreCompress)).toContain('tc-pre-compact')
-    expect(JSON.stringify(hooks.SessionStart)).toContain('tc-session-start')
-  })
-
   it('does not duplicate when already present', () => {
-    const p = join(dir, 'settings.json')
+    const p = join(dir, 'hooks.json')
     writeFileSync(p, '{}')
-    upsertGeminiHooks(p, false)
+    upsertCodexHooks(p, false, false)
     const once = readFileSync(p, 'utf8')
-    expect(upsertGeminiHooks(p, false).status).toBe('skipped')
+    expect(upsertCodexHooks(p, false, false).status).toBe('skipped')
     expect(readFileSync(p, 'utf8')).toBe(once)
   })
 
   it('preserves existing hooks', () => {
-    const p = join(dir, 'settings.json')
+    const p = join(dir, 'hooks.json')
     writeFileSync(p, JSON.stringify({
-      hooks: { PreCompress: [{ hooks: [{ command: 'other-tool' }] }] },
+      hooks: { PreCompact: [{ hooks: [{ command: 'other-tool' }] }] },
     }))
-    upsertGeminiHooks(p, false)
-    const data = readJson(p)
-    const hooks = data.hooks as Record<string, unknown[]>
-    expect(hooks.PreCompress!.length).toBe(2)
+    upsertCodexHooks(p, false, false)
+    const hooks = readJson(p).hooks as Record<string, unknown[]>
+    expect(hooks.PreCompact!.length).toBe(2)
   })
 
   it("a user command containing 'hook ' is neither claimed nor replaced", () => {
@@ -1495,11 +1482,11 @@ describe('upsertGeminiHooks', () => {
     // was silently overwritten with treecontext's entry, and its presence
     // also suppressed adding treecontext's own hook. Both halves of that
     // failure are asserted here.
-    const p = join(dir, 'settings.json')
+    const p = join(dir, 'hooks.json')
     writeFileSync(p, JSON.stringify({
       hooks: { SessionStart: [{ hooks: [{ command: 'my-tool hook sync' }] }] },
     }))
-    upsertGeminiHooks(p, false)
+    upsertCodexHooks(p, false, false)
     const hooks = readJson(p).hooks as Record<string, Array<{ hooks: Array<{ command: string }> }>>
     const commands = hooks.SessionStart!.flatMap(m => m.hooks.map(h => h.command))
     expect(commands).toContain('my-tool hook sync')
@@ -1511,21 +1498,21 @@ describe('upsertGeminiHooks', () => {
     // bare-node entry-point spelling and a `hook <event>` subcommand
     // spelling; rewriting each to the current entry without collapsing
     // fired the hook twice per event forever.
-    const p = join(dir, 'settings.json')
+    const p = join(dir, 'hooks.json')
     writeFileSync(p, JSON.stringify({
       hooks: {
         SessionStart: [
-          { hooks: [{ command: 'node "/old/dist/hooks/gemini/session-start.js"' }] },
+          { hooks: [{ command: 'node "/old/dist/hooks/codex/session-start.js"' }] },
           { hooks: [{ command: 'treecontext hook session-start' }] },
         ],
       },
     }))
-    upsertGeminiHooks(p, false)
+    upsertCodexHooks(p, false, false)
     const hooks = readJson(p).hooks as Record<string, Array<{ hooks: Array<{ command: string }> }>>
     const commands = hooks.SessionStart!.flatMap(m => m.hooks.map(h => h.command))
     // Both legacy spellings gone, and exactly the block's own entries left:
     // one session-start per matcher, never two.
-    const block = translateHookBlockForGemini(claudeHooksBlock())
+    const block = claudeHooksBlock()
     expect(commands).toEqual(block['SessionStart']!.flatMap(m => m.hooks.map(h => h.command)))
     expect(commands.filter(c => c.includes('tc-session-start'))).toHaveLength(block['SessionStart']!.length)
   })
@@ -1536,7 +1523,7 @@ describe('upsertGeminiHooks', () => {
     // (and an entry carrying no hooks key at all) was deleted from their
     // settings on every single install, permanently and silently. Only what
     // THIS pass emptied is ours to drop.
-    const p = join(dir, 'settings.json')
+    const p = join(dir, 'hooks.json')
     writeFileSync(p, JSON.stringify({
       hooks: {
         SessionStart: [
@@ -1546,8 +1533,8 @@ describe('upsertGeminiHooks', () => {
         ],
       },
     }))
-    upsertGeminiHooks(p, false)
-    upsertGeminiHooks(p, false)
+    upsertCodexHooks(p, false, false)
+    upsertCodexHooks(p, false, false)
 
     const hooks = readJson(p).hooks as Record<string, Array<{ matcher?: string; hooks?: Array<{ command: string }> }>>
     const matchers = hooks.SessionStart!.map(m => m.matcher)
@@ -1556,7 +1543,7 @@ describe('upsertGeminiHooks', () => {
     // The owned entries are exactly the block's, the legacy one replaced.
     const owned = hooks.SessionStart!.flatMap(m => m.hooks ?? [])
       .filter(h => h.command.includes('tc-session-start'))
-    expect(owned).toHaveLength(translateHookBlockForGemini(claudeHooksBlock())['SessionStart']!.length)
+    expect(owned).toHaveLength(claudeHooksBlock()['SessionStart']!.length)
     expect(JSON.stringify(hooks)).not.toContain('treecontext hook session-start')
   })
 })
@@ -1602,16 +1589,6 @@ describe('Codex CLI copy of the Claude Code block (D154, D208)', () => {
   })
 })
 
-describe('translateHookBlockForGemini', () => {
-  it("drops Claude's Windows shell key, which Gemini's hook entry does not have", () => {
-    const out = translateHookBlockForGemini({
-      PostToolUse: [{ hooks: [{ type: 'command', command: 'x', shell: 'powershell' }] }],
-      Stop: [{ hooks: [{ type: 'command', command: 'y' }] }],
-    })
-    expect(out).toEqual({ AfterTool: [{ hooks: [{ type: 'command', command: 'x' }] }] })
-  })
-})
-
 describe('parseJsonc (VS Code settings.json)', () => {
   it('reads comments and trailing commas, and leaves // inside strings alone', () => {
     const text = '// user settings\n{\n  /* font */ "editor.fontSize": 14,\n  "http.proxy": "http://example.com", // trailing\n  "chat.useClaudeHooks": true,\n  "list": [1, 2, /* x */ ],\n}\n'
@@ -1624,7 +1601,7 @@ describe('parseJsonc (VS Code settings.json)', () => {
   })
 })
 
-describe('removeGeminiHooks', () => {
+describe('removeGeminiHooks (the archived sweep, D399)', () => {
   let dir: string
 
   beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'tc-inst-')) })
@@ -1645,6 +1622,30 @@ describe('removeGeminiHooks', () => {
     const data = readJson(p)
     const hooks = data.hooks as Record<string, unknown[]>
     expect(hooks.PreCompress!.length).toBe(1)
+  })
+
+  it('takes every spelling an earlier build wrote, drops the hooks key it empties, and keeps every other key', () => {
+    const p = join(dir, 'settings.json')
+    const script = `exec "${join(homedir(), '.claude', 'hooks', 'tc-session-start')}"`
+    writeFileSync(p, JSON.stringify({
+      theme: 'GitHub',
+      mcpServers: { other: { command: 'x' } },
+      hooks: {
+        SessionStart: [{ matcher: 'startup', hooks: [{ type: 'command', command: script }] }],
+        AfterTool: [{ hooks: [{ type: 'command', command: 'node "/old/dist/hooks/gemini/after-tool.js"' }] }],
+        BeforeAgent: [{ hooks: [{ type: 'command', command: `"${join(homedir(), '.claude', 'hooks', 'tc-gemini-before-agent')}"` }] }],
+      },
+    }))
+    expect(removeGeminiHooks(p, false)).not.toBeNull()
+    expect(readJson(p)).toEqual({ theme: 'GitHub', mcpServers: { other: { command: 'x' } } })
+    expect(removeGeminiHooks(p, false)).toBeNull()
+  })
+
+  it('leaves a file that does not parse as it is', () => {
+    const p = join(dir, 'settings.json')
+    writeFileSync(p, '{ not json')
+    expect(removeGeminiHooks(p, false)).toBeNull()
+    expect(readFileSync(p, 'utf8')).toBe('{ not json')
   })
 
   it('returns null when no treecontext hooks', () => {
@@ -1831,9 +1832,9 @@ describe('idempotent install + uninstall cycle', () => {
 })
 
 describe('agent registry', () => {
-  it('has exactly the seven live agents (archived five deleted 2026-08-12; Antigravity CLI added by D383)', () => {
+  it('has exactly the six live agents (archived five deleted 2026-08-12; Antigravity CLI added by D383; Gemini CLI retired by D399)', () => {
     expect(AGENTS.map(a => a.slug).sort()).toEqual(
-      ['agy', 'claude', 'codex', 'cursor', 'gemini', 'opencode', 'vscode'])
+      ['agy', 'claude', 'codex', 'cursor', 'opencode', 'vscode'])
   })
 
   it('all slugs are unique', () => {
@@ -1868,10 +1869,9 @@ describe('agent registry', () => {
     expect(claude.hooks!.events).toContain('PreCompact')
   })
 
-  it('Gemini CLI has hooks and instructions', () => {
-    const gemini = getAgent('gemini')!
-    expect(gemini.hooks).toBeDefined()
-    expect(gemini.instructions).toBeDefined()
+  it('Gemini CLI is no agent of the table, and its settings file is an archived sweep target (D399)', () => {
+    expect(getAgent('gemini')).toBeUndefined()
+    expect(legacyMcpConfigs('linux').find(l => l.slug === 'gemini')).toEqual({ slug: 'gemini', rootKey: 'mcpServers', path: join(homedir(), '.gemini', 'settings.json') })
   })
 
   it('VS Code and Cursor have hooks (platform-specific formats)', () => {
@@ -2033,14 +2033,9 @@ describe('interpreter resolution (AC1.1/AC1.2)', () => {
       for (const agent of Object.keys(AGENT_HOOK_WRAPPER_STEMS) as Array<keyof typeof AGENT_HOOK_WRAPPER_STEMS>) {
         installAgentHookWrappers(agent, false)
       }
-      // The Codex and Gemini copies run the Claude Code hook scripts.
+      // The Codex copy runs the Claude Code hook scripts.
       installClaudeHookScripts(false)
       const configs: Record<string, unknown>[] = []
-
-      const gp = join(dir, 'gemini.json')
-      writeFileSync(gp, '{}')
-      upsertGeminiHooks(gp, false)
-      configs.push(readJson(gp))
 
       const vp = join(dir, 'vscode.json')
       upsertVscodeHooks(vp, false, false)
@@ -2068,7 +2063,7 @@ describe('interpreter resolution (AC1.1/AC1.2)', () => {
       }
       configs.forEach(collect)
 
-      expect(commands.length).toBeGreaterThanOrEqual(22) // gemini/codex: the Claude block's 12 commands each; cursor: 4; copilot: 5 events × 2 shells
+      expect(commands.length).toBeGreaterThanOrEqual(22) // codex: the Claude block's 12 commands; cursor: 4; copilot: 5 events × 2 shells
       for (const c of commands) {
         const tok = interpreterToken(c)
         expect(tok, c).not.toBe('node')
@@ -2484,27 +2479,6 @@ describe('legacy bare-node config convergence (AC1.5)', () => {
   beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'tc-inst-')) })
   afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
 
-  it('gemini: legacy bare-node hook commands are upgraded in place', () => {
-    const p = join(dir, 'settings.json')
-    writeFileSync(p, JSON.stringify({
-      hooks: {
-        SessionStart: [{ hooks: [{ type: 'command', command: 'node "/old/dist/hooks/gemini/session-start.js"' }] }],
-      },
-    }))
-    upsertGeminiHooks(p, false)
-    const after = readJson(p)
-    const json = JSON.stringify(after)
-    expect(json).not.toContain('node \\"/old/')
-    const hooks = after.hooks as Record<string, Array<{ hooks: Array<{ command: string }> }>>
-    // Replaced by the copy of the Claude Code block, entry for entry: no
-    // duplicate beside it.
-    expect(hooks.SessionStart).toEqual(translateHookBlockForGemini(claudeHooksBlock())['SessionStart'])
-    // idempotent: second run leaves content unchanged
-    const snapshot = readFileSync(p, 'utf8')
-    upsertGeminiHooks(p, false)
-    expect(readFileSync(p, 'utf8')).toBe(snapshot)
-  })
-
   it('vscode: legacy bare-node config is updated, then skipped', () => {
     const p = join(dir, 'hooks.json')
     writeFileSync(p, JSON.stringify({
@@ -2560,7 +2534,7 @@ describe('legacy bare-node config convergence (AC1.5)', () => {
  * survive on. The wrappers must carry the full resolution machinery, and the
  * stems must name entry points that actually exist.
  */
-describe('agent hook wrappers (gemini/vscode/codex/cursor)', () => {
+describe('agent hook wrappers (vscode/codex/cursor; gemini\'s swept only)', () => {
   const combos = (Object.entries(AGENT_HOOK_WRAPPER_STEMS) as Array<
     [keyof typeof AGENT_HOOK_WRAPPER_STEMS, readonly string[]]
   >).flatMap(([agent, stems]) => stems.map(stem => [agent, stem] as [keyof typeof AGENT_HOOK_WRAPPER_STEMS, string]))
@@ -2598,7 +2572,10 @@ describe('agent hook wrappers (gemini/vscode/codex/cursor)', () => {
     expect(hookScriptIssue(body)).toBeNull()
   })
 
-  it.each(combos)('%s/%s: the stem names a real entry point', (agent, stem) => {
+  // Gemini CLI's stems name no entry point since its adapter left with its
+  // retirement (D399): install writes no wrapper of its, and the stems stay
+  // only for the archived sweep to recognise an earlier build's.
+  it.each(combos.filter(([agent]) => agent !== 'gemini'))('%s/%s: the stem names a real entry point', (agent, stem) => {
     // The wrapper dispatches to dist/hooks/<agent>/<stem>.js, which a build
     // emits exactly when src/hooks/<agent>/<stem>.ts exists. A stem typo in
     // AGENT_HOOK_WRAPPER_STEMS would otherwise ship a wrapper aimed at
@@ -2629,22 +2606,23 @@ describe('agent hook wrappers (gemini/vscode/codex/cursor)', () => {
     // `uninstall claude` swept every tc-* file, deleting wrappers a
     // still-installed gemini config referenced — a working config aimed at
     // nothing, the F1-defect shape. And no agent's own uninstall removed
-    // its wrappers at all.
+    // its wrappers at all. (Gemini CLI is retired, D399; vscode and cursor
+    // keep the shape.)
     const home = mkdtempSync(join(tmpdir(), 'tc-agent-unwrap-'))
     const restore = redirectHome(home)
     try {
       installClaudeHookScripts(false)
-      installAgentHookWrappers('gemini', false)
+      installAgentHookWrappers('vscode', false)
       installAgentHookWrappers('cursor', false)
       const hooksDir = join(home, '.claude', 'hooks')
 
       removeClaudeHookScripts(false)
       const afterClaude = readdirSync(hooksDir).sort()
-      const geminiSet = AGENT_HOOK_WRAPPER_STEMS.gemini.map(s => basename(agentHookWrapperPath('gemini', s)))
+      const vscodeSet = AGENT_HOOK_WRAPPER_STEMS.vscode.map(s => basename(agentHookWrapperPath('vscode', s)))
       const cursorSet = AGENT_HOOK_WRAPPER_STEMS.cursor.map(s => basename(agentHookWrapperPath('cursor', s)))
-      expect(afterClaude).toEqual([...geminiSet, ...cursorSet].sort())
+      expect(afterClaude).toEqual([...vscodeSet, ...cursorSet].sort())
 
-      removeAgentHookWrappers('gemini', false)
+      removeAgentHookWrappers('vscode', false)
       expect(readdirSync(hooksDir).sort()).toEqual([...cursorSet].sort())
       removeAgentHookWrappers('cursor', false)
       expect(readdirSync(hooksDir)).toEqual([])

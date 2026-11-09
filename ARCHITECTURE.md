@@ -57,9 +57,9 @@ library consumers ─ FlatStore.open()  (no server, no hooks, same store)
   `startup`, `resume`, `clear` and `compact` matchers (reminder, then
   session-start), PreCompact, PostToolUse, UserPromptSubmit, Stop,
   SubagentStart and SubagentStop. The same block is copied verbatim into
-  Codex CLI's `~/.codex/hooks.json` and, translated to Gemini CLI's
-  event names (no Stop, no subagent events), into
-  `~/.gemini/settings.json` — both only behind `--experimental-capture`.
+  Codex CLI's `~/.codex/hooks.json`, only behind `--experimental-capture`
+  (Gemini CLI's translated copy went with its retirement, D399; uninstall
+  sweeps one an earlier install left).
   VS Code and Cursor read the Claude settings file as-is and get
   nothing written; doctor gives each documented client a row naming its
   mode, the state found and the remedy. Installs from before

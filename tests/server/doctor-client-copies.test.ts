@@ -62,14 +62,10 @@ const claudeBlock = (): Record<string, unknown> =>
 
 beforeEach(() => {
   home = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-copies-home-')))
-  for (const d of ['.claude', '.codex', '.gemini']) mkdirSync(join(home, d), { recursive: true })
+  for (const d of ['.claude', '.codex']) mkdirSync(join(home, d), { recursive: true })
   markClaudeCodeInstalled(home)
-  // Gemini CLI installed: the installation_id it writes on its first run (D383);
-  // the directory alone, or a settings.json of only treecontext's, is not.
-  writeFileSync(join(home, '.gemini', 'installation_id'), 'copies-world\n')
   ok(['install', '--yes', '--agent', 'claude'])
   ok(['install', '--yes', '--agent', 'codex'])
-  ok(['install', '--yes', '--agent', 'gemini'])
 })
 afterEach(() => { rmSync(home, { recursive: true, force: true }) })
 
@@ -142,24 +138,17 @@ describe('doctor and install on a copying client, end to end', () => {
     expect(r.line).toMatch(/server mode: standard \(no auto-capture\) \(this client: tools only\), /)
   }, 120_000)
 
+  // Gemini CLI, the other copying client, is retired (D399).
   for (const client of [
     { name: 'Codex CLI', slug: 'codex' },
-    { name: 'Gemini CLI', slug: 'gemini' },
   ] as const) {
     it(`a ${client.name} copy beside a server without capture warns, names the install, and the install clears it (D386)`, () => {
       ok(['install', '--agent', client.slug, '--experimental-capture'])
       // The entry turned to no capture by hand while the copy stays.
       const setArgs = (edit: (a: string[]) => string[]): void => {
-        if (client.slug === 'codex') {
-          const t = parseToml(readFileSync(codexToml(), 'utf8')) as { mcp_servers: Record<string, Record<string, unknown>> }
-          t.mcp_servers['treecontext']!['args'] = edit(t.mcp_servers['treecontext']!['args'] as string[])
-          writeFileSync(codexToml(), stringifyToml(t) + '\n')
-        } else {
-          const path = join(home, '.gemini', 'settings.json')
-          const j = JSON.parse(readFileSync(path, 'utf8')) as { mcpServers: Record<string, { args: string[] }> }
-          j.mcpServers['treecontext']!.args = edit(j.mcpServers['treecontext']!.args)
-          writeFileSync(path, JSON.stringify(j, null, 2))
-        }
+        const t = parseToml(readFileSync(codexToml(), 'utf8')) as { mcp_servers: Record<string, Record<string, unknown>> }
+        t.mcp_servers['treecontext']!['args'] = edit(t.mcp_servers['treecontext']!['args'] as string[])
+        writeFileSync(codexToml(), stringifyToml(t) + '\n')
       }
       const before = row(client.name)
       expect(before.status, before.line).toBe('ok')
@@ -235,18 +224,21 @@ describe('doctor and install on a copying client, end to end', () => {
   }, 120_000)
 
   it('when the MCP half needs the install too, the one fix line still carries the flag', () => {
-    ok(['install', '--agent', 'gemini', '--experimental-capture'])
-    const settingsPath = join(home, '.gemini', 'settings.json')
-    const settings = JSON.parse(readFileSync(settingsPath, 'utf8')) as Record<string, Record<string, unknown>>
-    delete settings['hooks']!['AfterTool']
-    delete settings['mcpServers']!['treecontext']
-    writeFileSync(settingsPath, JSON.stringify(settings))
+    // Pinned through Gemini CLI's one-file settings until its retirement
+    // (D399); Codex CLI keeps its copy and its entry in two files.
+    ok(['install', '--agent', 'codex', '--experimental-capture'])
+    const hooks = JSON.parse(readFileSync(codexHooks(), 'utf8')) as { hooks: Record<string, unknown> }
+    delete hooks.hooks['PostToolUse']
+    writeFileSync(codexHooks(), JSON.stringify(hooks))
+    const toml = parseToml(readFileSync(codexToml(), 'utf8')) as { mcp_servers: Record<string, unknown> }
+    delete toml.mcp_servers['treecontext']
+    writeFileSync(codexToml(), stringifyToml(toml) + '\n')
 
-    const both = row('Gemini CLI')
+    const both = row('Codex CLI')
     expect(both.state).toContain('present and inconsistent')
-    expect(both.fix).toBe('treecontext install --force --agent gemini --experimental-capture')
+    expect(both.fix).toBe('treecontext install --force --agent codex --experimental-capture')
     runNamed(both.fix!)
-    const fixed = row('Gemini CLI')
+    const fixed = row('Codex CLI')
     expect(fixed.status).toBe('ok')
     expect(fixed.state).toMatch(/present and consistent/)
   }, 120_000)

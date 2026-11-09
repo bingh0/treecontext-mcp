@@ -241,9 +241,11 @@ ratification. [ruled: D253] The constraints the build must not cross:
   matrix documents each client's hook support with the documentation's
   date; doctor states each documented client's mode, state, correctness
   and remedy; the installer writes nothing for a client that reads the
-  Claude file, and for a copying client, Codex CLI and Gemini CLI, it
-  copies the hooks only behind the existing experimental flag, writing
-  the tools alone without it. [ruled: D153, D208]
+  Claude file, and for a copying client, Codex CLI (Gemini CLI too until
+  its retirement), it copies the hooks only behind the existing
+  experimental flag, writing the tools alone without it; Gemini CLI is
+  an archived platform, swept by uninstall and named by doctor while an
+  earlier install's entry is left. [ruled: D153, D208, D399]
 - **Availability and ops burden.** Nothing treecontext does blocks a
   turn; capture degrades with a gap marker; doctor names the cause in
   one command; the sprint runs with zero maintenance. Performance
@@ -312,10 +314,11 @@ ratification. [ruled: D253] The constraints the build must not cross:
   block install writes today, running the same `~/.claude/hooks/tc-*`
   scripts: verbatim under `hooks` in `~/.codex/hooks.json` (doctor also
   reads the top level an older build wrote and `[hooks]` in
-  `~/.codex/config.toml`), and in `~/.gemini/settings.json` with events
-  renamed UserPromptSubmit→BeforeAgent, PreToolUse→BeforeTool,
-  PostToolUse→AfterTool, PreCompact→PreCompress, Stop and the subagent
-  events dropped, matchers kept, Claude's Windows `shell` key dropped. A
+  `~/.codex/config.toml`), and, until D399 retired Gemini CLI, in
+  `~/.gemini/settings.json` with events renamed UserPromptSubmit→
+  BeforeAgent, PreToolUse→BeforeTool, PostToolUse→AfterTool,
+  PreCompact→PreCompress, Stop and the subagent events dropped, matchers
+  kept, Claude's Windows `shell` key dropped. A
   command is treecontext's only when it runs a known script in
   `<home>/.claude/hooks/` or is an earlier build's spelling. A copy is
   consistent when its treecontext entries equal that block's, foreign
@@ -716,7 +719,7 @@ index is a transcription, not a new decision.
 - the ratified session-first rung order is restored: the session rung is causal and a session id is never recycled while the pid file is structurally shared, so the session-keyed annotation outranks the pid rung; the mid-session relaunch counter-case is accepted as a disclosed, self-healing residual [ruled: D95]
 - treecontext offers to write the pane wiring into the reader's own configuration itself, because a reader that survives a typo by drawing nothing makes every mistake invisible; pulled into the release line after no closed-beta tester got a pane by hand-naming paths [ruled: D98]
 - the sidecar is a post-charter surface, not charter detail (h): pane files on disk beside the store, pure data conformant to the reader's pane contract; the renderer never runs treecontext's code, stale health never reads as an all-clear, only the drain owner writes a pane and rewrites it on every drain, and a drain that fails confesses [ruled: D102]
-- all six client integrations stand, Cursor included: Claude Code, Gemini CLI, VS Code, Codex, Cursor, OpenCode [ruled: D104] — noted 2026-10-08: the VS Code and Cursor adapters are in source and unwired; the installer writes nothing for those two clients, which read the Claude settings file (D226)
+- all six client integrations stand, Cursor included: Claude Code, Gemini CLI, VS Code, Codex, Cursor, OpenCode [ruled: D104] — noted 2026-11-09: Gemini CLI retired as an archived platform (D399), Antigravity CLI its successor in the agent table (D383) — noted 2026-10-08: the VS Code and Cursor adapters are in source and unwired; the installer writes nothing for those two clients, which read the Claude settings file (D226)
 - version skew is stated policy: stores migrate forward, the oldest supported store version is named per release, a store with a newer schema is refused by name, and in mixed-version lanes the laggards refuse until upgraded [ruled: D116]
 - an append-only access log exists; more data is better forensics later, and a performance cost is optimized only when it appears [ruled: D125]
 - an agent registry exists, one record per agent lifetime, so a row needs only an agent identity and the rest is a join [ruled: D126]

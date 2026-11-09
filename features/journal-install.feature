@@ -401,12 +401,36 @@ Feature: Journal install — setup is auditable, reversible, and honest
     And no hook of Antigravity CLI's is written
     And the instruction block Antigravity CLI reads is present once
 
-  @D383 @D51
-  Scenario: a directory Gemini CLI and Antigravity CLI share is not read as both
-    Given a machine with Antigravity CLI installed and no Gemini CLI
+  @D399 @D51
+  Scenario: install never wires Gemini CLI, even where its own command and files are there
+    Given a machine with Antigravity CLI installed, and Gemini CLI's command and its own files present
     When install runs
     Then no Gemini CLI configuration is written
     And Antigravity CLI is wired for the tools
+
+  @D399
+  Scenario: install refuses the experimental flag naming Gemini CLI, saying it is retired
+    Given a machine with Gemini CLI's command and its own files present
+    When install runs with the experimental flag naming Gemini CLI
+    Then the install run exits non-zero
+    And the developer sees one line saying Gemini CLI is retired, naming Antigravity CLI and the command that removes an old entry
+    And no Gemini CLI configuration is written
+
+  @D399 @D51
+  Scenario: uninstall sweeps what an earlier install wrote for Gemini CLI and keeps the developer's own keys
+    Given Gemini CLI's settings holding the treecontext entry and the copied hooks an earlier install wrote, beside the developer's own server, hook and keys, its hook wrappers, and the instruction block in GEMINI.md below the developer's notes
+    When uninstall runs
+    Then Gemini CLI's settings hold the developer's own server, hook and keys, and nothing of treecontext's
+    And no Gemini CLI hook wrapper is left
+    And GEMINI.md holds the developer's notes and no treecontext block
+
+  @D399 @D383
+  Scenario: the instruction block in GEMINI.md is Antigravity CLI's, and goes with Antigravity CLI's uninstall
+    Given a machine with Antigravity CLI installed, Gemini CLI's own files present, and a GEMINI.md holding the developer's own notes
+    When install runs and then Antigravity CLI is uninstalled
+    Then after install GEMINI.md holds the treecontext block once, below the developer's notes
+    And after the uninstall GEMINI.md holds the developer's notes and no treecontext block
+    And Antigravity CLI's own listing of its MCP servers no longer names the treecontext server
 
   @D383 @D51
   Scenario: a permission rule the developer wrote for Antigravity CLI survives install and uninstall

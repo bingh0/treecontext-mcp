@@ -97,8 +97,10 @@ scenario, are in `docs/beta3-bindings-audit.md`.
   (`trustedWorkerLane`), which tells it to begin from its first message
 - `src/server/installer.ts` — agent detection, config writing, AGENTS.md
   block, doctor (one row per documented client: mode, state, remedy); the
-  Claude Code hooks block, and its verbatim (Codex) and translated
-  (Gemini) copies behind `--experimental-capture`
+  Claude Code hooks block, and its verbatim (Codex) copy behind
+  `--experimental-capture`; Gemini CLI is an archived platform (D399):
+  install never wires it, uninstall's archived sweep removes what an
+  earlier build wrote for it, and doctor names the leftovers
 - `src/server/idle-compaction.ts` — Claude Code's idle-compaction key
   (D290, D304, D338): the version parse and the 2.1.290 / 2.1.302 floors,
   what install does about the key, and doctor's row for it
@@ -234,8 +236,7 @@ scenario, are in `docs/beta3-bindings-audit.md`.
 - `src/server/agents.ts` — the agent registry install reads (detection,
   config paths and formats, hooks); Antigravity CLI (`agy`, D383) is a
   tools-only entry, detected by its command or `~/.gemini/antigravity-cli`,
-  and `~/.gemini` alone stops counting as Gemini CLI where agy's own
-  directories are in it (`geminiCliPresent`)
+  and `~/.gemini/GEMINI.md` is its instruction block alone (D399)
 - `src/server/shielding.ts` — output shielding (`--shield-threshold`)
 
 ## Design decisions worth not re-litigating

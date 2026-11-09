@@ -25,7 +25,7 @@ describe('capture-platform guard', () => {
   it('leaves agents with unverified adapters out of the set', () => {
     // These have adapters in-tree; none has earned its pass yet. When one
     // does, this test is the deliberate place that ruling gets recorded.
-    for (const slug of ['vscode', 'cursor', 'codex', 'gemini', 'opencode']) {
+    for (const slug of ['vscode', 'cursor', 'codex', 'opencode']) {
       expect(CAPTURE_PLATFORMS.has(slug)).toBe(false)
     }
   })

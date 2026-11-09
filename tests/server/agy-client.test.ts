@@ -10,12 +10,12 @@ import { MARKER_START } from '../../src/server/installer.js'
 
 // Antigravity CLI as a tools-only client (D383, D387, D390) in the corners
 // the charter scenarios do not reach: how an agy rule names a tool, the
-// merge beside the developer's rules, the row's other states, detection of
-// the directory Gemini CLI and agy share, the shared instruction block, the
-// project file doctor reads, and the permissions of the files install
-// rewrites. The CLI runs under a redirected HOME; the machine's own `agy`
-// and `gemini` are hidden from it (sandboxedSpawnEnv), so detection here is
-// by the directories each test lays out.
+// merge beside the developer's rules, the row's other states, detection in
+// the `~/.gemini` that retired Gemini CLI (D399) also used, agy's
+// instruction block, the project file doctor reads, and the permissions of
+// the files install rewrites. The CLI runs under a redirected HOME; the
+// machine's own `agy` is hidden from it (sandboxedSpawnEnv), so detection
+// here is by the directories each test lays out.
 
 const FOUR: string[] = APPROVED_TOOLS.map(t => `mcp(treecontext/${t})`)
 const [F_STATUS, F_QUERY, , F_INSERT] = FOUR as [string, string, string, string]
@@ -185,73 +185,62 @@ describe("doctor's agy clause in the states the outline does not list", () => {
   })
 })
 
-describe('the directory Gemini CLI and agy share (D383)', () => {
+describe('Gemini CLI is never detected, whatever of its own is there (D399)', () => {
   const detected = (h: string, env?: Record<string, string>): string =>
     /^Detected agents: (.*)$/m.exec(spawnCli(['install', '--yes', '--dry-run'], { home: h, ...(env ? { env } : {}) }).stdout)?.[1] ?? ''
-  test('~/.gemini alone, or with only what agy makes in it, is not Gemini CLI', () => {
+  test('~/.gemini alone, or with only what agy makes in it, is not a client; agy\'s own directories are agy', () => {
     expect(detected(home(['.gemini']))).toBe('(none)')
     expect(detected(home())).toBe('Antigravity CLI')
     expect(detected(home(['.gemini/config']))).toBe('(none)')
   })
-  test("a settings.json holding only what an earlier install wrote is not Gemini CLI (the dogfood machine's shape)", () => {
-    for (const data of [{ mcpServers: { treecontext: { command: 'x', args: ['serve'] } } }, { mcpServers: {} }, {}]) {
-      const h = home()
-      writeFileSync(join(h, '.gemini', 'settings.json'), JSON.stringify(data))
-      expect(detected(h), JSON.stringify(data)).toBe('Antigravity CLI')
-    }
-  })
-  test("each of Gemini CLI's own artifacts is Gemini CLI, with agy there or not", () => {
+  test("Gemini CLI's own files, its settings, its hooks and its command detect nothing, with agy there or not", () => {
     for (const layout of [['.gemini'], ['.gemini/antigravity-cli', '.gemini/config']]) {
-      const both = layout.length > 1 ? 'Gemini CLI Antigravity CLI' : 'Gemini CLI'
+      const expected = layout.length > 1 ? 'Antigravity CLI' : '(none)'
       for (const f of ['installation_id', 'oauth_creds.json', 'google_accounts.json', 'trusted_hooks.json']) {
         const h = home(layout)
         writeFileSync(join(h, '.gemini', f), '{}')
-        expect(detected(h), f).toBe(both)
+        expect(detected(h), f).toBe(expected)
       }
-      const t = home([...layout, '.gemini/tmp'])
-      expect(detected(t), 'tmp/').toBe(both)
-      for (const data of [{ security: { auth: { selectedType: 'oauth-personal' } } }, { mcpServers: { github: { command: 'gh' } } }, { hooks: { BeforeTool: [{ hooks: [{ type: 'command', command: 'my-linter --check' }] }] } }]) {
+      expect(detected(home([...layout, '.gemini/tmp'])), 'tmp/').toBe(expected)
+      for (const data of [
+        { security: { auth: { selectedType: 'oauth-personal' } } }, { mcpServers: { github: { command: 'gh' } } },
+        { hooks: { BeforeTool: [{ hooks: [{ type: 'command', command: '/usr/local/bin/audit' }] }] } },
+        { mcpServers: { treecontext: { command: 'x', args: ['serve'] } } },
+      ]) {
         const h = home(layout)
         writeFileSync(join(h, '.gemini', 'settings.json'), JSON.stringify(data))
-        expect(detected(h), JSON.stringify(data)).toBe(both)
+        expect(detected(h), JSON.stringify(data)).toBe(expected)
       }
+      const h = home(layout)
+      const bin = join(h, 'bin')
+      mkdirSync(bin)
+      writeFileSync(join(bin, process.platform === 'win32' ? 'gemini.cmd' : 'gemini'), '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+      expect(detected(h, { PATH: `${bin}${delimiter}${process.env['PATH'] ?? ''}` }), 'gemini on PATH').toBe(expected)
     }
   })
-  test("hooks treecontext wrote, or the empty hooks its uninstall leaves, are not Gemini CLI's own", () => {
-    for (const shape of ['empty', 'tc', 'tc+server'] as const) {
-      const h = home()
-      // The commands as install writes them in this home: a Claude Code hook
-      // script in its own hooks directory, and an earlier build's adapter.
-      const tcHooks = { hooks: { SessionStart: [{ hooks: [{ type: 'command', command: `exec "${join(h, '.claude', 'hooks', 'tc-session-start')}"` }] }], BeforeAgent: [{ hooks: [{ type: 'command', command: 'node /opt/tc/dist/hooks/gemini/before-agent.js' }] }] } }
-      const data = shape === 'empty' ? { hooks: {} } : shape === 'tc' ? tcHooks : { ...tcHooks, mcpServers: { treecontext: { command: 'x', args: ['serve'] } } }
-      writeFileSync(join(h, '.gemini', 'settings.json'), JSON.stringify(data))
-      expect(detected(h), JSON.stringify(data)).toBe('Antigravity CLI')
+  test('install refuses to wire Gemini CLI by name, with the experimental flag or without, and writes nothing', () => {
+    for (const flags of [[], ['--experimental-capture']]) {
+      const h = home(['.gemini'])
+      writeFileSync(join(h, '.gemini', 'installation_id'), 'x')
+      const run = spawnCli(['install', '--yes', '--agent', 'gemini', ...flags], { home: h })
+      expect(run.status, run.out).toBe(1)
+      expect(run.stderr).toContain('Gemini CLI is retired (Google deprecated it for Antigravity CLI)')
+      expect(run.stderr).toContain('`treecontext uninstall --agent gemini`')
+      expect(run.out).not.toMatch(/Fatal|No matching agents/)
+      expect(readdirSync(join(h, '.gemini'))).toEqual(['installation_id'])
+      expect(existsSync(join(h, '.treecontext', 'config.toml')), 'install wrote its config before refusing').toBe(false)
     }
-  })
-  test("a developer's own Gemini hook proves Gemini CLI, however its path reads", () => {
-    for (const command of ['/etc-scripts/audit.sh', 'node ./scripts/cli.js lint', '/opt/treecontext-notes/sync.sh', '/usr/local/bin/audit']) {
-      const h = home()
-      writeFileSync(join(h, '.gemini', 'settings.json'), JSON.stringify({ hooks: { BeforeTool: [{ hooks: [{ type: 'command', command }] }] } }))
-      expect(detected(h), command).toBe('Gemini CLI Antigravity CLI')
-    }
-  })
-  test('the gemini command on PATH is Gemini CLI', () => {
-    const h = home()
-    const bin = join(h, 'bin')
-    mkdirSync(bin)
-    writeFileSync(join(bin, process.platform === 'win32' ? 'gemini.cmd' : 'gemini'), '#!/bin/sh\nexit 0\n', { mode: 0o755 })
-    expect(detected(h, { PATH: `${bin}${delimiter}${process.env['PATH'] ?? ''}` })).toBe('Gemini CLI Antigravity CLI')
   })
 })
 
-describe.skipIf(process.platform === 'win32')('an orphan Gemini CLI entry (D383)', () => {
-  /** agy installed, and an earlier install's Gemini CLI entry and shared block left with no Gemini CLI. */
-  const orphaned = (): string => {
+describe.skipIf(process.platform === 'win32')('a Gemini CLI entry an earlier install left (D399)', () => {
+  /** agy installed, and the treecontext entry an earlier install wrote into Gemini CLI's settings, beside a key of the developer's. */
+  const leftover = (opts: { geminiPresent?: boolean } = {}): string => {
     const h = home()
-    writeFileSync(join(h, '.gemini', 'installation_id'), 'x')
     expect(spawnCli(['install', '--yes'], { home: h }).status).toBe(0)
-    rmSync(join(h, '.gemini', 'installation_id'))
-    expect(JSON.parse(readFileSync(join(h, '.gemini', 'settings.json'), 'utf8'))).toHaveProperty(['mcpServers', 'treecontext'])
+    if (opts.geminiPresent) writeFileSync(join(h, '.gemini', 'installation_id'), 'x')
+    const entry = JSON.parse(readFileSync(mcpPath(h), 'utf8')) as { mcpServers: Record<string, unknown> }
+    writeFileSync(join(h, '.gemini', 'settings.json'), JSON.stringify({ theme: 'Default', mcpServers: { treecontext: entry.mcpServers['treecontext'] } }))
     return h
   }
   const geminiRow = (out: string): string[] => {
@@ -260,39 +249,49 @@ describe.skipIf(process.platform === 'win32')('an orphan Gemini CLI entry (D383)
     return i < 0 ? [] : [lines[i]!, lines[i + 1] ?? '']
   }
 
-  test('doctor warns that an earlier install wired Gemini CLI, which is not present, and names the uninstall', () => {
-    const h = orphaned()
-    const [row, fix] = geminiRow(spawnCli(['doctor'], { home: h }).stdout)
-    expect(row).toMatch(/^\[warn\] Gemini CLI: an earlier install wired Gemini CLI, which is not present — /)
-    expect(row).toContain(join(h, '.gemini', 'settings.json'))
-    expect(fix).toBe('       fix: treecontext uninstall --agent gemini')
+  test('doctor warns that Gemini CLI is retired, names what is left and the uninstall, whether Gemini CLI is installed or not', () => {
+    for (const geminiPresent of [false, true]) {
+      const h = leftover({ geminiPresent })
+      const out = spawnCli(['doctor'], { home: h }).stdout
+      const [row, fix] = geminiRow(out)
+      expect(row).toBe(`[warn] Gemini CLI: Gemini CLI is retired; an earlier install left its treecontext entry in ${join(h, '.gemini', 'settings.json')}, which nothing of treecontext's uses any more (install leaves it alone; ~/.gemini/GEMINI.md is Antigravity CLI's and stays)`)
+      expect(fix).toBe('       fix: treecontext uninstall --agent gemini')
+      // One row naming Gemini CLI, and no client row for it.
+      expect(out.split('\n').filter(l => /Gemini CLI/.test(l))).toEqual([row])
+    }
   })
 
-  test('install leaves it alone; uninstall --agent gemini removes it, and doctor no longer names it', () => {
-    const h = orphaned()
+  test("install leaves it alone; uninstall --agent gemini removes it and nothing else, and doctor no longer names it", () => {
+    const h = leftover()
     const before = readFileSync(join(h, '.gemini', 'settings.json'), 'utf8')
     expect(spawnCli(['install', '--yes'], { home: h }).status).toBe(0)
     expect(readFileSync(join(h, '.gemini', 'settings.json'), 'utf8')).toBe(before)
+    const agyFiles = [mcpPath(h), settingsPath(h), join(h, '.gemini', 'GEMINI.md')].map(f => readFileSync(f, 'utf8'))
     const un = spawnCli(['uninstall', '--yes', '--agent', 'gemini'], { home: h })
     expect(un.status, un.out).toBe(0)
-    expect(JSON.stringify(JSON.parse(readFileSync(join(h, '.gemini', 'settings.json'), 'utf8')))).not.toMatch(/treecontext/)
+    expect(un.stdout).toContain('gemini: Gemini CLI is retired (D399) — its old configuration is swept below')
+    expect(JSON.parse(readFileSync(join(h, '.gemini', 'settings.json'), 'utf8'))).toEqual({ theme: 'Default', mcpServers: {} })
     expect(geminiRow(spawnCli(['doctor'], { home: h }).stdout)).toEqual([])
-    // agy is still wired, so the shared block stays.
-    expect(readFileSync(join(h, '.gemini', 'GEMINI.md'), 'utf8')).toContain(MARKER_START)
+    // agy's wiring and its block are as install left them.
+    expect([mcpPath(h), settingsPath(h), join(h, '.gemini', 'GEMINI.md')].map(f => readFileSync(f, 'utf8'))).toEqual(agyFiles)
   })
 
-  test("an orphan is not \"still wired\": uninstalling agy takes the shared block", () => {
-    const h = orphaned()
-    const un = spawnCli(['uninstall', '--yes', '--agent', 'agy'], { home: h })
-    expect(un.status, un.out).toBe(0)
-    expect(un.stdout).not.toMatch(/instructions kept/)
-    expect(existsSync(join(h, '.gemini', 'GEMINI.md')) ? readFileSync(join(h, '.gemini', 'GEMINI.md'), 'utf8') : '').not.toContain(MARKER_START)
+  test('the block is agy\'s alone: uninstalling agy takes it, Gemini CLI\'s files there or not', () => {
+    for (const geminiPresent of [false, true]) {
+      const h = leftover({ geminiPresent })
+      const un = spawnCli(['uninstall', '--yes', '--agent', 'agy'], { home: h })
+      expect(un.status, un.out).toBe(0)
+      expect(un.stdout).not.toMatch(/instructions kept/)
+      expect(un.stdout).toContain(`Antigravity CLI: instructions removed from ${join(h, '.gemini', 'GEMINI.md')}`)
+      expect(existsSync(join(h, '.gemini', 'GEMINI.md')) ? readFileSync(join(h, '.gemini', 'GEMINI.md'), 'utf8') : '').not.toContain(MARKER_START)
+    }
   })
 })
 
-describe.skipIf(process.platform === 'win32')('install and uninstall for agy beside Gemini CLI (D383)', () => {
-  const both = (): string => {
+describe.skipIf(process.platform === 'win32')("agy's instruction block beside Gemini CLI's files (D399)", () => {
+  const beside = (): string => {
     const h = home()
+    writeFileSync(join(h, '.gemini', 'installation_id'), 'x')
     writeFileSync(join(h, '.gemini', 'settings.json'), JSON.stringify({ theme: 'Default' }))
     return h
   }
@@ -300,40 +299,44 @@ describe.skipIf(process.platform === 'win32')('install and uninstall for agy bes
     .map(f => join(h, '.gemini', f))
     .reduce((n, f) => n + (existsSync(f) ? readFileSync(f, 'utf8').split(MARKER_START).length - 1 : 0), 0)
 
-  test('the shared block is written once, and the second agent says where', () => {
-    const h = both()
+  test('the block is written once, for agy, and Gemini CLI\'s settings are left as they were', () => {
+    const h = beside()
     const run = spawnCli(['install', '--yes'], { home: h })
     expect(run.status, run.out).toBe(0)
     expect(blocks(h)).toBe(1)
-    expect(run.stdout).toContain(`instructions: ${join(h, '.gemini', 'GEMINI.md')} [shared with Gemini CLI — written once, above]`)
+    expect(run.stdout).toContain(`instructions: ${join(h, '.gemini', 'GEMINI.md')} [created]`)
+    expect(run.stdout).not.toMatch(/shared with|Gemini CLI/)
+    expect(JSON.parse(readFileSync(join(h, '.gemini', 'settings.json'), 'utf8'))).toEqual({ theme: 'Default' })
     // Twice over, still once.
     expect(spawnCli(['install', '--yes'], { home: h }).status).toBe(0)
     expect(blocks(h)).toBe(1)
   })
 
-  test("uninstalling agy alone keeps the block Gemini CLI still reads; uninstalling both removes it", () => {
-    const h = both()
+  test('uninstalling agy takes the block and the file install created for it', () => {
+    const h = beside()
     expect(spawnCli(['install', '--yes'], { home: h }).status).toBe(0)
     const one = spawnCli(['uninstall', '--yes', '--agent', 'agy'], { home: h })
     expect(one.status, one.out).toBe(0)
-    expect(one.stdout).toContain(`Antigravity CLI: instructions kept in ${join(h, '.gemini', 'GEMINI.md')} — Gemini CLI reads the same block and is still wired`)
-    expect(blocks(h)).toBe(1)
+    expect(blocks(h)).toBe(0)
     // The settings file install created for agy, left empty, went with it.
     expect(existsSync(settingsPath(h))).toBe(false)
-    const all = spawnCli(['uninstall', '--yes'], { home: h })
-    expect(all.status, all.out).toBe(0)
-    expect(blocks(h)).toBe(0)
+    expect(JSON.parse(readFileSync(join(h, '.gemini', 'settings.json'), 'utf8'))).toEqual({ theme: 'Default' })
   })
 
-  test('uninstalling Gemini CLI alone keeps the block agy still reads', () => {
-    const h = both()
-    expect(spawnCli(['install', '--yes'], { home: h }).status).toBe(0)
-    const one = spawnCli(['uninstall', '--yes', '--agent', 'gemini'], { home: h })
-    expect(one.status, one.out).toBe(0)
-    expect(one.stdout).toContain(`Gemini CLI: instructions kept in ${join(h, '.gemini', 'GEMINI.md')} — Antigravity CLI reads the same block and is still wired`)
-    expect(blocks(h)).toBe(1)
+  test("a full uninstall takes a block an earlier install wrote for Gemini CLI where agy is not wired", () => {
+    const h = home(['.gemini'])
+    writeFileSync(join(h, '.gemini', 'GEMINI.md'), `# notes\n\n${MARKER_START}\nold block\n<!-- treecontext:end -->\n`)
+    const run = spawnCli(['uninstall', '--yes'], { home: h })
+    expect(run.status, run.out).toBe(0)
+    expect(readFileSync(join(h, '.gemini', 'GEMINI.md'), 'utf8')).toBe('# notes\n')
+    // A run that names an agent leaves the file to agy's own uninstall.
+    writeFileSync(join(h, '.gemini', 'GEMINI.md'), `# notes\n\n${MARKER_START}\nold block\n<!-- treecontext:end -->\n`)
+    expect(spawnCli(['uninstall', '--yes', '--agent', 'gemini'], { home: h }).status).toBe(0)
+    expect(readFileSync(join(h, '.gemini', 'GEMINI.md'), 'utf8')).toContain(MARKER_START)
   })
+})
 
+describe.skipIf(process.platform === 'win32')('install and uninstall for agy (D383)', () => {
   test("a reinstall keeps the developer's disabled flag, and doctor says so", () => {
     const h = home()
     expect(spawnCli(['install', '--yes'], { home: h }).status).toBe(0)
@@ -542,11 +545,11 @@ describe.skipIf(process.platform === 'win32')('install and uninstall for agy bes
   })
 })
 
-describe("the machine's own agy and gemini, hidden from a sandboxed child's PATH", () => {
+describe("the machine's own agy, hidden from a sandboxed child's PATH", () => {
   test('on Linux and macOS a directory holding one is mirrored without it; on Windows the PATH is left whole', () => {
     const dir = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-path-')))
     dirs.push(dir)
-    for (const n of ['gemini', 'node-ish']) writeFileSync(join(dir, n), '', { mode: 0o755 })
+    for (const n of ['agy', 'node-ish']) writeFileSync(join(dir, n), '', { mode: 0o755 })
     const was = process.env['PATH']
     process.env['PATH'] = `${dir}${delimiter}${was ?? ''}`
     try {

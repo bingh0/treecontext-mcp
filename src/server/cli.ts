@@ -703,9 +703,9 @@ Install options:
   --npx                Unavailable during the beta (install globally instead)
   --experimental-capture
                        Also copy the Claude Code hooks into a client that
-                       copies them into its own configuration (Codex CLI,
-                       Gemini CLI); requires --agent. MCP tools always
-                       install; this opts into unverified capture.
+                       copies them into its own configuration (Codex CLI);
+                       requires --agent. MCP tools always install; this
+                       opts into unverified capture.
 
 Uninstall options:
   --agent <name>       Uninstall for a specific agent only (repeatable)
@@ -1552,6 +1552,8 @@ async function main(): Promise<void> {
 
   if (args.command === 'install') {
     const { install } = await import('./installer.js')
+    // Gemini CLI is retired (D399): install said why on stderr; the run fails.
+    const retired = (e: unknown): boolean => !!e && typeof e === 'object' && 'code' in e && e.code === 'INSTALL_RETIRED'
     await install({
       yes: args.yes,
       dryRun: args.dryRun,
@@ -1566,7 +1568,7 @@ async function main(): Promise<void> {
       lexical: args.provided.has('lexical') ? args.lexical : true,
       experimentalCapture: args.experimentalCapture,
       noToolApprovals: args.noToolApprovals,
-    })
+    }).catch((e: unknown) => { if (!retired(e)) throw e; process.exitCode = 1 })
     return
   }
 

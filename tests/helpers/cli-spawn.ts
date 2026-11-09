@@ -82,15 +82,15 @@ export const LEAK_KEYS = [
 
 /**
  * Commands whose presence on PATH install reads as a client being installed
- * (D383: Antigravity CLI by `agy`, Gemini CLI by `gemini`; D51: Claude Code
- * by `claude`). The machine
+ * (D383: Antigravity CLI by `agy`; D51: Claude Code by `claude`; Gemini
+ * CLI's `gemini` no longer, since its retirement, D399). The machine
  * running the suite may have them; a sandboxed child must not see them, or
  * every install world on that machine wires a client its scenario never
  * named — the PATH twin of CLAUDE_CONFIG_DIR. A scenario that means one of
  * them to be installed puts it on the child's PATH from a directory of its
  * own, which this leaves alone.
  */
-export const DETECTED_CLIENT_COMMANDS = ['agy', 'gemini', 'claude'] as const
+export const DETECTED_CLIENT_COMMANDS = ['agy', 'claude'] as const
 
 const mirrors = new Map<string, string>()
 let mirrorRoot: string | null = null
@@ -120,17 +120,17 @@ function holdsClient(dir: string): boolean {
 /**
  * A PATH whose directories from this machine's own PATH show no detected
  * client command. On Linux and macOS each such directory is replaced by a
- * mirror of it without `agy`, `gemini` and `claude`.
+ * mirror of it without `agy` and `claude`.
  *
  * On Windows the hiding is off, and the PATH is returned as it is. A mirror
  * needs symlinks, which Windows grants only to an elevated or developer-mode
  * account; dropping the directory instead would take every other command in
- * it too (npm's global directory holds `gemini.cmd` beside `node`, `npx` and
+ * it too (npm's global directory holds a client's `.cmd` beside `node`, `npx` and
  * treecontext's own shim, which the children need). Shadowing the two with
  * stub `.cmd` files first on PATH does not hide them either: install detects
  * a client by its command's file on PATH (commandOnPath) without running it,
  * so a stub reads as the client installed. A Windows machine that has `agy`
- * or `gemini` on PATH therefore detects them in a sandboxed install world;
+ * on PATH therefore detects it in a sandboxed install world;
  * the scenarios that depend on their absence are verified on Linux and macOS.
  */
 export function pathHidingMachineClients(path: string | undefined, platform: NodeJS.Platform = process.platform): string | undefined {

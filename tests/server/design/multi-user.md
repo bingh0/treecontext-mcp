@@ -79,7 +79,7 @@ first hit wins):
    the drain's `project` default is applied at drain time, visibly,
    not smuggled in at capture time.
 
-Platform adapters (codex / cursor / gemini / opencode / vscode): where
+Platform adapters (codex / cursor / opencode / vscode; gemini retired, D399): where
 the adapter's launch chain preserves the exec-into-node ppid identity,
 the same ladder applies; where it does not, the hook lands on rung 2 by
 construction. Audit each adapter during implementation; none may guess.

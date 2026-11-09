@@ -12,7 +12,7 @@ import { launcherCliPath } from '../../../src/server/installer.js'
 import { agyHooksPath, getAgent, getHookSettingsPath } from '../../../src/server/agents.js'
 import { decodeContent } from '../../../src/persistence/content-codec.js'
 import { TS_ROOT } from '../proc.js'
-import { type InstallWorld, tcCli, openInstallWorld, agentConfigPath, mcpLauncherIn, setFakeCodex, pathWithoutCodex, putAgyOnPath, agyMcpList, markGeminiCliInstalled } from '../install-harness.js'
+import { type InstallWorld, tcCli, openInstallWorld, agentConfigPath, mcpLauncherIn, setFakeCodex, pathWithoutCodex, putAgyOnPath, agyMcpList, layEarlierGeminiInstall } from '../install-harness.js'
 import { CODEX_APPROVALS_FLOOR } from '../../../src/server/codex-client.js'
 import { failedRunLine } from '../../../src/first-moment.js'
 import { documentedCommands, runLineRefusal } from '../../helpers/readme-commands.js'
@@ -23,9 +23,10 @@ import { parse as parseToml, stringify as stringifyToml } from 'smol-toml'
 // Three scenarios bound at the beta.1 build (D197): the dated matrix, read
 // out of README.md itself by parsing its table; the copying client's
 // tools-only install, run through the real CLI in a redirected HOME with
-// doctor read off its own output; and a teammate on Gemini CLI, whose tool
-// calls go through the exact server command install wrote into Gemini's
-// own settings file, spawned over a real stdio transport. Doctor per client
+// doctor read off its own output; and a teammate on another agent, whose tool
+// calls go through the exact server command install wrote into that agent's
+// own configuration, spawned over a real stdio transport (Gemini CLI until
+// its retirement, Antigravity CLI since D399). Doctor per client
 // and the copied-configuration consistency rows bound at beta.2 (D161,
 // D208): every doctor run is the real CLI in a redirected HOME, its row read
 // off its own stdout, and every remedy a row names is run and doctor re-read.
@@ -61,6 +62,12 @@ export interface ClientsWorld extends InstallWorld {
   workerKey?: string
   /** The orchestration matrix rows for Codex CLI and Antigravity CLI. */
   orchRows?: Array<{ client: string; cells: string[] }>
+  /** D399: the files install wrote for the wired clients, by their bytes, before Gemini CLI's leftover is laid. */
+  retiredWiring?: Record<string, string>
+  /** D399: the command doctor's Gemini CLI row names. */
+  retiredFix?: string
+  /** D399: doctor's report after that command ran. */
+  retiredDoctorAfter?: string
 }
 
 /** A client's doctor row read for whether its headless workers can use the tools. */
@@ -80,8 +87,8 @@ interface DoctorClause {
   fix: string | null
 }
 
-/** The six clients ruled to stand (D104), and Antigravity CLI since D383; the matrix carries one row each. */
-const DOCUMENTED_CLIENTS = ['Claude Code', 'Codex CLI', 'Gemini CLI', 'VS Code', 'Cursor', 'OpenCode', 'Antigravity CLI']
+/** The clients ruled to stand (D104), Antigravity CLI since D383, Gemini CLI retired by D399; the matrix carries one row each. */
+const DOCUMENTED_CLIENTS = ['Claude Code', 'Codex CLI', 'VS Code', 'Cursor', 'OpenCode', 'Antigravity CLI']
 const STATUSES = ['verified live', 'documented only']
 
 /** A markdown cell as read: emphasis and code ticks are presentation. */
@@ -171,18 +178,17 @@ function ownedHookCommands(path: string): string[] {
 }
 
 /**
- * The five documented clients other than Claude Code, as a test reads them:
+ * The documented clients other than Claude Code, as a test reads them:
  * the slug the CLI takes and what in the README matrix and doctor's row its
  * mode must say. The mode patterns are the README's own vocabulary, so
  * doctor's wording and the matrix's Mode column cannot drift apart.
  */
 const CLIENT_SLUG: Record<string, string> = {
-  'Codex CLI': 'codex', 'Gemini CLI': 'gemini', 'VS Code': 'vscode', 'Cursor': 'cursor', 'OpenCode': 'opencode',
+  'Codex CLI': 'codex', 'VS Code': 'vscode', 'Cursor': 'cursor', 'OpenCode': 'opencode',
   'Antigravity CLI': 'agy',
 }
 const MODE_FAMILY: Record<string, RegExp[]> = {
   'Codex CLI': [/copies the hooks into its own configuration/],
-  'Gemini CLI': [/copies the hooks into its own translated configuration/],
   'VS Code': [/reads the Claude settings file\b.*\bwhen\b/, /chat\.useClaudeHooks/],
   'Cursor': [/reads the Claude settings file\b.*\bby default\b/],
   'OpenCode': [/no shell hooks/, /tools are its whole surface/],
@@ -223,37 +229,12 @@ function vscodeSettings(home: string): string {
  * Every treecontext hook a file mentions, in any spelling any build wrote —
  * read off the raw text, so JSON and TOML alike, escaped separators and all.
  * The MCP launcher (tc-mcp-serve) shares the directory and prefix but is the
- * tools' registration, not a hook, and Gemini keeps both in one file.
+ * tools' registration, not a hook, and Gemini CLI kept both in one file.
  */
 function treecontextHookMentions(path: string | null): string[] {
   if (!path || !existsSync(path)) return []
   const text = readFileSync(path, 'utf8')
   return [...text.matchAll(/hooks(?:[\\/])+(?:tc-(?!mcp-serve)[\w-]+|(?:codex|gemini|vscode|cursor)(?:[\\/]))|treecontext hook [\w-]+/g)].map(m => m[0])
-}
-
-/**
- * Gemini CLI's names for Claude Code's events, written here from the record
- * (D153: same shapes, renamed events — BeforeTool, AfterTool, PreCompress —
- * no subagent events; BeforeAgent is the prompt event, with precedent in
- * src/hooks/gemini/normalize.ts). Stop has no counterpart: Gemini's
- * AfterAgent carries another payload and treats `deny` as a forced retry, so
- * it stays out until a live probe (D225). The test's own oracle, so doctor's
- * translation is checked against the record rather than against itself.
- * Claude's Windows-only `shell` key is not part of Gemini's hook entry.
- */
-const GEMINI_NAME: Record<string, string | undefined> = {
-  SessionStart: 'SessionStart', SessionEnd: 'SessionEnd', UserPromptSubmit: 'BeforeAgent',
-  PreToolUse: 'BeforeTool', PostToolUse: 'AfterTool', PreCompact: 'PreCompress',
-}
-function translateForGemini(block: HookBlock): HookBlock {
-  const out: HookBlock = {}
-  for (const [event, matchers] of Object.entries(block)) {
-    const name = GEMINI_NAME[event]
-    if (!name) continue
-    const copied = structuredClone(matchers).map(m => ({ ...m, hooks: m.hooks.map(({ shell: _shell, ...rest }) => rest) }))
-    out[name] = [...(out[name] ?? []), ...copied]
-  }
-  return out
 }
 
 /** Doctor, run as the developer runs it, and one client's row cut into its halves. */
@@ -422,28 +403,35 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
   })
 
   // ── a teammate on another agent reads and writes through the tools (D152)
-  reg.define(/^a teammate on Gemini CLI with the treecontext server configured and no hooks$/, async (w: ClientsWorld) => {
-    await openInstallWorld(w, ['.gemini'])
-    markGeminiCliInstalled(w.ihome!)
+  reg.define(/^a teammate on Antigravity CLI with the treecontext server configured and no hooks$/, async (w: ClientsWorld) => {
+    // Antigravity CLI is there by its own directory under ~/.gemini (D383),
+    // with the real `agy` on the CLI's PATH to read back what install wrote.
+    await openInstallWorld(w, [join('.gemini', 'antigravity-cli')])
+    putAgyOnPath(w)
     w.iproj = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-clients-proj-')))
     w.defer(() => rmSync(w.iproj!, { recursive: true, force: true }))
     mkdirSync(w.iproj, { recursive: true })
-    const run = tcCli(w, ['install', '--yes', '--agent', 'gemini'])
+    const run = tcCli(w, ['install', '--yes', '--agent', 'agy'])
     expect(run.status, run.out).toBe(0)
-    const settingsPath = agentConfigPath('gemini', w.ihome!)
-    const settings = JSON.parse(readFileSync(settingsPath, 'utf8')) as {
+    const configPath = agentConfigPath('agy', w.ihome!)
+    const config = JSON.parse(readFileSync(configPath, 'utf8')) as {
       mcpServers?: Record<string, { command: string; args?: string[]; env?: Record<string, string> }>
     }
-    const entry = settings.mcpServers?.['treecontext']
-    expect(entry, 'Gemini CLI has no treecontext server configured').toBeDefined()
-    expect(ownedHookCommands(settingsPath), 'capture hooks were written for Gemini CLI').toEqual([])
-    // The teammate's agent launches what Gemini's settings name, the way
-    // Gemini would: those args, over stdio, through the entry point the
+    const entry = config.mcpServers?.['treecontext']
+    expect(entry, 'Antigravity CLI has no treecontext server configured').toBeDefined()
+    // agy's own listing names the server install wrote, as agy reads it.
+    const listed = agyMcpList(w).servers.find(s => s.name === 'treecontext')
+    expect(listed?.command.split(/\s+/)[0], 'agy does not list the treecontext server install wrote').toBe(entry!.command)
+    // No hooks: agy's own hook file, and no Gemini CLI settings beside it.
+    expect(existsSync(clientHookFile('agy', w.ihome!)!), 'install wrote agy hooks').toBe(false)
+    expect(existsSync(join(w.ihome!, '.gemini', 'settings.json')), 'install wrote a Gemini CLI settings file').toBe(false)
+    // The teammate's agent launches what agy's configuration names, the way
+    // agy would: those args, over stdio, through the entry point the
     // configured launcher pins. One substitution, the one the install wave
     // already accepts: this suite drives the TypeScript source, so the
     // launcher's pinned cli.js is reached through its .ts twin under tsx —
     // the launcher itself would exec a dist/ build `npm test` never makes.
-    expect(entry!.command, 'Gemini is not launched through the MCP launcher').toBe(mcpLauncherIn(w.ihome!))
+    expect(entry!.command, 'agy is not launched through the MCP launcher').toBe(mcpLauncherIn(w.ihome!))
     const pinned = launcherCliPath(readFileSync(entry!.command, 'utf8'))
     expect(pinned, 'the launcher pins no CLI').toBeTruthy()
     const cli = existsSync(pinned!) ? pinned! : pinned!.replace(/\.js$/, '.ts')
@@ -457,7 +445,7 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
     })
     let serverErr = ''
     transport.stderr?.on('data', (d: Buffer) => { serverErr += d.toString() })
-    const client = new Client({ name: 'gemini-teammate', version: '0' })
+    const client = new Client({ name: 'agy-teammate', version: '0' })
     try {
       await client.connect(transport)
     } catch (err) {
@@ -494,18 +482,19 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
     }
   })
   reg.define(/^the documentation the teammate reads promises no capture of their session$/, (w: ClientsWorld) => {
-    // The README: Gemini's matrix row is documented only, and the team
-    // section says plainly that other agents get the tools, not capture.
+    // The README: Antigravity CLI's matrix row is documented only, and the
+    // team section says plainly that other agents get the tools, not capture.
     // LF-normalized so the character-count window below means the same on an
     // autocrlf (Windows) checkout.
     const readme = readFileSync(join(TS_ROOT, 'README.md'), 'utf8').replace(/\r\n/g, '\n')
-    const gemini = parseMatrix(readme).find(r => r.client === 'Gemini CLI')
-    expect(gemini?.status).toBe('documented only')
+    const agy = parseMatrix(readme).find(r => r.client === 'Antigravity CLI')
+    expect(agy?.status).toBe('documented only')
     const team = readme.slice(readme.indexOf('### Working as a team'))
     expect(readme.indexOf('### Working as a team'), 'README has no team section').toBeGreaterThanOrEqual(0)
-    expect(team.slice(0, 2500).replace(/\s+/g, ' ')).toMatch(/Capture is verified only on Claude Code\.[^.]*Gemini[^.]*gets the tools[^.]*nothing of their session is captured/)
-    // And the block install wrote into Gemini's own instructions file, which
-    // the teammate's agent reads every session: capture is Claude Code's.
+    expect(team.slice(0, 3000).replace(/\s+/g, ' ')).toMatch(/Capture is verified only on Claude Code\.[^.]*Antigravity CLI[^.]*gets the tools[^.]*nothing of their session is captured/)
+    // And the block install wrote into agy's own instructions file,
+    // ~/.gemini/GEMINI.md, which the teammate's agent reads every session:
+    // capture is Claude Code's.
     const block = readFileSync(join(w.ihome!, '.gemini', 'GEMINI.md'), 'utf8').replace(/\s+/g, ' ')
     expect(block).toContain('<!-- treecontext:start -->')
     expect(block).toMatch(/On Claude Code, conversation hooks auto-capture/)
@@ -518,7 +507,7 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
   // Claude Code block written by the real installer, VS Code's own
   // settings.json in the JSON-with-comments form VS Code writes, then a
   // tools-only install and doctor read off its own stdout.
-  const CLIENT_RE = '(Codex CLI|Gemini CLI|VS Code|Cursor|OpenCode|Antigravity CLI)'
+  const CLIENT_RE = '(Codex CLI|VS Code|Cursor|OpenCode|Antigravity CLI)'
   /** Antigravity CLI's own hook configuration, a hook of the developer's in it (D383: install leaves it alone). */
   const AGY_DEVELOPER_HOOKS = JSON.stringify({ hooks: { PreToolUse: [{ matcher: 'command', hooks: [{ type: 'command', command: '/usr/local/bin/audit-tool' }] }] } }, null, 2) + '\n'
   reg.define(new RegExp(`^${CLIENT_RE} is installed and its hook configuration holds no treecontext hooks$`), async (w: ClientsWorld, ...captures) => {
@@ -526,8 +515,6 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
     w.clientName = client!
     await openInstallWorld(w, [])
     mkdirSync(clientDir(CLIENT_SLUG[client!]!, w.ihome!), { recursive: true })
-    // Gemini CLI is there by a file of its own, not by `~/.gemini` alone (D383).
-    if (client === 'Gemini CLI') markGeminiCliInstalled(w.ihome!)
     if (client === 'Antigravity CLI') {
       // The real `agy` on the CLI's PATH, and its own hook file holding a
       // hook of the developer's and none of treecontext's.
@@ -608,7 +595,6 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
     const home = w.ihome!.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
     const expected: Record<string, RegExp> = {
       'Codex CLI': new RegExp(`^hooks not copied into ${home}[\\\\/]\\.codex[\\\\/]hooks\\.json \\(capture unverified — MCP tools only\\)$`),
-      'Gemini CLI': new RegExp(`^hooks not copied into ${home}[\\\\/]\\.gemini[\\\\/]settings\\.json \\(capture unverified — MCP tools only\\)$`),
       'VS Code': new RegExp(`^chat\\.useClaudeHooks is off in ${vscodeSettings(w.ihome!).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} and the Claude Code hooks block is installed$`),
       'Cursor': /^the Claude Code hooks block is installed — Cursor reads it \(capture unverified\)$/,
       'OpenCode': /^no hooks to install — MCP tools only \(nothing is captured\)$/,
@@ -641,7 +627,7 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
       // and doctor's row now reads the copy present and consistent.
       runNamedCommand(w, command)
       const after = readClause(w, w.clientName!)
-      expect(after.state).toMatch(/: present and consistent with the (translated )?Claude Code block/)
+      expect(after.state).toMatch(/: present and consistent with the Claude Code block/)
       expect(after.remedy).toBe('nothing to do')
       expectNoVerifiedClaim(after.row)
       return
@@ -657,22 +643,19 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
     expectNoVerifiedClaim(after.row)
   })
 
-  // ── a copied configuration, verbatim (Codex CLI) or translated (Gemini CLI),
-  //    read present and consistent or inconsistent with its remedy (D161) ──
-  reg.define(/^(Codex CLI|Gemini CLI) is installed and its hook configuration holds (a copy identical to|a copy that differs from|the translated copy of|a translated copy that differs from) the Claude Code block$/, async (w: ClientsWorld, ...captures) => {
+  // ── a copied configuration, verbatim (Codex CLI), read present and
+  //    consistent or inconsistent with its remedy (D161) ──
+  reg.define(/^(Codex CLI) is installed and its hook configuration holds (a copy identical to|a copy that differs from) the Claude Code block$/, async (w: ClientsWorld, ...captures) => {
     const [client, how] = captures as string[]
     w.clientName = client!
     const slug = CLIENT_SLUG[client!]!
     await openInstallWorld(w, [])
     mkdirSync(clientDir(slug, w.ihome!), { recursive: true })
-    // "Gemini CLI is installed": one of its own artifacts (D383); its
-    // directory, or a settings.json holding only what install wrote, is not.
-    if (slug === 'gemini') markGeminiCliInstalled(w.ihome!)
     // The block as the real installer writes it today, then the copy written
     // through the real door: the flagged install names the client, which
     // writes the copy and the server entry in capture mode together (D386).
-    // The oracle (the block verbatim, or translated) grades what it wrote; a
-    // drifted copy is that installed copy changed afterwards.
+    // The oracle (the block verbatim) grades what it wrote; a drifted copy is
+    // that installed copy changed afterwards.
     let run = tcCli(w, ['install', '--yes', '--agent', 'claude'])
     expect(run.status, run.out).toBe(0)
     run = tcCli(w, ['install', '--yes', '--agent', slug, '--experimental-capture'])
@@ -680,40 +663,22 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
     w.claudeBlock = (JSON.parse(readFileSync(join(w.ihome!, '.claude', 'settings.json'), 'utf8')) as { hooks: HookBlock }).hooks
     const hookFile = clientHookFile(slug, w.ihome!)!
     const written = JSON.parse(readFileSync(hookFile, 'utf8')) as Record<string, unknown> & { hooks: HookBlock }
-    let copy: HookBlock
-    if (slug === 'codex') {
-      expect(written.hooks, 'the flagged install did not copy the Claude Code block verbatim').toEqual(w.claudeBlock)
-      copy = structuredClone(written.hooks)
-      // An older copy: taken before the block gained its Stop hook.
-      if (how === 'a copy that differs from') delete copy['Stop']
-    } else {
-      expect(written.hooks, 'the flagged install did not write the translated block').toEqual(translateForGemini(w.claudeBlock))
-      copy = structuredClone(written.hooks)
-      // Every translated event is one Gemini's own documentation offers.
-      const offered = parseMatrix(readFileSync(join(TS_ROOT, 'README.md'), 'utf8')).find(r => r.client === 'Gemini CLI')!.events
-      for (const e of Object.keys(copy)) expect(offered, `Gemini offers no ${e}`).toContain(e)
-      if (how === 'a translated copy that differs from') {
-        // One event copied across verbatim, never renamed.
-        copy['PostToolUse'] = copy['AfterTool']!
-        delete copy['AfterTool']
-      }
-      // Gemini keeps its hooks beside its MCP registration.
-      expect(written['mcpServers'], 'the install registered no server').toBeDefined()
-    }
+    expect(written.hooks, 'the flagged install did not copy the Claude Code block verbatim').toEqual(w.claudeBlock)
+    const copy: HookBlock = structuredClone(written.hooks)
+    // An older copy: taken before the block gained its Stop hook.
+    if (how === 'a copy that differs from') delete copy['Stop']
     // Every other key of the file stays as install wrote it.
     writeFileSync(hookFile, JSON.stringify({ ...written, hooks: copy }, null, 2))
     expect(treecontextHookMentions(clientHookFile(slug, w.ihome!)).length, 'the copy holds no treecontext hook').toBeGreaterThan(0)
   })
-  reg.define(/^the developer sees doctor's row for (Codex CLI|Gemini CLI) read present and (consistent|inconsistent)$/, (w: ClientsWorld, ...captures) => {
+  reg.define(/^the developer sees doctor's row for (Codex CLI) read present and (consistent|inconsistent)$/, (w: ClientsWorld, ...captures) => {
     const [client, verdict] = captures as string[]
     expect(client).toBe(w.clientName)
     const c = w.clause!
-    const block = client === 'Gemini CLI' ? 'the translated Claude Code block' : 'the Claude Code block'
+    const block = 'the Claude Code block'
     const readmeRow = parseMatrix(readFileSync(join(TS_ROOT, 'README.md'), 'utf8')).find(r => r.client === client)
     expect(c.mode).toBe(readmeRow!.mode)
-    expect(c.mode).toContain(client === 'Gemini CLI'
-      ? 'copies the hooks into its own translated configuration'
-      : 'copies the hooks into its own configuration')
+    expect(c.mode).toContain('copies the hooks into its own configuration')
     expect(c.state).toContain(`hooks copied into ${clientHookFile(CLIENT_SLUG[client!]!, w.ihome!)}: present and ${verdict} with ${block}`)
     expectNoVerifiedClaim(c.row)
     if (verdict === 'consistent') {
@@ -723,7 +688,7 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
     } else {
       expect(c.status, c.row).toBe('warn')
       // It says where the copy went wrong, in the client's own event names.
-      expect(c.state).toMatch(client === 'Gemini CLI' ? /differs on .*AfterTool.*PostToolUse|differs on .*PostToolUse.*AfterTool/ : /differs on Stop\b/)
+      expect(c.state).toMatch(/differs on Stop\b/)
     }
   })
   reg.define(/^the row names the command that rewrites the copy$/, (w: ClientsWorld) => {
@@ -733,13 +698,12 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
     expect(c.remedy).toBe(`to rewrite the copy: ${command}`)
     expect(c.fix).toBe(command)
     // Run it as printed: the copy is rewritten to the block install writes
-    // today — the oracle's verbatim or translated block — and doctor reads
-    // it present and consistent.
+    // today — the oracle's verbatim block — and doctor reads it present and
+    // consistent.
     runNamedCommand(w, command)
     const path = clientHookFile(slug, w.ihome!)!
-    const written = JSON.parse(readFileSync(path, 'utf8')) as { hooks?: HookBlock; mcpServers?: unknown }
-    expect(written.hooks).toEqual(slug === 'gemini' ? translateForGemini(w.claudeBlock!) : w.claudeBlock)
-    if (slug === 'gemini') expect(written.mcpServers, 'the rewrite dropped the MCP registration').toBeDefined()
+    const written = JSON.parse(readFileSync(path, 'utf8')) as { hooks?: HookBlock }
+    expect(written.hooks).toEqual(w.claudeBlock)
     const after = readClause(w, w.clientName!)
     expect(after.state).toMatch(/: present and consistent with/)
     expect(after.status).toBe('ok')
@@ -1240,5 +1204,100 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
     const dispatched = documentedCommands(`\n\`\`\`\n${code![0]}\n\`\`\`\n`, 'run')
     expect(dispatched, 'the dispatcher has no run line').toHaveLength(1)
     expect(runLineRefusal(dispatched[0]!), dispatched[0]).toBeNull()
+  })
+
+  // ── Gemini CLI retired: doctor names what an earlier install left (D399)
+  //
+  // The real install wires Claude Code and Antigravity CLI in a redirected
+  // HOME; ~/.gemini/settings.json then holds what an earlier build's
+  // install wrote for Gemini CLI over the developer's own keys (a fixture
+  // of that build's output, layEarlierGeminiInstall). Doctor is the real
+  // CLI read off its stdout, the command its row names is run as printed,
+  // and agy's own `agy mcp list` is the other side for its wiring.
+  /** Gemini CLI's settings as the developer keeps them: a server, a hook of their own, and keys of Gemini CLI's. */
+  const GEMINI_DEVELOPER = {
+    theme: 'GitHub',
+    selectedAuthType: 'oauth-personal',
+    mcpServers: { 'their-server': { command: 'someone-elses-tool' } },
+    hooks: { BeforeTool: [{ matcher: 'run_shell_command', hooks: [{ type: 'command', command: '/usr/local/bin/audit-tool' }] }] },
+  }
+  const geminiSettings = (w: ClientsWorld): string => join(w.ihome!, '.gemini', 'settings.json')
+  /** Every file install wrote for Claude Code and Antigravity CLI, by its bytes, and agy's own listing. */
+  const wiringOf = (w: ClientsWorld): Record<string, string> => {
+    const files = [
+      join(w.ihome!, '.claude.json'), join(w.ihome!, '.claude', 'settings.json'),
+      join(w.ihome!, '.gemini', 'config', 'mcp_config.json'), agySettingsFile(w), join(w.ihome!, '.gemini', 'GEMINI.md'),
+    ]
+    const out: Record<string, string> = {}
+    for (const f of files) out[f] = existsSync(f) ? readFileSync(f, 'utf8') : '(absent)'
+    const hooksDir = join(w.ihome!, '.claude', 'hooks')
+    out['hook scripts'] = readdirSync(hooksDir).filter(f => f.startsWith('tc-')).sort().join(' ')
+    out['agy mcp list'] = JSON.stringify(agyMcpList(w).servers)
+    return out
+  }
+  /** Doctor's rows naming Gemini CLI, each with the fix line under it. */
+  const geminiRows = (out: string): Array<{ row: string; fix: string | null }> => {
+    const lines = out.split('\n')
+    return lines.flatMap((l, i) => /^\[\w+\]\s+Gemini CLI:/.test(l)
+      ? [{ row: l, fix: /^\s+fix: (.+)$/.exec(lines[i + 1] ?? '')?.[1] ?? null }]
+      : [])
+  }
+  reg.define(/^install has wired Claude Code and Antigravity CLI, and Gemini CLI's settings hold the treecontext entry and the copied hooks an earlier install wrote beside the developer's own keys$/, async (w: ClientsWorld) => {
+    await openInstallWorld(w, ['.claude', join('.gemini', 'antigravity-cli')])
+    putAgyOnPath(w)
+    const run = tcCli(w, ['install', '--yes'])
+    expect(run.status, run.out).toBe(0)
+    expect(run.stdout).toMatch(/^Detected agents: Claude Code Antigravity CLI$/m)
+    expect(agyMcpList(w).servers.map(s => s.name), 'agy lists no treecontext server').toEqual(['treecontext'])
+    w.retiredWiring = wiringOf(w)
+    layEarlierGeminiInstall(w.ihome!, GEMINI_DEVELOPER)
+    // The fixture holds what the Then reads gone: the entry, and hooks that
+    // run Claude Code's scripts.
+    const laid = JSON.parse(readFileSync(geminiSettings(w), 'utf8')) as { mcpServers: Record<string, unknown>; hooks: Record<string, unknown> }
+    expect(Object.keys(laid.mcpServers).sort()).toEqual(['their-server', 'treecontext'])
+    expect(Object.keys(laid.hooks).sort()).toEqual(['AfterTool', 'BeforeAgent', 'BeforeTool', 'PreCompress', 'SessionStart'])
+  })
+  reg.define(/^the developer runs doctor, then the command its Gemini CLI row names, then doctor again$/, (w: ClientsWorld) => {
+    const first = tcCli(w, ['doctor'])
+    expect(first.status, first.out).toBe(0)
+    w.doctorOut = first.stdout
+    const rows = geminiRows(first.stdout)
+    expect(rows, `doctor printed ${rows.length} Gemini CLI rows:\n${first.stdout}`).toHaveLength(1)
+    expect(rows[0]!.fix, `the Gemini CLI row names no command:\n${rows[0]!.row}`).not.toBeNull()
+    w.retiredFix = rows[0]!.fix!
+    runNamedCommand(w, w.retiredFix)
+    const second = tcCli(w, ['doctor'])
+    expect(second.status, second.out).toBe(0)
+    w.retiredDoctorAfter = second.stdout
+  })
+  reg.define(/^the first doctor run shows no client row for Gemini CLI and one warning row saying Gemini CLI is retired, naming what is left and that command$/, (w: ClientsWorld) => {
+    const out = w.doctorOut!
+    // The needle fires: the same run prints a client row, with its clause, for agy.
+    expect(out).toMatch(/^\[\w+\]\s+Antigravity CLI: .*the client keeps its own hook configuration/m)
+    const [only] = geminiRows(out)
+    // A warning row, not a client row: no mode, state and remedy clause.
+    expect(only!.row).toMatch(/^\[warn\] Gemini CLI: Gemini CLI is retired; /)
+    // step-lint: allow unearned-absence -- the same-scope positive above matches this clause shape ("the client …") on the Antigravity CLI row of this doctor run
+    expect(only!.row).not.toMatch(/the client .*; state: /)
+    const path = geminiSettings(w)
+    expect(only!.row).toContain(`its treecontext entry in ${path}`)
+    expect(only!.row).toContain(`a copy of the treecontext hooks in ${path}`)
+    expect(only!.fix).toBe('treecontext uninstall --agent gemini')
+  })
+  reg.define(/^after the command Gemini CLI's settings hold the developer's own keys and nothing of treecontext's$/, (w: ClientsWorld) => {
+    const after = JSON.parse(readFileSync(geminiSettings(w), 'utf8')) as unknown
+    // The developer's keys, exactly as they were, and nothing else: the
+    // entry and every hook of the copy are gone, theirs kept.
+    expect(after).toEqual(GEMINI_DEVELOPER)
+  })
+  reg.define(/^Claude Code's and Antigravity CLI's wiring is as install left it$/, (w: ClientsWorld) => {
+    expect(wiringOf(w)).toEqual(w.retiredWiring)
+  })
+  reg.define(/^the second doctor run shows no row for Gemini CLI$/, (w: ClientsWorld) => {
+    const out = w.retiredDoctorAfter!
+    // The needle fires: this run prints rows, the client beside it among them.
+    expect(out).toMatch(/^\[\w+\]\s+Antigravity CLI:/m)
+    // The first doctor run of this world printed exactly one Gemini CLI row (the When).
+    expect(geminiRows(out)).toEqual([])
   })
 }

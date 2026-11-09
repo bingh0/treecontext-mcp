@@ -44,9 +44,9 @@
  *  |                                        | `sandbox -- true` exactly; it runs nothing in a sandbox,    |
  *  |                                        | reads no configuration, calls no model and answers no other |
  *  |                                        | subcommand or sandbox command (exit 2, saying so)           |
- *  | `writeFakeGemini`                      | the `gemini` on PATH whose presence install reads as Gemini |
- *  |                                        | CLI installed (D383): install and doctor never run it; run, |
- *  |                                        | it answers nothing and exits 127, saying it is a stand-in   |
+ *  | `writeFakeGemini`                      | the `gemini` on PATH of a machine with Gemini CLI, which    |
+ *  |                                        | install and doctor no longer read (D399): they never run    |
+ *  |                                        | it; run, it answers nothing and exits 127, saying so        |
  *  | `startEntryAsClient`                   | a client (Claude Code, Codex CLI, Antigravity CLI, Cursor)  |
  *  |                                        | starting the MCP server its treecontext entry names: the    |
  *  |                                        | command and args the client read, spawned as written, so    |
@@ -562,8 +562,9 @@ export function writeFakeClaude(dir: string, version: string | null): void {
 }
 
 /**
- * A `gemini` in `dir`: Gemini CLI's command on PATH, which install reads
- * as Gemini CLI installed (D383) without running it. It answers nothing:
+ * A `gemini` in `dir`: Gemini CLI's command on PATH, which install read as
+ * Gemini CLI installed until its retirement (D399) and reads no more; a
+ * world puts it there to show it wires nothing. It answers nothing:
  * run, it exits 127 saying it is a stand-in, so a caller that reached for
  * more than its presence fails loudly.
  */

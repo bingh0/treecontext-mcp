@@ -79,7 +79,7 @@ export interface InstallWorld extends World {
   iClient?: 'Claude Code' | 'Codex CLI' | 'Antigravity CLI'
   /** D383 scenarios: a directory holding the real `agy`, first on the CLI's PATH. */
   iAgyBin?: string
-  /** A directory holding the stand-in `gemini`, first on the CLI's PATH (Gemini CLI installed by its command, D383). */
+  /** A directory holding the stand-in `gemini`, first on the CLI's PATH (Gemini CLI's command, which install no longer reads, D399). */
   iGeminiBin?: string
   /** D385 scenarios: the arguments the developer added to the entry, in their order. */
   iDeveloperArgs?: string[]
@@ -128,22 +128,71 @@ export function tcCli(w: InstallWorld, args: string[], opts: { cwd?: string } = 
 }
 
 /**
- * Gemini CLI installed in a home: a file of its own in `~/.gemini`, the
- * `installation_id` it writes on its first run. Since D383 the directory
- * alone is not Gemini CLI (Antigravity CLI makes it too), so a world that
- * means Gemini CLI to be there lays out one of its artifacts.
+ * Gemini CLI's own files in a home: the `installation_id` it writes on its
+ * first run, in `~/.gemini`. Gemini CLI is retired (D399) and install reads
+ * none of it; a world lays it out to show that its presence wires nothing.
  */
 export function markGeminiCliInstalled(home: string): void {
   mkdirSync(join(home, '.gemini'), { recursive: true })
   writeFileSync(join(home, '.gemini', 'installation_id'), 'install-world\n')
 }
 
-/** Gemini CLI installed by its command: the stand-in `gemini` (./standins.ts) first on the CLI's PATH. */
+/** Gemini CLI's command on the CLI's PATH: the stand-in `gemini` (./standins.ts), which install must not read (D399). */
 export function putGeminiOnPath(w: InstallWorld): void {
   if (w.iGeminiBin) return
   w.iGeminiBin = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-gemini-bin-')))
   w.defer(() => rmSync(w.iGeminiBin!, { recursive: true, force: true }))
   writeFakeGemini(w.iGeminiBin)
+}
+
+/** The four wrappers an earlier build's `install --agent gemini --experimental-capture` wrote beside the hook scripts. */
+export const GEMINI_WRAPPER_STEMS = ['session-start', 'before-agent', 'after-tool', 'pre-compress'] as const
+
+/**
+ * What an earlier install wrote for Gemini CLI, before its retirement
+ * (D399), laid into `~/.gemini/settings.json` over the developer's own
+ * keys, as that build wrote it: the treecontext entry under `mcpServers`
+ * (the MCP launcher, `serve` over stdio, capture on beside its copy), and
+ * the copy of the hooks `install --agent gemini --experimental-capture`
+ * wrote, the Claude Code hook scripts under Gemini CLI's event names
+ * (SessionStart, BeforeAgent, AfterTool, PreCompress), with one entry in a
+ * still earlier build's spelling, the adapter entry point
+ * `hooks/gemini/<stem>.js`, which uninstall must recognise too. With
+ * `wrappers`, also the four `tc-gemini-*` wrappers an earlier build wrote.
+ * The file and wrapper bodies are fixtures of those builds' output; no
+ * writer of this build produces them any more.
+ */
+export function layEarlierGeminiInstall(home: string, developer: Record<string, unknown>, opts: { wrappers?: boolean } = {}): void {
+  const hooksDir = join(home, '.claude', 'hooks')
+  const script = (stem: string): string => process.platform === 'win32'
+    ? `"${join(hooksDir, `tc-${stem}.cmd`).replace(/\\/g, '/')}"`
+    : `exec "${join(hooksDir, `tc-${stem}`)}"`
+  const own = (command: string): Record<string, string> => ({ type: 'command', command })
+  const dev = structuredClone(developer) as Record<string, unknown> & { mcpServers?: Record<string, unknown>; hooks?: Record<string, unknown[]> }
+  const hooks: Record<string, unknown[]> = structuredClone(dev.hooks ?? {})
+  const add = (event: string, entry: Record<string, unknown>): void => { hooks[event] = [...(hooks[event] ?? []), entry] }
+  for (const matcher of ['startup', 'resume', 'clear', 'compact']) {
+    add('SessionStart', { matcher, hooks: [own(script('session-reminder')), own(script('session-start'))] })
+  }
+  add('BeforeAgent', { hooks: [own(script('user-prompt-submit'))] })
+  add('AfterTool', { hooks: [own(script('post-tool-use'))] })
+  add('PreCompress', { hooks: [own(`node "${join(home, 'old-install', 'dist', 'hooks', 'gemini', 'pre-compress.js').replace(/\\/g, '/')}"`)] })
+  const settings = {
+    ...dev,
+    mcpServers: {
+      ...dev.mcpServers,
+      treecontext: { command: mcpLauncherIn(home), args: ['serve', '--transport', 'stdio', '--capture', '--debug', '--lexical'] },
+    },
+    hooks,
+  }
+  mkdirSync(join(home, '.gemini'), { recursive: true })
+  writeFileSync(join(home, '.gemini', 'settings.json'), JSON.stringify(settings, null, 2) + '\n')
+  if (opts.wrappers) {
+    mkdirSync(hooksDir, { recursive: true })
+    for (const stem of GEMINI_WRAPPER_STEMS) {
+      writeFileSync(join(hooksDir, `tc-gemini-${stem}`), `#!/bin/bash\n# treecontext: gemini ${stem} hook\n# Installed by: treecontext install\nexit 0\n`, { mode: 0o755 })
+    }
+  }
 }
 
 /** The machine's real `agy`, resolved on this process's PATH; a missing one fails loudly, as a missing `codex` does. */

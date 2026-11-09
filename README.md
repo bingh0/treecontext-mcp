@@ -176,10 +176,13 @@ upgrade changes:
 - `--force` keeps your additions to an entry; it rewrites what install
   owns and nothing more. To start over, run `treecontext uninstall --agent
   <name>`, then `treecontext install`.
-- Gemini CLI is detected by its binary or its own files, no longer by the
-  `~/.gemini` directory alone (Antigravity CLI uses that directory too).
-  `treecontext doctor` reports a Gemini CLI entry an earlier install left
-  where Gemini CLI is not present.
+- Gemini CLI is retired (Google deprecated it for Antigravity CLI): install
+  no longer detects or wires it, with or without `--experimental-capture`,
+  and doctor gives it no client row. `treecontext uninstall --agent gemini`
+  removes the entry, the copied hooks and the `tc-gemini-*` wrappers an
+  earlier install left (a full `treecontext uninstall` does too), keeping
+  every other key of `~/.gemini/settings.json`; doctor names them while
+  they are there. `~/.gemini/GEMINI.md` is Antigravity CLI's.
 - Claude Code is detected by its `claude` command or its own files, no
   longer by the `~/.claude` directory alone (install's own launcher lives
   there). `treecontext doctor` reports a Claude Code wiring an earlier
@@ -208,7 +211,7 @@ This detects your installed agents and wires treecontext into them. Add
 | `~/.codex/config.toml` | where Codex CLI is detected (or on its own with `--agent codex`): the treecontext MCP entry, with `[mcp_servers.treecontext.tools.<tool>] approval_mode = "approve"` for status, query, export and insert |
 | `~/.gemini/config/mcp_config.json` | where Antigravity CLI is detected (or on its own with `--agent agy`): Antigravity CLI's MCP entry |
 | `~/.gemini/antigravity-cli/settings.json` | where Antigravity CLI is detected (or on its own with `--agent agy`): `permissions.allow` gets `mcp(treecontext/<tool>)` for status, query, export and insert |
-| `~/.gemini/GEMINI.md` | the instruction block of Antigravity CLI, a file it shares with Gemini CLI |
+| `~/.gemini/GEMINI.md` | the instruction block of Antigravity CLI |
 | `~/.treecontext/config.toml` | treecontext's own settings |
 | `~/.treecontext/install-state.json` | install's record: the `idleCompaction` key it wrote and in which settings file, the tool approvals it wrote in each client's file, your choice to turn them off, and the files it created (Antigravity CLI's), so uninstall and `config tool-approvals` remove only what install wrote |
 
@@ -387,7 +390,7 @@ adds `_insert` and nothing that removes. Details in
   if a note's writer was guessed wrong).
 - **Something looks off?** Run `treecontext doctor` first.
 - **Capture is verified only on Claude Code.** A teammate on Codex,
-  Gemini, Cursor, VS Code or OpenCode gets the tools: they can search and
+  Antigravity CLI, Cursor, VS Code or OpenCode gets the tools: they can search and
   write notes, but nothing of their session is captured for them (§6).
 - **The main checkout is a lane like any worktree.** In the main checkout
   or a linked worktree, `treecontext_status`, the fresh-start packet and
@@ -414,9 +417,9 @@ adds `_insert` and nothing that removes. Details in
   headless worker started by `treecontext run` searches the whole store.
   The recovery snapshot is claimed only in the lane it was written for. A
   client running the Claude Code hooks registers its sessions and claims
-  in its own lane, Codex CLI and Gemini CLI included once
+  in its own lane, Codex CLI included once
   `--experimental-capture` has copied the block; the adapters' own
-  scripts (Cursor, Codex, Gemini, opencode), unverified scaffolding,
+  scripts (Cursor, Codex, opencode), unverified scaffolding,
   register no session and claim none.
 
 ### Running work as legs
@@ -691,11 +694,13 @@ a test result.
 | --- | --- | --- | --- | --- |
 | Claude Code | SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Stop, PreCompact, SubagentStart, SubagentStop | hooks docs 2026-09-23; live probe 2026-09-25 on release 2.1.282 | reads the Claude settings file as-is (it owns `~/.claude/settings.json`, where install writes the hooks: SessionStart, UserPromptSubmit, PostToolUse, Stop, PreCompact, SubagentStart, SubagentStop; reinstall to add the two subagent hooks) | verified live |
 | Codex CLI | SessionStart, SessionEnd, UserPromptSubmit, PreToolUse, PostToolUse, PermissionRequest, PreCompact, PostCompact, SubagentStart, SubagentStop, Stop, Interrupt | learn.chatgpt.com/docs/hooks (no date shown), checked 2026-10-05 | copies the hooks into its own configuration (`~/.codex/hooks.json` or `[hooks]` in `~/.codex/config.toml`, repo `.codex/hooks.json`; same JSON contract as Claude Code) | documented only |
-| Gemini CLI | SessionStart, SessionEnd, BeforeAgent, AfterAgent, BeforeModel, AfterModel, BeforeToolSelection, BeforeTool, AfterTool, PreCompress, Notification | geminicli.com/docs/hooks (updated 2026-04-13) and /docs/hooks/reference (updated 2026-04-10) | copies the hooks into its own translated configuration (`settings.json` under `.gemini/` or `~/.gemini/`; same stdin/stdout shapes, renamed events, no subagent events) | documented only |
 | VS Code (Copilot agent mode) | SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, PreCompact, SubagentStart, SubagentStop, Stop | code.visualstudio.com/docs/copilot/customization/hooks and /docs/agents/reference/hooks-reference (dated 2026-09-30) | reads the Claude settings file when its Claude-hooks setting is on (`chat.useClaudeHooks`, off by default; read as-is, matcher values ignored; also reads `.github/hooks/*.json`) | documented only |
 | Cursor | sessionStart, sessionEnd, beforeSubmitPrompt, preToolUse, postToolUse, stop, preCompact, subagentStart, subagentStop, and more | cursor.com/docs/agent/hooks and /docs/reference/third-party-hooks (no date shown), checked 2026-10-05 | reads the Claude settings file by default (as-is, through its Include Third-Party configs setting) | documented only |
 | OpenCode | none: JS/TS plugins only, no shell hooks | opencode.ai/docs/plugins (updated 2026-10-03) | offers no shell hooks, so the tools are its whole surface (the MCP tools; JS/TS plugins are not hooks) | documented only |
 | Antigravity CLI | SessionStart, PreToolUse, PostToolUse, PreInvocation, PostInvocation, Stop | antigravity.google/docs/hooks (no date shown), checked 2026-11-08 | keeps its own hook configuration, which install leaves alone, so the tools are its whole surface (`~/.gemini/config/hooks.json`, workspace `.agents/hooks.json`; no adapter, nothing is captured) | documented only |
+
+Gemini CLI left the matrix on 2026-11-09, archived: Google deprecated it
+for Antigravity CLI, and treecontext no longer wires it.
 
 Claude Code in VS Code (the Claude extension, not Copilot) is Claude Code:
 same configuration, nothing extra to do. Linux, macOS and Windows are all
@@ -705,16 +710,16 @@ supported targets.
 verified.** MCP tools are registered anywhere the agent speaks MCP —
 those work regardless — but a hook entry sitting in your settings reads
 as a promise that capture is running, and we won't make that promise on
-an adapter nobody has run. For the two clients that copy hooks into their
-own configuration, Codex CLI and Gemini CLI, the copy is an opt-in by
-name, and `treecontext doctor` names the command on that client's row:
+an adapter nobody has run. For the client that copies hooks into its own
+configuration, Codex CLI, the copy is an opt-in by name, and
+`treecontext doctor` names the command on that client's row:
 
 ```bash
 treecontext install --agent codex --experimental-capture
 ```
 
-The copy is the Claude Code block itself, verbatim for Codex CLI and
-translated to Gemini CLI's event names, running the same hook scripts.
+The copy is the Claude Code block itself, verbatim, running the same hook
+scripts.
 `treecontext doctor` gives every documented client one row with three
 halves: its mode (from the matrix above), the state it found, and the
 remedy. A copy reads present and consistent when it matches the block

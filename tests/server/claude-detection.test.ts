@@ -6,7 +6,7 @@ import { spawnCli } from '../helpers/cli-spawn.js'
 import { markClaudeCodeInstalled } from '../helpers/home.js'
 
 // Claude Code is present when `claude` is on PATH or one of its own
-// artifacts is there (D51, as D383 read it for Gemini CLI): never by the
+// artifacts is there (D51, as D383 read it for Gemini CLI before D399 retired it): never by the
 // `~/.claude` directory alone, where install's own MCP launcher lives. The
 // CLI runs under a redirected HOME with the machine's own `claude` hidden
 // (sandboxedSpawnEnv), so detection here is by what each test lays out.

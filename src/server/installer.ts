@@ -41,7 +41,7 @@ import {
 import { forgetCreatedFile, installCreated, installStateUnreadable, recordCreatedFile, repairInstallState } from './install-state.js'
 import {
   type AgentDefinition, type Platform,
-  AGENTS, claudeCodePresent, detectAgents, geminiCliPresent, getAgent, getConfigPath,
+  AGENTS, claudeCodePresent, detectAgents, geminiSettingsPath, getAgent, getConfigPath,
   getHookSettingsPath, getInstructionsPath, claudeLegacyMcpPath, legacyMcpConfigs,
   agySettingsPath, agyProjectsDir, agyHooksPath, agyMcpConfigPath,
 } from './agents.js'
@@ -1198,12 +1198,13 @@ export const CAPTURE_PLATFORMS = new Set(['claude'])
 /**
  * Clients that keep their own hook configuration rather than reading the
  * Claude settings file, so capture can reach them only through a copy of
- * the hooks: Codex CLI verbatim, Gemini CLI translated to its renamed
- * events (survey of official documentation, 2026-10-05; D154). Outside
- * CAPTURE_PLATFORMS the copy is written only behind --experimental-capture,
- * and doctor names that command as the way to copy (D208).
+ * the hooks: Codex CLI, verbatim (survey of official documentation,
+ * 2026-10-05; D154). Outside CAPTURE_PLATFORMS the copy is written only
+ * behind --experimental-capture, and doctor names that command as the way
+ * to copy (D208). Gemini CLI, the other copying client, is retired (D399):
+ * its translated copy is only ever removed, by uninstall's archived sweep.
  */
-export const COPYING_CLIENTS = new Set(['codex', 'gemini'])
+export const COPYING_CLIENTS = new Set(['codex'])
 
 /**
  * Whether a capture hooks block runs for an agent, which is when its entry
@@ -1449,7 +1450,7 @@ export function removeClaudeHookScripts(dryRun: boolean, hooksOnly = false, spar
   const results: ActionResult[] = []
   const hooksDir = join(homedir(), '.claude', HOOK_SCRIPTS_DIR_NAME)
   if (!existsSync(hooksDir)) return results
-  // Scripts a Codex or Gemini copy still runs (uninstall's refusal, D225).
+  // Scripts a Codex copy still runs (uninstall's refusal, D225).
   const sparedScripts = new Set(spareClaudeScripts ? claudeHookScriptPaths().map(p => basename(p)) : [])
 
   // The MCP launcher shares this directory and prefix but is not a hook:
@@ -1463,7 +1464,7 @@ export function removeClaudeHookScripts(dryRun: boolean, hooksOnly = false, spar
   const ownedPrefixes = [TC_HOOK_PREFIX, ...LEGACY_HOOK_PREFIXES]
   // The other agents' wrappers share this directory and prefix but belong to
   // THEIR uninstall branches (removeAgentHookWrappers): sweeping them here
-  // while a still-installed gemini/vscode/codex/cursor config references
+  // while a still-installed vscode/codex/cursor config references
   // them leaves a working config aimed at nothing — the same F1 shape the
   // `spared` comment above documents for the MCP launcher.
   const agentWrapperPrefixes = (Object.keys(AGENT_HOOK_WRAPPER_STEMS) as AgentHookAgent[])
@@ -1481,7 +1482,7 @@ export function removeClaudeHookScripts(dryRun: boolean, hooksOnly = false, spar
   return results
 }
 
-// ── Agent hook wrapper scripts (gemini / vscode / codex / cursor) ──
+// ── Agent hook wrapper scripts (vscode / codex / cursor; gemini's swept only) ──
 //
 // These agents' hook configs used to carry `"<execPath>" "<entry.js>"`
 // verbatim — both halves version-stamped for a global install, so the same
@@ -1518,8 +1519,8 @@ export function agentHookWrapperPath(agent: AgentHookAgent, stem: string): strin
  * either way keeps working.
  *
  * The exit status IS masked (plain invocation + exit 0, no exec): capture is
- * passive and must never block the host, but Cursor's beforeSubmitPrompt and
- * Gemini's BeforeAgent act on hook exit codes — a stranded install execing a
+ * passive and must never block the host, but Cursor's beforeSubmitPrompt
+ * acts on hook exit codes — a stranded install execing a
  * gone interpreter would hand them the shell's 126/127 and perturb the
  * user's prompt flow instead of merely losing capture. The Claude wrappers
  * get the same guarantee from the CLI itself (hook exits are NEVER non-zero,
@@ -1567,8 +1568,9 @@ export function installAgentHookWrappers(agent: AgentHookAgent, dryRun: boolean)
 /**
  * Remove one agent's hook wrappers. Owned by that agent's uninstall branch —
  * NOT by the claude tc- sweep, which spares them: `uninstall claude` on a
- * machine that still runs gemini capture must not delete the scripts
- * gemini's config points at. Both dialect spellings are taken, so a
+ * machine that still runs cursor capture must not delete the scripts
+ * cursor's config points at. Gemini CLI's, from earlier builds, go with the
+ * archived sweep (D399). Both dialect spellings are taken, so a
  * cross-platform home sync never strands the other platform's copy.
  */
 export function removeAgentHookWrappers(agent: AgentHookAgent, dryRun: boolean): ActionResult[] {
@@ -1995,8 +1997,8 @@ export function claudeSessionStartUnwired(settings: Record<string, unknown>): st
  * Merge treecontext's hook entries into a Claude-format hooks map, in place,
  * and return it: foreign entries kept, owned ones rewritten to this build's
  * form. ONE definition of "the Claude Code block", shared by the Claude
- * settings writer, the copies written into Codex CLI and Gemini CLI, and
- * doctor's consistency check against them (D154, D161) — so the block a
+ * settings writer, the copy written into Codex CLI, and doctor's
+ * consistency check against it (D154, D161) — so the block a
  * copy is graded against is the one install would write today, never a
  * stored snapshot of it.
  */
@@ -2227,63 +2229,18 @@ function wrapperCommandString(agent: AgentHookAgent, stem: string): string {
   return claudeHookCommand(agentHookWrapperPath(agent, stem), 'bash')
 }
 
-// ── Copies of the Claude Code block: Codex CLI verbatim, Gemini CLI translated ──
+// ── Copies of the Claude Code block: Codex CLI verbatim ──
 //
-// The two copying clients keep their own hook configuration rather than
-// reading the Claude settings file, so capture reaches them only through a
-// copy of the Claude Code block (D154, D161), written behind
-// --experimental-capture (D208). The copy is the block itself — the same
-// entries running the same ~/.claude/hooks/tc-* scripts — verbatim for Codex
-// CLI, whose documented contract is Claude Code's, and translated for Gemini
-// CLI, whose events are renamed (survey of official documentation,
-// 2026-10-05; D153). Doctor grades a copy against what these functions would
-// write today, so the remedy it names is the command that produces exactly
-// what it grades as consistent.
-
-/**
- * Gemini CLI's name for each Claude Code hook event: same stdin/stdout
- * shapes, renamed events, no subagent events. An event with no Gemini
- * counterpart (null, or absent from this table) is left out of the
- * translated copy.
- */
-export const GEMINI_EVENT_FOR: Readonly<Record<string, string | null>> = {
-  SessionStart: 'SessionStart',
-  SessionEnd: 'SessionEnd',
-  UserPromptSubmit: 'BeforeAgent',
-  PreToolUse: 'BeforeTool',
-  PostToolUse: 'AfterTool',
-  PreCompact: 'PreCompress',
-  // Gemini's AfterAgent is not Claude's Stop: its payload carries
-  // prompt_response and stop_hook_active, its transcript is another JSON,
-  // and a `deny` decision forces a retry — the stop hook's bookmark ask
-  // (`decision: "block"`) would be a forced-retry hazard there. Left out
-  // until a live probe shows otherwise (D225).
-  Stop: null,
-  SubagentStart: null,
-  SubagentStop: null,
-}
-
-/**
- * A Claude-format hooks block in Gemini CLI's event names. Claude's Windows
- * `shell` field is dropped: Gemini's hook entry has no such key (its
- * documented fields are type, command, name, timeout, description).
- */
-export function translateHookBlockForGemini(
-  block: Record<string, ClaudeHookMatcher[]>,
-): Record<string, ClaudeHookMatcher[]> {
-  const out: Record<string, ClaudeHookMatcher[]> = {}
-  for (const [event, matchers] of Object.entries(block)) {
-    const renamed = GEMINI_EVENT_FOR[event]
-    if (!renamed) continue
-    const copied = structuredClone(matchers).map(m => ({
-      ...m,
-      hooks: m.hooks.map(({ shell: _shell, ...rest }) => rest),
-    }))
-    out[renamed] = [...(out[renamed] ?? []), ...copied]
-  }
-  return out
-}
-
+// The copying client keeps its own hook configuration rather than reading
+// the Claude settings file, so capture reaches it only through a copy of the
+// Claude Code block (D154, D161), written behind --experimental-capture
+// (D208). The copy is the block itself — the same entries running the same
+// ~/.claude/hooks/tc-* scripts — verbatim for Codex CLI, whose documented
+// contract is Claude Code's. Doctor grades a copy against what these
+// functions would write today, so the remedy it names is the command that
+// produces exactly what it grades as consistent. Gemini CLI's translated
+// copy is no longer written (D399); removeGeminiHooks takes back one an
+// earlier build wrote.
 
 type LooseMatcher = { matcher?: unknown; hooks?: Array<{ command?: unknown } & Record<string, unknown>> }
 
@@ -2366,40 +2323,27 @@ export function hookViewDifferences(actual: Record<string, string[]>, expected: 
   return events.filter(e => JSON.stringify(actual[e] ?? []) !== JSON.stringify(expected[e] ?? []))
 }
 
-/** The block a copying client's configuration should hold today. */
-export function expectedHookCopy(slug: string): Record<string, ClaudeHookMatcher[]> {
-  const block = claudeHooksBlock()
-  return slug === 'gemini' ? translateHookBlockForGemini(block) : block
+/** The block a copying client's configuration should hold today: the Claude Code block, verbatim. */
+export function expectedHookCopy(): Record<string, ClaudeHookMatcher[]> {
+  return claudeHooksBlock()
 }
 
 /**
- * Write Gemini CLI's translated copy of the Claude Code block into its
- * settings.json `hooks`, beside its MCP registration and the user's own
- * hooks. Every treecontext entry already there, in any spelling an earlier
- * build wrote, is replaced, so the copy converges on today's block and the
- * same command that copies the hooks also rewrites a drifted copy.
+ * Take back the copy of the hooks an earlier build's
+ * `install --agent gemini --experimental-capture` wrote into Gemini CLI's
+ * settings.json (D399's archived sweep): treecontext's entries, in every
+ * spelling an earlier build wrote, and nothing else. The developer's own
+ * hooks and every other key stay; a `hooks` key this leaves empty goes, as
+ * treecontext's alone. A file that does not parse is left as it is.
  */
-export function upsertGeminiHooks(path: string, dryRun: boolean): ActionResult {
-  const data = readJsonSafe(path)
-  const before = canonicalJson(data)
-  const hooks = (data.hooks && typeof data.hooks === 'object' ? data.hooks : {}) as Record<string, unknown>
-  writeHookCopy(hooks, expectedHookCopy('gemini'))
-  data.hooks = hooks
-  if (existsSync(path) && canonicalJson(data) === before) {
-    return { type: 'hook-settings', path, status: 'skipped', detail: 'already configured' }
-  }
-  if (dryRun) return { type: 'hook-settings', path, status: 'dry-run' }
-  const status = existsSync(path) ? 'updated' : 'created'
-  atomicWrite(path, JSON.stringify(data, null, 2) + '\n')
-  return { type: 'hook-settings', path, status }
-}
-
 export function removeGeminiHooks(path: string, dryRun: boolean): ActionResult | null {
   if (!existsSync(path)) return null
   const data = readJsonSafe(path)
-  const hooks = (data.hooks && typeof data.hooks === 'object' ? data.hooks : {}) as Record<string, unknown>
+  if (!data.hooks || typeof data.hooks !== 'object' || Array.isArray(data.hooks)) return null
+  const hooks = data.hooks as Record<string, unknown>
   if (!stripOwnedHooks(hooks)) return null
-  data.hooks = hooks
+  if (Object.keys(hooks).length === 0) delete data.hooks
+  else data.hooks = hooks
   if (!dryRun) atomicWrite(path, JSON.stringify(data, null, 2) + '\n')
   return { type: 'hook-settings', path, status: dryRun ? 'dry-run' : 'updated', detail: 'removed' }
 }
@@ -2584,7 +2528,7 @@ export function upsertCodexHooks(path: string, _force: boolean, dryRun: boolean)
   for (const k of Object.keys(data)) if (!CODEX_NON_EVENT_KEYS.has(k) && !(k in legacy)) delete data[k]
   Object.assign(data, legacy)
   const hooks = (data.hooks && typeof data.hooks === 'object' ? data.hooks : {}) as Record<string, unknown>
-  writeHookCopy(hooks, expectedHookCopy('codex'))
+  writeHookCopy(hooks, expectedHookCopy())
   data.hooks = hooks
   if (existsSync(path) && canonicalJson(data) === before) {
     return { type: 'hook-settings', path, status: 'skipped', detail: 'already configured' }
@@ -3396,26 +3340,33 @@ function hasTreecontextEntry(agent: AgentDefinition, platform: Platform): boolea
   }
 }
 
-/**
- * Whether an agent is present on this machine and carries a treecontext
- * entry: wired and still there to read what install wrote for it. A Gemini
- * CLI entry left in `~/.gemini/settings.json` where Gemini CLI is no longer
- * present (an orphan, D383) wires nothing anyone reads.
- */
-function presentAndWired(agent: AgentDefinition, platform: Platform): boolean {
-  return detectAgents(platform).some(a => a.slug === agent.slug) && hasTreecontextEntry(agent, platform)
-}
+/** The command that removes what an earlier install wrote for Gemini CLI: uninstall's archived sweep, and nothing else (D399). */
+export const GEMINI_SWEEP_COMMAND = 'treecontext uninstall --agent gemini'
 
 /**
- * An orphan Gemini CLI entry (D383): `~/.gemini/settings.json` carries the
- * treecontext entry an earlier install wrote, and Gemini CLI is not present
- * (no `gemini` on PATH, none of its artifacts in `~/.gemini`). Doctor warns
- * and names the uninstall; install never removes it on its own.
+ * What an earlier install left for Gemini CLI, retired (D399): its
+ * treecontext entry or a copy of the hooks in `~/.gemini/settings.json`, and
+ * the `tc-gemini-*` wrappers an earlier build wrote. Gemini CLI's own
+ * presence is not read: nothing of treecontext's there is used any more,
+ * whether Gemini CLI is installed or not. Each part in words, or null.
+ * Doctor warns and names GEMINI_SWEEP_COMMAND; install never removes it.
  */
-export function orphanGeminiEntry(platform: Platform): string | null {
-  const gemini = getAgent('gemini')
-  if (!gemini || geminiCliPresent(platform) || !hasTreecontextEntry(gemini, platform)) return null
-  return getConfigPath(gemini, platform)
+export function leftoverGeminiCli(): string[] | null {
+  const found: string[] = []
+  const path = geminiSettingsPath()
+  if (existsSync(path)) {
+    try {
+      const data = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>
+      const servers = data?.['mcpServers']
+      if (servers && typeof servers === 'object' && 'treecontext' in servers) found.push(`its treecontext entry in ${path}`)
+      if (Object.keys(ownedHookView(data?.['hooks'])).length > 0) found.push(`a copy of the treecontext hooks in ${path}`)
+    } catch { /* a file treecontext cannot read holds nothing it can name */ }
+  }
+  const wrappers = AGENT_HOOK_WRAPPER_STEMS.gemini.flatMap(stem => ['', '.cmd']
+    .map(ext => join(homedir(), '.claude', HOOK_SCRIPTS_DIR_NAME, `${TC_HOOK_PREFIX}gemini-${stem}${ext}`)))
+    .filter(p => existsSync(p))
+  if (wrappers.length > 0) found.push(`${wrappers.length} Gemini CLI hook wrapper${wrappers.length === 1 ? '' : 's'} in ${join(homedir(), '.claude', HOOK_SCRIPTS_DIR_NAME)}`)
+  return found.length > 0 ? found : null
 }
 
 /**
@@ -3543,12 +3494,25 @@ export async function configToolApprovals(on: boolean, only: string[] | null): P
   return lines
 }
 
+/** What install and uninstall say of Gemini CLI, retired (D399). */
+export const RETIRED_GEMINI_LINE = 'Gemini CLI is retired (Google deprecated it for Antigravity CLI): install no longer wires it, '
+  + `with or without --experimental-capture. Antigravity CLI is wired as \`agy\` (treecontext install --agent agy); `
+  + `a treecontext entry or hooks an earlier install left for Gemini CLI are removed by \`${GEMINI_SWEEP_COMMAND}\`.`
+
 export async function install(opts: InstallOptions): Promise<AgentInstallResult[]> {
   const platform = process.platform as Platform
   const results: AgentInstallResult[] = []
 
   let agents: AgentDefinition[]
   if (opts.agents && opts.agents.length > 0) {
+    // Gemini CLI is retired (D399): install never wires it, flag or not, and
+    // naming it is refused in so many words rather than as an unknown agent.
+    if (opts.agents.includes('gemini')) {
+      console.error(RETIRED_GEMINI_LINE)
+      const err = new Error(`Gemini CLI is retired: install does not wire it${opts.experimentalCapture ? ', with or without --experimental-capture' : ''}`)
+      ;(err as Error & { code?: string }).code = 'INSTALL_RETIRED'
+      throw err
+    }
     agents = opts.agents
       .map(slug => getAgent(slug))
       .filter((a): a is AgentDefinition => a !== undefined)
@@ -3624,8 +3588,6 @@ export async function install(opts: InstallOptions): Promise<AgentInstallResult[
   }
 
   let ccsMcpSynced = false
-  /** Instruction files this run has written, and for which agent. */
-  const instructionsWritten = new Map<string, string>()
   // One agent's broken configuration must not decide whether the agents
   // beside it get wired. Before this was isolated, a single unwritable
   // directory aborted the whole run at whatever point it was reached, so
@@ -3807,20 +3769,17 @@ export async function install(opts: InstallOptions): Promise<AgentInstallResult[
         console.log(`  hooks: UserPromptSubmit (conversation capture)`)
         console.log(`  hooks: PostToolUse (conversation capture)`)
         console.log(`  hooks: PreCompact (checkpoint before compaction)`)
-      } else if ((agent.hooks.format === 'codex-hooks' || agent.hooks.format === 'gemini-settings') && settingsPath) {
+      } else if (agent.hooks.format === 'codex-hooks' && settingsPath) {
         // A copying client (D154, D161, D208): its own configuration gets a
-        // copy of the Claude Code block — verbatim for Codex CLI, translated
-        // to Gemini CLI's event names — running the same Claude Code hook
-        // scripts, which are written first so the copy never names a script
-        // install did not write.
+        // copy of the Claude Code block, verbatim for Codex CLI, running the
+        // same Claude Code hook scripts, which are written first so the copy
+        // never names a script install did not write.
         const scriptResults = installClaudeHookScripts(opts.dryRun, opts.debug)
         agentResult.actions.push(...scriptResults)
         for (const s of scriptResults) {
           console.log(`  hooks: ${s.path} [${s.status}${s.detail ? ` — ${s.detail}` : ''}]`)
         }
-        const hookResult = agent.hooks.format === 'codex-hooks'
-          ? upsertCodexHooks(settingsPath, opts.force, opts.dryRun)
-          : upsertGeminiHooks(settingsPath, opts.dryRun)
+        const hookResult = upsertCodexHooks(settingsPath, opts.force, opts.dryRun)
         agentResult.actions.push(hookResult)
         console.log(`  hooks: ${settingsPath} [${hookResult.status}${hookResult.detail ? ` — ${hookResult.detail}` : ''}]`)
         // One copy, in one place: an entry of ours in config.toml's [hooks]
@@ -3831,8 +3790,8 @@ export async function install(opts: InstallOptions): Promise<AgentInstallResult[
           agentResult.actions.push(tomlResult)
           console.log(`  hooks: ${tomlPath} [${tomlResult.status} — ${tomlResult.detail}]`)
         }
-        const copied = Object.keys(expectedHookCopy(agent.slug))
-        console.log(`  hooks: copied the Claude Code block${agent.slug === 'gemini' ? ', translated' : ''} (${copied.join(', ')})`)
+        const copied = Object.keys(expectedHookCopy())
+        console.log(`  hooks: copied the Claude Code block (${copied.join(', ')})`)
       } else if (agent.hooks.format === 'cursor-hooks' && settingsPath) {
         agentResult.actions.push(...installAgentHookWrappers('cursor', opts.dryRun))
         const hookResult = upsertCursorHooks(settingsPath, opts.force, opts.dryRun)
@@ -3856,18 +3815,13 @@ export async function install(opts: InstallOptions): Promise<AgentInstallResult[
       console.log(`         conversation indexer unavailable — agent uses standard mode (manual treecontext_insert/query)`)
     }
 
-    // Instructions. Gemini CLI and Antigravity CLI read the same
-    // `~/.gemini/GEMINI.md` (D383): the block is written there once, by the
-    // first of them, and the second says where.
+    // Instructions. `~/.gemini/GEMINI.md` is Antigravity CLI's alone since
+    // Gemini CLI was retired (D399, amending D383's shared block).
     if (agent.instructions) {
       const instrPath = getInstructionsPath(agent, platform)
-      const earlier = instrPath ? instructionsWritten.get(resolve(instrPath)) : undefined
-      if (instrPath && earlier) {
-        console.log(`  instructions: ${instrPath} [shared with ${earlier} — written once, above]`)
-      } else if (instrPath) {
+      if (instrPath) {
         const instrResult = upsertInstructions(instrPath, opts.force, opts.dryRun)
         agentResult.actions.push(instrResult)
-        instructionsWritten.set(resolve(instrPath), agent.name)
         console.log(`  instructions: ${instrPath} [${instrResult.status}]`)
       }
     }
@@ -4025,11 +3979,13 @@ export async function uninstall(opts: {
         // "uninstalled" to the user who typed it (fifth-pass review). The
         // archived-build five are the expected case here.
         if (!a) {
-          console.log(
-            `unknown agent: ${slug}` +
-            (legacyMcpConfigs(platform).some(l => l.slug === slug)
-              ? ' (archived-build platform — its config is cleaned automatically below)'
-              : ''),
+          const swept = opts.hooksOnly ? 'run it without --hooks-only to sweep its old configuration' : 'its old configuration is swept below'
+          console.log(slug === 'gemini'
+            ? `gemini: Gemini CLI is retired (D399) — ${swept}`
+            : `unknown agent: ${slug}` +
+              (legacyMcpConfigs(platform).some(l => l.slug === slug)
+                ? ` (archived-build platform — ${swept})`
+                : ''),
           )
         }
         return a
@@ -4100,7 +4056,7 @@ export async function uninstall(opts: {
 
     // Remove hooks
     if (agent.hooks?.format === 'claude-settings') {
-      // A Codex or Gemini copy runs these same scripts. Removing them under
+      // A Codex copy runs these same scripts. Removing them under
       // it would leave every entry of the copy aimed at nothing, so the
       // scripts stay and the command that removes the copy first is named.
       const copies = copiesRunningClaudeScripts(platform, new Set(agents.map(a => a.slug)))
@@ -4185,16 +4141,6 @@ export async function uninstall(opts: {
           console.log(`${agent.name}: hooks removed from ${settingsPath}`)
         }
       }
-    } else if (agent.hooks?.format === 'gemini-settings') {
-      agentResult.actions.push(...removeAgentHookWrappers('gemini', opts.dryRun))
-      const settingsPath = getHookSettingsPath(agent, platform)
-      if (settingsPath) {
-        const hookResult = removeGeminiHooks(settingsPath, opts.dryRun)
-        if (hookResult) {
-          agentResult.actions.push(hookResult)
-          console.log(`${agent.name}: hooks removed`)
-        }
-      }
     }
 
     // A copying client whose copy is gone runs no capture hooks, so its
@@ -4208,16 +4154,11 @@ export async function uninstall(opts: {
       }
     }
 
-    // Remove instructions. A file another agent shares (Gemini CLI's and
-    // Antigravity CLI's `~/.gemini/GEMINI.md`, D383) keeps its block while
-    // that agent, outside this uninstall, is still wired.
+    // Remove instructions. No two agents share a file since Gemini CLI was
+    // retired (D399): `~/.gemini/GEMINI.md` goes with Antigravity CLI's.
     if (agent.instructions && !opts.hooksOnly) {
       const instrPath = getInstructionsPath(agent, platform)
-      const sharer = instrPath ? AGENTS.find(o => o.slug !== agent.slug && !agents.includes(o)
-        && getInstructionsPath(o, platform) === instrPath && presentAndWired(o, platform)) : undefined
-      if (instrPath && sharer) {
-        console.log(`${agent.name}: instructions kept in ${instrPath} — ${sharer.name} reads the same block and is still wired`)
-      } else if (instrPath) {
+      if (instrPath) {
         const instrResult = removeInstructions(instrPath, opts.dryRun)
         if (instrResult) {
           agentResult.actions.push(instrResult)
@@ -4280,10 +4221,12 @@ export async function uninstall(opts: {
   //
   // The selection at the top of a full uninstall keeps only agents whose
   // config path still EXISTS, so a user who deleted ~/.gemini never ran the
-  // gemini branch — and removeClaudeHookScripts spares every tc-<agent>-*
-  // name on purpose, for the branch that was supposed to take them. The four
-  // gemini wrappers therefore survived `treecontext uninstall` permanently,
-  // with nothing left on the machine that could ever name them again.
+  // gemini branch an earlier build had — and removeClaudeHookScripts spares
+  // every tc-<agent>-* name on purpose, for the branch that was supposed to
+  // take them. The four gemini wrappers therefore survived `treecontext
+  // uninstall` permanently, with nothing left on the machine that could ever
+  // name them again. (Gemini CLI is retired, D399; its wrappers are still
+  // swept here, and by the archived sweep below.)
   // Config-file cleanup stays gated on the config existing; wrapper removal
   // must not be. Idempotent, so an agent the loop DID handle contributes
   // nothing here.
@@ -4302,14 +4245,44 @@ export async function uninstall(opts: {
   // strand each agent erroring on a nonexistent path forever
   // (fifth-pass review). Same posture as claudeLegacyMcpPath above: the
   // platform is gone, its debris is still ours to clean.
+  // Gemini CLI, retired (D399), is swept the same way, with what else an
+  // earlier install wrote for it: the copy of the hooks in the same
+  // settings.json, and the `tc-gemini-*` wrappers. The developer's own keys
+  // and hooks there stay; `~/.gemini/GEMINI.md` is Antigravity CLI's.
   if (!opts.hooksOnly) {
     for (const legacy of legacyMcpConfigs(platform)) {
-      if (!existsSync(legacy.path)) continue
-      const removed = removeJsonMcp(legacy.path, legacy.rootKey, opts.dryRun)
+      const actions: ActionResult[] = []
+      const removed = existsSync(legacy.path) ? removeJsonMcp(legacy.path, legacy.rootKey, opts.dryRun) : null
       if (removed) {
-        results.push({ agent: `${legacy.slug} (archived)`, slug: legacy.slug, actions: [removed] })
+        actions.push(removed)
         console.log(`${legacy.slug} (archived): mcp removed from ${legacy.path}`)
       }
+      if (legacy.slug === 'gemini') {
+        const hooks = removeGeminiHooks(legacy.path, opts.dryRun)
+        if (hooks) {
+          actions.push(hooks)
+          console.log(`${legacy.slug} (archived): hooks removed from ${legacy.path}`)
+        }
+        const wrappers = removeAgentHookWrappers('gemini', opts.dryRun)
+        if (wrappers.length > 0) {
+          actions.push(...wrappers)
+          console.log(`${legacy.slug} (archived): hook wrappers removed`)
+        }
+        // A full uninstall owns the block an earlier install wrote into
+        // `~/.gemini/GEMINI.md` for Gemini CLI as well: with Antigravity CLI
+        // not wired (else its own branch above took the block), nothing reads
+        // it for treecontext. A run naming agents leaves the file to agy's.
+        const agy = getAgent('agy')
+        const block = agy ? getInstructionsPath(agy, platform) : null
+        if (fullScope && block && !agents.some(a => a.slug === 'agy')) {
+          const instr = removeInstructions(block, opts.dryRun)
+          if (instr) {
+            actions.push(instr)
+            console.log(`${legacy.slug} (archived): instructions removed from ${block}`)
+          }
+        }
+      }
+      if (actions.length > 0) results.push({ agent: `${legacy.slug} (archived)`, slug: legacy.slug, actions })
     }
   }
 
@@ -4772,8 +4745,8 @@ function collectCommandStrings(value: unknown, out: string[] = []): string[] {
 }
 
 /**
- * The hook part of a hook settings file, and nothing else. Gemini keeps its
- * hooks in the same settings.json as its MCP registration, so walking the
+ * The hook part of a hook settings file, and nothing else. Gemini CLI kept
+ * its hooks in the same settings.json as its MCP registration, so walking the
  * whole file collected the MCP launcher (`…/tc-mcp-serve`) as if it were a
  * hook command, and a tools-only install read as "hooks present". Files
  * that nest hooks under a `hooks` key (Claude, Gemini, Copilot, Cursor) are
@@ -4899,7 +4872,6 @@ export function unmanagedHookState(
  */
 export const CLIENT_HOOK_MODES: Readonly<Record<string, string>> = {
   codex: 'copies the hooks into its own configuration (~/.codex/hooks.json or [hooks] in ~/.codex/config.toml, repo .codex/hooks.json; same JSON contract as Claude Code)',
-  gemini: 'copies the hooks into its own translated configuration (settings.json under .gemini/ or ~/.gemini/; same stdin/stdout shapes, renamed events, no subagent events)',
   vscode: 'reads the Claude settings file when its Claude-hooks setting is on (chat.useClaudeHooks, off by default; read as-is, matcher values ignored; also reads .github/hooks/*.json)',
   cursor: 'reads the Claude settings file by default (as-is, through its Include Third-Party configs setting)',
   opencode: 'offers no shell hooks, so the tools are its whole surface (the MCP tools; JS/TS plugins are not hooks)',
@@ -5049,7 +5021,7 @@ export function copiedHookState(agent: AgentDefinition, platform: Platform): {
   where: string[]
   problems: string[]
 } {
-  const expected = ownedHookView(expectedHookCopy(agent.slug))
+  const expected = ownedHookView(expectedHookCopy())
   const where: string[] = []
   const problems: string[] = []
   for (const src of copiedHookSources(agent, platform)) {
@@ -5108,7 +5080,7 @@ function clientHookReportBase(agent: AgentDefinition, platform: Platform): Clien
 
   if (COPYING_CLIENTS.has(agent.slug)) {
     const copy = copiedHookState(agent, platform)
-    const block = agent.slug === 'gemini' ? 'the translated Claude Code block' : 'the Claude Code block'
+    const block = 'the Claude Code block'
     if (copy.state === 'absent') {
       const path = getHookSettingsPath(agent, platform)
       return {
@@ -6836,25 +6808,6 @@ export async function doctor(): Promise<DiagnosticResult[]> {
         } else {
           parts.push('hooks missing')
         }
-      } else if (agent.hooks.format === 'gemini-settings') {
-        const settingsPath = getHookSettingsPath(agent, platform)
-        if (settingsPath && existsSync(settingsPath)) {
-          const data = readJsonSafe(settingsPath)
-          const hasHooks = Object.keys(ownedHookView(data.hooks)).length > 0
-          parts.push(hasHooks ? 'hooks installed' : 'hooks missing')
-          const issue = hookSettingsInterpreterIssue(data)
-          if (issue) {
-            parts.push(`hook ${issue}`)
-            interpreterProblem = true
-          }
-          const wrapperIssue = agentHookWrapperIssue('gemini', hookCommandStrings(data))
-          if (wrapperIssue) {
-            parts.push(wrapperIssue)
-            interpreterProblem = true
-          }
-        } else {
-          parts.push('hooks missing')
-        }
       }
     } else if (!client) {
       parts.push('no hook support (standard mode only — no auto-capture)')
@@ -7021,17 +6974,17 @@ export async function doctor(): Promise<DiagnosticResult[]> {
     if (unmanagedRow) results.push(unmanagedRow)
   }
 
-  // An orphan Gemini CLI entry (D383): an earlier install wired Gemini CLI
-  // (the directory alone once read as it), and Gemini CLI is not present.
-  // Nothing reads the entry; install leaves it, so doctor names the way out.
+  // Gemini CLI is retired (D399): it has no client row, and what an earlier
+  // install wrote for it is named, with the archived sweep that removes it
+  // and nothing else. Install leaves it, so doctor names the way out.
   {
-    const orphan = orphanGeminiEntry(platform)
-    if (orphan) {
+    const leftover = leftoverGeminiCli()
+    if (leftover) {
       results.push({
         check: 'Gemini CLI',
         status: 'warn',
-        detail: `an earlier install wired Gemini CLI, which is not present — ${orphan} holds its treecontext entry, and no \`gemini\` command or Gemini CLI file of its own is here (install leaves the entry alone)`,
-        fix: 'treecontext uninstall --agent gemini',
+        detail: `Gemini CLI is retired; an earlier install left ${andList(leftover)}, which nothing of treecontext's uses any more (install leaves ${leftover.length === 1 ? 'it' : 'them'} alone; ~/.gemini/GEMINI.md is Antigravity CLI's and stays)`,
+        fix: GEMINI_SWEEP_COMMAND,
       })
     }
   }

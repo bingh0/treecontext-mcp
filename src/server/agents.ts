@@ -27,7 +27,7 @@ export interface HookDef {
   /** Path to the agent's hook settings file (platform-keyed). */
   settingsPath: Partial<Record<Platform, string>>
   /** Hook settings format. */
-  format: 'claude-settings' | 'gemini-settings' | 'vscode-hooks' | 'codex-hooks' | 'cursor-hooks'
+  format: 'claude-settings' | 'vscode-hooks' | 'codex-hooks' | 'cursor-hooks'
 }
 
 export interface InstructionsDef {
@@ -141,42 +141,6 @@ export const AGENTS: AgentDefinition[] = [
   },
 
   {
-    name: 'Gemini CLI',
-    slug: 'gemini',
-    configFormat: 'json-mcpServers',
-    // `~/.gemini` alone is not Gemini CLI's: Antigravity CLI makes it too.
-    // Detection reads the command and Gemini CLI's own artifacts there
-    // (geminiCliPresent, D383); detectDirs is not consulted for it.
-    detectCommands: ['gemini'],
-    detectDirs: {
-      linux: [join(home(), '.gemini')],
-      darwin: [join(home(), '.gemini')],
-      win32: [join(home(), '.gemini')],
-    },
-    configPath: {
-      linux: join(home(), '.gemini', 'settings.json'),
-      darwin: join(home(), '.gemini', 'settings.json'),
-      win32: join(home(), '.gemini', 'settings.json'),
-    },
-    hooks: {
-      events: ['SessionStart', 'BeforeAgent', 'AfterTool', 'PreCompress'],
-      settingsPath: {
-        linux: join(home(), '.gemini', 'settings.json'),
-        darwin: join(home(), '.gemini', 'settings.json'),
-        win32: join(home(), '.gemini', 'settings.json'),
-      },
-      format: 'gemini-settings',
-    },
-    instructions: {
-      path: {
-        linux: join(home(), '.gemini', 'GEMINI.md'),
-        darwin: join(home(), '.gemini', 'GEMINI.md'),
-        win32: join(home(), '.gemini', 'GEMINI.md'),
-      },
-    },
-  },
-
-  {
     name: 'VS Code',
     slug: 'vscode',
     configFormat: 'json-servers',
@@ -261,8 +225,9 @@ export const AGENTS: AgentDefinition[] = [
   // Antigravity CLI (D383): a tools-only client. Its MCP entry is in
   // `~/.gemini/config/mcp_config.json`, its permission rules in
   // `~/.gemini/antigravity-cli/settings.json` (tool-approvals.ts), and its
-  // instruction block is the `~/.gemini/GEMINI.md` it shares with Gemini
-  // CLI. Install writes no hooks of its (fenced: its hooks stay its own).
+  // instruction block is in `~/.gemini/GEMINI.md`, its alone since Gemini
+  // CLI was retired (D399). Install writes no hooks of its (fenced: its
+  // hooks stay its own).
   // The slug is the command's; the archived Antigravity IDE keeps the
   // `antigravity` slug in the uninstall sweep below.
   {
@@ -317,18 +282,21 @@ export const AGENTS: AgentDefinition[] = [
   // their adapter builds were retired with the tree era, no tester ever
   // ran one, and an MCP stub with no capture story reads as a promise
   // this beta does not make. Reinstatement is an ordinary agent entry
-  // plus a README platform-table row.
+  // plus a README platform-table row. Gemini CLI followed on 2026-11-09
+  // (D399): Google deprecated it for Antigravity CLI.
 ]
 
 
 /**
- * MCP configs earlier releases wrote for the archived-build five. The
- * agents left the registry at the 0.1 cold-read, but a 0.0.x install may
- * have written a 'treecontext' entry into these files pointing at the
- * launcher UNINSTALL DELETES — dropping the registry entry without
- * keeping cleanup knowledge would strand that entry erroring on a
- * nonexistent path forever (fifth-pass review). Same pattern as
- * LEGACY_HOOK_PREFIXES: the platform is gone, its debris is still ours.
+ * MCP configs earlier releases wrote for the archived platforms. The
+ * archived-build five left the registry at the 0.1 cold-read, Gemini CLI at
+ * its retirement (D399), but an earlier install may have written a
+ * 'treecontext' entry into these files pointing at the launcher UNINSTALL
+ * DELETES — dropping the registry entry without keeping cleanup knowledge
+ * would strand that entry erroring on a nonexistent path forever
+ * (fifth-pass review). Same pattern as LEGACY_HOOK_PREFIXES: the platform
+ * is gone, its debris is still ours. Gemini CLI's file also holds the copy
+ * of the hooks `--experimental-capture` wrote there (geminiSettingsPath).
  */
 export function legacyMcpConfigs(platform?: Platform): Array<{ slug: string; path: string; rootKey: 'mcpServers' | 'servers' }> {
   const p = platform ?? process.platform as Platform
@@ -360,7 +328,22 @@ export function legacyMcpConfigs(platform?: Platform): Array<{ slug: string; pat
       darwin: join(home(), '.openclaw', 'openclaw.json'),
       win32: join(home(), '.openclaw', 'openclaw.json'),
     }),
+    one('gemini', 'mcpServers', {
+      linux: geminiSettingsPath(),
+      darwin: geminiSettingsPath(),
+      win32: geminiSettingsPath(),
+    }),
   ]
+}
+
+/**
+ * Gemini CLI's settings file, where an earlier install wrote its MCP entry
+ * and, behind `--experimental-capture`, a translated copy of the Claude Code
+ * hooks. Gemini CLI is retired (D399): install writes nothing there, and
+ * uninstall's archived sweep takes back treecontext's part of the file.
+ */
+export function geminiSettingsPath(): string {
+  return join(home(), '.gemini', 'settings.json')
 }
 
 // ── Detection ──────────────────────────────────────────────────────
@@ -396,56 +379,6 @@ export function hooksAreTreecontextOnly(hooks: unknown): boolean {
   if (hooks !== null && typeof hooks === 'object') walk(hooks)
   else if (hooks !== undefined) return false
   return commands.every(c => isOwnHookCommand(c))
-}
-
-/** The files and directories in `~/.gemini` that only Gemini CLI makes (D383). */
-export const GEMINI_ARTIFACTS = ['installation_id', 'oauth_creds.json', 'google_accounts.json', 'trusted_hooks.json', 'tmp'] as const
-
-/**
- * What in `~/.gemini` shows Gemini CLI has been there (D383): the files and
- * directories it makes (GEMINI_ARTIFACTS), and a `settings.json` holding a
- * key of its own, which is any key but the treecontext entry under
- * `mcpServers` an install writes (another server there is the developer's).
- * A `settings.json` that does not parse is not treecontext's, which writes
- * only JSON, so it counts. Antigravity CLI's own directories,
- * `antigravity-cli` and `config`, never count, and neither does
- * `~/.gemini` itself, which agy creates too. Each artifact by its name.
- */
-export function geminiArtifacts(): string[] {
-  const dir = join(home(), '.gemini')
-  const found: string[] = GEMINI_ARTIFACTS.filter(f => existsSync(join(dir, f)))
-  const settings = join(dir, 'settings.json')
-  if (existsSync(settings)) {
-    try {
-      const data = JSON.parse(readFileSync(settings, 'utf8')) as unknown
-      if (!data || typeof data !== 'object' || Array.isArray(data)) {
-        found.push('settings.json')
-      } else {
-        const rec = data as Record<string, unknown>
-        const servers = rec['mcpServers']
-        // `hooks` is Gemini CLI's own only when it holds a hook treecontext
-        // did not write: the translated block `install --experimental-capture`
-        // copies there, or the `{}` its uninstall leaves, is ours, so an
-        // orphan carrying it still reads as an orphan.
-        const ownKey = Object.keys(rec).some(k => k !== 'mcpServers' && !(k === 'hooks' && hooksAreTreecontextOnly(rec[k])))
-        const otherServer = servers !== undefined && (!servers || typeof servers !== 'object' || Array.isArray(servers)
-          || Object.keys(servers).some(k => k !== 'treecontext'))
-        if (ownKey || otherServer) found.push('settings.json')
-      }
-    } catch {
-      found.push('settings.json')
-    }
-  }
-  return found
-}
-
-/**
- * Whether Gemini CLI is installed (D383): its command on PATH, or one of
- * its own artifacts in `~/.gemini` (geminiArtifacts). The directory alone
- * proves nothing, since Antigravity CLI creates it too.
- */
-export function geminiCliPresent(platform: Platform = process.platform as Platform): boolean {
-  return commandOnPath('gemini', platform) || geminiArtifacts().length > 0
 }
 
 /**
@@ -490,7 +423,7 @@ function holdsForeignKey(path: string, own: (key: string, value: unknown) => boo
 
 /**
  * What shows Claude Code has been on this machine (D51, as D383 read it for
- * Gemini CLI): `~/.claude.json` holding a key of its own (anything but the
+ * Gemini CLI before its retirement): `~/.claude.json` holding a key of its own (anything but the
  * treecontext entry install writes under `mcpServers`; another server there
  * is the developer's); one of CLAUDE_CODE_ARTIFACTS in its config
  * directory; or a `settings.json` there holding a key treecontext did not
@@ -531,7 +464,6 @@ export function claudeCodePresent(platform: Platform = process.platform as Platf
 export function detectAgents(platform?: Platform): AgentDefinition[] {
   const p = platform ?? process.platform as Platform
   return AGENTS.filter(agent => {
-    if (agent.slug === 'gemini') return geminiCliPresent(p)
     if (agent.slug === 'claude') return claudeCodePresent(p)
     const dirs = agent.detectDirs[p] ?? agent.detectDirs.linux ?? []
     return dirs.some(d => existsSync(d)) || (agent.detectCommands ?? []).some(c => commandOnPath(c, p))

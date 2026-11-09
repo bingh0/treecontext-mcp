@@ -14,7 +14,7 @@ import { DEFAULT_ROLE_WEIGHTS } from '../../../src/persistence/fts.js'
 import { DEFAULT_RECENCY_WEIGHT } from '../../../src/server/query-telemetry.js'
 import { KEY_LOOKUP_PARAM } from '../../../src/key-lookup.js'
 import { mcpOver, openLiveStore, exportNode, mediaOf, rawMediaOf, insertAttachment } from '../world.js'
-import { type InstallWorld, tcCli, openInstallWorld, setFakeCodex, markGeminiCliInstalled } from '../install-harness.js'
+import { type InstallWorld, tcCli, openInstallWorld, setFakeCodex } from '../install-harness.js'
 
 // ── journal-agent-surface ───────────────────────────────────────────────
 
@@ -666,15 +666,17 @@ function workerOrientationSteps(reg: Registry<AgentSurfaceWorld>): void {
   })
 
   // ── the instruction block's worker line ────────────────────────────
-  reg.define(/^install has written its instruction block for Codex CLI and for the clients that read GEMINI\.md$/, async (w: AgentSurfaceWorld) => {
-    await openInstallWorld(w, ['.claude', '.codex'])
+  reg.define(/^install has written its instruction block for Codex CLI and for Antigravity CLI$/, async (w: AgentSurfaceWorld) => {
+    // Antigravity CLI is there by its own directory under ~/.gemini (D383);
+    // its block is the one in ~/.gemini/GEMINI.md, its alone (D399).
+    await openInstallWorld(w, ['.claude', '.codex', join('.gemini', 'antigravity-cli')])
     setFakeCodex(w, { version: CODEX_APPROVALS_FLOOR, sandbox: { exit: 0, stderr: '' } })
-    markGeminiCliInstalled(w.ihome!)
     const run = tcCli(w, ['install', '--yes'])
     expect(run.status, run.out).toBe(0)
+    expect(run.stdout).toMatch(/^Detected agents: .*Antigravity CLI/m)
     w.blockFiles = {
       'Codex CLI': readFileSync(join(w.ihome!, '.codex', 'AGENTS.md'), 'utf8'),
-      'GEMINI.md': readFileSync(join(w.ihome!, '.gemini', 'GEMINI.md'), 'utf8'),
+      'Antigravity CLI': readFileSync(join(w.ihome!, '.gemini', 'GEMINI.md'), 'utf8'),
     }
   })
   reg.define(/^an agent reads the block$/, (w: AgentSurfaceWorld) => {

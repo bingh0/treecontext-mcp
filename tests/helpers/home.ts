@@ -83,7 +83,7 @@ export function storesDirIn(home: string): string {
  * alone is not Claude Code (D51: install's own MCP launcher lives there),
  * and the machine's own `claude` is hidden from every sandboxed child, so a
  * home that means Claude Code to be there lays out one of its artifacts,
- * as markGeminiCliInstalled does for Gemini CLI (D383).
+ * as Gemini CLI's own files once were for it (D383, before its retirement, D399).
  */
 export function markClaudeCodeInstalled(home: string): void {
   mkdirSync(join(home, '.claude', 'projects'), { recursive: true })

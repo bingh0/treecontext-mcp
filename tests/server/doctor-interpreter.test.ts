@@ -18,19 +18,19 @@ const fakeHome = mkdtempSync(join(tmpdir(), 'tc-doctor-home-'))
 // is one accidental un-skip away from writing into a real profile.
 const restoreHome = redirectHome(fakeHome)
 
-// Gemini: legacy bare-node MCP command + legacy bare-node hook command
-mkdirSync(join(fakeHome, '.gemini'), { recursive: true })
-// Gemini CLI itself is here: a file of its own (D383), not only treecontext's entry.
-writeFileSync(join(fakeHome, '.gemini', 'installation_id'), 'fixture\n')
-writeFileSync(join(fakeHome, '.gemini', 'settings.json'), JSON.stringify({
-  mcpServers: { treecontext: { command: 'node', args: ['cli.js', '--capture', '--code-index'] } },
-  hooks: {
-    SessionStart: [{ hooks: [{ type: 'command', command: 'node "/old/dist/hooks/gemini/session-start.js"' }] }],
-    BeforeAgent: [{ hooks: [{ type: 'command', command: 'node "/old/dist/hooks/gemini/before-agent.js"' }] }],
-    AfterTool: [{ hooks: [{ type: 'command', command: 'node "/old/dist/hooks/gemini/after-tool.js"' }] }],
-    PreCompress: [{ hooks: [{ type: 'command', command: 'node "/old/dist/hooks/gemini/pre-compress.js"' }] }],
-  },
-}))
+// Codex CLI: legacy bare-node MCP command + legacy bare-node hook command
+// (Gemini CLI carried these fixtures until its retirement, D399).
+mkdirSync(join(fakeHome, '.codex'), { recursive: true })
+const codexToml = (args: string[], command = 'node'): string =>
+  `[mcp_servers.treecontext]\ncommand = ${JSON.stringify(command)}\nargs = ${JSON.stringify(args)}\n`
+writeFileSync(join(fakeHome, '.codex', 'config.toml'), codexToml(['cli.js', '--capture', '--code-index']))
+const legacyCodexHooks = JSON.stringify({
+  SessionStart: [{ hooks: [{ type: 'command', command: 'node "/old/dist/hooks/codex/session-start.js"' }] }],
+  UserPromptSubmit: [{ hooks: [{ type: 'command', command: 'node "/old/dist/hooks/codex/user-prompt-submit.js"' }] }],
+  PostToolUse: [{ hooks: [{ type: 'command', command: 'node "/old/dist/hooks/codex/post-tool-use.js"' }] }],
+  PreCompact: [{ hooks: [{ type: 'command', command: 'node "/old/dist/hooks/codex/pre-compact.js"' }] }],
+})
+writeFileSync(join(fakeHome, '.codex', 'hooks.json'), legacyCodexHooks)
 
 // Cursor: stale absolute interpreter (node upgraded/removed since install)
 mkdirSync(join(fakeHome, '.cursor'), { recursive: true })
@@ -80,11 +80,11 @@ describe.skipIf(process.platform === 'win32')('doctor interpreter diagnostics (A
   it('flags bare-node configs and stale interpreters per agent', async () => {
     const results = await doctor()
 
-    const gemini = results.find(r => /gemini/i.test(r.check))
-    expect(gemini).toBeDefined()
-    expect(gemini!.status).toBe('warn')
-    expect(gemini!.detail).toContain("bare 'node'")
-    expect(gemini!.fix).toContain('treecontext install')
+    const codex = results.find(r => r.check === 'Codex CLI')
+    expect(codex).toBeDefined()
+    expect(codex!.status).toBe('warn')
+    expect(codex!.detail).toContain("bare 'node'")
+    expect(codex!.fix).toContain('treecontext install')
 
     // Cursor is outside CAPTURE_PLATFORMS, so `install` never writes its
     // hooks and the stale-interpreter finding belongs on the unmanaged-hooks
@@ -101,25 +101,25 @@ describe.skipIf(process.platform === 'win32')('doctor interpreter diagnostics (A
     expect(claude!.status).toBe('warn')
     expect(claude!.detail).toContain("bare 'node'")
 
-    // AC3.1 missing state: no GEMINI.md yet; AC3.3: skill not installed
-    expect(gemini!.detail).toContain('instructions missing')
+    // AC3.1 missing state: no ~/.codex/AGENTS.md yet; AC3.3: skill not installed
+    expect(codex!.detail).toContain('instructions missing')
     expect(claude!.detail).toContain('skill missing')
   }, 60_000)
 
   it('reports instruction blocks as outdated, then current (AC3.1)', async () => {
     writeFileSync(
-      join(fakeHome, '.gemini', 'GEMINI.md'),
+      join(fakeHome, '.codex', 'AGENTS.md'),
       '<!-- treecontext:start -->\nstale old block\n<!-- treecontext:end -->\n',
     )
     let results = await doctor()
-    let gemini = results.find(r => /gemini/i.test(r.check))!
-    expect(gemini.status).toBe('warn')
-    expect(gemini.detail).toContain('instructions outdated')
+    let codex = results.find(r => r.check === 'Codex CLI')!
+    expect(codex.status).toBe('warn')
+    expect(codex.detail).toContain('instructions outdated')
 
-    writeFileSync(join(fakeHome, '.gemini', 'GEMINI.md'), `${INSTRUCTIONS_CONTENT}\n`)
+    writeFileSync(join(fakeHome, '.codex', 'AGENTS.md'), `${INSTRUCTIONS_CONTENT}\n`)
     results = await doctor()
-    gemini = results.find(r => /gemini/i.test(r.check))!
-    expect(gemini.detail).toContain('instructions current')
+    codex = results.find(r => r.check === 'Codex CLI')!
+    expect(codex.detail).toContain('instructions current')
   }, 60_000)
 
   it('reports the reference skill as installed after install (AC3.3)', async () => {
@@ -130,28 +130,23 @@ describe.skipIf(process.platform === 'win32')('doctor interpreter diagnostics (A
   }, 60_000)
 
   it("warns when --instructions none has no delivering hook channel (AC5.4)", async () => {
-    const settingsPath = join(fakeHome, '.gemini', 'settings.json')
-    const mcpEntry = {
-      command: process.execPath,
-      args: ['cli.js', '--capture', '--code-index', '--instructions', 'none'],
-    }
+    const hooksPath = join(fakeHome, '.codex', 'hooks.json')
+    writeFileSync(join(fakeHome, '.codex', 'config.toml'),
+      codexToml(['cli.js', '--capture', '--code-index', '--instructions', 'none'], process.execPath))
 
     // No hooks installed: nothing carries the orientation trigger.
-    writeFileSync(settingsPath, JSON.stringify({ mcpServers: { treecontext: mcpEntry } }))
+    writeFileSync(hooksPath, '{}')
     let results = await doctor()
-    let gemini = results.find(r => /gemini/i.test(r.check))!
-    expect(gemini.status).toBe('warn')
-    expect(gemini.detail).toContain("instructions 'none' but hook channel not delivering")
+    let codex = results.find(r => r.check === 'Codex CLI')!
+    expect(codex.status).toBe('warn')
+    expect(codex.detail).toContain("instructions 'none' but hook channel not delivering")
 
     // Hooks installed: the hook channel carries the trigger — no warning.
-    writeFileSync(settingsPath, JSON.stringify({
-      mcpServers: { treecontext: mcpEntry },
-      hooks: {
-        SessionStart: [{ hooks: [{ type: 'command', command: `"${process.execPath}" "/x/hooks/gemini/session-start.js"` }] }],
-      },
+    writeFileSync(hooksPath, JSON.stringify({
+      SessionStart: [{ hooks: [{ type: 'command', command: `"${process.execPath}" "/x/hooks/codex/session-start.js"` }] }],
     }))
     results = await doctor()
-    gemini = results.find(r => /gemini/i.test(r.check))!
-    expect(gemini.detail).not.toContain('hook channel not delivering')
+    codex = results.find(r => r.check === 'Codex CLI')!
+    expect(codex.detail).not.toContain('hook channel not delivering')
   }, 60_000)
 })

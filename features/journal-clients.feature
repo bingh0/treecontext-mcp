@@ -14,7 +14,9 @@ Feature: Other clients — a dated matrix and a doctor that knows each one
   beta.3 final gate, 2026-11-01: the orchestration matrix, its own table.
   D383, D387, D388, D390 of 2026-11-07: Antigravity CLI as a tools-only
   client, the headless-readiness rows, the matrices' permission modes,
-  and one tool-approval rule for the three clients.
+  and one tool-approval rule for the three clients. D399 of 2026-11-09:
+  Gemini CLI retired as an archived platform, its rows gone and what an
+  earlier install left for it named by doctor.
 
   @D153
   Scenario: every matrix row carries its client, its events, its documentation date and one status
@@ -31,7 +33,7 @@ Feature: Other clients — a dated matrix and a doctor that knows each one
     And the developer sees every cell carry one of "verified live", "verified through a stand-in", "documented only" or "not possible", with the date it was checked against
     And the developer sees every "not possible" cell name what the client lacks
 
-  @D161 @D208 @D383
+  @D161 @D208 @D383 @D399
   Scenario Outline: doctor reports <client> as a client that <mode>
     Given <client> is installed and its hook configuration holds no treecontext hooks
     And the Claude Code hooks block is installed and VS Code's Claude-hooks setting is off
@@ -44,7 +46,6 @@ Feature: Other clients — a dated matrix and a doctor that knows each one
     Examples:
       | client     | mode                                                            | remedy                        |
       | Codex CLI  | copies the hooks into its own configuration                     | the flagged command that copies them |
-      | Gemini CLI | copies the hooks into its own translated configuration          | the flagged command that copies them |
       | VS Code    | reads the Claude settings file when its Claude-hooks setting is on | turning that setting on    |
       | Cursor     | reads the Claude settings file by default                       | nothing                       |
       | OpenCode   | offers no shell hooks, so the tools are its whole surface       | nothing                       |
@@ -63,19 +64,6 @@ Feature: Other clients — a dated matrix and a doctor that knows each one
     Then the developer sees doctor's row for Codex CLI read present and inconsistent
     And the row names the command that rewrites the copy
 
-  @D161
-  Scenario: a translated Gemini copy that matches reads present and consistent
-    Given Gemini CLI is installed and its hook configuration holds the translated copy of the Claude Code block
-    When the developer runs doctor
-    Then the developer sees doctor's row for Gemini CLI read present and consistent
-
-  @D161
-  Scenario: a translated Gemini copy that drifted reads inconsistent with its remedy
-    Given Gemini CLI is installed and its hook configuration holds a translated copy that differs from the Claude Code block
-    When the developer runs doctor
-    Then the developer sees doctor's row for Gemini CLI read present and inconsistent
-    And the row names the command that rewrites the copy
-
   @D208
   Scenario: without the experimental flag a copying client gets tools only
     Given Codex CLI is installed
@@ -83,12 +71,21 @@ Feature: Other clients — a dated matrix and a doctor that knows each one
     Then the developer sees Codex CLI wired for the tools and no capture hooks copied
     And the developer running doctor sees the Codex CLI row name the flagged command as the way to copy them
 
-  @D152
+  @D152 @D399
   Scenario: a teammate on another agent reads and writes through the tools
-    Given a teammate on Gemini CLI with the treecontext server configured and no hooks
+    Given a teammate on Antigravity CLI with the treecontext server configured and no hooks
     When the teammate inserts "ux: the login form uses the compact layout" and searches "compact layout"
     Then the teammate finds the entry
     And the documentation the teammate reads promises no capture of their session
+
+  @D399
+  Scenario: doctor names what an earlier install left for Gemini CLI, and the command it names removes that and nothing else
+    Given install has wired Claude Code and Antigravity CLI, and Gemini CLI's settings hold the treecontext entry and the copied hooks an earlier install wrote beside the developer's own keys
+    When the developer runs doctor, then the command its Gemini CLI row names, then doctor again
+    Then the first doctor run shows no client row for Gemini CLI and one warning row saying Gemini CLI is retired, naming what is left and that command
+    And after the command Gemini CLI's settings hold the developer's own keys and nothing of treecontext's
+    And Claude Code's and Antigravity CLI's wiring is as install left it
+    And the second doctor run shows no row for Gemini CLI
 
   # The headless build (D387, D388, D390, 2026-11-07): doctor says whether a
   # headless worker of each client can use the tools, and the documentation

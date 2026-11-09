@@ -31,7 +31,7 @@ import { markClaudeCodeInstalled, redirectHome } from '../helpers/home.js'
 import { sandboxedSpawnEnv, spawnCli, CLI_TS } from '../helpers/cli-spawn.js'
 import { type CaptureWorld, openCaptureWorld, hookJson } from '../journal/capture-harness.js'
 import {
-  installClaudeHookScripts, upsertClaudeSettingsHooks, removeClaudeSettingsHooks, upsertCodexHooks, upsertGeminiHooks,
+  installClaudeHookScripts, upsertClaudeSettingsHooks, removeClaudeSettingsHooks, upsertCodexHooks,
   claudeHookCommand, claudeHookDispatch, claudeHookCommandsWithoutExec,
 } from '../../src/server/installer.js'
 import { UNKNOWN_PREDECESSOR } from '../../src/hooks/session-start.js'
@@ -84,7 +84,7 @@ describe.skipIf(!POSIX)('hook dispatch through /bin/sh -c keeps the claude pid (
     } finally { void done(w) }
   })
 
-  it('install writes every Claude hook command, and the Codex and Gemini copies, behind exec; uninstall still owns them', () => {
+  it('install writes every Claude hook command, and the Codex copy, behind exec; uninstall still owns them', () => {
     const w = mkWorld()
     const home = scratch(w, 'tc-exec-home-')
     const restore = redirectHome(home)
@@ -95,10 +95,7 @@ describe.skipIf(!POSIX)('hook dispatch through /bin/sh -c keeps the claude pid (
       upsertClaudeSettingsHooks(settings, false)
       const codex = join(home, 'codex-hooks.json')
       upsertCodexHooks(codex, false, false)
-      const gemini = join(home, 'gemini-settings.json')
-      writeFileSync(gemini, '{}')
-      upsertGeminiHooks(gemini, false)
-      for (const f of [settings, codex, gemini]) {
+      for (const f of [settings, codex]) {
         const commands = [...readFileSync(f, 'utf8').matchAll(/"command": "((?:[^"\\]|\\.)*)"/g)].map((m) => JSON.parse(`"${m[1]}"`) as string)
         expect(commands.length, f).toBeGreaterThanOrEqual(7)
         for (const c of commands) expect(c, `${f}: ${c}`).toMatch(/^exec "[^"]+\/\.claude\/hooks\/tc-[a-z-]+"$/)

@@ -176,9 +176,9 @@ Feature: Journal agent surface — the parts the agent reads are product
     When the server sends its handshake
     Then the instructions carry the session-start routine as every other session's do
 
-  @D382
+  @D382 @D399
   Scenario: the instruction block tells a worker to skip the session-start routine, in one line
-    Given install has written its instruction block for Codex CLI and for the clients that read GEMINI.md
+    Given install has written its instruction block for Codex CLI and for Antigravity CLI
     When an agent reads the block
     Then the agent reads one line saying that a session whose first message opens with treecontext's line naming it a worker of a run, or saying its instructions were invalid, skips the session-start routine
     And the block's session-start steps are otherwise as before

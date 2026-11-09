@@ -58,22 +58,21 @@ installer registers MCP tools only and says plainly that nothing is
 being captured.
 
 Current status of the shipped scaffolding (`codex/`, `cursor/`,
-`gemini/`, `opencode/`): **unverified**, and the first three still hold
-their own copies of capture logic that predate the charter. Bringing
-each one onto the delegate-to-reference pattern is part of its
-verification pass.
+`opencode/`): **unverified**, and the first two still hold their own
+copies of capture logic that predate the charter. Bringing each one onto
+the delegate-to-reference pattern is part of its verification pass.
+Gemini CLI is retired (D399): its adapter was removed, install no longer
+wires it, and `treecontext uninstall --agent gemini` sweeps what an
+earlier install wrote for it.
 
-Codex CLI and Gemini CLI no longer need theirs to be wired: they keep
-their own hook configuration, so `install --agent codex|gemini
---experimental-capture` writes a **copy of the Claude Code block** there
-— verbatim into `~/.codex/hooks.json` for Codex, whose documented
-contract is Claude Code's (all seven events, `SubagentStart` and
-`SubagentStop` and the four `SessionStart` matchers included), and translated to Gemini's renamed events
-(`BeforeAgent`, `BeforeTool`, `AfterTool`, `PreCompress`; no subagent
-events, and no `AfterAgent` for Claude's `Stop` until a live probe, since
-Gemini treats a `deny` there as a forced retry) in `~/.gemini/settings.json` — running the same
+Codex CLI no longer needs its adapter to be wired: it keeps its own hook
+configuration, so `install --agent codex --experimental-capture` writes a
+**copy of the Claude Code block** there — verbatim into
+`~/.codex/hooks.json`, since Codex's documented contract is Claude Code's
+(all seven events, `SubagentStart` and `SubagentStop` and the four
+`SessionStart` matchers included) — running the same
 `~/.claude/hooks/tc-*` scripts (D154, D208). `treecontext doctor` grades
-each copy against the block this build would write: present and
+the copy against the block this build would write: present and
 consistent, or present and inconsistent with the events it differs on
 and the same command as the way to rewrite it (D161). Codex's `[hooks]`
 table in `~/.codex/config.toml` is graded, cleared by that command and by
@@ -82,7 +81,8 @@ it would fire twice. Ownership is anchored to treecontext's own hooks
 directory, so a `tc-*` hook of yours elsewhere is never touched, and
 `uninstall --agent claude` keeps the scripts while a copy still runs them. A new copying
 client is a row in `CLIENT_HOOK_MODES` and, if its events are renamed, a
-translation table like `GEMINI_EVENT_FOR` (`src/server/installer.ts`).
+translation table from Claude Code's event names to its own
+(`src/server/installer.ts`).
 
 VS Code and Cursor are the as-is clients (`AS_IS_CLIENTS`): they read
 the Claude settings file themselves (VS Code only with

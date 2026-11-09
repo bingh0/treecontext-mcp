@@ -82,7 +82,8 @@ re-decided, and the previous text is in git history.
   vscode adapters stay labeled unverified and unadvertised until each
   earns a live-payload verification pass, and bringing an adapter onto
   the charter's capture semantics is part of that pass; reaffirmed at the
-  re-scope (D109).  (D30, 2026-07-23)
+  re-scope (D109); the gemini adapter left the build when D399 retired
+  Gemini CLI.  (D30, 2026-07-23)
 - **The tree-sitter code index** (`treecontext_code`, the grammars, the
   code backend and hints) — deprecated in full; owner's why: too low level
   for the lane this process operates at, and with million-token contexts
@@ -191,6 +192,15 @@ re-decided, and the previous text is in git history.
   names a slowest acceptable lookup, first moment or export at the
   largest realistic run; security was confirmed as already answered by
   the traceability principle and not re-probed. (D306, 2026-10-31)
+- **Gemini CLI as an agent entry** — archived 2026-11-09, as the
+  Antigravity IDE was: Google deprecated Gemini CLI for Antigravity CLI,
+  so install never detects or wires it, doctor gives it no client row,
+  and its hook adapter and translated copy of the hooks are gone from the
+  build. What stays is cleanup: uninstall's archived sweep takes back the
+  entry, the copied hooks and the wrappers an earlier install wrote, and
+  doctor names them while they are there; `~/.gemini/GEMINI.md` is
+  Antigravity CLI's. Reopens if Google revives Gemini CLI. (D399,
+  2026-11-09)
 
 ## Deferred
 
@@ -363,8 +373,9 @@ re-decided, and the previous text is in git history.
   next hook. (D369 amends D285, 2026-11-01)
 - **Antigravity CLI's capture and its subagent roles** — Antigravity CLI
   is an agent entry for the tools since D383: install writes its MCP
-  entry, four allow rules and the instruction block it shares with
-  Gemini CLI, and doctor gives it a row. What stays out: install writes
+  entry, four allow rules and its instruction block in
+  `~/.gemini/GEMINI.md`, its alone since Gemini CLI was retired (D399),
+  and doctor gives it a row. What stays out: install writes
   no agy hooks and nothing of an agy session is captured, since no
   adapter has earned a live-payload pass and its PostToolUse payload
   carries no tool output; a main agy session registers no self and
@@ -899,6 +910,41 @@ re-decided, and the previous text is in git history.
   surviving row, and the reply says so" (D391, D169), both bound through
   the tools, the real post-tool-use hook and the drain, the survivor read
   with SQL. (D391, D382, D393, D294, D397, D398, 2026-11-09)
+
+- **Gemini CLI retired** — the owner's "go ahead and remove gemini stuff
+  too", after "gemini has been deprecated by google - only agy". It
+  amends four bound scenarios and removes two (direction: rewords and
+  removes). journal-clients: the outline "doctor reports <client> as a
+  client that <mode>" loses its Gemini CLI row ("copies the hooks into
+  its own translated configuration") and gains the tag @D399; "a
+  translated Gemini copy that matches reads present and consistent" and
+  "a translated Gemini copy that drifted reads inconsistent with its
+  remedy" are removed, no copy being written any more; "a teammate on
+  another agent reads and writes through the tools" (@D152), whose Given
+  read "a teammate on Gemini CLI with the treecontext server configured
+  and no hooks", now reads "a teammate on Antigravity CLI …", its promise
+  that no capture is promised kept, and gains @D399. journal-install:
+  "a directory Gemini CLI and Antigravity CLI share is not read as both"
+  (@D383 @D51), its Given "a machine with Antigravity CLI installed and
+  no Gemini CLI", is now "install never wires Gemini CLI, even where its
+  own command and files are there" (@D399 @D51), its Given "a machine
+  with Antigravity CLI installed, and Gemini CLI's command and its own
+  files present", its Thens unchanged. journal-agent-surface: "the
+  instruction block tells a worker to skip the session-start routine, in
+  one line", whose Given read "… for Codex CLI and for the clients that
+  read GEMINI.md", now reads "… for Codex CLI and for Antigravity CLI",
+  and gains @D399. It adds, to bound files: journal-install "install
+  refuses the experimental flag naming Gemini CLI, saying it is retired",
+  "uninstall sweeps what an earlier install wrote for Gemini CLI and
+  keeps the developer's own keys" and "the instruction block in GEMINI.md
+  is Antigravity CLI's, and goes with Antigravity CLI's uninstall";
+  journal-clients "doctor names what an earlier install left for Gemini
+  CLI, and the command it names removes that and nothing else". All are
+  bound in the same change through the real install, uninstall and
+  doctor under a redirected HOME, agy's own `agy mcp list` the other side
+  for agy; no wip entry. The two step definitions the removed scenarios
+  alone used (the translated copy's Given and its doctor-row Then) lose
+  their Gemini alternatives. (D399, 2026-11-09)
 
 ---
 

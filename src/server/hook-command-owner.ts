@@ -1,7 +1,7 @@
 /**
  * What makes a hook command treecontext's own: the one predicate the copy
- * writer, the remover, doctor's consistency check and Gemini CLI's presence
- * test (agents.ts) share, and the names it reads. A leaf: it imports no
+ * writer, the remover, doctor's consistency check and Claude Code's
+ * presence test (agents.ts) share, and the names it reads. A leaf: it imports no
  * treecontext module, so agents.ts can use it without a cycle.
  */
 import { homedir } from 'node:os'
@@ -19,6 +19,9 @@ export const CLAUDE_HOOK_SCRIPTS = [
 export const HOOK_SCRIPTS_DIR_NAME = 'hooks'
 
 export const AGENT_HOOK_WRAPPER_STEMS = {
+  // Gemini CLI is retired (D399): install writes no wrapper of its, and its
+  // stems stay only so uninstall's sweep, doctor's leftover row and the
+  // predicate below still recognise what an earlier build wrote.
   gemini: ['session-start', 'before-agent', 'after-tool', 'pre-compress'],
   vscode: ['session-start', 'user-prompt-submit', 'post-tool-use', 'stop', 'pre-compact'],
   codex: ['session-start', 'user-prompt-submit', 'post-tool-use', 'pre-compact'],

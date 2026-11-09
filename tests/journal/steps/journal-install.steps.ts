@@ -8,13 +8,13 @@ import { spawnCli, spawnNodeTs } from '../../helpers/cli-spawn.js'
 import { seedOrphanSidecar, storesDirIn } from '../../helpers/store-fixtures.js'
 import { writeVerdict } from '../../../src/persistence/backup-verdict.js'
 import { TS_ROOT } from '../proc.js'
-import { claudeSessionStartUnwired, MARKER_START } from '../../../src/server/installer.js'
+import { claudeSessionStartUnwired, MARKER_START, MARKER_END, INSTRUCTIONS_CONTENT } from '../../../src/server/installer.js'
 import { DatabaseSync } from 'node:sqlite'
 import { openNodeSqlite } from '../../../src/persistence/node-sqlite.js'
 import { FlatStore } from '../../../src/flat-store.js'
 import { LeaseClient, DRAIN_LEASE_TTL_SECS } from '../../../src/persistence/leases.js'
 import { MAX_INGEST_ATTEMPTS } from '../../../src/persistence/capture-constants.js'
-import { type InstallWorld, pathWithFakeClaude, setClaudeVersion, tcCli, agentCli, codexCli, codexConfigRead, setFakeCodex, openInstallWorld, treeOf, pathsMentioned, installedCommands, interpreterRunsPackage, isBatchBody, toPosix, mcpLauncherIn, agentConfigPath, fakeGlobalInstall, clientEntry, putAgyOnPath, putGeminiOnPath, markGeminiCliInstalled, agyMcpList, type ClientEntry } from '../install-harness.js'
+import { type InstallWorld, pathWithFakeClaude, setClaudeVersion, tcCli, agentCli, codexCli, codexConfigRead, setFakeCodex, openInstallWorld, treeOf, pathsMentioned, installedCommands, interpreterRunsPackage, isBatchBody, toPosix, mcpLauncherIn, agentConfigPath, fakeGlobalInstall, clientEntry, putAgyOnPath, putGeminiOnPath, markGeminiCliInstalled, layEarlierGeminiInstall, GEMINI_WRAPPER_STEMS, agyMcpList, type ClientEntry } from '../install-harness.js'
 import { CODEX_APPROVALS_FLOOR } from '../../../src/server/codex-client.js'
 import { startEntryAsClient } from '../standins.js'
 import { parse as parseToml, stringify as stringifyToml } from 'smol-toml'
@@ -95,8 +95,7 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
 
   // ── the dry run is the whole plan ───────────────────────────────────
   reg.define(/^a machine with agents detected$/, async (w: InstallWorld) => {
-    await openInstallWorld(w, ['.claude', '.gemini'])
-    markGeminiCliInstalled(w.ihome!)
+    await openInstallWorld(w, ['.claude', '.cursor'])
   })
 
   reg.define(/^install runs with the dry-run flag$/, (w: InstallWorld) => {
@@ -112,7 +111,7 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
     const realHome = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-install-real-')))
     try {
       mkdirSync(join(realHome, '.claude'), { recursive: true })
-      markGeminiCliInstalled(realHome)
+      mkdirSync(join(realHome, '.cursor'), { recursive: true })
       // The world's own files are not install's writes.
       const fixture = new Set(treeOf(realHome).map(f => `/${toPosix(f)}`))
       const real = tcCli({ ...w, ihome: realHome }, ['install', '--yes'])
@@ -453,29 +452,28 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
   // ── an unwritable agent config fails loudly and changes nothing ─────
   reg.define(/^an agent config whose file or directory denies writes$/, async (w: InstallWorld) => {
     // Three agents, the middle one unwritable: isolation is only observable
-    // when there is an agent AFTER the failure to check.
-    await openInstallWorld(w, ['.claude', '.gemini', '.cursor'])
+    // when there is an agent AFTER the failure to check. In the registry's
+    // order: Claude Code, Cursor (blocked), Codex CLI.
+    await openInstallWorld(w, ['.claude', '.cursor', '.codex'])
     // Denied by SHAPE, not by permission bits: a regular FILE sits where the
-    // .gemini DIRECTORY must be, so every write beneath it fails ENOTDIR on
-    // every platform. The agent is still DETECTED (by its command on PATH,
-    // below), so the installer reaches the write and has to report the denial.
+    // .cursor DIRECTORY must be, so every write beneath it fails ENOTDIR on
+    // every platform. The agent is still DETECTED (detection reads that the
+    // path exists), so the installer reaches the write and has to report the
+    // denial.
     //
     // The previous fixture chmod'ed the directory to 0o500, which NTFS does not
     // honour: on Windows the install simply succeeded and this scenario
     // reported "a failed install reported success" — asserting a property of
     // POSIX, not of the installer. Two other cross-platform forms were measured
-    // and rejected: a directory at settings.json is RECOVERED from (the
+    // and rejected: a directory at the config file is RECOVERED from (the
     // installer treats it as corrupt JSON and backs it up — correct
-    // behaviour), and a read-only settings.json is simply replaced, because the
+    // behaviour), and a read-only config file is simply replaced, because the
     // write goes to a temp file and renames. Only removing the directory itself
     // denies the write everywhere. The shape form also drops the root caveat
     // the old fixture carried, since root cannot descend into a file either.
-    rmSync(join(w.ihome!, '.gemini'), { recursive: true, force: true })
-    writeFileSync(join(w.ihome!, '.gemini'), 'not a directory\n')
-    // Gemini CLI is still installed, by its command: since D383 a `.gemini`
-    // with none of Gemini CLI's own files in it is not Gemini CLI, so the
-    // command on PATH is what has install reach the blocked write.
-    putGeminiOnPath(w)
+    // (The blocked agent was Gemini CLI until its retirement, D399.)
+    rmSync(join(w.ihome!, '.cursor'), { recursive: true, force: true })
+    writeFileSync(join(w.ihome!, '.cursor'), 'not a directory\n')
   })
 
   reg.define(/^the failure names the path and the permission problem$/, (w: InstallWorld) => {
@@ -486,19 +484,18 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
     // write yields. Pinning one spelling would make this a POSIX assertion.
     // Windows reports ENOENT for a write beneath a path that is a file; POSIX
     // reports ENOTDIR. The errno spelling is the platform's business — what
-    // this pins is that a denial was REPORTED, and the `.gemini` assertion
+    // this pins is that a denial was REPORTED, and the `.cursor` assertion
     // below plus the non-zero status above pin which write it was.
     expect(w.irun!.out).toMatch(/ENOTDIR|ENOENT|EACCES|EPERM|not a directory|no such file|permission denied/i)
-    expect(w.irun!.out).toMatch(/\.gemini/)
+    expect(w.irun!.out).toMatch(/\.cursor/)
   })
 
   reg.define(/^every other detected agent is still wired completely$/, (w: InstallWorld) => {
     const cfg = JSON.parse(readFileSync(join(w.ihome!, '.claude.json'), 'utf8')) as Record<string, Record<string, unknown>>
     expect(cfg['mcpServers']?.['treecontext'], 'an agent BEFORE the failure lost its wiring').toBeDefined()
-    const cursor = join(w.ihome!, '.cursor', 'mcp.json')
-    expect(existsSync(cursor), 'an agent AFTER the failure never got wired').toBe(true)
-    const cur = JSON.parse(readFileSync(cursor, 'utf8')) as Record<string, Record<string, unknown>>
-    expect(cur['mcpServers']?.['treecontext']).toBeDefined()
+    const codex = agentConfigPath('codex', w.ihome!)
+    expect(existsSync(codex), 'an agent AFTER the failure never got wired').toBe(true)
+    expect(readFileSync(codex, 'utf8'), 'an agent AFTER the failure never got wired').toMatch(/^\[mcp_servers\.treecontext\]/m)
   })
 
   reg.define(/^the install run exits non-zero$/, (w: InstallWorld) => {
@@ -509,15 +506,15 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
   })
 
   reg.define(/^no partial or temporary file is left at the unwritable path$/, (w: InstallWorld) => {
-    // Nothing may have been created beside or beneath the blocker: .gemini is
+    // Nothing may have been created beside or beneath the blocker: .cursor is
     // still exactly the file the fixture wrote, and the atomic temp file the
     // installer names in its error must not survive anywhere in the home.
-    expect(statSync(join(w.ihome!, '.gemini')).isFile(), '.gemini is no longer the blocking file').toBe(true)
-    expect(readFileSync(join(w.ihome!, '.gemini'), 'utf8')).toBe('not a directory\n')
-    // `.gemini` itself is the fixture; anything else named after it — a
+    expect(statSync(join(w.ihome!, '.cursor')).isFile(), '.cursor is no longer the blocking file').toBe(true)
+    expect(readFileSync(join(w.ihome!, '.cursor'), 'utf8')).toBe('not a directory\n')
+    // `.cursor` itself is the fixture; anything else named after it — a
     // sibling, a .bak, the atomic .tmp. the installer names in its error — is
     // a partial write that outlived the failure.
-    const leftovers = treeOf(w.ihome!).filter(f => f !== '.gemini' && (f.startsWith('.gemini') || f.includes('.tmp.')))
+    const leftovers = treeOf(w.ihome!).filter(f => f !== '.cursor' && (f.startsWith('.cursor') || f.includes('.tmp.')))
     expect(leftovers, 'a partial or temp file survived the failed write').toEqual([])
   })
 
@@ -2116,27 +2113,147 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
     expect(blocks[0], 'the block is not in ~/.gemini/GEMINI.md').toBe(1)
   })
 
-  reg.define(/^a machine with Antigravity CLI installed and no Gemini CLI$/, async (w: InstallWorld) => {
+  // ── Gemini CLI retired (D399) ─────────────────────────────────────
+  //
+  // Real install, uninstall and doctor under a redirected HOME. Gemini CLI's
+  // own command (the stand-in `gemini`, which nothing may run) and its own
+  // files are laid out where a scenario means them present, so its absence
+  // from every write is install's doing and not the world's. What an earlier
+  // install wrote for Gemini CLI is a fixture of that build's output
+  // (layEarlierGeminiInstall); agy's own `agy mcp list` is the other side for
+  // agy's wiring.
+  const geminiSettingsFile = (w: InstallWorld): string => join(w.ihome!, '.gemini', 'settings.json')
+  const geminiMd = (w: InstallWorld): string => join(w.ihome!, '.gemini', 'GEMINI.md')
+  const geminiWrappers = (w: InstallWorld): string[] => {
+    const hooksDir = join(w.ihome!, '.claude', 'hooks')
+    return existsSync(hooksDir) ? readdirSync(hooksDir).filter(f => f.startsWith('tc-gemini-')) : []
+  }
+  /** Gemini CLI there by its command and its own files (D399: install reads neither). */
+  const markGeminiPresent = (w: InstallWorld): void => {
+    putGeminiOnPath(w)
+    markGeminiCliInstalled(w.ihome!)
+  }
+  /** The developer's own notes in GEMINI.md, which Antigravity CLI reads. */
+  const DEVELOPER_NOTES = '# My notes\n\nAlways answer in British English.\n'
+  /** Gemini CLI's settings as the developer keeps them: a server, a hook and keys of their own. */
+  const GEMINI_DEVELOPER = {
+    theme: 'GitHub',
+    selectedAuthType: 'oauth-personal',
+    mcpServers: { 'their-server': { command: 'someone-elses-tool' } },
+    hooks: {
+      BeforeTool: [{ matcher: 'run_shell_command', hooks: [{ type: 'command', command: '/usr/local/bin/audit-tool' }] }],
+      SessionStart: [{ matcher: 'startup', hooks: [{ type: 'command', command: '/usr/local/bin/greet' }] }],
+    },
+  }
+
+  reg.define(/^a machine with Antigravity CLI installed, and Gemini CLI's command and its own files present$/, async (w: InstallWorld) => {
     await openInstallWorld(w, [])
     putAgyOnPath(w)
     seedAgyHome(w)
-    // The directory the two share is there, agy's own; the machine's
-    // `gemini`, if it has one, is hidden from the CLI (sandboxedSpawnEnv).
-    expect(existsSync(join(w.ihome!, '.gemini')), 'no ~/.gemini').toBe(true)
-    expect(existsSync(join(w.ihome!, '.gemini', 'settings.json'))).toBe(false)
+    markGeminiPresent(w)
+  })
+
+  reg.define(/^a machine with Gemini CLI's command and its own files present$/, async (w: InstallWorld) => {
+    await openInstallWorld(w, [])
+    markGeminiPresent(w)
+  })
+
+  reg.define(/^install runs with the experimental flag naming Gemini CLI$/, (w: InstallWorld) => {
+    w.irun = tcCli(w, ['install', '--yes', '--agent', 'gemini', '--experimental-capture'])
   })
 
   reg.define(/^no Gemini CLI configuration is written$/, (w: InstallWorld) => {
-    expect(w.irun!.status, w.irun!.out).toBe(0)
-    // The needle fires: install detected and wired agy in this run.
-    expect(w.irun!.stdout).toMatch(/^Detected agents: .*Antigravity CLI/m)
-    // step-lint: allow unearned-absence -- guarded: the line above proves the same run detected the agent beside it, and the D161 Gemini row's world (a ~/.gemini that is Gemini CLI's) writes settings.json
-    expect(w.irun!.stdout).not.toMatch(/Gemini CLI/)
-    expect(existsSync(join(w.ihome!, '.gemini', 'settings.json')), 'install wrote Gemini CLI configuration').toBe(false)
+    // The world means Gemini CLI to be there: its own file and its command.
+    expect(existsSync(join(w.ihome!, '.gemini', 'installation_id')), "the world laid out no Gemini CLI file").toBe(true)
+    expect(existsSync(join(w.iGeminiBin!, process.platform === 'win32' ? 'gemini.cmd' : 'gemini')), 'the world put no gemini on PATH').toBe(true)
+    // The world above holds Gemini CLI's own file and command, which the
+    // build before D399 read as Gemini CLI installed and wired.
+    expect(existsSync(geminiSettingsFile(w)), 'install wrote Gemini CLI configuration').toBe(false)
+    expect(geminiWrappers(w), 'install wrote Gemini CLI hook wrappers').toEqual([])
+    // step-lint: allow unearned-absence -- guarded: the install line it would sit in is asserted present in this same output (Detected agents, or the refusal line)
+    expect(w.irun!.stdout).not.toMatch(/^Gemini CLI:/m)
     const doctor = tcCli(w, ['doctor'])
-    expect(doctor.stdout).toMatch(/^\[\w+\]\s+Antigravity CLI:/m)
-    // step-lint: allow unearned-absence -- the line above proves the same row shape fires for the client beside it in this doctor run, and the D161 outline's Gemini CLI row reads doctor's Gemini CLI row in a world whose ~/.gemini is Gemini CLI's
+    expect(doctor.status, doctor.out).toBe(0)
+    // The needle fires: this doctor run prints rows.
+    expect(doctor.stdout).toMatch(/^\[(ok|warn|err)\]\s+\S/m)
+    // step-lint: allow unearned-absence -- guarded: the line above proves this doctor run prints rows, and the D399 doctor scenario of journal-clients reads a Gemini CLI row where an earlier install's entry is laid
     expect(doctor.stdout).not.toMatch(/^\[\w+\]\s+Gemini CLI:/m)
+  })
+
+  reg.define(/^the developer sees one line saying Gemini CLI is retired, naming Antigravity CLI and the command that removes an old entry$/, (w: InstallWorld) => {
+    const said = w.irun!.out.split('\n').filter(l => /Gemini CLI is retired/.test(l))
+    expect(said, `install said it ${said.length} times:\n${w.irun!.out}`).toHaveLength(1)
+    const line = said[0]!
+    expect(line).toContain('Antigravity CLI')
+    expect(line).toContain('treecontext install --agent agy')
+    expect(line).toContain('treecontext uninstall --agent gemini')
+    expect(line).toContain('--experimental-capture')
+    // A refusal, said as such: no crash trace and no "unknown agent".
+    // step-lint: allow unearned-absence -- the needles are the CLI's own spellings: `[treecontext] Fatal:` is what cli.ts prints for an install error it does not recognise, and `No matching agents found for:` what install prints for an unknown slug, both in src
+    expect(w.irun!.out).not.toMatch(/Fatal|No matching agents/)
+  })
+
+  reg.define(/^Gemini CLI's settings holding the treecontext entry and the copied hooks an earlier install wrote, beside the developer's own server, hook and keys, its hook wrappers, and the instruction block in GEMINI\.md below the developer's notes$/, async (w: InstallWorld) => {
+    await openInstallWorld(w, [])
+    markGeminiPresent(w)
+    layEarlierGeminiInstall(w.ihome!, GEMINI_DEVELOPER, { wrappers: true })
+    writeFileSync(geminiMd(w), `${DEVELOPER_NOTES}\n${INSTRUCTIONS_CONTENT}\n`)
+    // The fixture holds what the Thens read gone.
+    const laid = JSON.parse(readFileSync(geminiSettingsFile(w), 'utf8')) as { mcpServers: Record<string, unknown>; hooks: Record<string, unknown[]> }
+    expect(Object.keys(laid.mcpServers).sort()).toEqual(['their-server', 'treecontext'])
+    expect(Object.keys(laid.hooks).sort()).toEqual(['AfterTool', 'BeforeAgent', 'BeforeTool', 'PreCompress', 'SessionStart'])
+    expect(laid.hooks['SessionStart']!.length, 'the copy holds no SessionStart entry beside the developer\'s').toBeGreaterThan(1)
+    expect(geminiWrappers(w).sort()).toEqual(GEMINI_WRAPPER_STEMS.map(st => `tc-gemini-${st}`).sort())
+    expect(readFileSync(geminiMd(w), 'utf8')).toContain(MARKER_START)
+  })
+
+  reg.define(/^Gemini CLI's settings hold the developer's own server, hook and keys, and nothing of treecontext's$/, (w: InstallWorld) => {
+    expect(w.irun!.stdout).toMatch(/^gemini \(archived\): mcp removed from /m)
+    expect(w.irun!.stdout).toMatch(/^gemini \(archived\): hooks removed from /m)
+    // Exactly what the developer had: every other key, server and hook stays.
+    expect(JSON.parse(readFileSync(geminiSettingsFile(w), 'utf8'))).toEqual(GEMINI_DEVELOPER)
+  })
+
+  reg.define(/^no Gemini CLI hook wrapper is left$/, (w: InstallWorld) => {
+    expect(geminiWrappers(w)).toEqual([])
+  })
+
+  reg.define(/^(?:after the uninstall )?GEMINI\.md holds the developer's notes and no treecontext block$/, (w: InstallWorld) => {
+    const text = readFileSync(geminiMd(w), 'utf8')
+    expect(text).toBe(DEVELOPER_NOTES)
+    expect(text).not.toContain(MARKER_START)
+  })
+
+  reg.define(/^a machine with Antigravity CLI installed, Gemini CLI's own files present, and a GEMINI\.md holding the developer's own notes$/, async (w: InstallWorld) => {
+    await openInstallWorld(w, [])
+    putAgyOnPath(w)
+    seedAgyHome(w)
+    markGeminiPresent(w)
+    writeFileSync(geminiMd(w), DEVELOPER_NOTES)
+  })
+
+  reg.define(/^install runs and then Antigravity CLI is uninstalled$/, (w: InstallWorld) => {
+    const install = tcCli(w, ['install', '--yes'])
+    expect(install.status, install.out).toBe(0)
+    expect(install.stdout).toMatch(/^Detected agents: Antigravity CLI$/m)
+    expect(agyMcpList(w).servers.map(s => s.name), 'agy lists no treecontext server after install').toEqual(['treecontext'])
+    w.iAfterInstall = readFileSync(geminiMd(w), 'utf8')
+    w.irun = tcCli(w, ['uninstall', '--yes', '--agent', 'agy'])
+    expect(w.irun.status, w.irun.out).toBe(0)
+  })
+
+  reg.define(/^after install GEMINI\.md holds the treecontext block once, below the developer's notes$/, (w: InstallWorld) => {
+    const text = w.iAfterInstall!
+    expect(text.split(MARKER_START).length - 1, 'treecontext blocks in GEMINI.md').toBe(1)
+    expect(text.startsWith(DEVELOPER_NOTES.trimEnd()), "the developer's notes are not where they were").toBe(true)
+    const block = new RegExp(`${MARKER_START}[\\s\\S]*?${MARKER_END}`).exec(text)
+    expect(block?.[0], 'the block is not the block install writes').toBe(INSTRUCTIONS_CONTENT)
+    expect(text.indexOf(MARKER_START)).toBeGreaterThan(DEVELOPER_NOTES.trimEnd().length - 1)
+  })
+
+  reg.define(/^Antigravity CLI's own listing of its MCP servers no longer names the treecontext server$/, (w: InstallWorld) => {
+    expect(w.irun!.stdout).toMatch(new RegExp(`^Antigravity CLI: instructions removed from ${geminiMd(w).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'm'))
+    expect(agyMcpList(w).servers.map(s => s.name)).toEqual([])
   })
 
   reg.define(/^Antigravity CLI is wired for the tools$/, (w: InstallWorld) => {
