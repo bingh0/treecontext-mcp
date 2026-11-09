@@ -737,8 +737,12 @@ export class IngestionLoop {
           }
 
           // Exit classification + error tracking (tool results / assistant messages with tool output)
-          if ((row.role === 'assistant' || row.role === 'tool_result') && row.toolName) {
-            const exitType = classifyExit(row.content)
+          // D400: a call's own failure event decides its class before any
+          // text heuristic: it is an error. D401: the batch's account of a
+          // call does not classify why the call did not run, so its row has
+          // no class at all, and neither opens nor resolves an error below.
+          if ((row.role === 'assistant' || row.role === 'tool_result') && row.toolName && row.capturedFrom == null) {
+            const exitType: ExitType = row.outcome === 'failed' || row.outcome === 'interrupted' ? 'error' : classifyExit(row.content)
             meta.exit_type = exitType
 
             // Loop detection
@@ -862,7 +866,7 @@ export class IngestionLoop {
           }
 
           // Error tracking: record errors, attempt resolution
-          if ((row.role === 'assistant' || row.role === 'tool_result') && row.toolName) {
+          if ((row.role === 'assistant' || row.role === 'tool_result') && row.toolName && meta.exit_type !== undefined) {
             const exitType = meta.exit_type as ExitType
             if (exitType === 'error') {
               this.errorTracker.recordError({

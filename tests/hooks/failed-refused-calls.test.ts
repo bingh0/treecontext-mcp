@@ -26,9 +26,9 @@ import { openNodeSqlite } from '../../src/persistence/node-sqlite.js'
 import { FlatStore } from '../../src/flat-store.js'
 import { IngestionLoop } from '../../src/server/ingestion.js'
 import { composeToolEntry, batchCallsOf, failureOutcome } from '../../src/hooks/post-tool-use.js'
-import { stageBatchAccount } from '../../src/hooks/shared.js'
+import { stageBatchAccount, HOOK_DB_TIMEOUT_MS } from '../../src/hooks/shared.js'
 import { gapLedgerPaths } from '../../src/hooks/gap-ledger.js'
-import { TOOL_OUTPUT_PREVIEW_CAP, FULL_TAIL_SEPARATOR } from '../../src/persistence/capture-constants.js'
+import { TOOL_OUTPUT_PREVIEW_CAP, FULL_TAIL_SEPARATOR, INDEX_CAP_TOOL_DEFAULT } from '../../src/persistence/capture-constants.js'
 import { maxSupportedVersion } from '../../src/persistence/migrations/index.js'
 import { readTicket, mintTicket } from '../../src/ticket.js'
 import { workerLaneOf } from '../../src/persistence/leg-registry.js'
@@ -191,6 +191,34 @@ describe('where the batch\'s failures go (D314)', () => {
     expect(stagingRows(path).filter((x) => x['captured_from'] === 'batch')).toEqual([])
   })
 
+  it('with the write lock held elsewhere, a complete batch returns at once with no gap; one with a call to add waits its budget and leaves that call\'s gap (recorded payload, in process)', async () => {
+    const { path } = tmpStore()
+    const s = await open(path)
+    const batch = PARALLEL[8]!
+    const sid = String(batch['session_id'])
+    const calls = batchCallsOf(batch, 3)
+    // Three of the four calls captured by their own events.
+    for (const c of calls.filter((x) => x.toolUseId !== 'toolu_01GNi6XzvVa1DEG9jzB5ePuH')) {
+      s.store.insertStaging({ sessionId: sid, role: 'assistant', content: 'Tool: x', toolName: c.entry.toolName ?? 'x', timestamp: 1, toolUseId: c.toolUseId })
+    }
+    const holder = new DatabaseSync(path)
+    cleanups.push(() => { try { holder.exec('ROLLBACK') } catch { /* gone */ } holder.close() })
+    holder.exec('BEGIN IMMEDIATE')
+    const gaps = (): Array<Record<string, unknown>> => gapLedgerPaths(path).filter(existsSync)
+      .flatMap((p) => readFileSync(p, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l) as Record<string, unknown>))
+    // Complete: only the three captured calls.
+    let t0 = Date.now()
+    const complete = stageBatchAccount(path, sid, calls.filter((x) => x.toolUseId !== 'toolu_01GNi6XzvVa1DEG9jzB5ePuH'))
+    expect(Date.now() - t0, 'a complete batch waited on the write lock').toBeLessThan(1500)
+    expect(complete).toEqual({ staged: [], captured: expect.arrayContaining(['toolu_01ExmFevbQgvcsxnJm65RtcV']) })
+    expect(gaps()).toEqual([])
+    // With the rejected Edit to add: it waits, then its one gap, no other.
+    t0 = Date.now()
+    stageBatchAccount(path, sid, calls)
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(HOOK_DB_TIMEOUT_MS - 1500)
+    expect(gaps().map((g) => g['lost'])).toEqual(["The Edit call toolu_01GNi6XzvVa1DEG9jzB5ePuH the batch's account carried was not staged."])
+  }, 30_000)
+
   it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('a store the hook cannot open for writing is one gap record for the whole batch (recorded payload)', async () => {
     const { dir, path } = tmpStore()
     const s = await open(path)
@@ -318,5 +346,112 @@ describe('the drain: a failed call and the batch\'s account heal nothing and are
       expect(m['_writer']).toBe(ok['_writer'])
       expect(m['_writer_src']).toBe('declared')
     }
+  })
+})
+
+describe('the drain\'s exit class: the client\'s word before any text heuristic (D400, D401)', () => {
+  const FAILED = ['toolu_01FvqNcZYBnuCsHBiwp6o3Mj', 'toolu_01Uce7kGn9KwGNm8bkJRj8rr', 'toolu_01FE2NPXLRRYkKKuSzvA5WpZ', 'toolu_01VZtRcwK5BmD25XRcfhTkLj',
+    'toolu_011BwmKDpXffq2ToBYPufCmD', 'toolu_01QcTUn2pcrYwiMYKGYEP5x5', 'toolu_01CJ3mnjPCSEkJMQDpg4Hs9a', 'toolu_01Cr1UTEpAkRXzhLfE7EFfQW']
+  const REFUSED = ['toolu_011vY6TQFTBGEGvzxAU1gH2z', 'toolu_016tYJEkXhrUAYW9DceAdgQY', 'toolu_01Eh6sZA8krzkd9tRXFMms21', 'toolu_01RdX9DY9gPKMbLdBeuKpre2',
+    'toolu_01GNi6XzvVa1DEG9jzB5ePuH', 'toolu_01M7pR8G3pzPXhq8xQkcfzSY', 'toolu_01VCEYEndqs8NLCYxquxWvuZ']
+
+  it('every recorded failure is an error and every call only the batch names is unclassified (recorded payloads)', async () => {
+    const w = world()
+    await openCaptureWorld(w)
+    replayRecordedSession(w, SERIAL)
+    replayRecordedSession(w, PARALLEL)
+    await drainStaging(w)
+    const rows = rawJournal(w)
+    const classOf = (id: string): unknown => {
+      const r = rows.filter((x) => x.metadata['tool_use_id'] === id)
+      expect(r, id).toHaveLength(1)
+      return r[0]!.metadata['exit_type']
+    }
+    expect(Object.fromEntries(FAILED.map((id) => [id, classOf(id)]))).toEqual(Object.fromEntries(FAILED.map((id) => [id, 'error'])))
+    expect(Object.fromEntries(REFUSED.map((id) => [id, classOf(id)]))).toEqual(Object.fromEntries(REFUSED.map((id) => [id, undefined])))
+    // The vitals tally counts no unclassified row.
+    const vit = (w.store as unknown as { vitals: (at: number) => { trail: { exits: Record<string, number> } } }).vitals(Date.now() / 1000)
+    const tool = rows.filter((r) => typeof r.metadata['tool_name'] === 'string')
+    expect(Object.values(vit.trail.exits).reduce((a, b) => a + b, 0)).toBe(tool.length - REFUSED.length)
+  })
+
+  it('a failed call opens an error; the batch\'s account of a call neither opens nor resolves one (constructed rows)', async () => {
+    const { path } = tmpStore()
+    const s = await open(path)
+    const t = Date.now() / 1000
+    const loop = new IngestionLoop(s, { batchSize: 10 })
+    // A failed MCP call whose text no heuristic reads as an error.
+    s.store.insertStaging({ sessionId: 'cc-e', role: 'assistant', content: 'Tool: mcp__x__y\nInput:\n{}\nOutput:\nprobe says: refused', toolName: 'mcp__x__y', timestamp: t, outcome: 'failed', toolUseId: 'toolu_e1' })
+    await loop.ingestBatch()
+    expect(loop.errors.pendingCount).toBe(1)
+    // The batch's account of a later call of that tool, plain text: no resolution.
+    s.store.insertStaging({ sessionId: 'cc-e', role: 'assistant', content: 'Tool: mcp__x__y\nInput:\n{}\nOutput:\nall good', toolName: 'mcp__x__y', timestamp: t + 1, capturedFrom: 'batch', toolUseId: 'toolu_e2' })
+    await loop.ingestBatch()
+    expect(loop.errors.pendingCount).toBe(1)
+    // A second failure of it, plain text: still an error, never a resolution.
+    s.store.insertStaging({ sessionId: 'cc-e', role: 'assistant', content: 'Tool: mcp__x__y\nInput:\n{"a":1}\nOutput:\nprobe threw', toolName: 'mcp__x__y', timestamp: t + 2, outcome: 'failed', toolUseId: 'toolu_e3' })
+    await loop.ingestBatch()
+    expect(loop.errors.pendingCount).toBe(1)
+    // The call's own success resolves it.
+    s.store.insertStaging({ sessionId: 'cc-e', role: 'assistant', content: 'Tool: mcp__x__y\nInput:\n{"a":2}\nOutput:\nok', toolName: 'mcp__x__y', timestamp: t + 3, toolUseId: 'toolu_e4' })
+    await loop.ingestBatch()
+    expect(loop.errors.pendingCount).toBe(0)
+  })
+})
+
+describe('a batch account naming one call twice (constructed: no recording holds it)', () => {
+  it('stages it once', () => {
+    const batch = { ...PARALLEL[30]! }
+    const call = (batch['tool_calls'] as unknown[])[0]
+    const twice = { ...batch, tool_calls: [call, call] }
+    expect(batchCallsOf(twice, 1).map((c) => c.toolUseId)).toEqual(['toolu_01M7pR8G3pzPXhq8xQkcfzSY'])
+  })
+})
+
+describe('long output through the real hook: one rule for a failure and a success (D400; recorded payloads)', () => {
+  const LONG = recordedSession('2.1.319', 'repo-reading-and-long-output.ndjson')
+  const FAIL_ID = 'toolu_01GaGxfahDkHY7kzrx5mGqdy'
+  const OK_ID = 'toolu_01KWsBjqjekfAv6vNyUA8d58'
+
+  it('the client\'s 10,040-character failure and its 30,000-character success keep the preview, the index boundary and the full tail; the batch adds no second row', async () => {
+    const w = world()
+    await openCaptureWorld(w)
+    replayRecordedSession(w, LONG)
+    await drainStaging(w)
+    const rows = rawJournal(w)
+    const only = (id: string) => {
+      const r = rows.filter((x) => x.metadata['tool_use_id'] === id)
+      expect(r, id).toHaveLength(1)
+      return r[0]!
+    }
+    // The failure: its error text whole after the boundary, the client's own cut marker verbatim.
+    const failure = lineOf(LONG, 'PostToolUseFailure', FAIL_ID)
+    const error = String(failure['error'])
+    expect(error.length).toBe(10_040)
+    expect(error).toContain('\n\n... [20012 characters truncated] ...\n\n')
+    const f = only(FAIL_ID)
+    expect(f.metadata['outcome']).toBe('failed')
+    const fPreview = f.metadata['_preview_len'] as number
+    expect(fPreview).toBeGreaterThan(0)
+    expect(f.content.slice(0, fPreview)).toBe(`Tool: Bash\nInput:\ncommand:\nseq 1 30000; exit 3\ndescription:\n${String((failure['tool_input'] as Record<string, unknown>)['description'])}\nOutput:\n${error.slice(0, TOOL_OUTPUT_PREVIEW_CAP)}...`)
+    expect(f.content.slice(fPreview, fPreview + FULL_TAIL_SEPARATOR.length + 1)).toBe(`\n${FULL_TAIL_SEPARATOR}`)
+    expect(f.content.endsWith(`\nOutput:\n${error}`)).toBe(true)
+    expect(f.metadata['_index_len']).toBe(Math.min(INDEX_CAP_TOOL_DEFAULT, f.content.length))
+    // The success: all 30,000 characters and the client's own file named, as text.
+    const success = lineOf(LONG, 'PostToolUse', OK_ID)
+    const resp = success['tool_response'] as Record<string, unknown>
+    const stdout = String(resp['stdout'])
+    expect(stdout.length).toBe(30_000)
+    const o = only(OK_ID)
+    expect(o.metadata['outcome']).toBeUndefined()
+    const oPreview = o.metadata['_preview_len'] as number
+    expect(o.content.slice(oPreview)).toContain(`\nOutput:\nstdout:\n${stdout}\n`)
+    expect(o.content).toContain(`\npersistedOutputPath:\n${String(resp['persistedOutputPath'])}`)
+    expect(o.content).toContain(`\npersistedOutputSize: ${String(resp['persistedOutputSize'])}`)
+    expect(o.metadata['_index_len']).toBe(Math.min(INDEX_CAP_TOOL_DEFAULT, o.content.length))
+    // The batch's 2 KB account of the success named the call: no second row, no batch row at all.
+    const batchCall = (lineOf(LONG, 'PostToolBatch', OK_ID)['tool_calls'] as Array<Record<string, unknown>>).find((c) => c['tool_use_id'] === OK_ID)!
+    expect(String(batchCall['tool_response']).length).toBeLessThan(3000)
+    expect(rows.filter((r) => r.metadata['captured_from'] === 'batch')).toEqual([])
   })
 })

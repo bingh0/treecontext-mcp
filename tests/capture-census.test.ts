@@ -41,7 +41,7 @@ const TRANSCRIPT = [
 
 function syntheticStore(): DatabaseSync {
   const db = new DatabaseSync(':memory:')
-  db.exec('CREATE TABLE nodes (node_id TEXT PRIMARY KEY, content TEXT NOT NULL, metadata_json TEXT, created_at INTEGER NOT NULL DEFAULT 0)')
+  db.exec("CREATE TABLE nodes (node_id TEXT PRIMARY KEY, content TEXT NOT NULL, metadata_json TEXT, created_at INTEGER NOT NULL DEFAULT 0, source_label TEXT DEFAULT 'auto-capture')")
   db.exec('CREATE TABLE staging (id INTEGER PRIMARY KEY, session_id TEXT, tool_use_id TEXT, processed INTEGER NOT NULL DEFAULT 0)')
   let n = 0
   const node = (content: string, meta: Record<string, unknown>, at: number): void => {
@@ -58,6 +58,10 @@ function syntheticStore(): DatabaseSync {
   // a node for t_late, but far outside the window
   node('Tool: Bash\nInput:\ncommand:\necho late-call\nOutput:\nx', { tool_name: 'Bash' }, 81 + INFER_WINDOW_SECS + 30)
   db.prepare("INSERT INTO staging (session_id, tool_use_id, processed) VALUES (?, 't_staged', 0)").run(S)
+  // A note whose metadata names a lost call's id (any caller can write the
+  // key): not a captured tool row, so never the call's (constructed).
+  db.prepare("INSERT INTO nodes (node_id, content, metadata_json, source_label) VALUES ('note1', 'a note about t_failed', ?, 'manual')")
+    .run(JSON.stringify({ session_id: S, created_at: T0 + 2, tool_use_id: 't_failed', tool_name: 'Bash' }))
   return db
 }
 

@@ -482,8 +482,11 @@ export function stagingHasCallId(db: DatabaseType): boolean {
  * always found here. A call whose own staging write failed left its gap
  * record (D314), and its batch's account is then its entry.
  *
- * One connection, one immediate transaction: the lookup and the inserts
- * see the same staging. On a store below 034 nothing is added, since what
+ * One connection. The lookup is a plain read first, which in WAL never
+ * waits on a writer: a batch whose every call was captured (nearly every
+ * batch) returns there, taking no write lock and recording nothing. Only a
+ * batch with a call to add takes an immediate transaction, looks again
+ * under it and inserts. On a store below 034 nothing is added, since what
  * was captured cannot be told there. A failure before the lookup answered
  * is one gap record for the batch (which of its calls were captured is not
  * known, so none is claimed lost by name); a failure after it is one gap
@@ -501,28 +504,40 @@ export function stageBatchAccount(dbPath: string, sessionId: string | null, call
       return { skipped: 'pre-034' }
     }
     const handle = db
+    const ids = calls.map((c) => c.toolUseId)
+    const capturedOf = (): Set<string> => new Set((handle.prepare(
+      `SELECT tool_use_id FROM staging WHERE session_id = ? AND tool_use_id IN (${ids.map(() => '?').join(', ')})`,
+    ).all(sessionId, ...ids) as Array<{ tool_use_id: string }>).map((r) => r.tool_use_id))
+    // A plain read first: in WAL it never waits on a writer, and nearly
+    // every batch is complete (each call's own event captured it), so the
+    // write lock is taken only for a batch that has a call to add.
+    const seen = capturedOf()
+    missing = calls.filter((c) => !seen.has(c.toolUseId))
+    if (missing.length === 0) {
+      dbg('hook', 'batch account: every call already captured', { dbPath, calls: calls.length })
+      return { staged: [], captured: [...seen] }
+    }
     const namespace = resolveHookNamespace(dbPath, process.ppid, sessionId,
       (a) => nsLeaseLiveFor(handle, a.namespace, a.server_pid, hostname()))
-    const ids = calls.map((c) => c.toolUseId)
     const result = withHookDeadline(handle, hookDeadlineOf(handle) ?? Date.now() + HOOK_DB_TIMEOUT_MS, () => {
       handle.exec('BEGIN IMMEDIATE')
-      const captured = new Set((handle.prepare(
-        `SELECT tool_use_id FROM staging WHERE session_id = ? AND tool_use_id IN (${ids.map(() => '?').join(', ')})`,
-      ).all(sessionId, ...ids) as Array<{ tool_use_id: string }>).map((r) => r.tool_use_id))
-      missing = calls.filter((c) => !captured.has(c.toolUseId))
+      // Again under the lock: what the read saw may have changed.
+      const captured = capturedOf()
+      const adding = calls.filter((c) => !captured.has(c.toolUseId))
+      missing = adding
       const insert = handle.prepare(
         `INSERT INTO staging (session_id, role, content, tool_name, timestamp, priority, processed, created_at,
            index_len, preview_len, namespace, agent_id, agent_type, kind, tool_use_id, outcome, captured_from)
          VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      for (const c of missing) {
+      for (const c of adding) {
         const e = c.entry
         insert.run(sessionId, e.role, e.content, e.toolName ?? null, e.timestamp, e.priority ?? 3, Date.now() / 1000,
           e.indexLen ?? null, e.previewLen ?? null, e.namespace !== undefined ? e.namespace : namespace,
           e.agentId ?? null, e.agentType ?? null, e.kind ?? null, c.toolUseId, e.outcome ?? null, e.capturedFrom ?? null)
       }
       handle.exec('COMMIT')
-      return { staged: missing.map((c) => c.toolUseId), captured: [...captured] }
+      return { staged: adding.map((c) => c.toolUseId), captured: [...captured] }
     })
     dbg('hook', 'batch account staged', { dbPath, staged: result.staged.length, captured: result.captured.length })
     return result

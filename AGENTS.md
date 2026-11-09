@@ -357,7 +357,14 @@ node dist/server/cli.js doctor      # after a build
   drain's heals, the status publisher, the stop hook's settle and the
   staged cap-refusal read all skip a row with either mark (D400, D401). A
   hook meeting a store below 034 drops the three columns (the tier walk)
-  and the batch adds nothing there
+  and the batch adds nothing there. The three keys are capture marks read
+  from those staging columns, never trusted from node metadata: a
+  `treecontext_insert` caller may put any of them on a note (an `outcome`
+  is an ordinary word), so no gate reads them off a node, and the capture
+  census counts an id only on a captured tool row (`auto-capture` with a
+  `tool_name`). A failed call's drained row is the `error` exit class
+  whatever its text; a batch row has no class and opens or resolves no
+  error
 - Platform events still stage (hook → staging → drain). The hooks door
   is the one place a hook writes journal rows directly: a leg's own rows
   (registration, the run's open, first moment, send-back, summary),

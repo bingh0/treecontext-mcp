@@ -158,17 +158,18 @@ upgrade changes:
   call carries the client's id for it and how it ended) the first time a
   beta.4 server opens it, after the automatic copy of the store as it was,
   `treecontext.db.pre-migration-v32.bak` beside it. Both migrations are
-  additive and change no existing row. Until a beta.4 server has opened
-  the store, its hooks capture a failed call as before the upgrade,
-  unmarked, and add nothing from the batch's account.
-- It wires two more Claude Code hook events, `PostToolUseFailure` and
-  `PostToolBatch`, so a failed call and a call the client resolved without
-  running it are journaled; until you re-run install, doctor's "capture
-  events" row names them, with `treecontext install --force --agent
-  claude`. `0.1.0-beta.3.1` then refuses the
+  additive and change no existing row. `0.1.0-beta.3.1` then refuses the
   store (`SchemaVersionError`: the store is newer than the build), so going
   back to beta.3.1 means restoring that copy, without what was written
   after the upgrade.
+- It wires two more Claude Code hook events, `PostToolUseFailure` and
+  `PostToolBatch`, so a failed call and a call the client resolved without
+  running it are journaled (before beta.4 neither was journaled at all);
+  until you re-run install, doctor's "capture events" row names them, with
+  `treecontext install --force --agent claude`. Between the re-run and the
+  first time a beta.4 server opens the store, a failed call is journaled
+  without its `outcome` and `tool_use_id` marks, and a call the client
+  resolved without running it is not journaled.
 - It writes tool approvals into Claude Code, Codex CLI and Antigravity CLI
   (§3), so a headless worker can read and write the journal. The way back:
   `treecontext config tool-approvals off|on [--agent claude|codex|agy]`, or
@@ -720,7 +721,7 @@ a test result.
 
 | Client | Hook events it offers | Documentation checked | Mode | Status |
 | --- | --- | --- | --- | --- |
-| Claude Code | SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, PostToolUseFailure, PostToolBatch, PermissionRequest, Stop, PreCompact, SubagentStart, SubagentStop, SessionEnd, and more | hooks docs 2026-09-23; live probe 2026-09-25 on release 2.1.282 | reads the Claude settings file as-is (it owns `~/.claude/settings.json`, where install writes the hooks: SessionStart, UserPromptSubmit, PostToolUse, PostToolUseFailure, PostToolBatch, Stop, PreCompact, SubagentStart, SubagentStop; reinstall to add the two subagent hooks and the two failed and refused call hooks; PostToolUseFailure and PostToolBatch recorded live on 2.1.319, 2026-11-09) | verified live |
+| Claude Code | SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, PostToolUseFailure, PostToolBatch, PermissionRequest, Stop, PreCompact, SubagentStart, SubagentStop, SessionEnd, and more | hooks docs 2026-09-23; live probe 2026-09-25 on release 2.1.282; PostToolUseFailure and PostToolBatch rest on sessions recorded on release 2.1.319, 2026-11-09 (tests/fixtures/claude-code-hooks) | reads the Claude settings file as-is (it owns `~/.claude/settings.json`, where install writes the hooks: SessionStart, UserPromptSubmit, PostToolUse, PostToolUseFailure, PostToolBatch, Stop, PreCompact, SubagentStart, SubagentStop; reinstall to add the two subagent hooks and the two failed and refused call hooks) | verified live |
 | Codex CLI | SessionStart, SessionEnd, UserPromptSubmit, PreToolUse, PostToolUse, PermissionRequest, PreCompact, PostCompact, SubagentStart, SubagentStop, Stop, Interrupt | learn.chatgpt.com/docs/hooks (no date shown), checked 2026-10-05 | copies the hooks into its own configuration (`~/.codex/hooks.json` or `[hooks]` in `~/.codex/config.toml`, repo `.codex/hooks.json`; same JSON contract as Claude Code) | documented only |
 | VS Code (Copilot agent mode) | SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, PreCompact, SubagentStart, SubagentStop, Stop | code.visualstudio.com/docs/copilot/customization/hooks and /docs/agents/reference/hooks-reference (dated 2026-09-30) | reads the Claude settings file when its Claude-hooks setting is on (`chat.useClaudeHooks`, off by default; read as-is, matcher values ignored; also reads `.github/hooks/*.json`) | documented only |
 | Cursor | sessionStart, sessionEnd, beforeSubmitPrompt, preToolUse, postToolUse, stop, preCompact, subagentStart, subagentStop, and more | cursor.com/docs/agent/hooks and /docs/reference/third-party-hooks (no date shown), checked 2026-10-05 | reads the Claude settings file by default (as-is, through its Include Third-Party configs setting) | documented only |
@@ -731,7 +732,11 @@ Codex CLI's copy is the Claude Code block verbatim, `PostToolUseFailure`
 and `PostToolBatch` included. Codex CLI 0.167.0 does not have those two
 events and skips them without a warning (checked 2026-11-09 through its
 app server's `hooks/list`), so a failed call, or one Codex refused before
-running it, is not captured there.
+running it, is not captured there. VS Code and Cursor read the Claude
+settings file, the two events included; how either treats
+`PostToolUseFailure` and `PostToolBatch` (whether it fires them, and with
+what payload) has not been checked, so their capture of a failed or refused
+call is unknown.
 
 Gemini CLI left the matrix on 2026-11-09, archived: Google deprecated it
 for Antigravity CLI, and treecontext no longer wires it.
@@ -824,6 +829,13 @@ resolved without running it (its input rejected, permission denied,
 blocked by a hook) is captured from the client's account of the batch
 (marked `captured_from` `batch`, with what the client told the model).
 Every captured call carries the client's id for it as `tool_use_id`.
+"In full" means in full as the client hands it over: Claude Code 2.1.319
+gives a hook at most the first 30,000 characters of a shell command's
+output, and for a successful call the entry also holds the path and size
+of the client's own file with the rest (`persistedOutputPath`,
+`persistedOutputSize`); a failed command's output arrives as about 10,000
+characters, its middle cut by the client with its own marker. treecontext
+does not read the client's file.
 
 **So treat the journal as being as sensitive as the terminal it watched.**
 If a command printed a token, an environment dump or a customer record,

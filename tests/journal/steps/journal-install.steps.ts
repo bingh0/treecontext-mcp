@@ -721,9 +721,9 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
       delete settings.hooks[ev]
       writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n')
       const doc = tcCli(w, ['doctor']).stdout.split('\n')
-      const i = doc.findIndex((l) => /capture events: not wired: wired by a build from before this event was added/.test(l))
+      const i = doc.findIndex((l) => /capture events: not wired: /.test(l))
       expect(i, `doctor did not name the old wiring without ${ev}:\n${doc.join('\n')}`).toBeGreaterThanOrEqual(0)
-      const named = doc[i]!.split('added: ')[1]!.split('; ').map((item) => item.split(' (')[0])
+      const named = doc[i]!.split('not wired: ')[1]!.split('; ').map((item) => item.split(' (')[0])
       expect(named, `the row for a settings file without ${ev}`).toEqual([ev])
       const fix = /^\s+fix: (treecontext install --force --agent claude)$/.exec(doc[i + 1] ?? '')
       expect(fix, `the row names no wiring command:\n${doc.join('\n')}`).not.toBeNull()

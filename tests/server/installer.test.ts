@@ -1350,7 +1350,7 @@ describe('upsertClaudeSettingsHooks', () => {
     delete older['hooks']!['PostToolUseFailure']
     delete older['hooks']!['PostToolBatch']
     expect(claudeCaptureEventsUnwired(older)).toEqual(['PostToolUseFailure', 'PostToolBatch'])
-    expect(claudeUnwiredEventsDetail(['PostToolUseFailure', 'PostToolBatch'])).toMatch(/^wired by a build from before these events were added: PostToolUseFailure \(a tool call that fails is not journaled\); PostToolBatch \(/)
+    expect(claudeUnwiredEventsDetail(['PostToolUseFailure', 'PostToolBatch'])).toMatch(/^PostToolUseFailure \(a tool call that fails is not journaled\); PostToolBatch \(/)
     expect(claudeCaptureEventsUnwired({})).toEqual([])
     expect(claudeCaptureEventsUnwired({ hooks: { PostToolUse: [{ hooks: [{ type: 'command', command: 'other-tool' }] }] } })).toEqual([])
   })
@@ -1896,8 +1896,9 @@ describe('agent registry', () => {
   it('Claude Code has hooks defined', () => {
     const claude = getAgent('claude')!
     expect(claude.hooks).toBeDefined()
-    expect(claude.hooks!.events).toContain('SessionStart')
-    expect(claude.hooks!.events).toContain('PreCompact')
+    // The events are the block install writes (claudeHooksBlock), never a
+    // list on the agent's entry.
+    expect(claude.hooks!.format).toBe('claude-settings')
   })
 
   it('Gemini CLI is no agent of the table, and its settings file is an archived sweep target (D399)', () => {

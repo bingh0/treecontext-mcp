@@ -25,7 +25,7 @@ import { CHECKPOINT_CAP_CHARS, OVER_CAP_KEY, charactersOf, checkpointCapRefusal 
 import { composeFirstMessage, composeSendBackMessage, firstMomentMetadata, sendBackReason, overCapWords, STATE_NOT_HISTORY_LINE } from '../src/first-moment.js'
 import { keyLookupReply } from '../src/key-lookup.js'
 import { sendBackDecision } from '../src/ticket-door.js'
-import { owesSendBack } from '../src/hooks/subagent-stop.js'
+import { owesSendBack, settleFromStagedEchoes } from '../src/hooks/subagent-stop.js'
 import { parseToolResult } from './helpers/mcp-result.js'
 
 let tmpDir: string
@@ -631,6 +631,59 @@ describe('a refusal is not an insert (M11)', () => {
     expect(sweeps()).toBe(before)
     await s.writeCheckpoint(text(20_000, 'B'), { run: 'r1', key: 'login-form', leg: legs['builder']! })
     expect(sweeps()).toBe(before + 1)
+    await s.close()
+  })
+})
+
+/** D400, D401: only a call's own successful echo is evidence. Each staged
+ *  row below is constructed (labelled so): a failed treecontext_insert
+ *  whose error text quotes the id the gate would act on, and the batch's
+ *  account of a call quoting it the same way. Neither may settle a key or
+ *  resolve a refusal; the same text as the call's own echo does. */
+describe('the staged-echo readers read only a call\'s own successful echo (D400, D401)', () => {
+  const marks: Array<{ name: string; extra: Record<string, unknown> }> = [
+    { name: 'a failed call', extra: { outcome: 'failed', toolUseId: 'toolu_constructed_f' } },
+    { name: 'the batch\'s account', extra: { capturedFrom: 'batch', toolUseId: 'toolu_constructed_b' } },
+  ]
+  const stage = (s: FlatStore, agent: string, output: string, extra: Record<string, unknown>): void => {
+    s.store.insertStaging({
+      sessionId: 's1', role: 'assistant', toolName: 'mcp__treecontext__treecontext_insert', timestamp: Date.now() / 1000,
+      content: `Tool: mcp__treecontext__treecontext_insert\nInput:\n{}\nOutput:\n${output}`, agentId: agent, agentType: agent.slice(2), ...extra,
+    })
+  }
+
+  it('the cap refusal\'s staged read (cap-refusals.ts) resolves nothing from them, and resolves from the own echo', async () => {
+    const { s } = await withLegs(['builder', 'reviewer'])
+    const { c, close } = await connect(s)
+    const a = await put(c, text(20_000, 'A'))
+    await close()
+    expect(a.r['writer_pending']).toBe(true)
+    for (const m of marks) stage(s, 'a-builder', replyText(a.r), m.extra)
+    const read = (): number => {
+      const probe = new DatabaseSync(path())
+      try { return resolveStagedCapRefusals(probe as never, 's1') } finally { probe.close() }
+    }
+    expect(read()).toBe(0)
+    expect(refusedOf('s1', '')).toEqual([expect.objectContaining({ src: 'pending' })])
+    stage(s, 'a-builder', replyText(a.r), {})
+    expect(read()).toBe(1)
+    await s.close()
+  })
+
+  it('the stop hook\'s settle from staged echoes (subagent-stop.ts) settles no key from them, and settles from the own echo', async () => {
+    const { s, legs } = await withLegs(['builder'])
+    const target = await s.insert('a note under the run\'s key', { metadata: { run: 'r1', key: 'login-form' } })
+    const reply = JSON.stringify([{ type: 'text', text: JSON.stringify({ node_id: target.nodeId, deduplicated: false }, null, 2) }])
+    for (const m of marks) stage(s, 'a-builder', reply, m.extra)
+    const settle = (): number => {
+      const db = new DatabaseSync(path())
+      try { return settleFromStagedEchoes(db as never, legs['builder']!) } finally { db.close() }
+    }
+    expect(settle()).toBe(0)
+    expect(regLeg(legs['builder']!)!.keySrc).toBe('inferred')
+    stage(s, 'a-builder', reply, {})
+    expect(settle()).toBe(1)
+    expect(regLeg(legs['builder']!)!.keySrc).toBe('own')
     await s.close()
   })
 })

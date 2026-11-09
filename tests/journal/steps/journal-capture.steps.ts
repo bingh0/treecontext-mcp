@@ -66,6 +66,7 @@ function ftsRowsMatching(w: CaptureWorld, token: string): string[] {
 const RECORDED_VERSION = '2.1.319'
 const SERIAL = 'serial-failures-and-denials.ndjson'
 const PARALLEL = 'parallel-batch-hook-block-mcp-errors-subagent.ndjson'
+const REPO_READING = 'repo-reading-and-long-output.ndjson'
 /** The parallel session's first batch: Bash `echo par-ok-slow-hook`
  *  (succeeds), Bash `ls /nonexistent-par` (exit 2), an Edit rejected for
  *  its input, and a ToolSearch (succeeds). */
@@ -544,38 +545,36 @@ export const captureDefiner = (reg: Registry<CaptureWorld>): void => {
   })
 
   // ── every tool invocation is journaled, even the boring ones ────────
-  reg.define(/^a session that runs ls, grep, and file reads alongside substantive work$/, async (w: CaptureWorld) => {
+  // A recorded session (D402): ls through Bash, Glob, Grep and Read beside
+  // shell work, one of whose commands fails after a long output, replayed
+  // through the hooks install wires. The census is the client's own: every
+  // call any PostToolBatch of the session names.
+  reg.define(/^a session that runs ls, grep, and file reads alongside substantive work$/, async (w: ReplayWorld) => {
     await openCaptureWorld(w)
-    spawnHook(w, 'post-tool-use', bashPayload(w, 'npm test', 'ok'))
-    spawnHook(w, 'post-tool-use', {
-      hook_event_name: 'PostToolUse', permission_mode: 'default',
-      tool_name: 'LS', tool_input: { path: w.proj }, tool_response: '- transcript.jsonl\n- .git/',
-    })
-    spawnHook(w, 'post-tool-use', {
-      hook_event_name: 'PostToolUse', permission_mode: 'default',
-      tool_name: 'Grep', tool_input: { pattern: 'retentionSweep', path: 'src' },
-      tool_response: 'src/flat-store.ts:961: retentionSweep',
-    })
-    spawnHook(w, 'post-tool-use', {
-      hook_event_name: 'PostToolUse', permission_mode: 'default',
-      tool_name: 'Read', tool_input: { file_path: join(w.proj!, 'README.md') },
-      tool_response: '     1\t# temp project',
-    })
+    const events = recordedSession(RECORDED_VERSION, REPO_READING)
+    const tools = new Set(events.filter((e) => e['hook_event_name'] === 'PreToolUse').map((e) => String(e['tool_name'])))
+    expect([...tools].sort(), 'the recording is not the session the Given names').toEqual(['Bash', 'Glob', 'Grep', 'Read'])
+    w.recorded = [{ events }]
+    w.replays = [replayRecordedSession(w, events)]
   })
-  reg.define(/^every call's tool name and input are in the journal$/, (w: CaptureWorld) => {
-    const rows = rawJournal(w)
-    const expectCall = (tool: string, needle: string) => {
-      const r = rows.find((x) => x.metadata['tool_name'] === tool)
-      expect(r, `no journal entry for ${tool} — an invocation was filtered out`).toBeTruthy()
-      expect(r!.content).toContain(`Tool: ${tool}`)
-      // D270: the tool input is journaled as its text, so a path (a
-      // Windows one included) arrives exactly as the client sent it.
-      expect(r!.content).toContain(needle)
+  reg.define(/^every call's tool name and input are in the journal$/, (w: ReplayWorld) => {
+    const events = w.recorded![0]!.events
+    const calls = events.filter((e) => e['hook_event_name'] === 'PostToolBatch')
+      .flatMap((e) => e['tool_calls'] as Array<Record<string, unknown>>)
+    expect(calls.length, 'the session\'s batches name no call').toBeGreaterThan(0)
+    expect(new Set(calls.map((c) => c['tool_use_id'])).size).toBe(calls.length)
+    for (const c of calls) {
+      const id = String(c['tool_use_id'])
+      const row = onlyEntryOf(w, id)
+      expect(row.metadata['tool_name'], id).toBe(c['tool_name'])
+      expect(row.content.startsWith(`Tool: ${String(c['tool_name'])}\n`), id).toBe(true)
+      // D270: the input as its text, each field as the client sent it.
+      const out = row.content.indexOf('\nOutput:')
+      const input = out > 0 ? row.content.slice(0, out) : row.content
+      for (const v of Object.values(c['tool_input'] as Record<string, unknown>)) {
+        expect(input, `${id}: the input lacks ${String(v)}`).toContain(String(v))
+      }
     }
-    expectCall('Bash', 'npm test')
-    expectCall('LS', w.proj!)
-    expectCall('Grep', 'retentionSweep')
-    expectCall('Read', join(w.proj!, 'README.md'))
   })
 
   // ── D400: a tool call that fails is journaled ───────────────────────
@@ -675,7 +674,21 @@ export const captureDefiner = (reg: Registry<CaptureWorld>): void => {
       expect(row.metadata['tool_use_id'], c.what).toBe(c.id)
       // It says what the client said and does not classify why.
       expect(row.metadata['outcome'], c.what).toBeUndefined()
+      // D401: as its writer's: a subagent's batch names the subagent, and
+      // the entry is stamped with it; the main agent's names none.
+      const batch = w.recorded!.flatMap((r) => r.events).find((e) => e['hook_event_name'] === 'PostToolBatch'
+        && (e['tool_calls'] as Array<Record<string, unknown>>).some((t) => t['tool_use_id'] === c.id))!
+      if (typeof batch['agent_id'] === 'string') {
+        expect(row.metadata['_writer_agent_id'], c.what).toBe(batch['agent_id'])
+        expect(row.metadata['_writer'], c.what).toBe(batch['agent_type'])
+        expect(row.metadata['_writer_src'], c.what).toBe('hook')
+      } else {
+        expect(row.metadata['_writer_agent_id'], c.what).toBeUndefined()
+      }
     }
+    // The recording holds a subagent's refused calls, so the clause is lit.
+    expect(w.calls!.filter((c) => typeof onlyEntryOf(w, c.id).metadata['_writer_agent_id'] === 'string').map((c) => c.id).sort())
+      .toEqual(['toolu_01M7pR8G3pzPXhq8xQkcfzSY', 'toolu_01VCEYEndqs8NLCYxquxWvuZ'])
   })
 
   // ── D401: a call is journaled once, whichever events carried it ──────

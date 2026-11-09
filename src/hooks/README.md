@@ -18,7 +18,14 @@ for the three-layer model.
   as the Output, `captured_from` `batch`, in one immediate transaction;
   nothing on a store below schema 034; a failure is one gap record for the
   batch before the lookup answered, one per call it was adding after,
-  D401); on the
+  D401; the lookup is a plain read, and only a batch with a call to add
+  takes the write lock). What the hook stages is what the client hands
+  it: Claude Code 2.1.319 gives at most the first 30,000 characters of a
+  shell command's output (a successful call's payload also names the
+  client's own file with all of it, `persistedOutputPath` and
+  `persistedOutputSize`, written into the entry as text, never read) and
+  about 10,000 characters of a failed one's, its middle cut by the
+  client; on the
   Agent tool's result (`tool_name` `Agent`, or `Task` before the rename),
   when the subagent it spawned (`tool_response.agentId`) was a leg, adds
   one line beside the result as `hookSpecificOutput.additionalContext`:

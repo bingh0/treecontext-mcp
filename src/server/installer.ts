@@ -2020,10 +2020,11 @@ const CLAUDE_EVENT_MISSED: Readonly<Record<string, string>> = {
   SessionStart: 'no session is registered and no re-orientation packet is shown',
 }
 
-/** Doctor's words for the unwired events: each event and what is missed. */
+/** Doctor's words for the unwired events: each event and what is missed,
+ *  and no guess at why (an older build, or a hand edit, D402). */
 export function claudeUnwiredEventsDetail(events: string[]): string {
   const what = events.map((e) => (CLAUDE_EVENT_MISSED[e] ? `${e} (${CLAUDE_EVENT_MISSED[e]})` : e))
-  return `wired by a build from before ${events.length === 1 ? 'this event was' : 'these events were'} added: ${what.join('; ')}`
+  return what.join('; ')
 }
 
 /**

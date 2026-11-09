@@ -22,8 +22,6 @@ export type ConfigFormat =
   | 'toml-codex'       // [mcp_servers.name]
 
 export interface HookDef {
-  /** Hook events to register. */
-  events: string[]
   /** Path to the agent's hook settings file (platform-keyed). */
   settingsPath: Partial<Record<Platform, string>>
   /** Hook settings format. */
@@ -130,7 +128,6 @@ export const AGENTS: AgentDefinition[] = [
       win32: claudeUserConfigPath(),
     },
     hooks: {
-      events: ['SessionStart', 'PreCompact'],
       settingsPath: {
         linux: join(home(), '.claude', 'settings.json'),
         darwin: join(home(), '.claude', 'settings.json'),
@@ -155,7 +152,6 @@ export const AGENTS: AgentDefinition[] = [
       win32: join(appData(), 'Code', 'User', 'mcp.json'),
     },
     hooks: {
-      events: ['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'PreCompact'],
       settingsPath: {
         linux: join(home(), '.copilot', 'hooks', 'treecontext.json'),
         darwin: join(home(), '.copilot', 'hooks', 'treecontext.json'),
@@ -180,7 +176,6 @@ export const AGENTS: AgentDefinition[] = [
       win32: join(home(), '.cursor', 'mcp.json'),
     },
     hooks: {
-      events: ['sessionStart', 'beforeSubmitPrompt', 'postToolUse', 'preCompact'],
       settingsPath: {
         linux: join(home(), '.cursor', 'hooks.json'),
         darwin: join(home(), '.cursor', 'hooks.json'),
@@ -205,7 +200,6 @@ export const AGENTS: AgentDefinition[] = [
       win32: join(home(), '.codex', 'config.toml'),
     },
     hooks: {
-      events: ['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'PreCompact'],
       settingsPath: {
         linux: join(home(), '.codex', 'hooks.json'),
         darwin: join(home(), '.codex', 'hooks.json'),

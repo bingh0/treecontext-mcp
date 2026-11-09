@@ -6,9 +6,14 @@ hook event the client fired, one JSON payload per line, in the order the
 client fired them, exactly as the client wrote it to a hook's stdin. A dump
 hook was registered on every event name; nothing here was written by hand.
 
-The only edits are path substitutions made after recording, so no machine or
-account name is committed: the probe's working directory reads `/probe/work`
-and the home directory `/home/dev`. Session ids, prompt ids, agent ids and
+The only edits are substitutions made after recording, so no machine,
+account or person is committed: the probe's working directory reads
+`/probe/work`, the home directory `/home/dev` (and the account name `dev`
+wherever a command printed it), and the one email address the
+client's own compaction summary quoted reads `user@example.com`. Free text the
+model wrote (a compaction summary, a final message) is read before it is
+committed, and `npm run release-scan` is run over it: a path scrub alone
+missed that address. Session ids, prompt ids, agent ids and
 tool-call ids are the client's own.
 
 These files are the ground truth for any charter step that says an event is
@@ -58,6 +63,17 @@ run with one Bash call, then `claude -p '/compact' --resume <session>`:
 
 All under the one session id. No UserPromptSubmit and no Stop fired for the
 `/compact` run.
+
+`repo-reading-and-long-output.ndjson` (model: haiku), one call per turn:
+
+| Call | What it shows |
+| --- | --- |
+| Bash `ls -la`, Glob `src/*.ts`, Grep `retentionSweep`, Read `README.md`, Bash `echo building && echo built` | the ordinary repo-reading calls of a working session, each PreToolUse, PostToolUse, PostToolBatch; Glob, Grep and Read hand their result over as an object, not a string (this client has no `LS` tool) |
+| Bash `seq 1 30000; exit 3` (fails after 168,894 bytes of output) | PostToolUseFailure's `error` is 10,040 characters: the client keeps the head and the tail of the first 30,000 characters and cuts the middle (`... [20012 characters truncated] ...`); nothing in the payload points to the rest |
+| Bash `seq 1 30000` (succeeds, same output) | PostToolUse's `tool_response.stdout` is the first 30,000 characters; `persistedOutputPath` and `persistedOutputSize` name the file under the client's project directory where it kept all 168,894 bytes; PostToolBatch's account of the call is a 2 KB preview naming that file |
+
+So a hook never receives more than 30,000 characters of a shell command's
+output from this client, and no more than about 10,000 of a failed one's.
 
 What these sessions do not hold: a developer's interrupt (`is_interrupt`
 true), an interactive denial, an auto-mode classifier denial

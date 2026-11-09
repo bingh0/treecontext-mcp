@@ -410,6 +410,8 @@ export function batchCallsOf(input: Record<string, unknown>, at: number): BatchC
     const toolName = call['tool_name']
     const toolUseId = callIdOf(call['tool_use_id'])
     if (typeof toolName !== 'string' || toolName === '' || !toolUseId) continue
+    // A call is journaled once: an id the account names twice is one call.
+    if (out.some((b) => b.toolUseId === toolUseId)) continue
     const e = composeToolEntry(toolName, call['tool_input'], call['tool_response'])
     out.push({
       toolUseId,

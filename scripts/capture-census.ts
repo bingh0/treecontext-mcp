@@ -249,12 +249,16 @@ export function exitCodeOf(rows: CensusRow[], stagedIsPresent = true): number {
 
 export function storeViewOf(db: DatabaseSync): StoreView {
   const hasStagingId = (db.prepare('PRAGMA table_info(staging)').all() as Array<{ name: string }>).some((c) => c.name === 'tool_use_id')
-  const byId = db.prepare("SELECT 1 FROM nodes WHERE json_extract(metadata_json, '$.tool_use_id') = ? LIMIT 1")
+  // Only a captured tool row counts as the call's (D400, D401): the drain's
+  // auto-capture with a tool name. A note's metadata can carry any key, a
+  // `tool_use_id` included, and is never the client's account of a call.
+  const byId = db.prepare("SELECT 1 FROM nodes WHERE json_extract(metadata_json, '$.tool_use_id') = ? AND source_label = 'auto-capture' "
+    + "AND json_extract(metadata_json, '$.tool_name') IS NOT NULL LIMIT 1")
   const staged = hasStagingId ? db.prepare('SELECT 1 FROM staging WHERE tool_use_id = ? AND processed = 0 LIMIT 1') : null
   const nodes = db.prepare(
     "SELECT content, json_extract(metadata_json, '$.tool_use_id') AS tool_use_id, " +
     "COALESCE(json_extract(metadata_json, '$.created_at'), created_at) AS at FROM nodes " +
-    "WHERE json_extract(metadata_json, '$.session_id') = ? AND json_extract(metadata_json, '$.tool_name') = ?")
+    "WHERE json_extract(metadata_json, '$.session_id') = ? AND json_extract(metadata_json, '$.tool_name') = ? AND source_label = 'auto-capture'")
   const cache = new Map<string, NodeView[]>()
   return {
     hasNodeWithId: (id) => byId.get(id) !== undefined,

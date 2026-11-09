@@ -323,8 +323,10 @@ function threadsPane(v: JournalVitals, storeName: string): PaneBlob {
  * The trail pane: what is the captured journal actually made of?
  *
  * COMPOSITION, NOT HEALTH — and the distinction is the reason this pane is
- * almost entirely dim. `exit_type` comes from `classifyExit`, which matches
- * substrings in tool OUTPUT: "failed", "exception", "enoent", "cannot
+ * almost entirely dim. `exit_type` is `error` for a call the client said
+ * failed (D400), absent for a call only the batch's account names (D401,
+ * so it is not counted here), and otherwise comes from `classifyExit`,
+ * which matches substrings in tool OUTPUT: "failed", "exception", "enoent", "cannot
  * find". A grep whose results mention an error is filed as an error; so is
  * a test run that prints "0 failed". Rendering that as a red defect rate
  * would put a number on screen that looks like a measurement and is a word

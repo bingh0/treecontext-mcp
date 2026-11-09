@@ -231,7 +231,8 @@ export interface JournalVitals {
    * silently falling out of a total.
    */
   trail: {
-    /** Tool events by `metadata.exit_type`. */
+    /** Tool events by `metadata.exit_type` (a row with none, the batch's
+     *  account of a call, D401, is not counted). */
     exits: Record<string, number>
     /** User turns by `metadata.intent`. */
     intents: Record<string, number>
