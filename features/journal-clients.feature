@@ -166,7 +166,11 @@ Feature: Other clients — a dated matrix and a doctor that knows each one
 
     Examples:
       | state                                                   | say                                                                                                                                                   | remedy                               |
-      | install has wired it                                    | read that headless workers can use the four tools, and say that a worker needing any other tool returns nothing unless the developer allows that tool | nothing                              |
+      | install has wired it and agy's permission preset is `always-proceed` | read that headless workers can use the four tools, name the preset, and say that under it every tool runs unasked | nothing |
+      | install has wired it and agy's permission preset is `request-review` | read that headless workers can use the four tools, name the preset, and say that a worker needing any other tool may be refused it and return nothing unless the developer allows that tool | nothing |
+      | install has wired it and agy's settings set no permission preset | read that headless workers can use the four tools, say that no preset is set, and that a worker needing any other tool may be refused it and return nothing unless the developer allows that tool | nothing |
+      | agy's permission preset is a value doctor does not know | say that it does not know that preset, naming it, never guessing what it lets a worker do | nothing |
+      | agy's settings file does not parse | say that it cannot read agy's permission preset, quoting the parse error, never guessing it | fixing the file by hand |
       | its MCP configuration holds no treecontext server       | warn that agy has no treecontext tools                                                                                                                | `treecontext install --agent agy`    |
       | the allow rule for treecontext_insert is missing        | warn that an `agy -p` worker would be refused treecontext_insert                                                                                      | `treecontext install --agent agy`    |
       | the developer's ask rule stands over treecontext_insert | warn that an `agy -p` worker would be refused treecontext_insert, naming the developer's rule and its file                                            | that rule, the developer's to change |
@@ -204,7 +208,7 @@ Feature: Other clients — a dated matrix and a doctor that knows each one
       | worker       | shape                                                                                                                                 | left                                                                                                                                                    |
       | `claude -p`  | with no `--allowedTools` for the four tools, and the warning that the flag takes several values and swallows a prompt that follows it | nothing                                                                                                                                                 |
       | `codex exec` | with the prompt on stdin                                                                                                              | on Linux, the sandbox steps doctor names                                                                                                                |
-      | `agy -p`     | with `--message-arg`, since agy takes the prompt as its own value                                                                     | allowing in agy's settings every tool beyond the four the worker needs, a shell command among them, since agy refuses it and the worker returns nothing |
+      | `agy -p`     | with `--message-arg`, since agy takes the prompt as its own value                                                                     | under any permission preset but `always-proceed`, allowing every tool beyond the four the worker needs, a shell command among them, or giving that one run the preset with agy's `--settings`, since agy may refuse it and the worker then returns nothing |
 
   @D388
   Scenario: the README says what a worker may do, that it skips orientation, and how a failed run reads
@@ -224,7 +228,8 @@ Feature: Other clients — a dated matrix and a doctor that knows each one
     And the developer reads that Codex runs treecontext's hooks only once they are trusted with `/hooks` in Codex, and that doctor says which are
     And the developer reads that a Codex shell command's entry holds the text Codex returned and no exit code
     And the developer reads that a Codex subagent is kept as a summary and is no leg
-    And the developer reads that a Codex main is re-oriented at a fresh start and gets no bookmark ask, and that an Antigravity CLI agent receives no re-orientation packet
+    And the developer reads that a Codex main is re-oriented at a fresh start and on a resume and gets no bookmark ask, and that an Antigravity CLI agent receives no re-orientation packet
+    And the developer reads that a manual Codex compaction leaves a recovery note, an automatic one being unrecorded, and that a call Codex reported no result for, or a turn the developer interrupted, is kept and says so
 
   @D412 @D370
   Scenario: the orchestration matrix's Codex CLI cells say what a Codex hook can and cannot do
@@ -259,16 +264,17 @@ Feature: Other clients — a dated matrix and a doctor that knows each one
       | its hooks file does not parse                                                      | warn, quoting the parse error, that agy runs none of the hooks in that file, the developer's own included | fixing the file by hand, never an install             |
 
   @D414 @D384
-  Scenario: the README and doctor say a headless agy worker returns nothing when it reaches for a tool agy does not allow
-    Given an `agy -p` worker, as Antigravity sends its events, that reaches for a shell command no rule of agy's allows
+  Scenario: the README and doctor say when a headless agy worker returns nothing because agy refused it a tool
+    Given an `agy -p` worker, as Antigravity sends its events, under agy's default with no permission preset set, that reaches for a shell command no rule of agy's allows
     When the worker's run through `treecontext run` ends
     Then agy has fired no event after the refusal, and the worker printed nothing and exited with code 0
     And the worker's summary row carries agy's own line from its error stream
-    And the developer reads, in the README's part for `agy -p` and in doctor's row for Antigravity CLI, that a worker needing any tool beyond the four returns nothing unless that tool is allowed in agy's settings
-    # Found on the far-side pass of 2026-11-09 (agy 1.5.3): a call headless
-    # agy cannot ask permission for is refused, and the turn ends with no
-    # reply, no PostToolUse and no Stop. The README's "Left to you:
-    # nothing" was true for the four journal tools alone.
+    And the developer reads, in the README's part for `agy -p` and in doctor's row for Antigravity CLI, which permission preset agy has, that under `always-proceed` every tool runs unasked, and that under any other a worker needing a tool beyond the four may be refused it and return nothing unless that tool is allowed or the run is given the preset
+    # Found on the far-side pass of 2026-11-09 (agy 1.5.3), under agy's
+    # default before `toolPermission` was set: a call headless agy could
+    # not ask permission for was refused, and the turn ended with no
+    # reply, no PostToolUse and no Stop. Under `always-proceed`, recorded
+    # the same day, every shell command ran unasked (D414).
 
   @D413 @D418 @D388
   Scenario: the README names the oldest Antigravity CLI whose hooks install writes, and what its capture leaves out
@@ -276,5 +282,5 @@ Feature: Other clients — a dated matrix and a doctor that knows each one
     When a developer reads the parts for Antigravity CLI
     Then the developer reads 1.5.3 as the first Antigravity CLI version whose hooks install writes, and that an older one stays tools-only
     And the developer reads which of agy's events install wires and that it never wires PreToolUse, with the reason
-    And the developer reads that a call agy refuses in a headless run leaves no entry, that agy states no outcome for a shell command, and that a subagent is kept as a helper of the session that started it, its report kept, and is no leg
+    And the developer reads that a call agy refuses in a headless run, under any permission preset but `always-proceed`, leaves no entry, that agy states no outcome for a shell command, and that a subagent is kept as a helper of the session that started it, its report kept, and is no leg
     And the developer reads every Antigravity CLI cell of the orchestration matrix with the agy version and date it was checked against

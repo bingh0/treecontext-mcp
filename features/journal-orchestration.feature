@@ -314,8 +314,29 @@ Feature: Orchestration inside one store — lanes that stay their own
     When its session-start hook receives the start as Codex sends it
     Then the hook's reply hands Codex, as context to add to the session, the packet a Claude Code session gets at a fresh start, opening with that chapter as the lane's own
     # Recorded live, 2026-11-09, Codex CLI 0.167.0: a SessionStart hook's
-    # added context reached the model. Only a fresh start was recorded;
-    # what a resumed Codex session is handed is not promised (D410).
+    # added context reached the model. What a Codex session continued
+    # after whatever Codex has for a /clear is handed is unrecorded, and
+    # not promised (D410).
+
+  @D410 @D373
+  Scenario: a resumed Codex CLI main is the same session and is handed what a resume is handed
+    Given a Codex CLI 0.167.0 main registered at its start in the main checkout, which wrote a chapter summary and was quit
+    When it is resumed, its start as Codex sends it on a resume
+    Then the store holds the same self registration for it, not a second one
+    And the hook's reply hands Codex the packet a Claude Code session gets on a resume, opening with that chapter as the lane's own
+    # Recorded live, 2026-11-09, in Codex's interactive interface: a
+    # resume fired SessionStart with source "resume" and the same
+    # session id.
+
+  @D409 @D375 @D286
+  Scenario: a Codex CLI compaction leaves a recovery note that the session's next start claims in its own lane
+    Given the events Codex CLI sent, as recorded, for a manual compaction of a main session with the hooks install wrote trusted
+    When the hooks install writes for Codex receive those events and ingestion runs
+    Then a recovery snapshot of the session is taken at its PreCompact
+    And the session's start after the compaction claims it in the session's own lane, as a Claude Code session's start after a compaction does
+    # Recorded live, 2026-11-09: a manual /compact fired PreCompact,
+    # PostCompact, then SessionStart with source "compact", under one
+    # session id. An automatic compaction was not recorded.
 
   @D410
   Scenario: at a Codex CLI turn's end treecontext's hooks print nothing

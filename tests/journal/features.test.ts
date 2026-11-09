@@ -269,6 +269,9 @@ runFeatures(join(HERE, '../../features'), {
         "a Codex session's prompt, tool calls and last reply are journaled",
         "a Codex shell command that fails is journaled with what Codex said, and no outcome the client never gave",
         "a failing Codex shell command replayed through Codex's hooks is classed by its text, never by the client's word",
+        "a Codex call that ends with no result reported is journaled once, unclassified, <call>",
+        "a Codex call that succeeded is journaled once, though two events carried it",
+        "a Codex turn the developer interrupted is journaled as interrupted, its partial reply named as not captured",
         // Unit 11: unit 11 (D413-D418, Antigravity CLI 1.5.3 captured through a named hook, its output read from agy's transcript).
         "an Antigravity session's prompt, tool calls and reply are journaled with the output agy's transcript holds",
         "a call's output is read from agy's transcript at the end of the model call that made it",
@@ -324,7 +327,7 @@ runFeatures(join(HERE, '../../features'), {
         "doctor reports <client> as a client that <mode>",
         "doctor's row for Antigravity CLI says whether a headless agy worker can use the tools, when <state>",
         "doctor's row for Antigravity CLI says what it found of agy's hooks, when <state>",
-        "the README and doctor say a headless agy worker returns nothing when it reaches for a tool agy does not allow",
+        "the README and doctor say when a headless agy worker returns nothing because agy refused it a tool",
         "the README names the oldest Antigravity CLI whose hooks install writes, and what its capture leaves out",
       ],
     },
@@ -376,6 +379,8 @@ runFeatures(join(HERE, '../../features'), {
         "a Codex CLI main registers itself at its start and the server stamps its rows from it",
         "a Codex CLI main's fresh start is handed its lane's chapter",
         "at a Codex CLI turn's end treecontext's hooks print nothing",
+        "a resumed Codex CLI main is the same session and is handed what a resume is handed",
+        "a Codex CLI compaction leaves a recovery note that the session's next start claims in its own lane",
         // Unit 11: unit 11 (D413-D418, Antigravity CLI 1.5.3 captured through a named hook, its output read from agy's transcript).
         "an Antigravity CLI main registers itself at its session start and the server stamps its notes from it",
         "an Antigravity CLI main whose subagent has started still writes as itself, <linked>",

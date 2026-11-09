@@ -141,6 +141,7 @@ Feature: Journal install — setup is auditable, reversible, and honest
     Then every event on the list is either wired or named with what the journal does not capture because of it
     And every event install writes for Codex is on the list
     And the list names PostToolUseFailure and PostToolBatch as events Codex does not have, with what the journal does not capture on Codex because of it
+    And the list marks PreToolUse, Interrupt and PreCompact wired, each with what it is for, and PostCompact not captured, with the reason
 
   @D409
   Scenario: the capture census counts a Codex session's calls and says which it could only infer

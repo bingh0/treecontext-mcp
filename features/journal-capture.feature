@@ -191,6 +191,39 @@ Feature: Journal capture — everything worth recalling enters the journal
     # an ordinary PostToolUse. The journal keeps what was said and invents
     # nothing; the README says what a Codex entry does not hold.
 
+  @D408 @D404
+  Scenario Outline: a Codex call that ends with no result reported is journaled once, unclassified, <call>
+    Given the events Codex CLI sent, as recorded, for <call>, its PreToolUse with no PostToolUse by the turn's end
+    When the hooks install writes for Codex receive those events and ingestion runs
+    Then the journal holds one entry for the call, with its tool name, its input and Codex's own id for it
+    And the entry is marked as a call Codex reported no result for, with no exit class and no word on why
+
+    Examples:
+      | call                                                  |
+      | an MCP tool call Codex got an error reply for          |
+      | a file edit whose patch did not match the file         |
+    # Recorded live, 2026-11-09, Codex CLI 0.167.0: a call that fails,
+    # other than a shell command, fires PreToolUse and no PostToolUse.
+    # A call still running at an interrupt looks the same, so the entry
+    # says Codex reported no result, never that the call failed.
+
+  @D408
+  Scenario: a Codex call that succeeded is journaled once, though two events carried it
+    Given the events Codex CLI sent, as recorded, for a file edit that succeeded, its PreToolUse and its PostToolUse
+    When the hooks install writes for Codex receive those events and ingestion runs
+    Then the journal holds one entry for the call, from its PostToolUse, with what Codex returned as its output
+
+  @D408
+  Scenario: a Codex turn the developer interrupted is journaled as interrupted, its partial reply named as not captured
+    Given the events Codex CLI sent, as recorded, for a turn the developer interrupted, ending in Codex's interrupt and no turn's end
+    When the hooks install writes for Codex receive those events and ingestion runs
+    Then the journal says the turn was interrupted, with a capture-gap entry naming its reply as not captured
+    And the journal holds no assistant entry for that turn
+    And every call of the turn whose PreToolUse had no PostToolUse is journaled as a call Codex reported no result for
+    # Recorded live, 2026-11-09, in Codex's interactive interface: Esc
+    # mid-turn fired Interrupt and no Stop, and the partial reply was in
+    # no payload. The journal writes no text the client never sent.
+
   @D270
   Scenario: a tool event's output is captured as text, a line a line
     Given a shell command whose output spans several lines and carries a tab
@@ -438,11 +471,12 @@ Feature: Journal capture — everything worth recalling enters the journal
 
   @D418
   Scenario: an Antigravity subagent whose link is not yet read is journaled as writer unknown, and linked once it is
-    Given the events of an Antigravity subagent's conversation, as Antigravity sends them, arriving before the parent's call result naming it can be read
+    Given the events of an Antigravity subagent's conversation, as Antigravity sends them, from its first event, before the parent's call result naming it is read
     When the hook install writes for Antigravity CLI receives the subagent's events and ingestion runs
     Then the subagent's rows sit in no checkout's lane, read as writer unknown, and none is stamped as the parent's
     And once the parent's call result naming it is read, the subagent is registered as a helper of the parent session, linked through that call
-    # The recorded order, the parent's call and its model call's end
-    # before the child's first event, is one run's (D418). Where it does
-    # not hold, the child waits unlinked rather than passing for a main of
-    # the checkout or for its parent.
+    # The two recordings of 2026-11-09 saw both orders: the parent's
+    # model call ended before the child's start in one, after it in the
+    # other (D418). So every child starts unlinked and is linked when the
+    # parent's result is read, never passing for a main of the checkout
+    # or for its parent meanwhile.

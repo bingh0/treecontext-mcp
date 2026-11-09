@@ -300,16 +300,6 @@ re-decided, and the previous text is in git history.
   build. A /clear still retires the predecessor's live subagents.
   Reopens with the SessionEnd hook above, in `0.1.0-beta.5`. (D396,
   2026-11-09)
-- **A recovery note after a Codex CLI compaction** — no recovery
-  snapshot is written after Codex compacts a session until a Codex
-  compaction has been recorded: the far-side pass of 2026-11-09 saw
-  Codex's `PreCompact` and `PostCompact` in its event list and never
-  fire. The build records one manual `/compact`; where its events take
-  Claude Code's shape, `PreCompact` is wired and this entry leaves the
-  fence; where they do not, both stay on Codex's list named as not
-  captured, with the reason, and the README says a Codex compaction
-  leaves no recovery note. Reopens with that recording, or when Codex's
-  compaction events are documented. (D409, 2026-11-09)
 - **A bookmark ask and a send-back from Codex CLI's stop hook** —
   declined until `0.1.0-beta.5`: at a Codex turn's end treecontext's
   hooks print nothing, so a Codex session is never asked for a bookmark
@@ -431,9 +421,19 @@ re-decided, and the previous text is in git history.
   tools, the ticket door's rows and their summary. Reopens for legs at
   `beta.5`, or when agy gains a subagent event or a parent link in a
   subagent's events. (D370 amended by D383 and by D418, 2026-11-09)
+- **An interrupted Codex CLI turn's partial reply** — Codex fires
+  `Interrupt` and no `Stop` for a turn the developer interrupts, and the
+  turn's partial reply is in no payload (recorded live 2026-11-09, Codex
+  CLI 0.167.0), so the journal says the turn was interrupted, with a
+  capture-gap entry naming its reply as not captured, and writes no
+  assistant text for it; Codex's transcript is not read for it, Codex
+  calling its transcript no stable interface. Reopens if Codex's
+  `Interrupt` carries the partial reply. (D408, 2026-11-09)
 - **A call agy refuses in a headless run, and the rest of its turn** —
-  agy `1.5.3` auto-denies a call no rule allows in a headless run, prints
-  nothing, exits 0, and fires no PostToolUse, PostInvocation or Stop, so
+  under any permission preset but `always-proceed`, or with none set
+  (D414), agy `1.5.3` may deny a call no rule allows in a headless run;
+  in the denial recorded, under agy's default, agy printed nothing,
+  exited 0, and fired no PostToolUse, PostInvocation or Stop, so
   neither the refused call nor the end of its turn reaches a hook; the
   call exists only in agy's transcript, and a ticketed worker's summary
   row carries agy's own line from its error stream (D384). Recovering the
@@ -1098,14 +1098,16 @@ re-decided, and the previous text is in git history.
   client version and date of the recording it rests on"; "doctor's row
   for Antigravity CLI says whether a headless agy worker can use the
   tools" gains @D414, its first row's "read that the tools are its whole
-  surface and headless workers can use the four tools" now "read that
-  headless workers can use the four tools, and say that a worker needing
-  any other tool returns nothing unless the developer allows that tool";
+  surface and headless workers can use the four tools" now the rows for
+  agy's permission preset, `always-proceed`, `request-review`, none set,
+  a value doctor does not know, a settings file that does not parse
+  (D414, as recorded live 2026-11-09);
   "the README's headless-workers section carries the steps for <worker>"
   gains @D414, its `agy -p` row's "nothing" left to the developer now
-  "allowing in agy's settings every tool beyond the four the worker
-  needs, a shell command among them, since agy refuses it and the worker
-  returns nothing".
+  "under any permission preset but `always-proceed`, allowing every tool
+  beyond the four the worker needs, a shell command among them, or
+  giving that one run the preset with agy's `--settings`, since agy may
+  refuse it and the worker then returns nothing".
   journal-workers: "a <worker> worker under a <parent> parent writes
   into its own lane with its role as writer" gains the row "Antigravity
   CLI | `claude -p`" and @D416, its parent registered through agy's
@@ -1133,8 +1135,9 @@ re-decided, and the previous text is in git history.
   converged), the @D417 list, and the Gemini sweep leaving agy's hooks
   file alone (@D399 @D413); journal-clients the @D407 outline, the @D414
   outline and scenarios, two @D412 scenarios and the agy README
-  scenario; journal-capture @D404's four scenarios, two @D408, five @D415
-  and two @D418; journal-orchestration three @D410 and two @D416;
+  scenario; journal-capture @D404's four scenarios, five @D408, five
+  @D415 and two @D418; journal-orchestration four @D410, one @D409 and
+  two @D416;
   journal-workers one @D410, one @D416 and @D403's four; journal-legs one
   @D411; journal-agent-surface one @D412. They enter the suite through
   scenario-scoped wip entries naming their build unit. Every step saying
