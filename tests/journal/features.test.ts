@@ -180,18 +180,72 @@ runFeatures(join(HERE, '../../features'), {
     // /config row; the key on at 2.1.295 is doctor's settings-line-only row.
     // Both halves bind, and the file has no open scenario.
     // journal-workers left the whole-feature register 2026-11-01 (unit 4).
-    // The parent outline's Antigravity row is unbound: this build writes no
-    // hooks for Antigravity CLI (a tools-only client since D383, its hooks
-    // fenced), so no hook of its can register a parent, and standing it in with
-    // another CLI's hook would bind the row against something it does not
-    // name. Its Claude Code and Codex rows bind; the outline is held open
-    // here by its title until the owner rules on the Antigravity row.
+    // The D288 parent outline's Antigravity row, held open here by the
+    // outline's title until the owner ruled, was removed on 2026-11-09
+    // (owner, "Adopt all (Recommended)"; the fence's Antigravity CLI entry,
+    // D370 amended by D383): an agy main registers no parent, and its case
+    // moved to the D294 declared-parent outline below. The outline's Claude
+    // Code and Codex rows bind, and its entry left this list.
+    // The headless build's unit 5 (D384, D389) bound its five scenarios on
+    // 2026-11-08, through both spawners, and they left this list.
+    //
+    // The seven rulings of 2026-11-09 (D391-D398; fence: Sanctioned
+    // changes, "The seven rulings of 2026-11-09"): new and reworded
+    // scenarios, unbound until the unit that owns each: unit 7a the store
+    // and the export (D391 curated dedup and lanes, D398 the skeleton's
+    // error-tail line), unit 7b the doors and the hooks (D382's fourth row,
+    // D393 the cut's process group, D397 the error stream kept open, the
+    // D294 outline). Scenario-scoped so the rest of each file keeps gating.
+    // The reworded scenarios' old step definitions were deleted with no
+    // consumer left; their units rebind them.
     {
       feature: 'journal-workers',
       scenarios: [
-        'a <worker> worker under a <parent> parent writes into its own lane with its role as writer',
-        // The headless build's unit 5 (D384, D389) bound its five scenarios
-        // on 2026-11-08, through both spawners, and they left this list.
+        // Unit 7a: D391 (a worker's curated dedup is its own lane's).
+        'a <second> writing the same text as <first> leaves its own row in its own lane',
+        // Unit 7b: D294 (the @D294 scenario reworded into an outline with
+        // Codex CLI and Antigravity CLI mains spawning through
+        // `treecontext run --parent --parent-cli`), D393 (a real grandchild
+        // in the worker's process group), D397 (a real background process
+        // holding the worker's error stream).
+        'a parent no hook registered, a <main> main, is carried on each worker\'s registration as declared, never as a row of its own',
+        'a worker ended by <signal> leaves no process of its group running',
+        'a background process the worker left writing to its error stream is not cut off when the run settles',
+      ],
+    },
+    {
+      feature: 'journal-orchestration',
+      scenarios: [
+        // Unit 7a: D391 (a hit's reply names the survivor's writer and
+        // lane; a hit arms no other lane's pointer).
+        "a dedup hit's reply names the surviving row's writer and lane and says nothing landed in the caller's",
+        "a dedup hit never arms another lane's resume pointer",
+      ],
+    },
+    {
+      feature: 'journal-session-echo',
+      scenarios: [
+        // Unit 7a: D391 (two @D86 scenarios reworded to sessions of one
+        // lane, their Givens' old step definitions deleted).
+        'a dedup-hit echo cannot re-stamp the older original',
+        'identical concurrent inserts from two sessions of one lane disclose their ambiguity',
+      ],
+    },
+    {
+      feature: 'journal-runs',
+      scenarios: [
+        // Unit 7a: D398 (the skeleton's reply names the legs whose summary
+        // row holds the end of an error stream).
+        'the export\'s reply names the legs whose summary row carries the end of an error stream, and no other',
+      ],
+    },
+    {
+      feature: 'journal-agent-surface',
+      scenarios: [
+        // Unit 7b: D382's fourth row, tagged @D291 (the send-back's re-run,
+        // read on the re-run's own first message through the real door);
+        // the outline's three bound rows wait with it, held by its title.
+        'the first message the ticket door composes for <case> opens with the line the block names',
       ],
     },
     // The headless build (2026-11-07, D381-D390; fence: Sanctioned changes,

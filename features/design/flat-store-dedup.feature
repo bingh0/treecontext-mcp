@@ -1,12 +1,18 @@
-Feature: dedup matrix — time-bounded for auto-capture, global for curated, never cross-source
+Feature: dedup matrix — time-bounded for auto-capture, across sessions for curated, never cross-source
 
   Global-forever content dedup swallows every recurrence of an identical
   message: the second "proceed" a user ever types inserts nothing and its
   session, timestamp and metadata are discarded, corrupting chronology and
-  window/anchor reconstruction. Owner decision D2: auto-capture dedups only
-  within DEDUP_WINDOW_SECS (which still suppresses Stop-hook double-fire);
-  curated notes keep global idempotent dedup; the two classes never dedup
-  against each other.
+  window/anchor reconstruction. Owner decision D2 (the dedup matrix's
+  number before the docket; the docket's D2 is the pitch): auto-capture
+  dedups only within DEDUP_WINDOW_SECS (which still suppresses Stop-hook
+  double-fire); curated notes keep idempotent dedup across sessions; the
+  two classes never dedup against each other. Amended by D391
+  (2026-11-09): a curated dedup hit never modifies another lane's row,
+  its reply names the surviving row's writer and lane, and a ticket-door
+  worker's curated dedup is scoped to its own lane (journal-workers,
+  journal-orchestration); a hooks-door leg keeps this matrix until
+  0.1.0-beta.5 (D392).
   Footguns: JF-4, JF-11.
 
   Scenario: a repeated user directive outside the window becomes its own node
@@ -34,7 +40,7 @@ Feature: dedup matrix — time-bounded for auto-capture, global for curated, nev
     When a backlog drain inserts both within the same second
     Then two nodes exist, pinning that wall clock at drain time plays no part
 
-  Scenario: curated notes keep global idempotent dedup across sessions
+  Scenario: curated notes keep idempotent dedup across sessions of one lane
     Given an agent-authored note and an identical insert in a later session
     When both are inserted
     Then one node exists and the second insert reports deduplicated
@@ -54,7 +60,7 @@ Feature: dedup matrix — time-bounded for auto-capture, global for curated, nev
     When the store is closed and reopened
     Then time-bounded and global dedup behave identically to before the reopen
 
-  Scenario: a dedup hit re-arms resume-pointer tags on the surviving note
+  Scenario: a dedup hit in the surviving note's own lane re-arms its resume-pointer tags
     Given a curated note whose resume-pointer tags were superseded away
     When the same content is recorded again with next_session set
     Then no new node is created and the original carries the pointer tags again
@@ -62,3 +68,6 @@ Feature: dedup matrix — time-bounded for auto-capture, global for curated, nev
     # re-arms an old note as a pointer — a dedup hit must merge those
     # tags onto the survivor, never silently discard them (post-G, the
     # merge rides the same transaction as the refused insert).
+    # Since D391 the merge is the survivor's own lane's only: a hit from
+    # another lane arms nothing (journal-orchestration, "a dedup hit
+    # never arms another lane's resume pointer").

@@ -15,7 +15,9 @@ Feature: Workers — a headless worker on any CLI, through the ticket door
   D313, D315, D316, D317, D329, D332, D335, D340, D341, D342 of the beta.3 interview, 2026-10-30 to
   2026-10-31; D372 and D374 of 2026-11-02 (a worker's status and search);
   D384 and D389 of 2026-11-07 (a failed worker's summary row; no
-  client-session variable handed to a worker). The leg contract the worker fulfils is journal-legs; the
+  client-session variable handed to a worker); D391, D393 and D397 of
+  2026-11-09 (a worker's curated dedup in its own lane; a cut ends the
+  worker's process group; the error stream kept open after the run). The leg contract the worker fulfils is journal-legs; the
   run it belongs to is journal-runs. A worker here is bound through a
   stand-in headless process launched through the real door; what the
   model inside a real worker chooses to do is out of reach, so every
@@ -33,7 +35,11 @@ Feature: Workers — a headless worker on any CLI, through the ticket door
       | parent      | worker       |
       | Claude Code | `codex exec` |
       | Codex       | `claude -p`  |
-      | Antigravity | `agy -p`     |
+    # No Antigravity row (owner, 2026-11-09): an Antigravity CLI main
+    # registers no self and spawns no registered worker but through
+    # `treecontext run` (the fence's Antigravity CLI entry, D370 amended
+    # by D383), so no parent of it is "registered"; its main is the
+    # declared parent of the D294 outline below.
 
   @D288 @D384
   Scenario: a worker is retired at exit and its last output is the summary row the pointer names
@@ -197,12 +203,17 @@ Feature: Workers — a headless worker on any CLI, through the ticket door
     And the wrapper runs the worker once more with the reason naming the missing checkpoint under "login-form"
 
   @D294
-  Scenario: a parent no hook registered is carried on each worker's registration as declared, never as a row of its own
-    Given a Codex main session "c7" that never spoke to the store
-    When two workers start with tickets naming the parent "c7", one declaring the branch "main" and the other the branch "login"
+  Scenario Outline: a parent no hook registered, a <main> main, is carried on each worker's registration as declared, never as a row of its own
+    Given a <main> main session "c7" that never spoke to the store
+    When it starts two workers through the `treecontext run` wrapper with `--parent c7` and `--parent-cli <cli>`, one from a checkout on the branch "main" and the other from a checkout on the branch "login"
     Then the store holds no registration for "c7" and no row in any lane with the writer or the session "c7"
-    And each worker's registration carries the parent id "c7", its CLI, directory, worktree and branch as its own ticket declared, marked declared, with the ticket's mint moment
+    And each worker's registration carries the parent id "c7", the CLI "<cli>", and the directory, worktree and branch its own ticket declared, marked declared, with the ticket's mint moment
     And a reader grouping workers by declared parent sees both under "c7" with their two branches, unreconciled
+
+    Examples:
+      | main            | cli   |
+      | Codex CLI       | codex |
+      | Antigravity CLI | agy   |
 
   @D294
   Scenario: a parent a hook did register is linked by id, never copied
@@ -409,3 +420,45 @@ Feature: Workers — a headless worker on any CLI, through the ticket door
       | `treecontext run` wrapper                      |
       | library call, in the process's own environment |
       | library call, with an environment it passes    |
+
+  @D391 @D288
+  Scenario Outline: a <second> writing the same text as <first> leaves its own row in its own lane
+    Given <first> that has inserted the note "login form: submit posts to /api/session"
+    When a <second> inserts "login form: submit posts to /api/session" through its tools
+    Then the store holds two rows of that text, one in each lane, each stamped with its own writer
+    And the second insert's reply says its row landed, not that it was deduplicated
+
+    Examples:
+      | first                                 | second                     |
+      | the main session in the main checkout | `codex exec` worker        |
+      | a `codex exec` worker                 | second `codex exec` worker |
+
+  @D393 @D292
+  Scenario Outline: a worker ended by <signal> leaves no process of its group running
+    Given a `codex exec` worker started by the wrapper under the key "login-form" that has started a long-running command in its own process group
+    When <signal> ends the worker
+    Then the worker's registration reads cut, with no summary row and no send-back
+    And no process of the worker's process group is still running, the long-running command included
+    # Linux and macOS only: on Windows only the direct child is ended
+    # (D393), so the binding is a host skip there. The binding needs a
+    # real grandchild in the worker's process group, a process the
+    # stand-in worker starts and the test finds by the group's id
+    # afterwards, never a simulated one. A process that left the group
+    # (setsid, a detached spawn) is outside this promise (D394).
+
+    Examples:
+      | signal                                                    |
+      | the wrapper's timeout                                     |
+      | a kill the door did not send, sent to the worker's process |
+
+  @D397 @D384
+  Scenario: a background process the worker left writing to its error stream is not cut off when the run settles
+    Given a `codex exec` worker started through the library call that starts a background process writing a line to its error stream every second, and then prints "done" and exits with code 0
+    When the run has settled and the background process writes three more lines
+    Then the spawner receives those three lines on its error stream
+    And the background process is still running, not ended by SIGPIPE
+    And the summary row the spawner's line points at reads "done"
+    # The run still waits up to the 2 s drain for the stream's end before
+    # it settles (D397). The binding needs a real background process the
+    # stand-in worker starts, holding the worker's error stream, read by
+    # the test after the run settled.

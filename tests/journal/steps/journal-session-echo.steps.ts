@@ -1,4 +1,3 @@
-import { randomBytes } from 'node:crypto'
 import { join } from 'node:path'
 import { expect } from 'vitest'
 import { type Registry } from 'gherkin-node-test/vitest'
@@ -172,15 +171,6 @@ export const sessionEchoDefiner = (reg: Registry<SessionEchoWorld>): void => {
     })
     w.eNoteId = r.nodeId
   })
-  reg.define(/^a new identical insert from another session that deduplicated onto it$/, async (w: SessionEchoWorld) => {
-    const client = await mcpOver(w, { claudeCwd: w.proj! })
-    const res = await client.callTool({ name: 'treecontext_insert', arguments: { content: NOTE } })
-    const parsed = parseTool(res)
-    expect(parsed['deduplicated'], 'the second insert must dedup onto the survivor').toBe(true)
-    expect(parsed['node_id']).toBe(w.eNoteId)
-    w.eToolResponse = (res as { content: unknown }).content
-    w.eSessionB = `cc-${randomBytes(6).toString('hex')}`
-  })
   reg.define(/^the drain processes the new insert's echo$/, async (w: SessionEchoWorld) => {
     spawnHook(w, 'post-tool-use', echoPayload(w, { content: NOTE }, w.eSessionB))
     await drainStaging(w)
@@ -193,17 +183,6 @@ export const sessionEchoDefiner = (reg: Registry<SessionEchoWorld>): void => {
     expect(sessionKey).toBe('cc-old-owner')
   })
 
-  reg.define(/^two sessions that insert identical content within one correlation window$/, async (w: SessionEchoWorld) => {
-    await openCaptureWorld(w)
-    await insertThroughServer(w, NOTE)
-    spawnHook(w, 'post-tool-use', echoPayload(w, { content: NOTE }))
-    const clientB = await mcpOver(w, { claudeCwd: w.proj! })
-    const resB = await clientB.callTool({ name: 'treecontext_insert', arguments: { content: NOTE } })
-    w.eToolResponse = (resB as { content: unknown }).content
-    w.eSessionB = `cc-${randomBytes(6).toString('hex')}`
-    spawnHook(w, 'post-tool-use', echoPayload(w, { content: NOTE }, w.eSessionB))
-    w.eDedupResponse = parseTool(resB)
-  })
   reg.define(/^curated dedup collapsed them to a single row$/, (w: SessionEchoWorld) => {
     expect(w.eDedupResponse!['deduplicated']).toBe(true)
     expect(w.eDedupResponse!['node_id']).toBe(w.eNoteId)

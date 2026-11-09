@@ -183,7 +183,7 @@ Feature: Journal agent surface — the parts the agent reads are product
     Then the agent reads one line saying that a session whose first message opens with treecontext's line naming it a worker of a run, or saying its instructions were invalid, skips the session-start routine
     And the block's session-start steps are otherwise as before
 
-  @D382 @D298
+  @D382 @D298 @D291
   Scenario Outline: the first message the ticket door composes for <case> opens with the line the block names
     Given <case>
     When the ticket door starts the worker
@@ -194,3 +194,8 @@ Feature: Journal agent surface — the parts the agent reads are product
       | a worker with a key and a brief in effect                   |
       | a one-off worker whose ticket says it has no key            |
       | a worker whose ticket is truncated after the role "builder" |
+      | a worker run once more for a missing checkpoint             |
+    # The fourth row (owner, 2026-11-09, recorded under D382) is the
+    # send-back's re-run of D291: its first message is the second run's,
+    # read where the re-run's process receives it through the real door,
+    # never the first run's and never the composer called on its own.

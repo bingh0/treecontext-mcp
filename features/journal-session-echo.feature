@@ -36,16 +36,16 @@ Feature: Echo-correlated session identity — the store's own capture attributes
     When the drain runs
     Then the row's attribution and source are unchanged
 
-  @D86
+  @D86 @D391
   Scenario: a dedup-hit echo cannot re-stamp the older original
     Given an old attributed curated row
-    And a new identical insert from another session that deduplicated onto it
+    And a new identical insert from another session of the same lane that deduplicated onto it
     When the drain processes the new insert's echo
     Then the old row's attribution and session-key column are unchanged
 
-  @D86
-  Scenario: identical concurrent inserts from two sessions disclose their ambiguity
-    Given two sessions that insert identical content within one correlation window
+  @D86 @D391
+  Scenario: identical concurrent inserts from two sessions of one lane disclose their ambiguity
+    Given two sessions of one lane that insert identical content within one correlation window
     And curated dedup collapsed them to a single row
     When the drain processes both echoes
     Then the row is flagged ambiguous with both session ids as candidates

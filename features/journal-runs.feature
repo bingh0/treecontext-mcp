@@ -15,7 +15,8 @@ Feature: Runs — a run is a unit the harness reads by key and anyone reconstruc
 
   Rulings D289, D296, D300, D301, D302, D309, D310, D311, D312, D318,
   D336, D337, D343, D344 of the beta.3 interview, 2026-10-30 to 2026-10-31,
-  and D360, D368 of the build's gates, 2026-11-01. The legs are
+  and D360, D368 of the build's gates, 2026-11-01; D398 of 2026-11-09
+  (the skeleton's reply names failed runs' error tails). The legs are
   journal-legs; the workers are journal-workers.
 
   @D289
@@ -195,6 +196,15 @@ Feature: Runs — a run is a unit the harness reads by key and anyone reconstruc
     When an agent exports the run "r1" without naming a form
     Then after the line about first moments the reply carries one line naming the reviewer leg as the one whose prompt rode on the Agent tool and was not seen by the door
     And that line names the reviewer leg alone
+
+  @D398 @D318 @D384
+  Scenario: the export's reply names the legs whose summary row carries the end of an error stream, and no other
+    Given a run "r1" with a builder worker that wrote the output of its test command, "FAIL src/login.test.ts", to its error stream and exited with code 1, and a reviewer worker that printed "review done" and exited with code 0
+    When an agent exports the run "r1" without naming a form
+    Then the file holds the builder's summary row whole, the end of its error stream included, with nothing redacted
+    And the reply carries one line naming the builder leg as the one whose summary row holds the end of its worker's error stream, saying that a CLI may write command output there
+    And that line names the builder leg alone
+    And no acknowledgement is asked for
 
   @D318
   Scenario: the run's export file says in its head what its first moments are

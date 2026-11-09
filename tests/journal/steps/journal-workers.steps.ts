@@ -130,24 +130,6 @@ export const workersDefiner = (reg: Registry<WorkersWorld>): void => {
 
   // ── D294: the parent as declared, or as a hook registered it ──
 
-  define(/^a Codex main session "([^"]+)" that never spoke to the store$/, async (w, parent) => {
-    await openRunWorld(w, { sessionStart: false })
-    expect(rawAll(w, 'SELECT 1 FROM session_registry WHERE session_id = ?', parent)).toHaveLength(0)
-  })
-
-  define(/^two workers start with tickets naming the parent "([^"]+)", one declaring the branch "([^"]+)" and the other the branch "([^"]+)"$/, async (w, parent, a, b) => {
-    for (const [name, branch, minted] of [['first', a, 100], ['second', b, 200]] as const) {
-      const at = Date.now() / 1000
-      await registerThroughLibrary(w, name, {
-        door: 'library', ticket: ticketFor({ id: parent, branch }, { mintedAt: at - minted }), process: liveProcess(),
-      })
-      w.moments![`${name}-minted`] = at - minted
-      w.facts![`${name}-branch`] = branch
-      // Each writes into its own lane.
-      await w.store!.insert(`note from the ${name} worker: wired the ${branch} branch's form`, { leg: w.legs![name]! })
-    }
-  })
-
   define(/^the store holds no registration for "([^"]+)" and no row in any lane with the writer or the session "\1"$/, (w, parent) => {
     expect(rawAll(w, 'SELECT 1 FROM session_registry WHERE session_id = ?', parent)).toHaveLength(0)
     expect(rawAll(w,
@@ -159,15 +141,6 @@ export const workersDefiner = (reg: Registry<WorkersWorld>): void => {
       "SELECT session_key, json_extract(metadata_json, '$._parent') AS p, json_extract(metadata_json, '$._parent_src') AS src FROM nodes WHERE content LIKE 'note from the %'")
     expect(notes.map((n) => [n.p, n.src])).toEqual([[parent, 'declared'], [parent, 'declared']])
     expect(new Set(notes.map((n) => n.session_key)).size).toBe(2)
-  })
-
-  define(/^each worker's registration carries the parent id "([^"]+)", its CLI, directory, worktree and branch as its own ticket declared, marked declared, with the ticket's mint moment$/, (w, parent) => {
-    for (const name of ['first', 'second']) {
-      const r = rawRegistration(w, w.legs![name]!)
-      expect([r['parent_session'], r['parent_src'], r['identity']]).toEqual([parent, 'declared', 'declared'])
-      expect(JSON.parse(String(r['parent_declared']))).toEqual({ id: parent, cli: 'codex', cwd: '/work/app', worktree: null, branch: w.facts![`${name}-branch`] })
-      expect(r['ticket_minted_at']).toBe(w.moments![`${name}-minted`])
-    }
   })
 
   define(/^a reader grouping workers by declared parent sees both under "([^"]+)" with their two branches, unreconciled$/, (w, parent) => {

@@ -21,7 +21,8 @@ Feature: Orchestration inside one store — lanes that stay their own
   and D378 of 2026-11-02 (the main checkout's own lane: status, the fresh
   start, the search scope read from the registry, the recovery snapshot's
   lane, the unknown writer, the chapter from before writers were
-  recorded); D379 of 2026-11-03 (one lane rule for every reader). Group
+  recorded); D379 of 2026-11-03 (one lane rule for every reader); D391 of
+  2026-11-09 (a curated dedup hit modifies no other lane's row). Group
   orientation (D168) is deferred with groups configuration (D209), no scenario yet.
 
   @D147
@@ -320,6 +321,25 @@ Feature: Orchestration inside one store — lanes that stay their own
     Then the orchestrator calling status still sees the chapter as a live pointer
     And the tester's entry carries the pointer to the chapter
     And the orchestrator's next packet after a /clear lists the tester's entry under referenced-by
+
+  @D391 @D169
+  Scenario: a dedup hit's reply names the surviving row's writer and lane and says nothing landed in the caller's
+    Given the note "the login form posts to /api/session" written by the worktree "subproject"'s own agent
+    When a session in the main checkout inserts "the login form posts to /api/session" through the tools
+    Then the reply says the insert was deduplicated onto the worktree's row, naming its writer and the lane "worktree:subproject"
+    And the reply says that nothing landed in the main checkout's lane
+    And the store holds one row of that text, in the worktree's lane
+
+  @D391 @D169
+  Scenario: a dedup hit never arms another lane's resume pointer
+    Given the chapter summary "plan: wire the login form" in the worktree "subproject", which the worktree's own agent has since superseded
+    When a session in the main checkout inserts "plan: wire the login form" through the tools with next_session set
+    Then the worktree's chapter summary is unchanged byte for byte and is still no live pointer
+    And the main checkout's status lists no pointer to it
+    # Today the hit arms next_session on the survivor whoever's lane it
+    # is in (mergePointerFlags), while the references beside it are
+    # already refused across lanes (D169); the binding reads the
+    # worktree's row with SQL before and after the insert.
 
   @D186
   Scenario: references resolve one hop deep, the rest on request

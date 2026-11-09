@@ -254,6 +254,34 @@ re-decided, and the previous text is in git history.
   group orientation (D168), which stays under its own entry above until
   then; D209's condition governs D168 until that session. (D267,
   2026-10-10)
+- **Curated dedup in a hooks-door leg's own lane** — a ticket-door
+  worker's curated dedup is its own lane's since D391, but a Claude Code
+  subagent leg through the hooks door shares its parent's session, so
+  its lane is no session a unique index can be scoped by; until then its
+  identical insert finds the surviving row as before, the reply naming
+  that row's writer and lane and saying nothing landed, and the hit
+  modifies nothing of the other lane. Reopens in `0.1.0-beta.5`, with
+  workflows. (D392, 2026-11-09)
+- **Nothing a worker started outlives a cut** — declined for now: the
+  promise that holds is D393's, the worker's process group ended on Linux
+  and macOS at a cut by the door or any exit by signal; a CLI may run its
+  tool commands outside that group (`setsid`, a detached spawn), and on
+  Windows only the direct child is ended. Reopens when a live probe per
+  CLI (Claude Code, Codex CLI, Antigravity CLI), on Linux and on macOS,
+  has a worker start a long-running command through its own tool, cuts
+  the worker, and reads whether the command is gone. (D394, 2026-11-09)
+- **A SessionEnd hook** — declined for now: install wires none, and
+  nothing marks a session ended at a plain exit. Session liveness, a
+  session's end as well as its start, is ruled once. Reopens in
+  `0.1.0-beta.5`, with workflows. (D395, 2026-11-09)
+- **Self registrations' stop moment** — declined until `0.1.0-beta.5`:
+  the store records no stop for a self registration, at a /clear or any
+  other end, and no reader reads one; the /clear's stop of its
+  predecessor's self that the build added on 2026-11-08 is withdrawn,
+  since a fence declines a promise and so takes its writer out of the
+  build. A /clear still retires the predecessor's live subagents.
+  Reopens with the SessionEnd hook above, in `0.1.0-beta.5`. (D396,
+  2026-11-09)
 
 ## Named assumptions
 
@@ -689,6 +717,28 @@ re-decided, and the previous text is in git history.
   own configuration (`CLAUDE_CODE_USE_BEDROCK`) and break a `claude -p`
   worker; the door names each session variable it leaves out, client by
   client. (D389, 2026-11-07)
+- Declined alternative, Keeping curated dedup global for workers — only
+  the hit's reply and the pointer flags fixed, identical text staying one
+  row store-wide: a worker's write would still leave no row in its own
+  lane, the record D288 promises it; and, Scoping every writer's dedup by
+  lane at once — a hooks-door leg shares its parent's session, so a
+  session-scoped index cannot reach its lane before the workflows of
+  `0.1.0-beta.5`. (D391, 2026-11-09)
+- Declined alternative, Redacting a failed run's error tail — false
+  confidence: a scrub's patterns miss the key shapes of the very CLIs
+  that write there (the repository's own release scan, matching `sk-`
+  and eight letters or digits, misses `sk-ant-` and `sk-proj-` keys), and
+  a reader told the tail was scrubbed trusts what slipped through; and
+  design decision 2: capture is never filtered, the run's tool-output
+  rows carry the same secrets unredacted, and the control is at the
+  sharing boundary, where the skeleton's reply names the legs whose
+  summary row holds an error tail; and, The tail moved to an evictable
+  row of the door's capture — against the owner's "carried wherever the
+  summary goes". (D398, D384, 2026-11-09)
+- Declined alternative, A tree kill on Windows at the cut (`taskkill /T
+  /F`) — raised by the review and not in the consensus adopted; the
+  README states that on Windows only the direct child is ended. (D393,
+  2026-11-09)
 
 ## Sanctioned changes
 
@@ -798,6 +848,51 @@ re-decided, and the previous text is in git history.
   one of the four, which install never writes over or beside (owner,
   2026-11-08: "yes, make the rewording") (direction: rewords).
   (D390, 2026-11-08)
+- **The seven rulings of 2026-11-09** — the owner's "Adopt all
+  (Recommended)" on the seven questions the headless build left. It
+  rewords seven bound scenarios (direction: rewords).
+  journal-session-echo: "a dedup-hit echo cannot re-stamp the older
+  original", whose Given read "a new identical insert from another
+  session that deduplicated onto it" and now reads "… from another
+  session of the same lane …"; and "identical concurrent inserts from two
+  sessions disclose their ambiguity", now "… from two sessions of one
+  lane …", its Given "two sessions that insert identical content within
+  one correlation window" now "two sessions of one lane that …" (D391: a
+  hit's echo changes the survivor only within its own lane, and a
+  worker's identical insert is no hit at all). The design tier's
+  flat-store-dedup: "curated notes keep global idempotent dedup across
+  sessions", now "curated notes keep idempotent dedup across sessions of
+  one lane", and "a dedup hit re-arms resume-pointer tags on the
+  surviving note", now "a dedup hit in the surviving note's own lane
+  re-arms its resume-pointer tags", the header naming D391; their steps
+  are unchanged and stay bound, both bindings inserting with no session
+  named, in one lane (D391). journal-workers: "a <worker> worker under a
+  <parent> parent writes into its own lane with its role as writer"
+  loses its Antigravity row, never bound (the fence's Antigravity CLI
+  entry, D370 amended by D383); "a parent no hook registered is carried
+  on each worker's registration as declared, never as a row of its own"
+  becomes the outline "a parent no hook registered, a <main> main, is
+  carried …", with Codex CLI and Antigravity CLI mains spawning through
+  `treecontext run` with `--parent` and `--parent-cli`, its Given, its
+  When and its second Then reworded (D294). journal-agent-surface: "the
+  first message the ticket door composes for <case> opens with the line
+  the block names" gains the row "a worker run once more for a missing
+  checkpoint" and the tag @D291 (D382). It adds, to bound files:
+  journal-orchestration "a dedup hit's reply names the surviving row's
+  writer and lane and says nothing landed in the caller's" and "a dedup
+  hit never arms another lane's resume pointer" (D391); journal-workers
+  "a <second> writing the same text as <first> leaves its own row in its
+  own lane" (D391), "a worker ended by <signal> leaves no process of its
+  group running" (D393) and "a background process the worker left
+  writing to its error stream is not cut off when the run settles"
+  (D397); journal-runs "the export's reply names the legs whose summary
+  row carries the end of an error stream, and no other" (D398). The new
+  and reworded charter scenarios enter the suite through scenario-scoped
+  wip entries naming their unit, 7a for the store and the export, 7b for
+  the doors and the hooks; the outline that gained a row is held with its
+  bound rows by its title. Five step definitions the rewording left with
+  no consumer are removed. (D391, D382, D393, D294, D397, D398,
+  2026-11-09)
 
 ---
 
