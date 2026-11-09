@@ -302,6 +302,18 @@ Then confirm recall: ask the agent something like *"search your journal for
 what we did earlier."* It should call `treecontext_query` and come back
 with your own earlier messages.
 
+**Checking capture against the client.** `treecontext doctor` reports a
+Claude Code wired by an older build (a capture event added since) with the
+command that wires it. To check what was actually journaled, run
+`npm run dogfood:census -- --transcript <session.jsonl>` from a checkout of
+this repository: it counts a real Claude Code session's tool calls (its
+transcript, subagents included) against the store by the client's call id
+and lists every call that is neither stored, staged, nor a deduplicated or
+pre-id entry; it exits 1 when one is missing. `--live` runs one headless
+session with a success, a failure and a refusal of each kind against the
+installed build, and also names any hook event the client fired that
+`tests/fixtures/claude-code-hooks/events.json` does not hold.
+
 Your data lives at:
 
 ```

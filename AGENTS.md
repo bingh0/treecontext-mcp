@@ -38,7 +38,12 @@ has been exercised end-to-end — real payloads in, direct SQLite
 inspection out. Reading the source is not verification. It covers the
 server's own writes as much as the hooks' captures: the recovery
 snapshot row (D286) compounded for three releases because the rule was
-applied to what came in and never to what the drain wrote.
+applied to what came in and never to what the drain wrote. "Real
+payloads in" means recorded from the client and replayed through what
+install wires (`tests/fixtures/claude-code-hooks/`, `replayRecordedSession`),
+never written by hand; the client's hook events are listed beside what
+install wires (`events.json`, D402), and `npm run dogfood:census` counts a
+real session's tool calls against the store by the client's call id.
 
 **Why a green suite can lie.** The review discipline is the failure
 ladder, the `cino:` and `blind:` addresses in gherkin-node-test's
@@ -70,7 +75,12 @@ only `standins.ts` and the lines its allowlist names, each with a reason,
 are exempt. It does not see a name assembled at run time or a door row
 written through raw SQL. The binding state of every beta.3
 scenario on the failure ladder, and the review mutations still needing a
-scenario, are in `docs/beta3-bindings-audit.md`.
+scenario, are in `docs/beta3-bindings-audit.md`. A step that says an event is "as Claude Code sends it" must be
+bound by a definition that takes it from the recordings through
+`recordedSession` or `replayRecordedSession` (a second guard in the same
+file; it cannot see a claim made in other words, or what a binding does
+with the event after taking it). The stand-in processes' own payloads are
+hand-written models, never the client's word.
 
 ## Architecture
 

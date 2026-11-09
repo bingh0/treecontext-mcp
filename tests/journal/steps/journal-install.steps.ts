@@ -8,7 +8,7 @@ import { spawnCli, spawnNodeTs } from '../../helpers/cli-spawn.js'
 import { seedOrphanSidecar, storesDirIn } from '../../helpers/store-fixtures.js'
 import { writeVerdict } from '../../../src/persistence/backup-verdict.js'
 import { TS_ROOT } from '../proc.js'
-import { claudeSessionStartUnwired, MARKER_START, MARKER_END, INSTRUCTIONS_CONTENT } from '../../../src/server/installer.js'
+import { claudeSessionStartUnwired, claudeHooksBlock, MARKER_START, MARKER_END, INSTRUCTIONS_CONTENT } from '../../../src/server/installer.js'
 import { DatabaseSync } from 'node:sqlite'
 import { openNodeSqlite } from '../../../src/persistence/node-sqlite.js'
 import { FlatStore } from '../../../src/flat-store.js'
@@ -18,6 +18,7 @@ import { type InstallWorld, pathWithFakeClaude, setClaudeVersion, tcCli, agentCl
 import { CODEX_APPROVALS_FLOOR } from '../../../src/server/codex-client.js'
 import { startEntryAsClient } from '../standins.js'
 import { parse as parseToml, stringify as stringifyToml } from 'smol-toml'
+import { type EventList, readEventList, provenanceProblems, dispositionProblems, unlistedWiredProblems, recordingProblems } from '../event-list.js'
 
 export const installDefiner = (reg: Registry<InstallWorld>): void => {
   // ── install wires only the agents that are present ──────────────────
@@ -668,6 +669,65 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
   reg.define(/^the refusal says the opt-in must name an agent$/, (w: InstallWorld) => {
     expect(w.irun!.out).toMatch(/--agent/)
     expect(w.irun!.out).toMatch(/name an agent|by name/i)
+  })
+
+  // ── @D402: the client's hook event list ─────────────────────────────
+  // The list is tests/fixtures/claude-code-hooks/events.json; the wired
+  // side is read from claudeHooksBlock(), the block install writes, and the
+  // recorded side from the .ndjson sessions beside it. No event name is
+  // restated here (tests/journal/event-list.ts).
+  reg.define(/^the list of Claude Code's hook events, kept with the client version it was read from$/, (w: InstallWorld) => {
+    const list = readEventList()
+    ;(w as InstallWorld & { iEventList?: EventList }).iEventList = list
+    expect(provenanceProblems(list)).toEqual([])
+  })
+
+  reg.define(/^it is compared with the hooks install wires$/, (w: InstallWorld) => {
+    const list = (w as InstallWorld & { iEventList?: EventList }).iEventList!
+    expect(Object.keys(claudeHooksBlock()).length, 'install wires no hook events').toBeGreaterThan(0)
+    expect(list.events.length).toBeGreaterThan(0)
+  })
+
+  reg.define(/^every event on the list is either wired or named with what the journal does not capture because of it$/, (w: InstallWorld) => {
+    const list = (w as InstallWorld & { iEventList?: EventList }).iEventList!
+    expect(dispositionProblems(list)).toEqual([])
+    // and every event a recording shows is on the list, observed exactly
+    expect(recordingProblems(list)).toEqual([])
+  })
+
+  reg.define(/^every event install wires is on the list$/, (w: InstallWorld) => {
+    const list = (w as InstallWorld & { iEventList?: EventList }).iEventList!
+    expect(unlistedWiredProblems(list)).toEqual([])
+  })
+
+  reg.define(/^an installation wired before a capture event was added is reported by doctor with the command that wires it$/, async (w: InstallWorld) => {
+    // The real CLI under a redirected HOME: a settings file holding
+    // treecontext's entries without the two events added by D400 and D401.
+    await openInstallWorld(w, ['.claude'])
+    expect(tcCli(w, ['install', '--yes']).status).toBe(0)
+    const settingsPath = join(w.ihome!, '.claude', 'settings.json')
+    // step-lint: allow unearned-absence -- the same step, with two events removed, finds the row by this same text (the findIndex below): the needle fires
+    expect(tcCli(w, ['doctor']).stdout, 'a fresh install already reports unwired events').not.toMatch(/capture events/)
+    const settings = JSON.parse(readFileSync(settingsPath, 'utf8')) as { hooks: Record<string, unknown> }
+    const missing = ['PostToolUseFailure', 'PostToolBatch']
+    for (const ev of missing) {
+      expect(Object.keys(settings.hooks), `install no longer wires ${ev}`).toContain(ev)
+      delete settings.hooks[ev]
+    }
+    writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n')
+    const doc = tcCli(w, ['doctor']).stdout.split('\n')
+    const i = doc.findIndex((l) => /capture events: not wired: wired by a build from before these events were added/.test(l))
+    expect(i, `doctor did not name the old wiring:\n${doc.join('\n')}`).toBeGreaterThanOrEqual(0)
+    for (const ev of missing) expect(doc[i], `the row does not name ${ev}`).toContain(ev)
+    const fix = /^\s+fix: (treecontext install --force --agent claude)$/.exec(doc[i + 1] ?? '')
+    expect(fix, `the row names no wiring command:\n${doc.join('\n')}`).not.toBeNull()
+    // The named command, run in the sandbox, wires them and the row is gone.
+    const args = fix![1]!.split(' ').slice(1)
+    expect(tcCli(w, [...args, '--yes']).status).toBe(0)
+    const after = JSON.parse(readFileSync(settingsPath, 'utf8')) as { hooks: Record<string, unknown> }
+    for (const ev of missing) expect(Object.keys(after.hooks)).toContain(ev)
+    // step-lint: allow unearned-absence -- the same step, with two events removed, finds the row by this same text (the findIndex below): the needle fires
+    expect(tcCli(w, ['doctor']).stdout).not.toMatch(/capture events/)
   })
 
   // ── doctor ──────────────────────────────────────────────────────────

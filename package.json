@@ -96,6 +96,7 @@
     "dogfood": "npm run typecheck && npm test && npm run dogfood:now",
     "dogfood:now": "npm run build && npm pack && node -e \"require('node:child_process').execSync('npm i -g ./treecontext-mcp-'+require('./package.json').version+'.tgz',{stdio:'inherit'})\" && treecontext install --force --agent claude -y",
     "dogfood:pull": "git pull --ff-only && npm ci --no-audit --no-fund && npm run dogfood:now",
+    "dogfood:census": "tsx scripts/capture-census.ts",
     "bench": "tsx bench/cli.ts",
     "bench:falsify": "tsx bench/falsify.ts",
     "bench:compare": "tsx bench/compare.ts",

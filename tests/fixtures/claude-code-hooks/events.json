@@ -1,0 +1,233 @@
+{
+  "client": "Claude Code",
+  "version": "2.1.319",
+  "read_at": "2026-11-09",
+  "sources": [
+    "hooks reference, code.claude.com/docs/en/hooks, read 2026-11-09",
+    "live headless runs recorded in 2.1.319/"
+  ],
+  "events": [
+    {
+      "event": "SessionStart",
+      "when": "a session begins, resumes, clears or compacts",
+      "disposition": "wired",
+      "observed": true
+    },
+    {
+      "event": "UserPromptSubmit",
+      "when": "the developer submits a prompt",
+      "disposition": "wired",
+      "observed": true
+    },
+    {
+      "event": "PostToolUse",
+      "when": "a tool call succeeds",
+      "disposition": "wired",
+      "observed": true
+    },
+    {
+      "event": "PostToolUseFailure",
+      "when": "a tool call fails or is interrupted",
+      "disposition": "wired",
+      "observed": true
+    },
+    {
+      "event": "PostToolBatch",
+      "when": "every call of one assistant message has resolved",
+      "disposition": "wired",
+      "observed": true
+    },
+    {
+      "event": "SubagentStart",
+      "when": "a subagent starts",
+      "disposition": "wired",
+      "observed": true
+    },
+    {
+      "event": "SubagentStop",
+      "when": "a subagent finishes",
+      "disposition": "wired",
+      "observed": true
+    },
+    {
+      "event": "Stop",
+      "when": "an assistant turn ends",
+      "disposition": "wired",
+      "observed": true
+    },
+    {
+      "event": "PreCompact",
+      "when": "before the client compacts the context",
+      "disposition": "wired",
+      "observed": false
+    },
+    {
+      "event": "Setup",
+      "when": "the client is initialised or runs maintenance",
+      "disposition": "not-captured",
+      "lost": "nothing of a conversation; it fires on init and maintenance runs",
+      "observed": false
+    },
+    {
+      "event": "UserPromptExpansion",
+      "when": "a typed command expands into a prompt",
+      "disposition": "not-captured",
+      "lost": "the text a typed command expands into; the journal holds the prompt as submitted. Not verified live",
+      "observed": false
+    },
+    {
+      "event": "PreToolUse",
+      "when": "before a tool call runs",
+      "disposition": "not-captured",
+      "lost": "a call's start. Every call's end is captured (PostToolUse, PostToolUseFailure, or the batch's account), so a call still running when the client dies leaves no entry",
+      "observed": true
+    },
+    {
+      "event": "PermissionRequest",
+      "when": "a permission prompt is about to show",
+      "disposition": "not-captured",
+      "lost": "the permission prompt itself; the call is journaled through its own event or the batch's account. The event carries no call id",
+      "observed": true
+    },
+    {
+      "event": "PermissionDenied",
+      "when": "an auto-mode classifier denies a call",
+      "disposition": "not-captured",
+      "lost": "an auto-mode classifier's denial as its own event; the denied call is journaled from the batch's account (D401). Not verified live",
+      "observed": false
+    },
+    {
+      "event": "Notification",
+      "when": "the client raises a notification",
+      "disposition": "not-captured",
+      "lost": "client notifications; not conversation content",
+      "observed": false
+    },
+    {
+      "event": "MessageDisplay",
+      "when": "assistant text is displayed",
+      "disposition": "not-captured",
+      "lost": "assistant text while it is displayed; the turn's text is captured at its end (Stop)",
+      "observed": false
+    },
+    {
+      "event": "TaskCreated",
+      "when": "a task is added to the task list",
+      "disposition": "not-captured",
+      "lost": "task list changes as events; the tool call that made them is journaled as a tool call",
+      "observed": false
+    },
+    {
+      "event": "TaskCompleted",
+      "when": "a task is completed",
+      "disposition": "not-captured",
+      "lost": "task list changes as events; the tool call that made them is journaled as a tool call",
+      "observed": false
+    },
+    {
+      "event": "StopFailure",
+      "when": "a turn ends on an API error",
+      "disposition": "not-captured",
+      "lost": "a turn that ends on an API error fires no Stop, so that turn's assistant text is not journaled. Candidate for a later release",
+      "observed": false
+    },
+    {
+      "event": "TeammateIdle",
+      "when": "a teammate agent goes idle",
+      "disposition": "not-captured",
+      "lost": "nothing of a conversation",
+      "observed": false
+    },
+    {
+      "event": "InstructionsLoaded",
+      "when": "the client loads instruction files",
+      "disposition": "not-captured",
+      "lost": "which instruction files the client loaded",
+      "observed": false
+    },
+    {
+      "event": "ConfigChange",
+      "when": "the client's configuration changes",
+      "disposition": "not-captured",
+      "lost": "environment events; not conversation content",
+      "observed": false
+    },
+    {
+      "event": "CwdChanged",
+      "when": "the working directory changes",
+      "disposition": "not-captured",
+      "lost": "environment events; not conversation content",
+      "observed": false
+    },
+    {
+      "event": "DirectoryAdded",
+      "when": "a directory is added to the session",
+      "disposition": "not-captured",
+      "lost": "environment events; not conversation content",
+      "observed": false
+    },
+    {
+      "event": "FileChanged",
+      "when": "a watched file changes",
+      "disposition": "not-captured",
+      "lost": "environment events; not conversation content",
+      "observed": false
+    },
+    {
+      "event": "WorktreeCreate",
+      "when": "a worktree is created",
+      "disposition": "not-captured",
+      "lost": "environment events; not conversation content",
+      "observed": false
+    },
+    {
+      "event": "WorktreeRemove",
+      "when": "a worktree is removed",
+      "disposition": "not-captured",
+      "lost": "environment events; not conversation content",
+      "observed": false
+    },
+    {
+      "event": "PostCompact",
+      "when": "a compaction ends",
+      "disposition": "not-captured",
+      "lost": "the end of a compaction; the SessionStart that follows it (source compact) is what the journal acts on",
+      "observed": false
+    },
+    {
+      "event": "PreModelSwitch",
+      "when": "before the model changes",
+      "disposition": "not-captured",
+      "lost": "model changes",
+      "observed": false
+    },
+    {
+      "event": "PostModelSwitch",
+      "when": "after the model changes",
+      "disposition": "not-captured",
+      "lost": "model changes",
+      "observed": false
+    },
+    {
+      "event": "Elicitation",
+      "when": "an MCP server asks the developer a question",
+      "disposition": "not-captured",
+      "lost": "an MCP server's question to the developer is not journaled. Candidate for a later release",
+      "observed": false
+    },
+    {
+      "event": "ElicitationResult",
+      "when": "the developer answers an MCP server's question",
+      "disposition": "not-captured",
+      "lost": "the developer's answer to an MCP server's question is not journaled. Candidate for a later release",
+      "observed": false
+    },
+    {
+      "event": "SessionEnd",
+      "when": "a session ends",
+      "disposition": "not-captured",
+      "lost": "a session's end moment; declined until 0.1.0-beta.5 (features/OUT-OF-SCOPE.md, D396)",
+      "observed": true
+    }
+  ]
+}

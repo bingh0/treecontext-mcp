@@ -2598,9 +2598,35 @@ describe('agent hook wrappers (vscode/codex/cursor; gemini\'s swept only)', () =
       expect(body).toMatch(/\nexit 0\n/)
     }
 
-    // Healthy under the product's grader: the fallback is present, so a
-    // stale pin is recoverable, not reportable.
-    expect(hookScriptIssue(body)).toBeNull()
+    // The grader's verdict on a stale pin depends on whether the fallback
+    // search lands on a copy, and that search reads the machine's managed
+    // layouts under the home directory (and two system roots). Run from the
+    // source tree the pin names src/hooks/<agent>/<stem>.js, which never
+    // exists, so the verdict is the search's alone. It is decided in a
+    // sandboxed home, never by whatever global install the developer's
+    // machine happens to hold (the real machine made this assertion pass for
+    // gemini until an older install holding dist/hooks/gemini went away).
+    const home = mkdtempSync(join(tmpdir(), 'tc-wrapper-grade-'))
+    const restore = redirectHome(home)
+    resetManagedLayoutScan()
+    try {
+      const systemCopy = ['/opt/homebrew/lib/node_modules', '/usr/local/lib/node_modules']
+        .some(r => ['treecontext', 'treecontext-mcp'].some(n => existsSync(join(r, n, 'dist', 'hooks', agent, `${stem}.js`))))
+      if (agent === 'gemini') {
+        // Retired (D399): no build emits dist/hooks/gemini, so a wrapper an
+        // earlier build wrote is unrecoverable and the grader says so.
+        if (!systemCopy) expect(hookScriptIssue(body)).toMatch(/no fallback copy was found in a managed layout/)
+        return
+      }
+      // A live agent: the pin is present (a source run counts the entry
+      // point's .ts twin as present, a built one has the .js), so the
+      // wrapper is healthy whatever the machine's managed layouts hold.
+      expect(hookScriptIssue(body)).toBeNull()
+    } finally {
+      restore()
+      resetManagedLayoutScan()
+      rmSync(home, { recursive: true, force: true })
+    }
   })
 
   // Gemini CLI's stems name no entry point since its adapter left with its

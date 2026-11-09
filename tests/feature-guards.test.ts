@@ -457,3 +457,74 @@ describe('no binding stands in for a door outside the stand-in harness', () => {
     expect(stale, 'stale ALLOWED entries (the line no longer holds the finding — remove them)').toEqual([])
   })
 })
+
+describe('a step that says an event is as Claude Code sends it replays a recording', () => {
+  // D402: "as Claude Code sends it" is a claim about the far side of the
+  // hooks door, and the only evidence the repository holds of it is the
+  // recorded sessions under tests/fixtures/claude-code-hooks. A step whose
+  // text says a payload or event is as Claude Code sends (or sent) it must
+  // be bound by a step definition whose body takes the payload from a
+  // recording through the stand-in helpers (`recordedSession` or
+  // `replayRecordedSession`, tests/journal/standins.ts), not from a literal
+  // in the steps file.
+  //
+  // What is checked: every step line of every feature file whose text
+  // matches CLAIM; the steps files' `reg.define(/…/, …)` whose regex matches
+  // that text (one must, so does the executor); and that its body, up to the
+  // next `reg.define(`, calls one of the two helpers and that the file
+  // imports it from the stand-ins module.
+  // Not seen: a claim in other words ("the real payload", "a Claude
+  // Code-shaped payload" is in a scenario title, not a step), a step's claim
+  // carried by a neighbouring step, what the body does with the recorded
+  // event after taking it (a call to the helper beside a hand-written
+  // payload would pass), and a definition built from a computed regex.
+  const CLAIM = /\bas Claude Code sen(?:ds|t)\b/i
+  const HELPERS = /\b(?:recordedSession|replayRecordedSession)\s*\(/
+
+  interface Definition { file: string; regex: RegExp; body: string; imports: boolean }
+  const definitionsIn = (file: string, src: string): Definition[] => {
+    const starts = [...src.matchAll(/reg\.define\(\//g)]
+    const imports = /import\s*\{[^}]*\b(?:recordedSession|replayRecordedSession)\b[^}]*\}\s*from\s*'[^']*standins\.js'/.test(src)
+    return starts.flatMap((m, i) => {
+      let j = m.index + m[0].length
+      let cls = false
+      while (j < src.length && src[j] !== '\n') {
+        if (src[j] === '\\') { j += 2; continue }
+        if (src[j] === '[') cls = true
+        else if (src[j] === ']') cls = false
+        else if (src[j] === '/' && !cls) break
+        j++
+      }
+      const source = src.slice(m.index + m[0].length, j)
+      const flags = /^[a-z]*/.exec(src.slice(j + 1))![0]
+      try {
+        return [{ file, regex: new RegExp(source, flags), body: src.slice(m.index, starts[i + 1]?.index ?? src.length), imports }]
+      } catch { return [] }
+    })
+  }
+  const stepsFiles = walkFrom(TESTS_DIR, 'tests/', '.steps.ts')
+  const definitions = stepsFiles.flatMap((f) => definitionsIn(f, read(f)))
+  const claims = featureFiles.flatMap((f) => read(f).split('\n').map((line, n) => ({ f, n: n + 1, line: line.trim() }))
+    .filter((x) => /^(Given|When|Then|And|But)\s/.test(x.line) && CLAIM.test(x.line))
+    .map((x) => ({ ...x, text: x.line.replace(/^(Given|When|Then|And|But)\s+/, '') })))
+
+  const unreplayed = (cs: Array<{ text: string }>, defs: Definition[]): string[] => cs.flatMap(({ text }) => {
+    const bound = defs.filter((d) => d.regex.test(text))
+    if (bound.length === 0) return [`${text}: no step definition matches`]
+    return bound.filter((d) => !(HELPERS.test(d.body) && d.imports)).map((d) => `${text}: bound in ${d.file} without replaying a recording`)
+  })
+
+  test('every such step is bound by a definition that replays a recording', () => {
+    expect(claims.length, 'no "as Claude Code sends it" step found: the phrasing the guard reads has moved').toBeGreaterThanOrEqual(2)
+    expect(unreplayed(claims, definitions), 'a step says its payload is as Claude Code sends it but its binding does not take it from tests/fixtures/claude-code-hooks').toEqual([])
+  })
+
+  test('the matcher is not vacuous: a literal-payload binding is found, a replaying one is not', () => {
+    const literal = definitionsIn('x.steps.ts', "reg.define(/^a payload as Claude Code sends it$/, (w) => {\n  w.payload = { tool_response: 'hand written' }\n})\n")
+    const replay = definitionsIn('y.steps.ts', "import { recordedSession } from '../journal/standins.js'\nreg.define(/^a payload as Claude Code sends it$/, (w) => {\n  w.payload = recordedSession('2.1.319', 'f.ndjson')[0]\n})\n")
+    const claim = [{ text: 'a payload as Claude Code sends it' }]
+    expect(unreplayed(claim, literal)).toHaveLength(1)
+    expect(unreplayed(claim, replay)).toEqual([])
+    expect(unreplayed(claim, [])).toHaveLength(1)
+  })
+})

@@ -24,15 +24,21 @@ import { TS_ROOT, tsxArgv, killAndWait } from './proc.js'
 // name) runs for real and writeStaging opens the same SQLite file the
 // assertions later read. No mocks anywhere on the path.
 //
-// Payload shapes mirror live Claude Code payloads as observed on the
-// reference platform 2026-07-24 (Bash tool_response is
+// NEAR-SIDE MODELS, NOT THE CLIENT'S WORD: the payloads the helpers here
+// build are hand-written models of Claude Code's, shaped after what was
+// observed on the reference platform 2026-07-24 (Bash tool_response is
 // {stdout, stderr, interrupted, isImage}; UserPromptSubmit carries
 // `prompt`; Stop carries `transcript_path` to the session JSONL, and —
 // probe of 2026-10-08, Claude Code 2.1.293 — the ended turn's text in
 // `last_assistant_message`, while the transcript still ends a turn
 // earlier). The
 // tool_response lesson applies: these shapes must track the platform,
-// and a drifted shape fails loudly here because staging stays empty.
+// and a drifted shape fails loudly here because staging stays empty. They
+// are evidence of what the hooks do with a payload of that shape, never of
+// what Claude Code sends: the recorded ground truth is
+// tests/fixtures/claude-code-hooks (every event a real `claude -p` fired,
+// replayed by `replayRecordedSession` in standins.ts), and a step that says
+// "as Claude Code sends it" must replay it (D402).
 
 /**
  * The capture wave's world: the core `World` plus the sandbox the hooks run

@@ -26,6 +26,7 @@ import { extractInsertEcho } from '../../src/server/echo-correlation.js'
 import { LeaseClient, DRAIN_LEASE_TTL_SECS } from '../../src/persistence/leases.js'
 import { maxSupportedVersion } from '../../src/persistence/migrations/index.js'
 import { decodeContent } from '../../src/persistence/content-codec.js'
+import { recordedSession } from '../journal/standins.js'
 
 interface World {
   defer: (fn: () => void | Promise<void>) => void
@@ -36,8 +37,9 @@ interface World {
   toolInput?: string | Record<string, unknown>
   toolOutput?: string
   toolName?: string
-  /** The Claude Code scenario: the result arrives under tool_response. */
-  claudeResponse?: unknown
+  /** The Claude Code scenario: a recorded PostToolUse event, whose result
+   *  arrives under tool_response (D402: never a payload written here). */
+  recordedStdout?: string
   /** The D270 scenarios: whole Claude Code-shaped payloads (tool_name,
    *  tool_input, tool_response), staged in order by the When step. */
   payloads?: Array<Record<string, unknown>>
@@ -99,27 +101,13 @@ export const toolEventFidelityDefiner = (reg: Registry<World>): void => {
     vi.spyOn(process, 'exit').mockImplementation((() => {}) as never)
     vi.spyOn(console, 'error').mockImplementation(() => {})
     vi.spyOn(shared, 'resolveDbPath').mockReturnValue(w.dbPath!)
-    if (w.claudeResponse !== undefined) {
-      // The REAL Claude Code payload shape: tool_response, not tool_output.
-      // Every other scenario uses the normalized name; this pin is what
-      // catches the field-name regression that left the journal input-only
-      // on the flagship platform.
-      vi.spyOn(shared, 'parseHookInput').mockReturnValue({
-        session_id: 'fidelity-session',
-        cwd: '/tmp',
-        tool_name: 'Bash',
-        tool_input: { command: 'echo hi' },
-        tool_response: w.claudeResponse,
-      })
-    } else {
-      vi.spyOn(shared, 'parseHookInput').mockReturnValue({
-        session_id: 'fidelity-session',
-        cwd: '/tmp',
-        tool_name: w.toolName ?? 'TestTool',
-        tool_input: w.toolInput!,
-        tool_output: w.toolOutput!,
-      })
-    }
+    vi.spyOn(shared, 'parseHookInput').mockReturnValue({
+      session_id: 'fidelity-session',
+      cwd: '/tmp',
+      tool_name: w.toolName ?? 'TestTool',
+      tool_input: w.toolInput!,
+      tool_output: w.toolOutput!,
+    })
     postToolUseMain()
     vi.restoreAllMocks()
   }
@@ -336,15 +324,23 @@ export const toolEventFidelityDefiner = (reg: Registry<World>): void => {
 
   reg.define(/^a PostToolUse payload carrying the result under tool_response, as Claude Code sends it$/, (w) => {
     w.dbPath = freshHookDb(w)
-    w.claudeResponse = 'claudecoderesponsetoken output body'
+    // D402: the recorded event (Claude Code 2.1.319, the serial session's
+    // successful Bash call), exactly as the client wrote it to the hook.
+    const event = recordedSession('2.1.319', 'serial-failures-and-denials.ndjson')
+      .find((e) => e['hook_event_name'] === 'PostToolUse' && e['tool_use_id'] === 'toolu_017WkjHRbHSjGabaDwQkTWJE')
+    expect(event, 'the recorded PostToolUse event is not in the fixture').toBeDefined()
+    expect(Object.keys(event!['tool_response'] as object), 'the recorded result is not under tool_response').toContain('stdout')
+    w.payloads = [event!]
+    w.recordedStdout = String((event!['tool_response'] as Record<string, unknown>)['stdout'])
   })
 
   reg.define(/^the staged content carries an Output section with that result$/, (w) => {
     const row = w.row as { content: string }
-    expect(row.content).toContain('Output:\nclaudecoderesponsetoken output body')
+    expect(w.recordedStdout).toBe('probe-ok')
+    expect(row.content).toContain('Output:\nstdout:\n' + w.recordedStdout)
     // D270: the object tool_input is composed as its text, a field's name
     // then its value on the next line, not as its JSON encoding.
-    expect(row.content).toBe('Tool: Bash\nInput:\ncommand:\necho hi\nOutput:\nclaudecoderesponsetoken output body')
+    expect(row.content).toBe('Tool: Bash\nInput:\ncommand:\necho probe-ok\ndescription:\nEcho probe-ok\nOutput:\nstdout:\nprobe-ok\nstderr:\ninterrupted: false\nisImage: false\nnoOutputExpected: false')
   })
 
   // D270 — object and content-block payloads compose as their text.

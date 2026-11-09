@@ -21,8 +21,8 @@
  *  |   (tests/helpers/standin-worker.ts)    | process the real ticket door (`spawnWorker`, `treecontext   |
  *  |                                        | run`) launches, the model inside it out of reach            |
  *  | `runWorker` + standin-claude-p         | Claude Code's headless client (`claude -p`): it fires the   |
- *  |   (tests/helpers/standin-claude-p.ts)  | real hooks the install wires, with the payloads Claude Code |
- *  |                                        | sends, in the order it sends them                           |
+ *  |   (tests/helpers/standin-claude-p.ts)  | real hooks the install wires, with payloads and an order    |
+ *  |                                        | the stand-in WRITES (hand-written models, not recordings)   |
  *  | a plan's `viaTools` / `toolNotes` /    | a worker's CLI writing and reading through its own tools: a |
  *  |   `reads` / `handshakes`               | real `treecontext serve` the stand-in starts with its env   |
  *  |                                        | (`handshakes`: the client reading `initialize`'s            |
@@ -76,11 +76,16 @@
  * has (a hook-less headless worker: the library or its own tools, a
  * `treecontext serve` it starts; a `claude -p` child: its tools only, each
  * call echoed by PostToolUse, as Claude Code runs them); fire the hooks
- * with the payloads Claude Code sends, in the order it sends them
- * (SessionStart, UserPromptSubmit, PostToolUse per tool call, Stop, and
- * Stop again with `stop_hook_active` after a block; at a compaction,
- * PreCompact and then SessionStart with source `compact`); print its last
- * output and exit as told (a code, or hanging until a signal).
+ * with payloads shaped after Claude Code's, in the order Claude Code is
+ * understood to send them (SessionStart, UserPromptSubmit, PostToolUse per
+ * tool call, Stop, and Stop again with `stop_hook_active` after a block; at
+ * a compaction, PreCompact and then SessionStart with source `compact`);
+ * print its last
+ * output and exit as told (a code, or hanging until a signal). The payloads
+ * are hand-written models, the stand-in's own words, not the client's: the
+ * recorded ground truth is tests/fixtures/claude-code-hooks, replayed by
+ * `replayRecordedSession` (D402), and a step that claims "as Claude Code
+ * sends it" uses that, never these.
  *
  * ── What a stand-in must never do ─────────────────────────────────────
  *
