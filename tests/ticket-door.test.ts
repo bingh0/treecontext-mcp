@@ -27,7 +27,7 @@ import {
 } from '../src/ticket-door.js'
 import { workerEnvironment, CLIENT_SESSION_VARIABLE_NAMES } from '../src/client-session-env.js'
 import { decodeContent } from '../src/persistence/content-codec.js'
-import { hostProbe } from '../src/persistence/process-probe.js'
+import { hostProbe, type ProcessProbe } from '../src/persistence/process-probe.js'
 import { registerSelf } from '../src/persistence/session-registry.js'
 import { NO_SESSION } from '../src/dedup-identity.js'
 import { checkpointerFlag } from '../src/key-lookup.js'
@@ -398,6 +398,13 @@ describe('the cut reaches the whole worker', () => {
 })
 
 describe('the group is signalled after its leader is reaped only while its number is ours', () => {
+  // A failing run must leave no TERM-ignoring survivor behind: whatever
+  // pid a test's script wrote, killed by pid after the test.
+  const survivors = (): number[] => ['child.pid', 'clean-child.pid'].flatMap((f) => {
+    try { return [Number(readFileSync(join(tmpDir, f), 'utf8').trim())] } catch { return [] }
+  })
+  afterEach(() => { for (const pid of survivors()) { if (pid > 0) { try { process.kill(pid, 'SIGKILL') } catch { /* gone */ } } } })
+
   // A worker whose child ignores SIGTERM: the timeout's SIGTERM ends the
   // leader, the child lives on in the group, and the door's SIGKILL after
   // the leader's reap is what ends it. The child writes its own pid first.
@@ -451,8 +458,8 @@ describe('the group is signalled after its leader is reaped only while its numbe
   // the system) takes its group with it too: SIGTERM first, SIGKILL after
   // the grace for a member still there. The leader writes its own pid and
   // waits; the test kills it.
-  const killedFromOutside = async (s: FlatStore, script: string, leaderFile: string): Promise<Awaited<ReturnType<typeof spawnWorker>>> => {
-    const p = spawnWorker({ store: s, ticket: { run: 'r1', key: 'k', role: 'builder', checkpointer: 'builder', parent: { id: 'p1' } }, command: 'sh', args: ['-c', script] })
+  const killedFromOutside = async (s: FlatStore, script: string, leaderFile: string, probe?: ProcessProbe): Promise<Awaited<ReturnType<typeof spawnWorker>>> => {
+    const p = spawnWorker({ store: s, ticket: { run: 'r1', key: 'k', role: 'builder', checkpointer: 'builder', parent: { id: 'p1' } }, command: 'sh', args: ['-c', script], ...(probe ? { probe } : {}) })
     for (let i = 0; i < 200 && !existsSync(leaderFile); i++) await new Promise((res) => setTimeout(res, 25))
     await new Promise((res) => setTimeout(res, 200))
     process.kill(Number(readFileSync(leaderFile, 'utf8').trim()), 'SIGKILL')
@@ -489,6 +496,51 @@ describe('the group is signalled after its leader is reaped only while its numbe
       // The run settled only after the grace, never before the group's end.
       expect(took).toBeGreaterThanOrEqual(GROUP_GRACE_MS)
     } finally { await s.close() }
+  }, 30_000)
+
+  // Every signal the door sends to a group (a negative pid), the null
+  // signal (a liveness probe) aside.
+  const watchGroupSignals = (): { sent: string[]; stop: () => void; seen: () => boolean } => {
+    const real = process.kill
+    const sent: string[] = []
+    process.kill = ((pid: number, sig?: string | number): true => {
+      if (pid < 0 && sig !== 0 && sig !== undefined) sent.push(String(sig))
+      return real.call(process, pid, sig as never) as true
+    }) as typeof process.kill
+    return { sent, stop: () => { process.kill = real }, seen: () => sent.includes('SIGTERM') }
+  }
+
+  it.skipIf(process.platform === 'win32')('a number a stranger takes once the SIGTERM is sent gets no SIGKILL, though a member is still there (D393)', async () => {
+    const s = await open()
+    const pidFile = join(tmpDir, 'child.pid')
+    const leader = join(tmpDir, 'leader.pid')
+    const watch = watchGroupSignals()
+    try {
+      // The number reads as free until the SIGTERM goes out, then as held:
+      // a stranger reused it during the grace.
+      const probe: ProcessProbe = { ...hostProbe, exists: (pid: number): boolean | null => (watch.seen() ? true : hostProbe.exists(pid)) }
+      const script = `(trap "" TERM; exec sh -c 'echo $$ > "${pidFile}"; exec sleep 777') </dev/null >/dev/null 2>&1 & cat >/dev/null; echo $$ > "${leader}"; wait`
+      const r = await killedFromOutside(s, script, leader, probe)
+      expect(r.runs[0]!.exit.signal).toBe('SIGKILL')
+      expect(watch.sent, 'the group got its SIGTERM and nothing after it').toEqual(['SIGTERM'])
+      expect(alive(Number(readFileSync(pidFile, 'utf8').trim()))).toBe(true)
+    } finally { watch.stop(); await s.close() }
+  }, 30_000)
+
+  it.skipIf(process.platform === 'win32')('a clean exit settles at once and sends its group no signal, whatever it left running (current behaviour)', async () => {
+    const s = await open()
+    const watch = watchGroupSignals()
+    try {
+      const pidFile = join(tmpDir, 'clean-child.pid')
+      const script = `cat >/dev/null; (trap "" TERM; exec sleep 777) </dev/null >/dev/null 2>&1 & echo $! > "${pidFile}"; exit 0`
+      const t0 = Date.now()
+      const r = await spawnWorker({ store: s, ticket: { run: 'r1', key: 'k', role: 'builder', parent: { id: 'p1' } }, command: 'sh', args: ['-c', script] })
+      const took = Date.now() - t0
+      expect([r.runs[0]!.exit.code, r.runs[0]!.exit.signal, r.runs[0]!.doorSignalled]).toEqual([0, null, false])
+      expect(watch.sent).toEqual([])
+      // Far under the grace: a clean exit never waits for the group's end.
+      expect(took).toBeLessThan(GROUP_GRACE_MS / 2)
+    } finally { watch.stop(); await s.close() }
   }, 30_000)
 
   it('reads the number as ours only when the host says no process holds it', () => {

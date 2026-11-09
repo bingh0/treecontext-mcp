@@ -484,8 +484,8 @@ treecontext run --run login --role parser-dev --key parser \
   that output becomes its summary row, and one line on stderr, starting
   `treecontext:`, says how it ended. The exit code is the worker's own.
   A worker that owes a checkpoint and exits without one is run once more
-  to write it. `--timeout <seconds>` stops the worker and everything it
-  started.
+  to write it. `--timeout <seconds>` ends the worker and its process
+  group (Linux, macOS; see the limits under "Headless workers").
 - Codex CLI (`-- codex exec`) and Antigravity CLI (`-- agy -p`) run
   as workers too; see "Headless workers" below.
 
@@ -641,7 +641,8 @@ the door and must scrub its own environment.
   and the next leg is a recovery leg.
 - On Linux and macOS a cut, and any end of the worker by a signal, whoever
   sent it, also ends the worker's process group: what it started that is
-  still in that group gets SIGTERM, then SIGKILL a second later. On
+  still in that group gets SIGTERM, then SIGKILL after a short grace
+  (currently about a second, not a promise). On
   Windows only the worker itself is ended. A process that left the group
   (`setsid`, a detached spawn) is not reached.
 - A failed run's summary row keeps the end of stderr verbatim. If a CLI

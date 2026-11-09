@@ -7,7 +7,7 @@
  * features/journal-reorientation.feature).
  */
 import { mkdirSync, readdirSync, readFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { dirname, join, relative, sep } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
 import { DatabaseSync } from 'node:sqlite'
@@ -120,11 +120,67 @@ describe('a /clear records no stop for the self of the session it continues (D39
     // The guard sees the writers that stop a subagent or a leg (the
     // subagent retirements and retireLeg): it is not looking at nothing.
     expect(setters).toBeGreaterThanOrEqual(3)
+    // The wider guard: no line of src names stopped_at outside the
+    // allowlist, whatever the way its SQL is built (a concatenation
+    // included), and no allowlist entry is left standing for nothing.
+    const files = tsFilesUnder(join(TS_ROOT, 'src')).map((f) => ({ file: relative(TS_ROOT, f).split(sep).join('/'), src: readFileSync(f, 'utf8') }))
+    expect(stoppedAtUnlisted(files)).toEqual({ unlisted: [], unused: [] })
+    const sneaky = [...files, { file: 'src/persistence/session-registry.ts', src: "const q = 'UPDATE session_registry SET ' + 'stopped_at' + ' = ?'" }]
+    expect(stoppedAtUnlisted(sneaky).unlisted).toHaveLength(1)
     // And it would see unit 5's withdrawn writer, were it back.
     expect(stoppedAtVerdict("UPDATE session_registry SET stopped_at = ? WHERE session_id = ? AND agent_id = '' AND stopped_at IS NULL")).toBe('self-reachable')
     expect(stoppedAtVerdict('INSERT INTO session_registry (session_id, agent_id, started_at, stopped_at) VALUES (?, \'\', ?, ?)')).toBe('self-reachable')
   })
 })
+
+/** Every place in src that names the registry's stopped_at column, by
+ *  file and the line's opening text (comments stripped), each with the
+ *  reason it may. A new line naming it, SQL built by concatenation
+ *  included, fails the guard until it is read and listed here. */
+const STOPPED_AT_ALLOWED: Array<{ file: string; line: string; reason: string }> = [
+  { file: 'src/persistence/session-registry.ts', line: 'stopped_at REAL,', reason: 'the column\'s definition' },
+  { file: 'src/persistence/session-registry.ts', line: 'cwd: string | null; toplevel', reason: 'the row type' },
+  { file: 'src/persistence/session-registry.ts', line: 'cwd: r.cwd, toplevel: r.toplevel', reason: 'the row read into the registration' },
+  { file: 'src/persistence/session-registry.ts', line: '`INSERT INTO session_registry (session_id, agent_id, agent_type, worktree', reason: 'a registration inserts the column as NULL (checked by the verdict test above)' },
+  { file: 'src/persistence/session-registry.ts', line: 'cwd = excluded.cwd, toplevel = excluded.toplevel', reason: 're-registration clears the stop (the resume clear)' },
+  { file: 'src/persistence/session-registry.ts', line: 'ON CONFLICT (session_id, agent_id) DO UPDATE SET agent_type', reason: 're-registration of a subagent clears the stop (the resume clear)' },
+  { file: 'src/persistence/session-registry.ts', line: '"UPDATE session_registry SET stopped_at = ? WHERE session_id = ? AND agent_id = ? AND agent_id != \'\'', reason: 'the subagent retirement; excludes the self\'s agent id' },
+  { file: 'src/persistence/session-registry.ts', line: 'WHERE session_id = ? AND agent_id != \'\' AND kind = \'subagent\' AND stopped_at IS NULL', reason: 'a registry read of live subagents' },
+  { file: 'src/persistence/session-registry.ts', line: '`UPDATE session_registry SET stopped_at = ? WHERE session_id = ? AND agent_id != \'\'', reason: 'the retirement of live helpers at a start; excludes the self\'s agent id' },
+  { file: 'src/persistence/session-registry.ts', line: '`SELECT * FROM session_registry WHERE session_id = ? AND agent_id != \'\' AND stopped_at IS NULL', reason: 'a registry read of the live subagents' },
+  { file: 'src/persistence/leg-registry.ts', line: 'cwd: string | null; started_at: number; stopped_at', reason: 'the row type' },
+  { file: 'src/persistence/leg-registry.ts', line: 'worktree: r.worktree, branch: r.branch, cwd: r.cwd, startedAt', reason: 'the row read into the leg' },
+  { file: 'src/persistence/leg-registry.ts', line: '`INSERT INTO session_registry (session_id, agent_id, agent_type, worktree', reason: 'a leg\'s registration inserts the column as NULL (a worker\'s agent id is never the self\'s)' },
+  { file: 'src/persistence/leg-registry.ts', line: '`UPDATE session_registry SET stopped_at = NULL', reason: 'the resume clear of a leg' },
+  { file: 'src/persistence/leg-registry.ts', line: '"UPDATE session_registry SET stopped_at = ?, ended = ? WHERE session_id = ? AND agent_id = ? AND agent_id != \'\'', reason: 'the leg retirement; excludes the self\'s agent id' },
+  { file: 'src/persistence/leg-registry.ts', line: '`SELECT * FROM session_registry WHERE kind = \'worker\'', reason: 'a registry read of live workers' },
+  { file: 'src/persistence/leg-registry.ts', line: 'WHERE session_id = ? AND agent_id = ? AND ended IS NULL AND stopped_at IS NULL', reason: 'a registry read of a live leg' },
+  { file: 'src/run-export.ts', line: 'worktree: leg.worktree, branch: leg.branch', reason: 'the leg\'s fact written to the export file' },
+  { file: 'src/run-export.ts', line: 'startedAt: numOrNull(f[\'started_at\'])', reason: 'the leg\'s fact read back from a claim' },
+  { file: 'src/key-lookup.ts', line: 'stopped_at: number | null', reason: 'the reply\'s type' },
+  { file: 'src/key-lookup.ts', line: 'stopped_at: g.stoppedAt', reason: 'the leg\'s fact in the reply' },
+]
+
+/** Lines of a file's code (comments stripped) that name stopped_at. */
+function stoppedAtLinesIn(src: string): string[] {
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`\\])\/\/[^\n]*/g, '$1')
+  return code.split('\n').map((l) => l.trim()).filter((l) => /\bstopped_at\b/.test(l))
+}
+
+/** The lines naming stopped_at that no allowlist entry covers; and the
+ *  entries no line used. */
+function stoppedAtUnlisted(files: Array<{ file: string; src: string }>): { unlisted: string[]; unused: string[] } {
+  const used = new Set<number>()
+  const unlisted: string[] = []
+  for (const { file, src } of files) {
+    for (const line of stoppedAtLinesIn(src)) {
+      const i = STOPPED_AT_ALLOWED.findIndex((a) => a.file === file && line.startsWith(a.line))
+      if (i === -1) unlisted.push(`${file}: ${line.slice(0, 160)}`)
+      else used.add(i)
+    }
+  }
+  return { unlisted, unused: STOPPED_AT_ALLOWED.filter((_, i) => !used.has(i)).map((a) => `${a.file}: ${a.line}`) }
+}
 
 function tsFilesUnder(dir: string): string[] {
   const out: string[] = []
