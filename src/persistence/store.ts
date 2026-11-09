@@ -125,6 +125,10 @@ export type EchoHealOutcome =
  *  so the publisher does not trade on them. */
 export const CORRELATED_ECHO_OUTCOMES: ReadonlySet<EchoHealOutcome> = new Set<EchoHealOutcome>([
   'healed', 'ambiguous', 'asserted', 'already-final', 'kept-exact',
+  // D391: a hit from another lane changes nothing of the survivor, but the
+  // correlation stands: this session's call reached this row, and a hit
+  // is found within one tree, so the survivor's namespace is the caller's.
+  'other-lane',
 ])
 
 // ── Helpers ─────────────────────────────────────────────────────────

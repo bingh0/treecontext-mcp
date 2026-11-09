@@ -118,6 +118,9 @@ export interface OrchestrationWorld extends RunWorld {
    *  stored metadata and update moment before the When. */
   unplacedExtra?: Record<string, unknown>
   asWas?: Record<string, { m: string; u: number }>
+  /** D391: the main checkout's call that hit another lane's row, as its
+   *  PostToolUse echo carries it (the input and the tool's own result). */
+  hitCall?: { input: Record<string, unknown>; response: unknown }
 }
 
 type Hit = { nodeId: string; content: string; metadata: Record<string, unknown> | null; referencedBy?: RefBy }
@@ -931,11 +934,85 @@ export const orchestrationDefiner = (reg: Registry<OrchestrationWorld>): void =>
     w.entries = { [lane]: old, [`${lane}#newer`]: { id: reply['node_id'] as string, text: 'plan: wire the login form and its CSRF test' } }
     w.chapterRow = rawRow(w, old.id)
   })
-  reg.define(/^a session in the main checkout inserts "([^"]+)" through the tools( with next_session set)?$/, async (w, text$, pointer$) => {
+  reg.define(/^the note "([^"]+)" written by the worktree "([^"]+)"'s own agent through a server that read its session from the beacon, its echo drained$/, async (w, text$, name$) => {
+    await openGitWorld(w)
+    w.laneSessions = { main: w.sessionId! }
+    const lane = `worktree:${String(name$)}`
+    // The real SessionStart hook in the worktree registers the session and
+    // writes its beacon; the worktree's server is given no session and
+    // reads it from that beacon, as a server whose own pid beacon it
+    // cannot read does.
+    const session = laneSession(w, lane)
+    const dir = checkoutDir(w, lane)
+    await mcpOver(w, { claudeCwd: dir, info: { storePath: w.dbPath! } })
+    const input = { content: String(text$), metadata: {} }
+    const res = await w.client!.callTool({ name: 'treecontext_insert', arguments: input })
+    const reply = parseTool(res)
+    expect(reply).toMatchObject({ writer: lane, writer_src: 'self', deduplicated: false })
+    const id = reply['node_id'] as string
+    expect(rawMeta(w, id)).toMatchObject({ _cc_session_id: session, _cc_session_src: 'beacon-unanimous' })
+    // Its own echo, as Claude Code fires it, drained: the attribution is
+    // the echo's now, one a later in-window echo could still change.
+    echoInsert(w, session, dir, input, (res as { content: unknown }).content)
+    await drainStaging(w)
+    expect(rawMeta(w, id)).toMatchObject({ _writer: lane, _writer_src: 'echo', _cc_session_id: session, _cc_session_src: 'echo' })
+    expect(rawRow(w, id)['session_key']).toBe(session)
+    w.entries = { [lane]: { id, text: String(text$) } }
+  })
+  reg.define(/^the main checkout's own note "([^"]+)"$/, async (w, text$) => {
+    w.entries!['main'] = await laneNote(w, 'main', String(text$))
+  })
+  reg.define(/^a session in the main checkout inserts "([^"]+)" through the tools( with next_session set| naming that note in its refs)?$/, async (w, text$, how$) => {
+    // The survivor as SQLite holds it before the hit (a Given that kept it
+    // after an act of its own keeps that).
+    const lane = Object.keys(w.entries!).find((k) => k.startsWith('worktree:') && !k.endsWith('#newer'))!
+    w.chapterRow ??= rawRow(w, w.entries![lane]!.id)
     await mcpOver(w, { ccSessionId: w.laneSessions!['main']! })
     w.clientSession = w.laneSessions!['main']!
-    w.noteReply = await insert(w, String(text$), pointer$ ? { next_session: true } : {})
+    const metadata: Record<string, unknown> = how$ === ' with next_session set' ? { next_session: true }
+      : how$ === ' naming that note in its refs' ? { refs: [w.entries!['main']!.id] } : {}
+    const input = { content: String(text$), metadata }
+    const res = await w.client!.callTool({ name: 'treecontext_insert', arguments: input })
+    w.hitCall = { input, response: (res as { content: unknown }).content }
+    w.noteReply = parseTool(res)
     expect(w.noteReply['deduplicated'], JSON.stringify(w.noteReply)).toBe(true)
+  })
+  reg.define(/^the drain processes that insert's echo$/, async (w) => {
+    const session = w.laneSessions!['main']!
+    const echoes = (): number => rawAll<{ n: number }>(w, "SELECT count(*) AS n FROM nodes WHERE session_key = ? AND json_extract(metadata_json, '$.tool_name') = 'mcp__treecontext__treecontext_insert'", session)[0]!.n
+    const before = echoes()
+    echoInsert(w, session, w.repo!, w.hitCall!.input, w.hitCall!.response)
+    await drainStaging(w)
+    // The echo was drained: it landed as the main session's capture.
+    expect(echoes()).toBe(before + 1)
+  })
+  reg.define(/^the worktree's row is unchanged byte for byte, its writer and its lane still "([^"]+)"$/, (w, lane$) => {
+    const lane = String(lane$)
+    const id = w.entries![lane]!.id
+    expect(w.noteReply!['node_id']).toBe(id)
+    expectRowAsWas(w, id)
+    // Its writer, and its lane as the registry places its session.
+    expect(rawMeta(w, id)['_writer']).toBe(lane)
+    const session = rawRow(w, id)['session_key'] as string
+    expect(session).toBe(w.laneSessions![lane])
+    const placed = rawAll<{ worktree: string | null }>(w, "SELECT worktree FROM session_registry WHERE session_id = ? AND agent_id = ''", session)
+    expect(placed.map((r) => (r.worktree === null ? 'main' : `worktree:${r.worktree}`))).toEqual([lane])
+  })
+  reg.define(/^the worktree's row is unchanged byte for byte and records no reference to the main checkout's note$/, (w) => {
+    const lane = Object.keys(w.entries!).find((k) => k.startsWith('worktree:'))!
+    const id = w.entries![lane]!.id
+    const note = w.entries!['main']!.id
+    expect(w.noteReply!['node_id']).toBe(id)
+    expectRowAsWas(w, id)
+    expect(rawMeta(w, id)['refs']).toBeUndefined()
+    // The reverse index holds no reference from the survivor, none to the note.
+    expect(rawAll(w, 'SELECT ref_id, node_id FROM node_refs WHERE node_id = ? OR ref_id = ?', id, note)).toEqual([])
+  })
+  reg.define(/^the reply says that reference was not recorded$/, (w) => {
+    const note = w.entries!['main']!.id
+    expect(w.noteReply!['refs_not_recorded']).toEqual([note])
+    expect(String(w.noteReply!['refs_note'])).toBe('This text is already in the journal, so no new entry was written and these refs were not recorded; '
+      + 'reword the entry to record them.')
   })
   reg.define(/^the reply says the insert was deduplicated onto the worktree's row, naming its writer and the lane "([^"]+)"$/, (w, lane$) => {
     const lane = String(lane$)
@@ -1752,6 +1829,29 @@ async function laneChapter(w: OrchestrationWorld, lane: string, text: string): P
   const reply = await insert(w, text, { next_session: true })
   expect(reply).toMatchObject({ writer: lane, writer_src: 'self' })
   return { id: reply['node_id'] as string, text }
+}
+
+/** The PostToolUse echo of a treecontext_insert call, as Claude Code fires
+ *  it for the session's own agent: the real post-tool-use hook, the call's
+ *  input and the tool's own result, the session and its directory. */
+function echoInsert(w: OrchestrationWorld, session: string, cwd: string, input: Record<string, unknown>, response: unknown): void {
+  runHook(w, 'post-tool-use', {
+    session_id: session, cwd, transcript_path: join(cwd, 'transcript.jsonl'), hook_event_name: 'PostToolUse', permission_mode: 'default',
+    tool_name: 'mcp__treecontext__treecontext_insert', tool_input: input, tool_response: response,
+  })
+}
+
+/** The row `id` is as the world kept it (chapterRow), column for column,
+ *  blobs compared by their bytes. */
+function expectRowAsWas(w: OrchestrationWorld, id: string): void {
+  const now = rawRow(w, id)
+  expect(Object.keys(now).sort()).toEqual(Object.keys(w.chapterRow!).sort())
+  for (const k of Object.keys(w.chapterRow!)) {
+    const before = w.chapterRow![k]
+    const after = now[k]
+    if (Buffer.isBuffer(before) || before instanceof Uint8Array) expect(Buffer.from(after as Uint8Array).equals(Buffer.from(before)), k).toBe(true)
+    else expect(after, k).toEqual(before)
+  }
 }
 
 /** A plain note written through the tools by the session the world keeps

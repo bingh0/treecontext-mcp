@@ -556,6 +556,22 @@ describe('the skeleton names the legs whose summary row holds an error stream\'s
     expect(sk.stdout.split('\n')).toContain(line)
   })
 
+  // The build's choice (D398's build line): an export written inline has
+  // no reply apart from its text, so the head is where it carries the line.
+  it('an inline export carries the line in its head, the only place it can', async () => {
+    const s = await open('a')
+    const { failed } = await withFailedWorker(s)
+    const out = exportRun(s, { run: 'r1', project: 'proj', path: null, inlineLimit: 100 })
+    await s.close()
+    expect(out.status).toBe('built')
+    if (out.status !== 'built') return
+    expect(out.written).toBe(false)
+    const text = JSON.parse(out.built.text) as Record<string, unknown>
+    expect(text['error_tails']).toBe(out.built.runLines.error_tails)
+    expect(String(text['error_tails'])).toContain(`tester worker in session ${failed.sessionId}`)
+    expect(Object.keys(text).indexOf('error_tails')).toBe(Object.keys(text).indexOf('first_moments') + 1)
+  })
+
   it('the tool\'s reply carries the line after the first moments\' one; a run with no such leg has none', async () => {
     const proj = join(tmpDir, 'proj')
     mkdirSync(proj, { recursive: true })

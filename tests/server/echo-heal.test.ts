@@ -518,6 +518,31 @@ describe('§7.8: status echoes and the session-namespace publisher', () => {
     await store.close()
   })
 
+  // D391: a hit from another lane modifies nothing of the survivor, but the
+  // correlation it rests on is the same: the caller's server served the row.
+  it('a dedup-hit echo from another lane still publishes the survivor\x27s namespace as insert-heal evidence, the row untouched', async () => {
+    const { readSessionNamespaceAnnotation } = await import('../../src/session-beacon.js')
+    const store = await freshStore()
+    selves(store, MAIN, 'cc-ns-main')
+    selves(store, WORKTREE, 'cc-ns-wt')
+    const dbPath = (store.store.database.prepare('PRAGMA database_list').get() as { file: string }).file
+    const now = Date.now() / 1000
+    const r = await store.insert('cross-lane namespace note', { createdAt: now, metadata: { _cc_session_id: 'cc-ns-main', _cc_session_src: 'beacon-unanimous' } })
+    const before = rawNode(store, r.nodeId)
+    store.store.insertStaging({
+      sessionId: 'cc-ns-wt',
+      role: 'assistant',
+      content: echoContent(mcpResponse(r.nodeId, true), { content: 'cross-lane namespace note' }),
+      toolName: 'mcp__treecontext__treecontext_insert',
+      timestamp: now + 0.1,
+      priority: 3,
+    })
+    await new IngestionLoop(store, { batchSize: 10, storePath: dbPath }).ingestBatch()
+    expect(rawNode(store, r.nodeId)).toEqual(before)
+    expect(readSessionNamespaceAnnotation(dbPath, 'cc-ns-wt')).toEqual(expect.objectContaining({ namespace: 'project', derived_from: 'insert-heal' }))
+    await store.close()
+  })
+
   it('a hostile namespace value extracted from an echo is refused by the publisher', async () => {
     const { readSessionNamespaceAnnotation } = await import('../../src/session-beacon.js')
     const store = await freshStore()

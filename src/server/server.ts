@@ -37,7 +37,7 @@ import { dbg, warn } from '../debug.js'
 import type { FlatStore } from '../flat-store.js'
 import { MAIN_WRITER, stampMetadata, WRITER_STAMP_KEYS, type WriterStamp } from '../persistence/session-registry.js'
 import { ageText, pointerKindWords, OTHER_LANES_NAMED } from '../references.js'
-import { NOTICED_BY_STATUS } from '../persistence/leg-registry.js'
+import { NOTICED_BY_STATUS, WORKER_AGENT_ID } from '../persistence/leg-registry.js'
 import {
   DOOR_KEY, IDENTITY_KEY, RUN_OPEN_KIND, RUN_CLOSE_KIND, OPENED_BY_KEY, OPENED_VIA_KEY, CLOSED_BY_KEY, REASON_KEY,
   PARENT_RUN_KEY, PARENT_LEG_KEY, BY_SRC_KEY, BY_PENDING, BY_CALLER, runRowKindOf, CHECKPOINT_KIND,
@@ -500,6 +500,18 @@ export function createServer(
         // not place, `_writer_src` `unregistered`: the undetermined
         // writers' lane, never main's (references.ts UNKNOWN_LANE).
         const recordsWriters = typeof (resolve() as Stamping).writerStampFor === 'function'
+        // D288, D391: a ticket-door worker's lane is its whole session, the
+        // one serve trusts (trustedWorkerLane) and the registry stamped as
+        // the worker's own; the row's session is that lane, never a
+        // `session_id` the caller's metadata names, which would key the
+        // worker's row, and its dedup, to another lane's session. Said back
+        // as session_id_ignored. Other callers' metadata is unchanged.
+        let sessionIdIgnored: unknown
+        if (stamp.src === 'declared' && stamp.agentId === WORKER_AGENT_ID && ccResolution.ccSessionId !== null
+          && metadataCopy && metadataCopy['session_id'] !== undefined) {
+          sessionIdIgnored = metadataCopy['session_id']
+          delete metadataCopy['session_id']
+        }
         if (metadataCopy || namespaceTag || sessionIdTag || ccResolution.ccSessionId !== null || stamp.src !== 'unregistered' || recordsWriters) {
           const merged: Record<string, unknown> = { ...metadataCopy }
           if (namespaceTag !== null) merged._namespace = namespaceTag
@@ -651,9 +663,16 @@ export function createServer(
               + `so no new entry was written: nothing landed in your lane ("${held.callerLane}").`
           if (result.flagsNotArmed && result.flagsNotArmed.length > 0) {
             response.flags_not_armed = result.flagsNotArmed
-            response.flags_note = `That entry is another lane's ("${held.lane}"), so the resume-pointer tags this insert carried `
-              + `(${result.flagsNotArmed.join(', ')}) were not armed on it: nothing outside your lane is modified. `
-              + 'Reword the entry to record it in your own lane.'
+            // D240: a caller the store could not tell apart owns no lane,
+            // so the entry is not said to be another lane's: it may be the
+            // caller's own, which the store cannot tell.
+            const tags = `the resume-pointer tags this insert carried (${result.flagsNotArmed.join(', ')}) were not armed on it`
+            response.flags_note = stamp.src === 'ambiguous'
+              ? `The store could not tell which writer made this call (it is stamped ambiguous), so it cannot tell whether that entry `
+                + `("${held.lane}") is in your lane, and ${tags}: nothing that may lie outside your lane is modified. `
+                + 'Reword the entry to record it as a new one.'
+              : `That entry is another lane's ("${held.lane}"), so ${tags}: nothing outside your lane is modified. `
+                + 'Reword the entry to record it in your own lane.'
           }
         } else if (stamp.src !== 'unregistered') {
           // D190: the writer the store stamped, said back — and when it
@@ -687,6 +706,11 @@ export function createServer(
           response.writer_note = 'No session-start hook placed this session in a checkout, so the store cannot tell who wrote '
             + 'this entry: it is stamped "writer unknown" (unregistered), in the lane of undetermined writers, never the main '
             + 'checkout\'s or any other lane\'s own, and a role named in its metadata is kept as a claim, not as its writer.'
+        }
+        if (sessionIdIgnored !== undefined) {
+          response.session_id_ignored = sessionIdIgnored
+          response.session_id_note = `This session is a worker of the ticket door, whose lane is its own session ("${ccResolution.ccSessionId}"), `
+            + 'so the session_id this insert\'s metadata named was ignored: the entry is keyed to that session, never the one named.'
         }
         if (runReply) response.run = runReply
         // D329, D331: a checkpoint under a run's key is numbered by the

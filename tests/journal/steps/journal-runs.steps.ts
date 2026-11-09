@@ -1886,6 +1886,16 @@ export const runsDefiner = (reg: Registry<RunsWorld>): void => {
     expect(row!.content).toBe(rawContentOf(w, w.ids!['builder-summary']!))
     expect(row!.content).toContain(`${String(w.facts!['test-output'])}\n  expected 200, got 403`)
     expect(file.nodes.find((n) => n.nodeId === w.ids!['reviewer-summary'])!.content).toBe(rawContentOf(w, w.ids!['reviewer-summary']!))
+    // The file says so of itself (the build's choice, D398's build line):
+    // its head carries the reply's error-tail line after the first-moments
+    // line, the one place an inline export carries it, and its holds
+    // sentence names it.
+    const line = (w.facts!['export-reply'] as ToolReply).json['error_tails']
+    expect(typeof line).toBe('string')
+    expect(file.head['error_tails']).toBe(line)
+    const keys = Object.keys(file.head)
+    expect(keys.indexOf('error_tails')).toBe(keys.indexOf('first_moments') + 1)
+    expect(String(file.head['holds'])).toContain('but the end of the error stream the summary rows named under error_tails hold')
   })
 
   define(/^the reply carries one line naming the builder leg as the one whose summary row holds the end of its worker's error stream, saying that a CLI may write command output there$/, (w) => {

@@ -341,6 +341,27 @@ Feature: Orchestration inside one store — lanes that stay their own
     # already refused across lanes (D169); the binding reads the
     # worktree's row with SQL before and after the insert.
 
+  @D391 @D86
+  Scenario: a dedup hit's echo from another lane leaves the surviving row's writer and lane as they were
+    Given the note "the login form posts to /api/session" written by the worktree "subproject"'s own agent through a server that read its session from the beacon, its echo drained
+    When a session in the main checkout inserts "the login form posts to /api/session" through the tools
+    And the drain processes that insert's echo
+    Then the worktree's row is unchanged byte for byte, its writer and its lane still "worktree:subproject"
+    # A session read from the beacon is an attribution an in-window echo
+    # may change (an exact one never is, D86), so the drain's heal of the
+    # main checkout's echo is what this reaches; the binding reads the
+    # worktree's row with SQL after its own echo is drained and after the
+    # main checkout's.
+
+  @D391 @D169
+  Scenario: a dedup hit from another lane records no reference on the surviving row, and the reply says so
+    Given the note "the login form posts to /api/session" written by the worktree "subproject"'s own agent
+    And the main checkout's own note "the CSRF token rides in a header"
+    When a session in the main checkout inserts "the login form posts to /api/session" through the tools naming that note in its refs
+    And the drain processes that insert's echo
+    Then the worktree's row is unchanged byte for byte and records no reference to the main checkout's note
+    And the reply says that reference was not recorded
+
   @D186
   Scenario: references resolve one hop deep, the rest on request
     Given an entry A, an entry B that names A, and an entry C that names B

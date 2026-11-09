@@ -891,8 +891,14 @@ re-decided, and the previous text is in git history.
   wip entries naming their unit, 7a for the store and the export, 7b for
   the doors and the hooks; the outline that gained a row is held with its
   bound rows by its title. Five step definitions the rewording left with
-  no consumer are removed. (D391, D382, D393, D294, D397, D398,
-  2026-11-09)
+  no consumer are removed. Unit 7a's review adds two more to
+  journal-orchestration, the store's writers D391 reaches that no
+  scenario held: "a dedup hit's echo from another lane leaves the
+  surviving row's writer and lane as they were" (the drain's echo heal)
+  and "a dedup hit from another lane records no reference on the
+  surviving row, and the reply says so" (D391, D169), both bound through
+  the tools, the real post-tool-use hook and the drain, the survivor read
+  with SQL. (D391, D382, D393, D294, D397, D398, 2026-11-09)
 
 ---
 

@@ -153,6 +153,14 @@ re-run it, Claude Code keeps summarising idle sessions.
 **Upgrading to `0.1.0-beta.4`.** Re-run `treecontext install`. What an
 upgrade changes:
 
+- The store's schema moves from v32 to v33 (migration 033: a headless
+  worker's notes dedup within its own lane) the first time a beta.4
+  server opens it, after the automatic copy of the store as it was,
+  `treecontext.db.pre-migration-v32.bak` beside it. The migration is
+  additive and changes no existing row. `0.1.0-beta.3.1` then refuses the
+  store (`SchemaVersionError`: the store is newer than the build), so going
+  back to beta.3.1 means restoring that copy, without what was written
+  after the upgrade.
 - It writes tool approvals into Claude Code, Codex CLI and Antigravity CLI
   (§3), so a headless worker can read and write the journal. The way back:
   `treecontext config tool-approvals off|on [--agent claude|codex|agy]`, or
