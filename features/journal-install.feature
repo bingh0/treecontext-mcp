@@ -117,6 +117,22 @@ Feature: Journal install — setup is auditable, reversible, and honest
     Then the report names that interpreter as a failure
     And it says that capture would record nothing rather than reporting the hooks healthy
 
+  @D402
+  Scenario: every hook event the client has is wired or named as not captured
+    Given the list of Claude Code's hook events, kept with the client version it was read from
+    When it is compared with the hooks install wires
+    Then every event on the list is either wired or named with what the journal does not capture because of it
+    And every event install wires is on the list
+    And an installation wired before a capture event was added is reported by doctor with the command that wires it
+    # The failed-call hole (D400) stood since the first release because
+    # nothing ever set the client's own event list beside the seven events
+    # install wired: each event was specified, bound and reviewed by
+    # itself, and the question "which events does the client have that we
+    # do not hear?" had no place to be asked. The list is the client's,
+    # read from its hooks reference and from what a real run fired; an
+    # event treecontext does not wire is a decision with a reason on it,
+    # never an omission.
+
   @D53
   Scenario: an unwritable agent config fails loudly and changes nothing
     Given an agent config whose file or directory denies writes

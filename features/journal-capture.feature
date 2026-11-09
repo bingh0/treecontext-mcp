@@ -78,6 +78,45 @@ Feature: Journal capture — everything worth recalling enters the journal
     # remembering it. Invocations are tiny; dedup handles repetition.
     # No invocation is ever filtered out.
 
+  @D400
+  Scenario: a tool call that fails is journaled with what the client said went wrong
+    Given the events Claude Code sent for a shell command that exits non-zero, a file read that fails, a command that times out and an MCP tool that answers with an error
+    When the hooks install wires receive those events and ingestion runs
+    Then each failed call is in the journal with its tool name, its input and the client's error text as its output
+    And each is marked as failed and carries the client's own id for the call
+    And each entry's moment is when its failure arrived
+    # Found on the first beta.4 load, 2026-11-09: Claude Code fires
+    # PostToolUse only for a call that succeeds. A call that fails fires
+    # PostToolUseFailure, which install never wired, so no failed call was
+    # ever journaled: 9 of 469 shell calls across four sessions, the ones a
+    # future agent most needs ("what did the failing test print?"). The
+    # scenario above this one was green throughout: its binding wrote four
+    # successful PostToolUse payloads by hand and ran the script itself, so
+    # neither what the client sends nor what install subscribes was in the
+    # world. The events here are the client's, recorded from a real run and
+    # kept with the client's version; they reach the hooks through what
+    # install wires, an event install does not wire reaching nothing, as on
+    # the client.
+
+  @D401
+  Scenario: a call the client refused before running it is journaled from the client's own account
+    Given the events Claude Code sent for a call rejected for its input, a call denied permission and a call a hook blocked
+    When the hooks install wires receive those events and ingestion runs
+    Then each such call is in the journal with its tool name, its input and what the client told the model about it
+    And each says it was captured from the client's account of the batch and carries the client's own id for the call
+    # Found by the same live pass: for these three the client fires neither
+    # PostToolUse nor PostToolUseFailure (a call rejected for its input
+    # fires no event of its own at all). The one place the client names
+    # every call it resolved is the batch's account, PostToolBatch, sent
+    # after the calls' own events and before the model is called again.
+
+  @D401
+  Scenario: a call is journaled once, whichever events carried it
+    Given the events Claude Code sent for one batch of parallel calls, one succeeding, one failing and one rejected for its input
+    When the hooks install wires receive those events and ingestion runs
+    Then the journal holds exactly one entry for each call of the batch
+    And the succeeding and the failing call are the entries their own events produced, not the batch's account of them
+
   @D270
   Scenario: a tool event's output is captured as text, a line a line
     Given a shell command whose output spans several lines and carries a tab
