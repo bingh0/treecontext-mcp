@@ -284,3 +284,19 @@ Feature: Other clients — a dated matrix and a doctor that knows each one
     And the developer reads which of agy's events install wires and that it never wires PreToolUse, with the reason
     And the developer reads that a call agy refuses in a headless run, under any permission preset but `always-proceed`, leaves no entry, that agy states no outcome for a shell command, and that a subagent is kept as a helper of the session that started it, its report kept, and is no leg
     And the developer reads every Antigravity CLI cell of the orchestration matrix with the agy version and date it was checked against
+
+  @D423 @D421
+  Scenario: the README says what is promised for each client as a main and as a worker, and documents the workflow every client shares
+    Given the README
+    When a developer reads its support table
+    Then the developer reads Claude Code as the main supported in full, with workers of any CLI started through the doors, Codex CLI and Antigravity CLI among them
+    And the developer reads Codex CLI and Antigravity CLI as mains with basic support, capture through their own hooks and the tools through MCP, with no promise of parity and each difference from a Claude Code main named
+    And the developer reads that a Codex CLI or Antigravity CLI main starting workers through the doors is not guaranteed
+    And the developer reads that an Antigravity CLI main is captured but placed in no checkout's lane, and that its subagents are not linked to it
+    When a developer reads the basic workflow
+    Then the developer reads how to start a worker of any CLI with `treecontext run` from a shell, whichever client is the main, and what the journal then holds with no hook at all: the worker's lane, its first message and its summary row
+    # Ruled 2026-11-10 (D423): the owner runs Claude Code as the main and
+    # Codex CLI and Antigravity CLI as workers. The table says in one
+    # place what the scenarios of this file say client by client, and the
+    # basic workflow is the part that needs no client's hooks.
+

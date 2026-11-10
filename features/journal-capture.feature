@@ -466,29 +466,16 @@ Feature: Journal capture — everything worth recalling enters the journal
     # exits non-zero; the exit code is only in the transcript's text.
     # Where the client states nothing, the text decides (D404).
 
-  @D418
-  Scenario: an Antigravity subagent is kept as a helper of the session that started it, linked through the call that started it
+  @D421 @D418
+  Scenario: an Antigravity subagent's conversation is journaled as its own session, writer unknown, and its parent keeps the call that started it
     Given the events and transcripts of an Antigravity session that starts a subagent and of the subagent's own conversation, as Antigravity sends them
     When the hook install writes for Antigravity CLI receives those events and ingestion runs
     Then the parent's journal holds the subagent call with its prompt and role as input and an Output section naming the subagent's conversation
-    And the subagent is registered as a helper of the parent session, linked through that call, with the role the call names as its writer, and retired at its conversation's end
-    And the message the subagent sent its parent is kept as the subagent's summary
-    And the parent searching its own lane finds that summary, and not the subagent's tool calls, unless it asks for the helper's trail
-    And no key, first moment, send-back or pointer is recorded for the subagent
+    And the subagent's rows sit in their own session, in no checkout's lane, read as writer unknown, and none is stamped as the parent's
+    And no helper, key, first moment, send-back or pointer is recorded for the subagent
     # agy 1.5.3 has no subagent event, and nothing in the subagent's
-    # events names its parent: the link is the parent's call, whose
-    # result names the child's conversation, and the report is the
-    # message the child sends the parent. Legs on agy are fenced to beta.5
-    # (the fence's Antigravity CLI entry, D418).
-
-  @D418
-  Scenario: an Antigravity subagent whose link is not yet read is journaled as writer unknown, and linked once it is
-    Given the events of an Antigravity subagent's conversation, as Antigravity sends them, from its first event, before the parent's call result naming it is read
-    When the hook install writes for Antigravity CLI receives the subagent's events and ingestion runs
-    Then the subagent's rows sit in no checkout's lane, read as writer unknown, and none is stamped as the parent's
-    And once the parent's call result naming it is read, the subagent is registered as a helper of the parent session, linked through that call
-    # The two recordings of 2026-11-09 saw both orders: the parent's
-    # model call ended before the child's start in one, after it in the
-    # other (D418). So every child starts unlinked and is linked when the
-    # parent's result is read, never passing for a main of the checkout
-    # or for its parent meanwhile.
+    # events names its parent. Ruled 2026-11-10 (D421): linking the child
+    # to its parent as a helper, through the parent's call result, waits
+    # for beta.5 or a user's request; until then every child stays as
+    # D418 had it before its link is read, never passing for a main of
+    # the checkout or for its parent. Legs on agy are fenced to beta.5.

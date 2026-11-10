@@ -469,30 +469,17 @@ Feature: Orchestration inside one store — lanes that stay their own
   # named hook installed, an agy main registers itself at its session
   # start, keyed by its conversation, as a Claude Code main does.
 
-  @D416 @D190
-  Scenario: an Antigravity CLI main registers itself at its session start and the server stamps its notes from it
-    Given an Antigravity session starting in a worktree of its checkout, its SessionStart as Antigravity sends it
-    When the hook install writes for Antigravity CLI receives it, and the session writes a chapter summary through the tools
-    Then the store holds a self registration keyed by the session's conversation id, whose worktree and branch equal what git reports for that directory
-    And the chapter summary is stamped as that session's own, in that worktree's lane, never as writer unknown
-    # Before beta.4 an agy main registered nothing: its chapter summaries
-    # read as written by an unplaced client (the fence's Antigravity CLI
-    # entry, amended by D416).
-
-  @D416 @D418
-  Scenario Outline: an Antigravity CLI main whose subagent has started still writes as itself, <linked>
-    Given an Antigravity main session registered at its SessionStart, which starts a subagent through agy's own subagent tool, the subagent's events as Antigravity sends them reaching the hook install writes
-    And <link>
-    When the main writes a chapter summary through the tools after the subagent's session has started
-    Then the chapter summary is stamped as the main's own, in the main's lane
-    And no row the main writes is stamped as the subagent's
-
-    Examples:
-      | linked                         | link                                                                     |
-      | the subagent linked            | the parent's call result naming the subagent has been read               |
-      | the subagent not yet linked    | the parent's call result naming the subagent has not yet been read       |
-    # One agy process hosts the subagent's conversation as well as the
-    # main's, and agy ran its hooks through `sh` in the recording of
-    # 2026-11-09. A subagent's start that took over the identity keyed to
-    # that process would stamp every later note of the main as the
-    # subagent's (D416).
+  @D421 @D416
+  Scenario: an Antigravity CLI session the ticket door did not start is captured as a session no hook registered
+    Given an Antigravity session starting in its checkout, not started through `treecontext run`, its events as Antigravity sends them
+    When the hook install writes for Antigravity CLI receives them and ingestion runs, and the session writes a chapter summary through the tools
+    Then the session's captured rows are kept in its own session, in no checkout's lane, read as writer unknown
+    And the store holds no self registration for the session
+    And the chapter summary is stamped as a client's that no hook registered, as an Antigravity main's was before beta.4
+    # Ruled 2026-11-10 (D421): the owner runs Claude Code as the main and
+    # agy as a worker. An agy main is best effort in beta.4: what it does
+    # is captured and found by a search of the whole store, but it
+    # registers no self, so nothing of it is placed in a checkout's lane.
+    # The self registration D416 drafted, and keeping a main's identity
+    # while its subagent runs in the same agy process, wait for beta.5
+    # or a user's request.

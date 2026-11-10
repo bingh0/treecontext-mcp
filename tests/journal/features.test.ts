@@ -306,8 +306,7 @@ runFeatures(join(HERE, '../../features'), {
         "a prompt Antigravity repeats on every event is journaled once per turn",
         "a call whose output agy's transcript does not hold is kept, and says its output was not captured",
         "a shell command that fails on Antigravity is journaled with what it printed, its ending read from its text",
-        "an Antigravity subagent is kept as a helper of the session that started it, linked through the call that started it",
-        "an Antigravity subagent whose link is not yet read is journaled as writer unknown, and linked once it is",
+        "an Antigravity subagent's conversation is journaled as its own session, writer unknown, and its parent keeps the call that started it",
       ],
     },
     {
@@ -345,6 +344,7 @@ runFeatures(join(HERE, '../../features'), {
         "doctor's row for Antigravity CLI says what it found of agy's hooks, when <state>",
         "the README and doctor say when a headless agy worker returns nothing because agy refused it a tool",
         "the README names the oldest Antigravity CLI whose hooks install writes, and what its capture leaves out",
+        "the README says what is promised for each client as a main and as a worker, and documents the workflow every client shares",
       ],
     },
     {
@@ -394,8 +394,7 @@ runFeatures(join(HERE, '../../features'), {
         "a resumed Codex CLI main is the same session and is handed what a resume is handed",
         "a Codex CLI compaction leaves a recovery note that the next fresh start in its lane claims",
         // Unit 11: unit 11 (D413-D418, Antigravity CLI 1.5.3 captured through a named hook, its output read from agy's transcript).
-        "an Antigravity CLI main registers itself at its session start and the server stamps its notes from it",
-        "an Antigravity CLI main whose subagent has started still writes as itself, <linked>",
+        "an Antigravity CLI session the ticket door did not start is captured as a session no hook registered",
       ],
     },
     {

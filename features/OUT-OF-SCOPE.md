@@ -292,6 +292,18 @@ re-decided, and the previous text is in git history.
   session ended at a plain exit. Session liveness, a session's end as
   well as its start, is ruled once. Reopens in `0.1.0-beta.5`, with
   workflows. (D395, D409, 2026-11-09)
+- **An Antigravity CLI main's identity, and its subagents as linked
+  helpers** — deferred to `0.1.0-beta.5` or a user's request, whichever
+  comes first. In `0.1.0-beta.4` an agy session the ticket door did not
+  start is captured through the named hook and kept in its own session,
+  writer unknown, in no checkout's lane; it registers no self, and a
+  subagent's conversation is kept the same way, never linked to its
+  parent. Reopens with: a recording of agy's MCP server process (its
+  environment, whether one server serves several conversations), the
+  session beacon under `exec` with a subagent running, and both orders
+  of a child's start against its parent's call result. An agy worker
+  started through `treecontext run` is not deferred. (D422, D421,
+  2026-11-10)
 - **Self registrations' stop moment** — declined until `0.1.0-beta.5`:
   the store records no stop for a self registration, at a /clear or any
   other end, and no reader reads one; the /clear's stop of its
