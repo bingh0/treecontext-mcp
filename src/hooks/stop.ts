@@ -39,6 +39,9 @@ import { FIRST_MOMENT_KIND } from '../run-kinds.js'
 import { decodeContent } from '../persistence/content-codec.js'
 import { hookStoreOn, hookTreeOf } from './hook-store.js'
 import { recordHookGap } from './gap-ledger.js'
+import { isCodexHook } from './hook-client.js'
+import { stageNoResultCalls } from './codex-calls.js'
+import { TURN_INTERRUPTED_KIND, interruptedTurnText } from '../persistence/capture-marks.js'
 
 /**
  * Stale-recapture guard: `extractLastAssistantText` deliberately scans past
@@ -389,9 +392,56 @@ async function workerStop(input: Record<string, unknown>, dbPath: string, sessio
   } finally { if (db) db.close() }
 }
 
+/**
+ * D408, D410: a Codex turn's end, for a hook whose command names Codex. At
+ * `Stop` the turn's last reply is staged from the payload's
+ * `last_assistant_message`, never from Codex's transcript (its format is
+ * no stable interface); at `Interrupt`, which fires no Stop, the turn is
+ * staged as interrupted, a capture-gap entry naming its reply as not
+ * captured, and no assistant text is written. Either way every call of the
+ * main thread Codex reported no result for is staged. The hook prints
+ * Codex nothing: no bookmark ask and no send-back on Codex (D410, deferred
+ * to 0.1.0-beta.5), since Codex honours a Stop block and `codex exec`
+ * prints only the last reply, which the block's extra turn would replace.
+ */
+/** The Interrupt hook's own budget from its start: Codex's ceiling for
+ *  the event is 3 s, process start and the ledger write included. */
+export const INTERRUPT_BUDGET_MS = 1500
+
+export function codexTurnEnd(input: Record<string, unknown>): void {
+  const sessionId = typeof input['session_id'] === 'string' ? input['session_id'] : null
+  const dbPath = resolveDbPath(typeof input['cwd'] === 'string' ? input['cwd'] : undefined)
+  const at = Date.now() / 1000
+  if (input['hook_event_name'] === 'Interrupt') {
+    // Codex gives an Interrupt hook 1 s by default and 3 s at most (its
+    // hooks documentation, read 2026-11-10; install asks for the 3), and
+    // kills it there. Both writes share one deadline well inside that, so
+    // a busy store costs a gap-ledger line (D314), never a silent kill.
+    const deadlineAt = HOOK_STARTED_AT + INTERRUPT_BUDGET_MS
+    const turnId = typeof input['turn_id'] === 'string' ? input['turn_id'] : null
+    writeStaging(dbPath, { sessionId, role: 'assistant', content: interruptedTurnText(turnId), timestamp: at, priority: 2, kind: TURN_INTERRUPTED_KIND }, undefined, { deadlineAt })
+    stageNoResultCalls(dbPath, sessionId, null, at, deadlineAt)
+    return
+  }
+  const said = input['last_assistant_message']
+  const text = typeof said === 'string' && said.trim() !== '' ? said.substring(0, STORE_SAFETY_CAP) : null
+  if (text && !isStaleRecapture(dbPath, sessionId ?? undefined, text)) {
+    writeStaging(dbPath, {
+      sessionId, role: 'assistant', content: text, timestamp: at, priority: 2,
+      indexLen: Math.min(activeIndexCap('assistant'), text.length),
+    })
+  }
+  stageNoResultCalls(dbPath, sessionId, null, at)
+}
+
 export async function main(preParsed?: Record<string, unknown>): Promise<void> {
   try {
     const input = preParsed ?? parseHookInput()
+    if (isCodexHook()) {
+      codexTurnEnd(input)
+      process.exit(0)
+      return
+    }
     const { session_id, cwd } = input
 
     const text = turnText(input)

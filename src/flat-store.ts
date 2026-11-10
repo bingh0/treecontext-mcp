@@ -114,6 +114,15 @@ export function workerHookFirstMomentText(role: string, sessionId: string, run: 
  *  none of them is the worker's own write (D303's "its one row"). */
 const DOOR_ROW_KINDS: ReadonlySet<string> = new Set([FIRST_MOMENT_KIND, SEND_BACK_KIND])
 
+/** A call's exit class is counted only on a captured tool row: the drain's
+ *  `auto-capture` with a `tool_name` (the insert tool drops `exit_type` from
+ *  a caller's row it labels `auto-capture`; on any other row `exit_type` is a
+ *  caller's word and counts nothing), in the store's own lanes. An SQL
+ *  conjunct, `AND ...`. */
+const CAPTURED_TOOL_ROW = " AND COALESCE(source_label, '') = 'auto-capture' AND json_extract(metadata_json, '$.tool_name') IS NOT NULL"
+  // Never an imported row or a merge's copy: another store's word about a call.
+  + " AND COALESCE(json_extract(metadata_json, '$.session_id'), '') NOT LIKE 'handoff:%' AND json_extract(metadata_json, '$._merge_label') IS NULL"
+
 export interface FlatStoreOptions {
   database: Database
   namespace?: string
@@ -1779,8 +1788,13 @@ export class FlatStore implements MemoryStore {
       // door it wrote through; the door's own rows in its lane are not it.
       // The prompt a `claude -p` child's UserPromptSubmit hook captured is
       // the door's message handed to it, not a row it wrote (D295).
-      const handedPrompt = meta?.['source'] === 'auto-capture' && meta['role'] === 'user'
-      if (meta && typeof meta['_writer_agent_id'] === 'string' && !DOOR_ROW_KINDS.has(String(meta['kind'] ?? '')) && !handedPrompt) {
+      // A row that came through the insert tool (`_door` `tools`, stamped by
+      // the server, never a caller's) is the worker's own write whatever its
+      // kind or label says: only the door writes its rows through the library.
+      const throughTools = meta?.[DOOR_KEY] === 'tools'
+      const handedPrompt = !throughTools && meta?.['source'] === 'auto-capture' && meta['role'] === 'user'
+      const doorRow = !throughTools && DOOR_ROW_KINDS.has(String(meta?.['kind'] ?? ''))
+      if (meta && typeof meta['_writer_agent_id'] === 'string' && !doorRow && !handedPrompt) {
         const leg = this.writingLegOf(meta)
         // D403: a leg taken for a phantom while it ran is set right by its
         // own row as by its door's word: the row proves it ran.
@@ -2789,12 +2803,12 @@ export class FlatStore implements MemoryStore {
     // SQL by concatenation is a shape that outlives the callers that made
     // it safe, and the next caller is the one that passes a variable.
     // HAVING rather than WHERE: the alias is only in scope after grouping.
-    const tally = (path: string): Record<string, number> => {
+    const tally = (path: string, where = ''): Record<string, number> => {
       const out: Record<string, number> = {}
       const rows = this.db
         .prepare(
           'SELECT json_extract(metadata_json, ?) AS k, COUNT(*) AS n ' +
-            'FROM nodes WHERE tree_id = ? GROUP BY k HAVING k IS NOT NULL',
+            `FROM nodes WHERE tree_id = ?${where} GROUP BY k HAVING k IS NOT NULL`,
         )
         .all(path, this.treeId) as Array<{ k: string; n: number }>
       for (const r of rows) out[String(r.k)] = r.n
@@ -2814,7 +2828,7 @@ export class FlatStore implements MemoryStore {
                        OR (json_extract(metadata_json, '$.exit_by') IS NULL
                            AND json_extract(metadata_json, '$.outcome') IN ('failed', 'interrupted'))) THEN 'client' ELSE 'text' END AS by,
               COUNT(*) AS n
-         FROM nodes WHERE tree_id = ? AND json_extract(metadata_json, '$.exit_type') IS NOT NULL GROUP BY k, by`,
+         FROM nodes WHERE tree_id = ?${CAPTURED_TOOL_ROW} AND json_extract(metadata_json, '$.exit_type') IS NOT NULL GROUP BY k, by`,
     ).all(this.treeId) as Array<{ k: string; by: 'client' | 'text'; n: number }>) {
       const e = (exitsBy[String(r.k)] ??= { client: 0, text: 0 })
       e[r.by] += r.n
@@ -2854,7 +2868,7 @@ export class FlatStore implements MemoryStore {
       },
       capturePerMinute: buckets,
       trail: {
-        exits: tally('$.exit_type'),
+        exits: tally('$.exit_type', CAPTURED_TOOL_ROW),
         exitsBy,
         intents: tally('$.intent'),
         previewed: shape.previewed,

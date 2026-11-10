@@ -6,7 +6,7 @@ import { afterEach, describe, expect, test } from 'vitest'
 import { parse as parseToml } from 'smol-toml'
 import { spawnCli } from '../helpers/cli-spawn.js'
 import { markClaudeCodeInstalled, sandboxedEnv } from '../helpers/home.js'
-import { writeFakeCodex } from '../journal/standins.js'
+import { writeFakeCodex, developerTrustsCodexHooks } from '../journal/standins.js'
 import {
   APPROVED_TOOLS, claudeApprovalClause, claudeView, codexHeadlessClause, codexView, withClaudeApprovals, withCodexApprovals,
   withoutClaudeApprovals, withoutCodexApprovals,
@@ -295,7 +295,10 @@ describe.skipIf(process.platform === 'win32')('every echo reads what the files l
       expect(spawnCli(['install', '--yes', '--agent', 'codex'], { home: h, env }).status).toBe(0)
       const path = join(h, '.codex', 'config.toml')
       writeFileSync(path, readFileSync(path, 'utf8').replace('[mcp_servers.treecontext]\n', `[mcp_servers.treecontext]\ndefault_tools_approval_mode = "${value}"\n`))
-      const before = spawnCli(['doctor'], { home: h })
+      // The Codex install read is the one doctor reads (D406: install at
+      // 0.166.0 writes no hooks; a doctor reading another Codex would grade
+      // an upgrade the test never made).
+      const before = spawnCli(['doctor'], { home: h, env })
       if (value === 'prompt') {
         expect(codexRow(before.stdout)).toMatch(/^\[warn\].*install's own approvals of status, query, export and insert override your default_tools_approval_mode = "prompt"/)
       } else {
@@ -308,7 +311,7 @@ describe.skipIf(process.platform === 'win32')('every echo reads what the files l
       const entry = (parseToml(readFileSync(path, 'utf8')) as { mcp_servers: { treecontext: Record<string, unknown> } }).mcp_servers.treecontext
       expect(entry['tools']).toBeUndefined()
       expect(entry['default_tools_approval_mode']).toBe(value)
-      const doctor = spawnCli(['doctor'], { home: h })
+      const doctor = spawnCli(['doctor'], { home: h, env })
       const row = codexRow(doctor.stdout)
       expect(row).toContain(`by your mcp_servers.treecontext.default_tools_approval_mode = "${value}" in ${path}`)
       expect(row).toMatch(value === 'prompt' ? /^\[warn\]/ : /^\[ok\]/)
@@ -336,7 +339,7 @@ describe.skipIf(process.platform === 'win32')('every echo reads what the files l
 })
 
 describe.skipIf(process.platform === 'win32')('doctor reads the configuration in force for its directory (D387)', () => {
-  test("a project's own settings and a trusted project's Codex configuration decide, and the row names their file", () => {
+  test("a project's own settings and a trusted project's Codex configuration decide, and the row names their file", async () => {
     const h = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-approvals-cwd-')))
     dirs.push(h)
     markClaudeCodeInstalled(h)
@@ -351,6 +354,10 @@ describe.skipIf(process.platform === 'win32')('doctor reads the configuration in
     writeFileSync(join(proj, '.codex', 'config.toml'), '[mcp_servers.treecontext.tools.treecontext_status]\napproval_mode = "prompt"\n')
     const user = join(h, '.codex', 'config.toml')
     writeFileSync(user, `[projects.${JSON.stringify(proj)}]\ntrust_level = "trusted"\n\n${readFileSync(user, 'utf8')}`)
+    // D406, D407: install wrote Codex's own hooks (the real Codex reads
+    // 0.167.0 or later); the developer trusts them with /hooks, so the row's
+    // grade is the approvals' alone.
+    await developerTrustsCodexHooks(h, h)
     const doctor = spawnCli(['doctor'], { home: h, cwd: proj })
     const claude = doctor.stdout.split('\n').find(l => /^\[\w+\]\s+Claude Code:/.test(l)) ?? ''
     expect(claude).toMatch(/^\[warn\]/)

@@ -436,12 +436,12 @@ describe('hook db timeout vs platform kill budgets', () => {
     // The Stop hook opens twice; its budgets sum. Pinning only the
     // single-open budget let the sum reach 16s against the 10s kill
     // (pass-2 review 2026-08-15).
-    const { upsertVscodeHooks } = await import('../../src/server/installer.js')
+    const { upsertVscodeHooks } = await import('../helpers/earlier-build-writers.js')
     const dir = mkdtemp2(join2(tmpdir2(), 'tc-timeout-sum-'))
     const settings = join2(dir, 'hooks.json')
     try {
       wf(settings, '{}')
-      upsertVscodeHooks(settings, true, false)
+      upsertVscodeHooks(settings)
       const cfg = JSON.parse(rf(settings, 'utf8')) as { hooks: Record<string, Array<{ timeoutSec?: number }>> }
       const minBudgetMs = Math.min(...Object.values(cfg.hooks).flat().map((e) => e.timeoutSec! * 1000))
       expect(STOP_GUARD_TIMEOUT_MS + HOOK_DB_TIMEOUT_MS).toBeLessThanOrEqual(minBudgetMs - 1000)
@@ -458,12 +458,12 @@ describe('hook db timeout vs platform kill budgets', () => {
   })
 
   it('stays strictly below every registered timeoutSec, with headroom', async () => {
-    const { upsertVscodeHooks } = await import('../../src/server/installer.js')
+    const { upsertVscodeHooks } = await import('../helpers/earlier-build-writers.js')
     const dir = mkdtemp2(join2(tmpdir2(), 'tc-timeout-invariant-'))
     const settings = join2(dir, 'hooks.json')
     try {
       wf(settings, '{}')
-      upsertVscodeHooks(settings, true, false)
+      upsertVscodeHooks(settings)
       const cfg = JSON.parse(rf(settings, 'utf8')) as {
         hooks: Record<string, Array<{ timeoutSec?: number }>>
       }
@@ -493,7 +493,7 @@ describe('hook stdio storm-proofing', () => {
     // uncaughtException, and kills the hook mid-capture behind a
     // wrapper that still reports exit 0. Every entry point reaches its
     // main() through shared.ts, so the guard is armed by importing it.
-    const entry = await import('../../src/hooks/vscode/session-start.js')
+    const entry = await import('../../src/hooks/session-start.js')
     expect(typeof entry.main).toBe('function')
     expect(process.stdout.listenerCount('error')).toBeGreaterThan(0)
     expect(process.stderr.listenerCount('error')).toBeGreaterThan(0)

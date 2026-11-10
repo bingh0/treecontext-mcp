@@ -75,7 +75,7 @@ describe('Claude Code MCP config location', () => {
 
     await install({
       yes: true, dryRun: false, force: true, agents: ['claude'],
-      useNpx: false, experimentalCapture: false, debug: true, lexical: true,
+      useNpx: false, debug: true, lexical: true,
     })
 
     const written = JSON.parse(readFileSync(userConfig, 'utf8')) as Record<string, Record<string, unknown>>
@@ -95,7 +95,7 @@ describe('Claude Code MCP config location', () => {
 
     await install({
       yes: true, dryRun: false, force: true, agents: ['claude'],
-      useNpx: false, experimentalCapture: false, debug: true, lexical: true,
+      useNpx: false, debug: true, lexical: true,
     })
 
     const backup = JSON.parse(readFileSync(`${userConfig}.treecontext-backup`, 'utf8')) as typeof sentinel

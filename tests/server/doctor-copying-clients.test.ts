@@ -66,11 +66,15 @@ describe('doctor: a copying client with tools only', () => {
   })
 
   for (const [name, slug] of [['Codex CLI', 'codex']] as const) {
-    it(`doctor's ${name} row names the flagged copy command`, async () => {
+    it(`doctor's ${name} row names the plain install, never the removed flag`, async () => {
       const row = (await doctor()).find(r => r.check === name)
       expect(row, `doctor printed no ${name} row`).toBeDefined()
-      expect(row!.detail).toContain('hooks not copied')
-      expect(row!.detail).toContain(`to copy them: treecontext install --agent ${slug} --experimental-capture`)
+      // D406, D407: at the floor or later with no hook written, the row
+      // warns that nothing is captured and names the plain install; below
+      // it, or with no codex to ask, Codex gets the tools only.
+      expect(row!.detail).toMatch(new RegExp(`no treecontext hook is written|gets the tools only|tools only`))
+      expect(row!.detail).not.toContain('--experimental-capture')
+      if (/no treecontext hook is written/.test(row!.detail)) expect(row!.fix).toMatch(new RegExp(`^treecontext install (--force )?--agent ${slug}$`))
     }, 60_000)
   }
 })

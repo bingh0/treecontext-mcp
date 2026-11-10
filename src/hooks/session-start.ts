@@ -15,6 +15,7 @@ import { ticketTextIn, readTicket, trustedWorkerLane } from '../ticket.js'
 import { hasLegColumns, legOf, linkClientSession, workerOfSession, recordWorkerProcess, WORKER_AGENT_ID, LINKED_BY_SESSION_START, type LegRegistration } from '../persistence/leg-registry.js'
 import { hostProbe, processReadings } from '../persistence/process-probe.js'
 import { composeFirstMessage, fitHookCap, invalidInstructionsMessage, firstMomentFactsOf } from '../first-moment.js'
+import { isCodexHook } from './hook-client.js'
 
 /** The packet when the session before this clear cannot be identified. */
 export const UNKNOWN_PREDECESSOR =
@@ -131,7 +132,36 @@ async function workerStart(db: DatabaseType, dbPath: string, sessionId: string, 
   }
 }
 
+/**
+ * D410: a `codex exec` worker the ticket door started, its ticket and its
+ * lane in its environment (honoured only when the ticket matches the
+ * door's registration, trustedWorkerLane): its Codex session is linked to
+ * the worker's lane, as a `claude -p` child's is, so the drain lands its
+ * captured rows there with the worker's role as writer. No first-moment
+ * row is written (the door's is the worker's first moment, its prompt) and
+ * nothing is printed. A Codex session holding a ticket with no lane the
+ * door named is registered as nobody's self and linked to no lane; its
+ * start is recorded as a capture gap (D314), since Codex's hooks are no
+ * ticket door (the fence: legs on Codex wait for 0.1.0-beta.5).
+ */
+function codexWorkerStart(db: DatabaseType, dbPath: string, sessionId: string): void {
+  const at = Date.now() / 1000
+  const lane = trustedWorkerLane(db)
+  if (lane !== null) {
+    linkClientSession(db, { sessionId: lane, agentId: WORKER_AGENT_ID }, sessionId, { linkedBy: LINKED_BY_SESSION_START, at })
+    dbg('hook:session-start', 'a Codex worker linked to its lane', { lane, sessionId })
+    return
+  }
+  recordHookGap(dbPath, {
+    hook: 'session-start', sessionId, at, error: 'a Codex session holding a worker\'s ticket with no lane the ticket door named',
+    lost: 'This Codex session held a worker\'s ticket, but no ticket door registered a lane for it (it was not started through treecontext run, or its lane did not match its ticket). It is journaled as no one\'s self and as no worker: no registration, no first moment and no leg, since a claimed worker is a leg and legs on Codex wait for 0.1.0-beta.5 (Codex gives no hook to retire one). Its captured rows stay in its own session, writer unknown.',
+  })
+}
+
 function emit(out: { additionalContext?: string; systemMessage?: string }): void {
+  // D410: the one thing treecontext's hooks print to Codex is a main's
+  // context; Codex surfaces a systemMessage as a warning, so none is sent.
+  if (isCodexHook()) out = out.additionalContext ? { additionalContext: out.additionalContext } : {}
   const json: Record<string, unknown> = {}
   if (out.systemMessage) json['systemMessage'] = out.systemMessage
   if (out.additionalContext) {
@@ -164,7 +194,10 @@ export async function main(preParsed?: Record<string, unknown>): Promise<void> {
       let db: DatabaseType | null = null
       try {
         db = openHookDb(dbPath)
-        if (!hasLegColumns(db)) {
+        if (isCodexHook()) {
+          if (hasLegColumns(db)) codexWorkerStart(db, dbPath, sessionId)
+          else recordHookGap(dbPath, { hook: 'session-start', sessionId, at: Date.now() / 1000, error: 'its store predates workers (schema 31)', lost: 'This Codex session held a worker\'s ticket; it was linked to no worker lane.' })
+        } else if (!hasLegColumns(db)) {
           recordHookGap(dbPath, {
             hook: 'session-start', sessionId, at: Date.now() / 1000, error: 'its store predates workers (schema 31)',
             lost: 'This session held a worker\'s ticket; no worker registration or first moment was recorded for it.',

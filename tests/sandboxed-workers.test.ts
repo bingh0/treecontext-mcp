@@ -460,7 +460,7 @@ describe('the store\'s own rules beside a phantom (D403)', () => {
 })
 
 describe('the trail pane never counts a caller\'s `exit_by` (D404)', () => {
-  it('the insert tool drops a caller\'s `exit_by`, and a note that claims it is counted by its text', async () => {
+  it('the insert tool drops a caller\'s `exit_by`, and a note that claims it is no call and counted nowhere', async () => {
     const db = join(tmp('tc-exit-by-'), 'pane.db')
     const s = await FlatStore.open({ database: openNodeSqlite(new DatabaseSync(db)), retentionInterval: 1_000_000 })
     cleanups.push(() => s.close())
@@ -488,11 +488,14 @@ describe('the trail pane never counts a caller\'s `exit_by` (D404)', () => {
     const n = await client.callTool({ name: 'treecontext_insert', arguments: { content: 'we chose the queue', metadata: { outcome: 'decided' } } })
     const nid = (JSON.parse((n.content as Array<{ text: string }>)[0]!.text) as { node_id: string }).node_id
     expect((JSON.parse(rows<{ m: string }>(db, 'SELECT metadata_json AS m FROM nodes WHERE node_id = ?', nid)[0]!.m) as Record<string, unknown>)['outcome']).toBe('decided')
-    // A library row claiming it on a row that is no captured tool call.
+    // A library row claiming it on a row that is no captured tool call: no
+    // call at all, so counted nowhere (an exit class is a captured tool
+    // row's alone, flat-store.ts CAPTURED_TOOL_ROW).
     await s.insert('a note, not a call', { metadata: { exit_type: 'success', exit_by: 'client' } })
     // A captured tool row the drain marked.
     await s.insert('Tool: Bash', { metadata: { source: 'auto-capture', tool_name: 'Bash', exit_type: 'success', exit_by: 'client' } })
-    expect(s.vitals(Date.now() / 1000).trail.exitsBy).toEqual({ success: { client: 1, text: 1 } })
+    expect(s.vitals(Date.now() / 1000).trail.exitsBy).toEqual({ success: { client: 1, text: 0 } })
+    expect(s.vitals(Date.now() / 1000).trail.exits).toEqual({ success: 1 })
   })
 })
 

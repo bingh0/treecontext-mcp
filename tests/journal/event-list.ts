@@ -11,12 +11,28 @@
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { claudeHooksBlock } from '../../src/server/installer.js'
-import { RECORDED_HOOK_EVENTS } from './standins.js'
+import { codexHooksBlock } from '../../src/server/codex-hooks.js'
+import { RECORDED_HOOK_EVENTS, RECORDED_CODEX_EVENTS } from './standins.js'
 
 export interface ListedEvent { event: string; when: string; disposition: string; lost?: string; observed: boolean }
 export interface EventList { client: string; version: string; read_at: string; sources: string[]; provenance: string; events: ListedEvent[] }
 
 export const EVENT_LIST_PATH = join(RECORDED_HOOK_EVENTS, 'events.json')
+
+/**
+ * A client whose hook events the repository keeps as a list (D402 for
+ * Claude Code, D409 for Codex CLI): its name as the list spells it, the
+ * fixture directory its list and recordings sit in, and the events of the
+ * block install writes for it, read from that block.
+ */
+export interface ListedClient { name: string; dir: string; wired: () => string[] }
+export const CLAUDE_CODE_LIST: ListedClient = { name: 'Claude Code', dir: RECORDED_HOOK_EVENTS, wired: () => Object.keys(claudeHooksBlock()) }
+export const CODEX_LIST: ListedClient = { name: 'Codex CLI', dir: RECORDED_CODEX_EVENTS, wired: () => Object.keys(codexHooksBlock()) }
+
+/** A client's list (events.json in its fixture directory). */
+export function readClientEventList(client: ListedClient): EventList {
+  return readEventList(join(client.dir, 'events.json'))
+}
 
 export function readEventList(path = EVENT_LIST_PATH): EventList {
   return JSON.parse(readFileSync(path, 'utf8')) as EventList
@@ -42,9 +58,9 @@ export function recordedEventNames(root = RECORDED_HOOK_EVENTS): Set<string> {
 
 /** The list kept with its provenance: parses, names a client version and a
  *  date, holds no event twice. */
-export function provenanceProblems(list: EventList): string[] {
+export function provenanceProblems(list: EventList, client: string = 'Claude Code'): string[] {
   const out: string[] = []
-  if (list.client !== 'Claude Code') out.push(`the list names client ${JSON.stringify(list.client)}, not Claude Code`)
+  if (list.client !== client) out.push(`the list names client ${JSON.stringify(list.client)}, not ${client}`)
   if (!/^\d+\.\d+\.\d+/.test(String(list.version))) out.push('the list names no client version')
   if (!/^\d{4}-\d{2}-\d{2}$/.test(String(list.read_at))) out.push('the list names no date it was read at')
   if (!Array.isArray(list.sources) || list.sources.length === 0) out.push('the list names no sources')
@@ -58,7 +74,10 @@ export function provenanceProblems(list: EventList): string[] {
 }
 
 /** Each listed event is wired (an event of the block install writes) or
- *  not-captured with a non-empty `lost`; never both, never neither. */
+ *  not-captured with a non-empty `lost`; never both, never neither. An
+ *  event the client does not have (`not-in-client`, D409: Claude Code's
+ *  PostToolUseFailure and PostToolBatch on Codex's list) names what the
+ *  journal does not capture because of it, and install never wires it. */
 export function dispositionProblems(list: EventList, wiredByInstall: string[] = Object.keys(claudeHooksBlock())): string[] {
   const out: string[] = []
   for (const e of list.events) {
@@ -70,6 +89,10 @@ export function dispositionProblems(list: EventList, wiredByInstall: string[] = 
     } else if (e.disposition === 'not-captured') {
       if (!lost) out.push(`${e.event} is not captured and names nothing it loses`)
       if (inBlock) out.push(`${e.event} is listed as not captured but install's block wires it`)
+    } else if (e.disposition === 'not-in-client') {
+      if (!lost) out.push(`${e.event} is not in the client and names nothing the journal loses for it`)
+      if (inBlock) out.push(`${e.event} is listed as not in the client but install's block wires it`)
+      if (e.observed) out.push(`${e.event} is listed as not in the client but says it was observed`)
     } else {
       out.push(`${e.event} is neither wired nor not-captured (${JSON.stringify(e.disposition)})`)
     }

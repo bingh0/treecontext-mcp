@@ -95,6 +95,28 @@ describe('capture census classification (synthetic transcript and store)', () =>
     expect(s['t_failed']).toBe('LOST')
   })
 
+  it('a call journaled twice, a no-result entry and its result entry (D408), is one call, stored: the census counts calls by id and never reads the resolved mark', () => {
+    // The census asks only whether a captured tool row carries the call's
+    // id (storeViewOf byId); whether the drain marked the earlier entry
+    // `resolved_by` is not its question, so the classification is the same
+    // with the mark, without it, and with the no-result entry alone.
+    const statusWith = (resolvedBy: string | undefined, withResult: boolean): string[] => {
+      const db = syntheticStore()
+      db.prepare("INSERT INTO nodes (node_id, content, metadata_json) VALUES ('nr', 'Tool: Bash\nInput:\ncommand:\nsleep 99\nResult: none reported.', ?)")
+        .run(JSON.stringify({ session_id: S, created_at: T0 + 90, tool_name: 'Bash', tool_use_id: 't_noresult', captured_from: 'no-result', ...(resolvedBy ? { resolved_by: resolvedBy } : {}) }))
+      if (withResult) {
+        db.prepare("INSERT INTO nodes (node_id, content, metadata_json) VALUES ('res', 'Tool: Bash\nInput:\ncommand:\nsleep 99\nOutput:\n', ?)")
+          .run(JSON.stringify({ session_id: S, created_at: T0 + 190, tool_name: 'Bash', tool_use_id: 't_noresult' }))
+      }
+      const rows = classify(calls, storeViewOf(db)).filter((r) => r.call.id === 't_noresult')
+      expect(tabulate(rows)['no result']['stored']).toBe(rows.length)
+      return rows.map((r) => r.status)
+    }
+    expect(statusWith('res', true)).toEqual(['stored'])
+    expect(statusWith(undefined, true)).toEqual(['stored'])
+    expect(statusWith(undefined, false)).toEqual(['stored'])
+  })
+
   it('two identical calls with one node: the first claims it, the second is deduplicated, never a second claim', () => {
     const s = statusOf()
     expect(s['t_twin1']).toBe('before-id')

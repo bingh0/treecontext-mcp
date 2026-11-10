@@ -18,18 +18,17 @@ import {
   claudeHookCommand, claudeHookDispatch, claudeHookCommandsWithoutExec, withoutExec, withoutClientArg, expectedHookCopy, hookShellFor,
   removeGeminiHooks,
   claudeHooksBlock, claudeHookSummaryLines, claudeCaptureEventsUnwired, claudeUnwiredEventsDetail, removeCodexHooks, parseJsonc,
-  upsertVscodeHooks, upsertCodexHooks, upsertCursorHooks,
   removeVscodeHooks, removeCursorHooks,
   buildVscodeHooksConfig, vscodeHooksComplete,
-  agentHookWrapperIssue, resetManagedLayoutScan,
+  resetManagedLayoutScan,
   buildMcpEntry, configRootKey, mcpCommand, convergeMcpEntry,
   mcpLauncherPath, mcpLauncherScriptContent,
   hookScriptContent, interpreterIssue, launcherInterpreter, launcherCliPath,
   hookScriptIssue,
   installClaudeSkill, removeClaudeSkill, skillFileContent,
   claudeHookScriptPaths,
-  AGENT_HOOK_WRAPPER_STEMS, agentHookWrapperPath, agentHookWrapperContent,
-  installAgentHookWrappers, removeAgentHookWrappers, removeClaudeHookScripts, meetsNodeFloor } from '../../src/server/installer.js'
+  AGENT_HOOK_WRAPPER_STEMS, agentHookWrapperPath, removeAgentHookWrappers, removeClaudeHookScripts, meetsNodeFloor } from '../../src/server/installer.js'
+import { installAgentHookWrappers, upsertVscodeHooks, upsertCursorHooks, upsertCodexHooks } from '../helpers/earlier-build-writers.js'
 import { SKILL_REFERENCE_NAME } from '../../src/server/instructions.js'
 import { AGENTS, getAgent, detectAgents, getConfigPath, legacyMcpConfigs } from '../../src/server/agents.js'
 import { redirectHome } from '../helpers/home.js'
@@ -1490,21 +1489,13 @@ describe('the hook copy writer (upsertCodexHooks)', () => {
   beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'tc-inst-')) })
   afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
 
-  it('does not duplicate when already present', () => {
-    const p = join(dir, 'hooks.json')
-    writeFileSync(p, '{}')
-    upsertCodexHooks(p, false, false)
-    const once = readFileSync(p, 'utf8')
-    expect(upsertCodexHooks(p, false, false).status).toBe('skipped')
-    expect(readFileSync(p, 'utf8')).toBe(once)
-  })
 
   it('preserves existing hooks', () => {
     const p = join(dir, 'hooks.json')
     writeFileSync(p, JSON.stringify({
       hooks: { PreCompact: [{ hooks: [{ command: 'other-tool' }] }] },
     }))
-    upsertCodexHooks(p, false, false)
+    upsertCodexHooks(p)
     const hooks = readJson(p).hooks as Record<string, unknown[]>
     expect(hooks.PreCompact!.length).toBe(2)
   })
@@ -1519,7 +1510,7 @@ describe('the hook copy writer (upsertCodexHooks)', () => {
     writeFileSync(p, JSON.stringify({
       hooks: { SessionStart: [{ hooks: [{ command: 'my-tool hook sync' }] }] },
     }))
-    upsertCodexHooks(p, false, false)
+    upsertCodexHooks(p)
     const hooks = readJson(p).hooks as Record<string, Array<{ hooks: Array<{ command: string }> }>>
     const commands = hooks.SessionStart!.flatMap(m => m.hooks.map(h => h.command))
     expect(commands).toContain('my-tool hook sync')
@@ -1540,7 +1531,7 @@ describe('the hook copy writer (upsertCodexHooks)', () => {
         ],
       },
     }))
-    upsertCodexHooks(p, false, false)
+    upsertCodexHooks(p)
     const hooks = readJson(p).hooks as Record<string, Array<{ hooks: Array<{ command: string }> }>>
     const commands = hooks.SessionStart!.flatMap(m => m.hooks.map(h => h.command))
     // Both legacy spellings gone, and exactly the block's own entries left:
@@ -1567,8 +1558,8 @@ describe('the hook copy writer (upsertCodexHooks)', () => {
         ],
       },
     }))
-    upsertCodexHooks(p, false, false)
-    upsertCodexHooks(p, false, false)
+    upsertCodexHooks(p)
+    upsertCodexHooks(p)
 
     const hooks = readJson(p).hooks as Record<string, Array<{ matcher?: string; hooks?: Array<{ command: string }> }>>
     const matchers = hooks.SessionStart!.map(m => m.matcher)
@@ -1588,27 +1579,6 @@ describe('Codex CLI copy of the Claude Code block (D154, D208)', () => {
   beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'tc-inst-')) })
   afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
 
-  it('writes the block verbatim under hooks, moves an earlier top-level copy out, keeps foreign keys and hooks', () => {
-    const p = join(dir, 'hooks.json')
-    writeFileSync(p, JSON.stringify({
-      SomethingElse: { keep: true },
-      // What builds before the copy wrote: wrapper entries at the top level.
-      SessionStart: [{ hooks: [{ type: 'command', command: `"${join(homedir(), '.claude', 'hooks', 'tc-codex-session-start')}"` }] }],
-      PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'my-guard' }] }],
-      hooks: { Stop: [{ hooks: [{ type: 'command', command: 'notify-me' }] }] },
-    }))
-    expect(upsertCodexHooks(p, false, false).status).toBe('updated')
-    const after = readJson(p) as Record<string, unknown> & { hooks: Record<string, unknown[]> }
-    expect(after.SomethingElse).toEqual({ keep: true })
-    expect(after.SessionStart, 'the earlier top-level copy survived').toBeUndefined()
-    expect(after.PreToolUse).toEqual([{ matcher: 'Bash', hooks: [{ type: 'command', command: 'my-guard' }] }])
-    const block = expectedHookCopy()
-    for (const [event, matchers] of Object.entries(block)) {
-      expect(after.hooks[event], event).toEqual(expect.arrayContaining(matchers))
-    }
-    expect(after.hooks.Stop![0]).toEqual({ hooks: [{ type: 'command', command: 'notify-me' }] })
-    expect(upsertCodexHooks(p, false, false).status).toBe('skipped')
-  })
 
   it('uninstall takes the copy and any earlier top-level copy, and nothing else', () => {
     const p = join(dir, 'hooks.json')
@@ -1616,7 +1586,7 @@ describe('Codex CLI copy of the Claude Code block (D154, D208)', () => {
       SessionStart: [{ hooks: [{ type: 'command', command: 'node "/old/hooks/codex/session-start.js"' }] }],
       hooks: { Stop: [{ hooks: [{ type: 'command', command: 'notify-me' }] }] },
     }))
-    upsertCodexHooks(p, false, false)
+    upsertCodexHooks(p)
     expect(removeCodexHooks(p, false)).not.toBeNull()
     expect(readJson(p)).toEqual({ hooks: { Stop: [{ hooks: [{ type: 'command', command: 'notify-me' }] }] } })
     expect(removeCodexHooks(p, false)).toBeNull()
@@ -1710,7 +1680,7 @@ describe('removeCursorHooks / removeVscodeHooks: owned entries only', () => {
       version: 1,
       hooks: { somethingForeign: [{ command: 'other-tool run' }] },
     }))
-    upsertCursorHooks(p, false, false)
+    upsertCursorHooks(p)
     const r = removeCursorHooks(p, false)
 
     expect(r).not.toBeNull()
@@ -1724,7 +1694,7 @@ describe('removeCursorHooks / removeVscodeHooks: owned entries only', () => {
   it('the cursor file goes entirely when only treecontext content was in it', () => {
     const p = join(dir, 'hooks.json')
     writeFileSync(p, '{}')
-    upsertCursorHooks(p, false, false)
+    upsertCursorHooks(p)
     expect(removeCursorHooks(p, false)).not.toBeNull()
     expect(existsSync(p), 'an empty husk was left for cursor to keep reading').toBe(false)
   })
@@ -1734,7 +1704,7 @@ describe('removeCursorHooks / removeVscodeHooks: owned entries only', () => {
     // `command`, so ownership has to be read from those keys as well.
     const p = join(dir, 'treecontext.json')
     writeFileSync(p, '{}')
-    upsertVscodeHooks(p, false, false)
+    upsertVscodeHooks(p)
     expect(removeVscodeHooks(p, false)).not.toBeNull()
     expect(existsSync(p)).toBe(false)
   })
@@ -1742,7 +1712,7 @@ describe('removeCursorHooks / removeVscodeHooks: owned entries only', () => {
   it('a hand-added copilot entry is not collateral', () => {
     const p = join(dir, 'treecontext.json')
     writeFileSync(p, '{}')
-    upsertVscodeHooks(p, false, false)
+    upsertVscodeHooks(p)
     const seeded = readJson(p)
     const hooks = seeded.hooks as Record<string, unknown[]>
     hooks.sessionStart!.push({ type: 'command', bash: 'other-tool run', timeoutSec: 5 })
@@ -1787,7 +1757,7 @@ describe('removeCursorHooks / removeVscodeHooks: owned entries only', () => {
   it('respects dry-run', () => {
     const p = join(dir, 'hooks.json')
     writeFileSync(p, '{}')
-    upsertCursorHooks(p, false, false)
+    upsertCursorHooks(p)
     const before = readFileSync(p, 'utf8')
     expect(removeCursorHooks(p, true)!.status).toBe('dry-run')
     expect(readFileSync(p, 'utf8')).toBe(before)
@@ -1959,18 +1929,6 @@ function unquoteBashForm(command: string): string {
   return command.slice(1, -1)
 }
 
-/**
- * An agent hook wrapper path as it appears once WRITTEN into a config.
- *
- * The bash form rewrites `\` to `/` on Windows on purpose: a quoted
- * backslash path survives as text but contains no '/', so the shell resolves
- * it as a command NAME against PATH instead of opening it — that rewrite is
- * the 0.0.14 fix, not an accident. Comparing a written command against a raw
- * agentHookWrapperPath therefore fails on Windows against a correct config.
- * Derived from claudeHookCommand so the rule keeps one definition.
- */
-const writtenWrapper = (agent: keyof typeof AGENT_HOOK_WRAPPER_STEMS, stem: string): string =>
-  unquoteBashForm(claudeHookCommand(agentHookWrapperPath(agent, stem), 'bash'))
 
 /** Extract the interpreter token (first quoted or bare word) of a command string. */
 function interpreterToken(command: string): string {
@@ -2066,22 +2024,22 @@ describe('interpreter resolution (AC1.1/AC1.2)', () => {
     const restore = redirectHome(home)
     try {
       for (const agent of Object.keys(AGENT_HOOK_WRAPPER_STEMS) as Array<keyof typeof AGENT_HOOK_WRAPPER_STEMS>) {
-        installAgentHookWrappers(agent, false)
+        installAgentHookWrappers(agent)
       }
       // The Codex copy runs the Claude Code hook scripts.
       installClaudeHookScripts(false)
       const configs: Record<string, unknown>[] = []
 
       const vp = join(dir, 'vscode.json')
-      upsertVscodeHooks(vp, false, false)
+      upsertVscodeHooks(vp)
       configs.push(readJson(vp))
 
       const cp = join(dir, 'codex.json')
-      upsertCodexHooks(cp, false, false)
+      upsertCodexHooks(cp)
       configs.push(readJson(cp))
 
       const up = join(dir, 'cursor.json')
-      upsertCursorHooks(up, false, false)
+      upsertCursorHooks(up)
       configs.push(readJson(up))
 
       const commands: string[] = []
@@ -2508,58 +2466,6 @@ describe('MCP launcher wrapper (upgrade-survivable stdio launch)', () => {
   })
 })
 
-describe('legacy bare-node config convergence (AC1.5)', () => {
-  let dir: string
-
-  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'tc-inst-')) })
-  afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
-
-  it('vscode: legacy bare-node config is updated, then skipped', () => {
-    const p = join(dir, 'hooks.json')
-    writeFileSync(p, JSON.stringify({
-      hooks: { SessionStart: [{ type: 'command', command: 'node "/old/hooks/vscode/session-start.js"', timeout: 10 }] },
-    }))
-    const r1 = upsertVscodeHooks(p, false, false)
-    expect(r1.status).toBe('updated')
-    expect(JSON.stringify(readJson(p))).not.toContain('node \\"')
-    const r2 = upsertVscodeHooks(p, false, false)
-    expect(r2.status).toBe('skipped')
-  })
-
-  it('codex: legacy bare-node config is updated, preserving foreign keys, then skipped', () => {
-    const p = join(dir, 'hooks.json')
-    writeFileSync(p, JSON.stringify({
-      SomethingElse: { keep: true },
-      SessionStart: [{ hooks: [{ type: 'command', command: 'node "/old/hooks/codex/session-start.js"' }] }],
-    }))
-    const r1 = upsertCodexHooks(p, false, false)
-    expect(r1.status).toBe('updated')
-    const after = readJson(p)
-    expect(after.SomethingElse).toEqual({ keep: true })
-    expect(JSON.stringify(after)).not.toContain('node \\"')
-    const r2 = upsertCodexHooks(p, false, false)
-    expect(r2.status).toBe('skipped')
-  })
-
-  it('cursor: legacy bare-node config is updated, preserving foreign hooks, then skipped', () => {
-    const p = join(dir, 'hooks.json')
-    writeFileSync(p, JSON.stringify({
-      version: 1,
-      hooks: {
-        sessionStart: [{ command: 'node "/old/hooks/cursor/session-start.js"' }],
-        somethingForeign: [{ command: 'other-tool run' }],
-      },
-    }))
-    const r1 = upsertCursorHooks(p, false, false)
-    expect(r1.status).toBe('updated')
-    const after = readJson(p)
-    const hooks = after.hooks as Record<string, Array<{ command: string }>>
-    expect(hooks.somethingForeign![0]!.command).toBe('other-tool run')
-    expect(interpreterToken(hooks.sessionStart![0]!.command)).toBe(writtenWrapper('cursor', 'session-start'))
-    const r2 = upsertCursorHooks(p, false, false)
-    expect(r2.status).toBe('skipped')
-  })
-})
 
 /**
  * Agent hook wrappers: the four agents whose configs once carried
@@ -2574,66 +2480,14 @@ describe('agent hook wrappers (vscode/codex/cursor; gemini\'s swept only)', () =
     [keyof typeof AGENT_HOOK_WRAPPER_STEMS, readonly string[]]
   >).flatMap(([agent, stems]) => stems.map(stem => [agent, stem] as [keyof typeof AGENT_HOOK_WRAPPER_STEMS, string]))
 
-  // Gemini CLI's stems write no wrapper any more (D399): the archived sweep
-  // that removes an earlier build's `tc-gemini-*` wrappers is asserted
-  // elsewhere; what a wrapper install never writes is not graded here.
-  it.each(combos.filter(([agent]) => agent !== 'gemini'))('%s/%s: pins TC_NODE and TC_CLI, dispatches through the variables', (agent, stem) => {
-    const body = agentHookWrapperContent(agent, stem)
-
-    // Read the pin with the product's own parser, so a shape drift that
-    // blinds doctor fails here too.
-    const pinnedCli = launcherCliPath(body)
-    expect(pinnedCli, 'the wrapper must pin a concrete module path').toBeTruthy()
-    expect(isAbsolute(pinnedCli!)).toBe(true)
-    expect(pinnedCli!.replace(/\\/g, '/')).toContain(`hooks/${agent}/${stem}.js`)
-
-    // The fallback search must be re-rooted at THIS entry point — a wrapper
-    // whose glob still hunts for cli.js would "recover" by execing the MCP
-    // server as a hook.
-    expect(body.replace(/\\/g, '/')).toContain(`node_modules/treecontext/dist/hooks/${agent}/${stem}.js`)
-
-    // The invocation must name the variables — the same assertion the
-    // claude-hook test makes, for the same pre-fix-shape reason — and must
-    // NOT exec: the exit-0 line after it is what keeps a stranded install
-    // from handing exit-code-sensitive hosts a 126/127.
-    if (process.platform === 'win32') {
-      expect(body).toContain('"%TC_NODE%" "%TC_CLI%"')
-      expect(body).toContain('exit /b 0')
-    } else {
-      expect(body).toMatch(/^"\$TC_NODE" "\$TC_CLI"/m)
-      expect(body).not.toContain('exec ')
-      expect(body).toMatch(/\nexit 0\n/)
-    }
-
-    // The grader's verdict is decided in a sandboxed home, never by
-    // whatever global install the developer's machine holds: run from the
-    // source tree the pin is satisfied by the entry point's .ts twin, and
-    // the sandbox keeps the managed-layout search from reading the machine.
-    const home = mkdtempSync(join(tmpdir(), 'tc-wrapper-grade-'))
-    const restore = redirectHome(home)
-    resetManagedLayoutScan()
-    try {
-      // A live agent: the pin is present (a source run counts the entry
-      // point's .ts twin as present, a built one has the .js), so the
-      // wrapper is healthy whatever the machine's managed layouts hold.
-      expect(hookScriptIssue(body)).toBeNull()
-    } finally {
-      restore()
-      resetManagedLayoutScan()
-      rmSync(home, { recursive: true, force: true })
-    }
-  })
-
-  // Gemini CLI's stems name no entry point since its adapter left with its
-  // retirement (D399): install writes no wrapper of its, and the stems stay
-  // only for the archived sweep to recognise an earlier build's.
-  it.each(combos.filter(([agent]) => agent !== 'gemini'))('%s/%s: the stem names a real entry point', (agent, stem) => {
-    // The wrapper dispatches to dist/hooks/<agent>/<stem>.js, which a build
-    // emits exactly when src/hooks/<agent>/<stem>.ts exists. A stem typo in
-    // AGENT_HOOK_WRAPPER_STEMS would otherwise ship a wrapper aimed at
-    // nothing, and nothing else in this suite would notice.
+  // No stem names an entry point any more: the vscode, codex and cursor
+  // adapters left the build with the experimental flag (D406), as Gemini
+  // CLI's did with its retirement (D399). The stems stay only so the sweep
+  // recognises the wrappers an earlier build wrote; nothing install writes
+  // runs one.
+  it.each(combos)('%s/%s: names no adapter left in the build', (agent, stem) => {
     const src = fileURLToPath(new URL(`../../src/hooks/${agent}/${stem}.ts`, import.meta.url))
-    expect(existsSync(src), src).toBe(true)
+    expect(existsSync(src), src).toBe(false)
   })
 
   it('install writes exactly the wrappers the stems declare, tc-prefixed for the uninstall sweep', () => {
@@ -2641,7 +2495,7 @@ describe('agent hook wrappers (vscode/codex/cursor; gemini\'s swept only)', () =
     const restore = redirectHome(home)
     try {
       for (const agent of Object.keys(AGENT_HOOK_WRAPPER_STEMS) as Array<keyof typeof AGENT_HOOK_WRAPPER_STEMS>) {
-        installAgentHookWrappers(agent, false)
+        installAgentHookWrappers(agent)
       }
       const written = readdirSync(join(home, '.claude', 'hooks')).sort()
       const expected = combos.map(([a, s]) => basename(agentHookWrapperPath(a, s))).sort()
@@ -2664,8 +2518,8 @@ describe('agent hook wrappers (vscode/codex/cursor; gemini\'s swept only)', () =
     const restore = redirectHome(home)
     try {
       installClaudeHookScripts(false)
-      installAgentHookWrappers('vscode', false)
-      installAgentHookWrappers('cursor', false)
+      installAgentHookWrappers('vscode')
+      installAgentHookWrappers('cursor')
       const hooksDir = join(home, '.claude', 'hooks')
 
       removeClaudeHookScripts(false)
@@ -2684,34 +2538,6 @@ describe('agent hook wrappers (vscode/codex/cursor; gemini\'s swept only)', () =
     }
   })
 
-  it('a wrapper the config references but which is missing from disk is reported', () => {
-    // Absence used to be waved through here on the claim that the
-    // config-command grading catches it. It did not: that grading walked
-    // `command` keys only, while the Copilot config carries the invocation
-    // under `bash`/`powershell` — so a deleted tc-vscode-* wrapper was
-    // invisible from both sides at once and capture died in silence.
-    const home = mkdtempSync(join(tmpdir(), 'tc-wrap-missing-'))
-    const restore = redirectHome(home)
-    try {
-      const config = buildVscodeHooksConfig()
-      const referenced = JSON.stringify(config).match(/"([^"]*tc-vscode-[^"]*)"/g)!
-        .map(s => s.slice(1, -1))
-      expect(referenced.length, 'the built config names no wrapper').toBeGreaterThan(0)
-
-      // Nothing installed yet: every wrapper the config names is absent.
-      expect(agentHookWrapperIssue('vscode', referenced))
-        .toContain('missing from disk')
-      // A config that references nothing is not judged — an agent installed
-      // without --experimental-capture legitimately has no wrappers.
-      expect(agentHookWrapperIssue('vscode', [])).toBeNull()
-
-      installAgentHookWrappers('vscode', false)
-      expect(agentHookWrapperIssue('vscode', referenced)).toBeNull()
-    } finally {
-      restore()
-      rmSync(home, { recursive: true, force: true })
-    }
-  })
 })
 
 describe('treecontext-reference skill (AC3.3/AC3.4)', () => {

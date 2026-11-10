@@ -20,6 +20,7 @@ import { decodeContent } from './persistence/content-codec.js'
 import { referencedBy, ageText, plural, laneOfRow, summarizeLanes, pointerKindWords, MAIN_LANE, OTHER_LANES_NAMED, type LaneSummary } from './references.js'
 import { MAIN_WRITER } from './persistence/session-registry.js'
 import { placementsOf } from './persistence/lane-scope.js'
+import { PRE_TOOL_USE_MARK, UNRESOLVED_CALL_MARKS, resolvedCallEntrySql } from './persistence/capture-marks.js'
 
 export { ageText, plural }
 
@@ -310,17 +311,30 @@ function hasTable(db: DatabaseType, name: string): boolean {
 
 /** Entries of the chain strictly after `after` (and before `before`):
  *  journal rows plus staged rows the drain has not reached yet, so a
- *  count never waits on the server. */
+ *  count never waits on the server. A call is one entry (D408): a staged
+ *  PreToolUse account is never an entry of its own, a staged no-result or
+ *  no-turn-end row whose call's own result is staged beside it is one the
+ *  drain skips, and a no-result or no-turn-end entry a later entry
+ *  resolved is counted in its resolver. */
 export function countSessionEntries(db: DatabaseType, chain: string[], after: number, before = Infinity): number {
   const hi = Number.isFinite(before) ? before : 1e15
   const nodes = (db.prepare(
-    `SELECT COUNT(*) AS n FROM nodes WHERE ${IN_TREES} AND session_key IN ${inList(chain.length)} AND created_at > ? AND created_at < ?`,
+    `SELECT COUNT(*) AS n FROM nodes WHERE ${IN_TREES} AND session_key IN ${inList(chain.length)} AND created_at > ? AND created_at < ?
+        AND NOT ${resolvedCallEntrySql()}`,
   ).get(...chain, after, hi) as { n: number }).n
-  const staged = hasTable(db, 'staging')
-    ? (db.prepare(
-      `SELECT COUNT(*) AS n FROM staging WHERE session_id IN ${inList(chain.length)} AND processed = 0 AND timestamp > ? AND timestamp < ?`,
+  let staged = 0
+  if (hasTable(db, 'staging')) {
+    const marks = (db.prepare('PRAGMA table_info(staging)').all() as Array<{ name: string }>).some((c) => c.name === 'captured_from')
+    const notCalls = marks
+      ? `AND (s.captured_from IS NULL OR s.captured_from <> '${PRE_TOOL_USE_MARK}')
+         AND NOT (s.captured_from IN (${UNRESOLVED_CALL_MARKS.map((m) => `'${m}'`).join(', ')}) AND EXISTS (
+               SELECT 1 FROM staging o WHERE o.session_id = s.session_id AND o.tool_use_id = s.tool_use_id
+                 AND (o.captured_from IS NULL OR o.captured_from NOT IN ('${PRE_TOOL_USE_MARK}', ${UNRESOLVED_CALL_MARKS.map((m) => `'${m}'`).join(', ')}))))`
+      : ''
+    staged = (db.prepare(
+      `SELECT COUNT(*) AS n FROM staging s WHERE s.session_id IN ${inList(chain.length)} AND s.processed = 0 AND s.timestamp > ? AND s.timestamp < ? ${notCalls}`,
     ).get(...chain, after, hi) as { n: number }).n
-    : 0
+  }
   return Number(nodes) + Number(staged)
 }
 

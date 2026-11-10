@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync, existsSync, statSync } from 'node:fs'
+import { appendFileSync, chmodSync, copyFileSync, renameSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync, existsSync, statSync } from 'node:fs'
 import { spawn, spawnSync } from 'node:child_process'
 import { basename, delimiter, dirname, isAbsolute, join } from 'node:path'
 import { hostname, tmpdir } from 'node:os'
@@ -9,16 +9,21 @@ import { seedOrphanSidecar, storesDirIn } from '../../helpers/store-fixtures.js'
 import { writeVerdict } from '../../../src/persistence/backup-verdict.js'
 import { TS_ROOT } from '../proc.js'
 import { claudeSessionStartUnwired, claudeHooksBlock, MARKER_START, MARKER_END, INSTRUCTIONS_CONTENT } from '../../../src/server/installer.js'
+import { upsertCodexHooks } from '../../helpers/earlier-build-writers.js'
+import { codexHooksBlock, codexBlockState } from '../../../src/server/codex-hooks.js'
+import { type CodexListedHook } from '../../../src/server/codex-client.js'
 import { DatabaseSync } from 'node:sqlite'
 import { openNodeSqlite } from '../../../src/persistence/node-sqlite.js'
 import { FlatStore } from '../../../src/flat-store.js'
 import { LeaseClient, DRAIN_LEASE_TTL_SECS } from '../../../src/persistence/leases.js'
 import { MAX_INGEST_ATTEMPTS } from '../../../src/persistence/capture-constants.js'
-import { type InstallWorld, pathWithFakeClaude, setClaudeVersion, tcCli, agentCli, codexCli, codexConfigRead, setFakeCodex, openInstallWorld, treeOf, pathsMentioned, installedCommands, interpreterRunsPackage, isBatchBody, toPosix, mcpLauncherIn, agentConfigPath, fakeGlobalInstall, clientEntry, putAgyOnPath, putGeminiOnPath, markGeminiCliInstalled, layEarlierGeminiInstall, GEMINI_WRAPPER_STEMS, agyMcpList, type ClientEntry } from '../install-harness.js'
+import { type InstallWorld, type CliRun, pathWithFakeClaude, setClaudeVersion, tcCli, agentCli, codexCli, codexConfigRead, setFakeCodex, openInstallWorld, treeOf, pathsMentioned, installedCommands, interpreterRunsPackage, isBatchBody, toPosix, mcpLauncherIn, agentConfigPath, fakeGlobalInstall, clientEntry, putAgyOnPath, putGeminiOnPath, markGeminiCliInstalled, layEarlierGeminiInstall, GEMINI_WRAPPER_STEMS, agyMcpList, type ClientEntry } from '../install-harness.js'
 import { CODEX_APPROVALS_FLOOR } from '../../../src/server/codex-client.js'
-import { startEntryAsClient } from '../standins.js'
+import { startEntryAsClient, developerTrustsCodexHooks, codexHooksSeen, recordedSession, replayRecordedSession } from '../standins.js'
+import { openCaptureWorld, drainStaging, type CaptureWorld } from '../capture-harness.js'
+import { parseCodexRollout, classify, storeViewOf, CODEX_INFER_WHY, type CensusRow } from '../../../scripts/capture-census.js'
 import { parse as parseToml, stringify as stringifyToml } from 'smol-toml'
-import { type EventList, readEventList, provenanceProblems, dispositionProblems, unlistedWiredProblems, recordingProblems } from '../event-list.js'
+import { type EventList, readEventList, provenanceProblems, dispositionProblems, unlistedWiredProblems, recordingProblems, readClientEventList, recordedEventNames, CODEX_LIST, CLAUDE_CODE_LIST } from '../event-list.js'
 
 export const installDefiner = (reg: Registry<InstallWorld>): void => {
   // ── install wires only the agents that are present ──────────────────
@@ -593,8 +598,52 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
 
 
 
-  reg.define(/^install runs with the experimental capture flag and no agent name$/, (w: InstallWorld) => {
-    w.irun = tcCli(w, ['install', '--yes', '--experimental-capture'])
+  // ── D406 (amending D57): the experimental flag is gone ──────────────
+  // A machine with all three captured clients: Claude Code marked
+  // installed, the stand-in Codex answering 0.167.0, and the real agy on
+  // PATH, whose own `--version` reads 1.5.3. Every file under the home is
+  // read before the run, so "before anything is written" is a byte compare.
+  const homeBytes = (dir: string): Record<string, string> => {
+    const out: Record<string, string> = {}
+    const walk = (d: string): void => {
+      for (const e of readdirSync(d, { withFileTypes: true })) {
+        const p = join(d, e.name)
+        if (e.isDirectory()) walk(p)
+        else if (e.isFile()) out[p] = readFileSync(p, 'utf8')
+      }
+    }
+    walk(dir)
+    return out
+  }
+  reg.define(/^a machine with Claude Code, Codex CLI 0\.167\.0 and Antigravity CLI 1\.5\.3 installed$/, async (w: InstallWorld) => {
+    await openInstallWorld(w, ['.claude', '.codex', '.gemini'])
+    setFakeCodex(w, { version: '0.167.0', sandbox: { exit: 0, stderr: '' } })
+    putAgyOnPath(w)
+    const agy = spawnSync(join(w.iAgyBin!, 'agy'), ['--version'], { encoding: 'utf8' })
+    expect(agy.stdout.trim(), "the agy on PATH is not the version the Given names").toBe('1.5.3')
+    ;(w as InstallWorld & { iTreeBefore?: Record<string, string> }).iTreeBefore = homeBytes(w.ihome!)
+  })
+  reg.define(/^install runs with the experimental capture flag (and no agent name|naming Codex CLI|naming Antigravity CLI)$/, (w: InstallWorld, named: unknown) => {
+    const agent = named === 'naming Codex CLI' ? ['--agent', 'codex'] : named === 'naming Antigravity CLI' ? ['--agent', 'agy'] : []
+    w.irun = tcCli(w, ['install', '--yes', ...agent, '--experimental-capture'])
+  })
+  reg.define(/^the install is refused before anything is written, and the install run exits non-zero$/, (w: InstallWorld) => {
+    expect(w.irun!.status, w.irun!.out).not.toBe(0)
+    expect(w.irun!.status).not.toBeNull()
+    expect(homeBytes(w.ihome!), 'install wrote under the home before refusing').toEqual((w as InstallWorld & { iTreeBefore?: Record<string, string> }).iTreeBefore)
+    // Refused before its run began: install printed nothing on stdout.
+    expect(w.irun!.stdout).toBe('')
+  })
+  reg.define(/^the developer sees one line saying the flag is gone and that each captured client is wired by default from its version floor, naming Codex CLI 0\.167\.0 and Antigravity CLI 1\.5\.3$/, (w: InstallWorld) => {
+    const said = w.irun!.out.split('\n').filter(l => l.trim() !== '')
+    expect(said, w.irun!.out).toHaveLength(1)
+    expect(said[0]).toMatch(/--experimental-capture is gone/)
+    expect(said[0]).toMatch(/wired by default from its version floor/)
+    expect(said[0]).toContain('Codex CLI 0.167.0')
+    expect(said[0]).toContain('Antigravity CLI 1.5.3')
+  })
+  reg.define(/^install runs naming Gemini CLI$/, (w: InstallWorld) => {
+    w.irun = tcCli(w, ['install', '--yes', '--agent', 'gemini'])
   })
 
 
@@ -616,16 +665,52 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
     expect(list.events.length).toBeGreaterThan(0)
   })
 
+  // D402 for Claude Code, D409 for Codex CLI: the list's client decides
+  // which block install writes and which recordings it is held against.
+  const listedClientOf = (list: EventList): typeof CODEX_LIST => (list.client === 'Codex CLI' ? CODEX_LIST : CLAUDE_CODE_LIST)
   reg.define(/^every event on the list is either wired or named with what the journal does not capture because of it$/, (w: InstallWorld) => {
     const list = (w as InstallWorld & { iEventList?: EventList }).iEventList!
-    expect(dispositionProblems(list)).toEqual([])
+    const client = listedClientOf(list)
+    expect(dispositionProblems(list, client.wired())).toEqual([])
     // and every event a recording shows is on the list, observed exactly
-    expect(recordingProblems(list)).toEqual([])
+    expect(recordingProblems(list, recordedEventNames(client.dir))).toEqual([])
   })
 
-  reg.define(/^every event install wires is on the list$/, (w: InstallWorld) => {
+  reg.define(/^every event install (?:wires|writes for Codex) is on the list$/, (w: InstallWorld) => {
     const list = (w as InstallWorld & { iEventList?: EventList }).iEventList!
-    expect(unlistedWiredProblems(list)).toEqual([])
+    expect(unlistedWiredProblems(list, listedClientOf(list).wired())).toEqual([])
+  })
+
+  reg.define(/^the list of Codex CLI's hook events, kept with the Codex version it was read from$/, (w: InstallWorld) => {
+    const list = readClientEventList(CODEX_LIST)
+    ;(w as InstallWorld & { iEventList?: EventList }).iEventList = list
+    expect(provenanceProblems(list, 'Codex CLI')).toEqual([])
+    expect(list.version).toBe('0.167.0')
+  })
+  reg.define(/^it is compared with the hooks install writes for Codex$/, () => {
+    expect(Object.keys(codexHooksBlock()).length, 'install writes no Codex hook events').toBeGreaterThan(0)
+  })
+  reg.define(/^the list names PostToolUseFailure and PostToolBatch as events Codex does not have, with what the journal does not capture on Codex because of it$/, (w: InstallWorld) => {
+    const list = (w as InstallWorld & { iEventList?: EventList }).iEventList!
+    for (const name of ['PostToolUseFailure', 'PostToolBatch']) {
+      const e = list.events.find((x) => x.event === name)
+      expect(e, name).toBeDefined()
+      expect(e!.disposition).toBe('not-in-client')
+      expect(String(e!.lost).trim().length, name).toBeGreaterThan(20)
+      expect(Object.keys(codexHooksBlock())).not.toContain(name)
+    }
+  })
+  reg.define(/^the list marks PreToolUse, Interrupt and PreCompact wired, each with what it is for, and PostCompact not captured, with the reason$/, (w: InstallWorld) => {
+    const list = (w as InstallWorld & { iEventList?: EventList }).iEventList!
+    for (const name of ['PreToolUse', 'Interrupt', 'PreCompact']) {
+      const e = list.events.find((x) => x.event === name)!
+      expect(e.disposition, name).toBe('wired')
+      expect(e.when.trim().length, name).toBeGreaterThan(10)
+      expect(Object.keys(codexHooksBlock())).toContain(name)
+    }
+    const post = list.events.find((x) => x.event === 'PostCompact')!
+    expect(post.disposition).toBe('not-captured')
+    expect(post.lost).toMatch(/no summary/)
   })
 
   reg.define(/^an installation wired before a capture event was added is reported by doctor with the command that wires it$/, async (w: InstallWorld) => {
@@ -1701,7 +1786,7 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
     const clause = agent === 'Claude Code'
       ? 'mode: capture'
       : w.iServerMode === 'conversation-indexer'
-        ? 'server mode: capture (this client: experimental hooks, unverified)'
+        ? 'server mode: capture (this client: its own hooks)'
         : 'server mode: standard (no auto-capture) (this client: tools only)'
     expect(row, row).toContain(`: MCP configured, ${clause}, `)
     expect(row, `doctor warns on ${String(agent)}'s row:\n${row}\n${lines[i + 1] ?? ''}`).toMatch(/^\[ok\]/)
@@ -1867,7 +1952,7 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
 
   const FLOOR_LINE = new RegExp(`Codex 0\\.165\\.0 cannot read per-tool approvals: its headless workers need Codex ${CODEX_APPROVALS_FLOOR.replace(/\./g, '\\.')} or newer for the tools`)
   reg.define(/^the developer sees install say in one line that Codex's headless workers need a newer Codex for the tools, naming the version$/, (w: InstallWorld) => {
-    const lines = w.iInstallRun!.stdout.split('\n').filter(l => /0\.165\.0|per-tool approval/.test(l))
+    const lines = w.iInstallRun!.stdout.split('\n').filter(l => /per-tool approval/.test(l))
     expect(lines, w.iInstallRun!.stdout).toHaveLength(1)
     expect(lines[0]).toMatch(FLOOR_LINE)
   })
@@ -2158,7 +2243,9 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
     expect(line).toContain('Antigravity CLI')
     expect(line).toContain('treecontext install --agent agy')
     expect(line).toContain('treecontext uninstall --agent gemini')
-    expect(line).toContain('--experimental-capture')
+    // D406: the flag is gone, so the line no longer names it.
+    // step-lint: allow unearned-absence -- the needle is the flag's own spelling, which the refusal line of the flag outline (this file, "install runs with the experimental capture flag") is found by
+    expect(line).not.toContain('--experimental-capture')
     // A refusal, said as such: no crash trace and no "unknown agent".
     // step-lint: allow unearned-absence -- the needles are the CLI's own spellings: `[treecontext] Fatal:` is what cli.ts prints for an install error it does not recognise, and `No matching agents found for:` what install prints for an unknown slug, both in src
     expect(w.irun!.out).not.toMatch(/Fatal|No matching agents/)
@@ -2339,5 +2426,398 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
     const body = messageOf(w.irun!.stdout)
     for (const c of THREE) expect(messageLine(body, c)).toMatch(/^  [^:]+: off by your choice — none approved by install;/)
     expect(body).toContain('  tool approvals are off by your choice for Claude Code, Codex CLI and Antigravity CLI; to turn them on: treecontext config tool-approvals on')
+  })
+
+  // ── D406: Codex's own block, beside the developer's hooks ───────────
+  // The far side is the real Codex on PATH (0.167.0 on the binding host):
+  // its app server's `hooks/list` is what says which hooks Codex loads and
+  // trusts, read under the redirected HOME; the developer's /hooks trust is
+  // the stand-in's (standins.ts developerTrustsCodexHooks), with Codex's own
+  // hashes. The files are read back only for what Codex's account does not
+  // carry (a group's order, a command's bytes).
+  type CodexWorld = InstallWorld & {
+    cxDevPlace?: string; cxState?: string; cxHeld?: string; cxReinstall?: CliRun
+    cxAfterReinstall?: CodexListedHook | undefined; cxAfterUninstall?: CodexListedHook | undefined
+  }
+  const cxHooksFile = (w: InstallWorld): string => join(w.ihome!, '.codex', 'hooks.json')
+  const cxToml = (w: InstallWorld): string => join(w.ihome!, '.codex', 'config.toml')
+  const cxHooks = (w: InstallWorld): Record<string, Array<{ matcher?: string; hooks: Array<{ command: string }> }>> =>
+    ((JSON.parse(readFileSync(cxHooksFile(w), 'utf8')) as Record<string, unknown>)['hooks'] ?? {}) as Record<string, Array<{ matcher?: string; hooks: Array<{ command: string }> }>>
+  const cxState = (w: InstallWorld): string => {
+    const toml = existsSync(cxToml(w)) ? parseToml(readFileSync(cxToml(w), 'utf8')) as Record<string, unknown> : {}
+    return JSON.stringify(((toml['hooks'] as Record<string, unknown> | undefined)?.['state']) ?? {})
+  }
+  const DEV_STOP = { hooks: [{ type: 'command', command: 'notify-send "codex turn ended"' }] }
+  const realCodexAt = (w: InstallWorld, version: string): void => {
+    const v = codexCli(w, ['--version'])
+    expect(v.stdout.trim(), 'the Codex on PATH is not the version the Given names').toBe(`codex-cli ${version}`)
+  }
+  const devTrusted = async (w: CodexWorld): Promise<void> => {
+    const trusted = await developerTrustsCodexHooks(w.ihome!, w.iproj ?? w.ihome!, (h) => h.command === DEV_STOP.hooks[0]!.command)
+    expect(trusted).toHaveLength(1)
+    w.cxDevPlace = trusted[0]!.key
+    w.cxState = cxState(w)
+  }
+  const codexSays = async (w: InstallWorld): Promise<CodexListedHook[]> => codexHooksSeen(w.ihome!, w.iproj ?? w.ihome!)
+
+  // ── D409: the capture census over a Codex transcript ────────────────
+  // Two recorded `codex exec` sessions (tests/fixtures/codex-hooks/0.167.0):
+  // no single recorded session holds both a direct call and code-mode shell
+  // commands, so the subagent set's (spawn_agent and wait_agent, called
+  // directly) stands beside the headless set's (six calls through code
+  // mode). Each transcript is Codex's own rollout, redacted as its events
+  // were (rollouts/); the store is the one its hooks wrote, the recorded
+  // events replayed through the hooks install writes for Codex. The census
+  // is the real script, run as the dogfood routine runs it.
+  type CensusWorld = InstallWorld & CaptureWorld & { cxRollouts?: string[]; cxCensus?: CliRun; cxRows?: CensusRow[] }
+  const ROLLOUTS = join(TS_ROOT, 'tests', 'fixtures', 'codex-hooks', '0.167.0', 'rollouts')
+  reg.define(/^the transcript of a headless Codex session and the store its hooks wrote, both recorded, in which Codex called a tool directly and ran shell commands through its code mode$/, async (w: CensusWorld) => {
+    await openCaptureWorld(w)
+    w.cxRollouts = ['headless-session', 'subagent'].map((s) => join(ROLLOUTS, `${s}.rollout.jsonl`))
+    for (const set of ['headless-session.ndjson', 'subagent.ndjson']) replayRecordedSession(w, recordedSession('0.167.0', set, 'codex'))
+    await drainStaging(w)
+    const calls = w.cxRollouts.flatMap((f) => parseCodexRollout(readFileSync(f, 'utf8'), f))
+    // The premise: a direct call, and shell commands run through code mode.
+    expect(calls.filter((c) => c.codex?.made === 'direct').map((c) => c.name)).toEqual(['collaborationspawn_agent', 'collaborationwait_agent'])
+    expect(calls.filter((c) => c.codex?.made === 'code-mode' && c.name === 'Bash').map((c) => c.input['command'])).toEqual(['head -c 13 notes.txt', 'ls /no-such-path-fixture', 'touch /etc/tc-fixture-probe'])
+    w.cxRows = classify(calls, storeViewOf(new DatabaseSync(w.dbPath!, { readOnly: true })))
+  })
+  reg.define(/^the capture census counts the session's calls against the store$/, (w: CensusWorld) => {
+    w.cxCensus = spawnNodeTs(join(TS_ROOT, 'scripts', 'capture-census.ts'), [...w.cxRollouts!.flatMap((f) => ['--codex', f]), '--store', w.dbPath!], { home: w.home! })
+    // Nothing LOST, one call inferred: the census's own exit code for that.
+    expect(w.cxCensus.status, w.cxCensus.out).toBe(3)
+  })
+  reg.define(/^the census counts the direct call as found by Codex's id for it$/, (w: CensusWorld) => {
+    const direct = w.cxRows!.filter((r) => r.call.codex?.made === 'direct')
+    expect(direct.map((r) => [r.call.id.startsWith('call_'), r.call.codex!.by, r.status])).toEqual([[true, 'id', 'stored'], [true, 'id', 'stored']])
+    expect(w.cxCensus!.stdout).toMatch(/found by Codex's id: 7 \(2 direct, 5 in code mode/)
+  })
+  reg.define(/^it counts each code-mode call by Codex's id for it where the transcript's record of the completed call carries that id, and as matched by inference where it does not$/, (w: CensusWorld) => {
+    const code = w.cxRows!.filter((r) => r.call.codex?.made === 'code-mode')
+    const byId = code.filter((r) => r.call.codex!.by === 'id')
+    expect(byId.map((r) => [r.call.name, r.status])).toEqual([
+      ['Bash', 'stored'], ['Bash', 'stored'], ['mcp__treecontext__treecontext_insert', 'stored'], ['mcp__treecontext__treecontext_query', 'stored'], ['mcp__treecontext__treecontext_export', 'stored'],
+    ])
+    for (const r of byId) expect(r.call.id).toMatch(/^exec-/)
+    const inferred = code.filter((r) => r.call.codex!.by === 'inference')
+    expect(inferred.map((r) => [r.call.name, r.call.input['command'], r.status])).toEqual([['Bash', 'touch /etc/tc-fixture-probe', 'inferred']])
+    // Not vacuous: the row the inference found is the call's own, under an
+    // id of Codex's the transcript never names.
+    const db = new DatabaseSync(w.dbPath!, { readOnly: true })
+    try {
+      const ids = (db.prepare("SELECT json_extract(metadata_json, '$.tool_use_id') AS id FROM nodes WHERE json_extract(metadata_json, '$.tool_name') = 'Bash' AND content LIKE '%touch /etc/tc-fixture-probe%'").all() as Array<{ id: string }>).map((r) => r.id)
+      expect(ids).toEqual(['exec-ed7d47c4-e6b1-4911-88a2-6cc988ad89ae'])
+      expect(readFileSync(w.cxRollouts![0]!, 'utf8')).not.toContain(ids[0]!)
+    } finally { db.close() }
+  })
+  reg.define(/^it says how many it found by id and how many it inferred, and why$/, (w: CensusWorld) => {
+    const out = w.cxCensus!.stdout
+    expect(out).toContain(`matched by inference: 1, because ${CODEX_INFER_WHY}`)
+    expect(out).toContain('  inferred Bash "touch /etc/tc-fixture-probe"')
+    expect(out).toMatch(/found by Codex's id: 7 /)
+  })
+
+  // ── D406, the reinstall outline: what a second install leaves of the
+  // hooks Codex trusts. The trust is Codex's own (`hooks/list` on the real
+  // Codex), the developer's /hooks click the stand-in's, with Codex's hashes.
+  type ReinstallWorld = CodexWorld & { rxFirst?: string; rxText?: string; rxTrust?: Record<string, string>; rxScript?: string; rxNode?: string; rxOldHome?: string }
+  const ourHooksSeen = async (w: InstallWorld): Promise<CodexListedHook[]> => (await codexSays(w)).filter((h) => h.sourcePath === cxHooksFile(w) && h.command.includes('--client codex'))
+  const stopScript = (w: InstallWorld): string => join(w.ihome!, '.claude', 'hooks', 'tc-stop')
+  reg.define(/^Codex CLI 0\.167\.0 wired by install, every hook of treecontext's trusted$/, async (w: ReinstallWorld) => {
+    await openInstallWorld(w, ['.claude', '.codex'])
+    realCodexAt(w, '0.167.0')
+    const run = tcCli(w, ['install', '--yes'])
+    expect(run.status, run.out).toBe(0)
+    w.rxFirst = run.stdout
+    const trusted = await developerTrustsCodexHooks(w.ihome!, w.iproj ?? w.ihome!)
+    expect(trusted.filter((h) => h.command.includes('--client codex'))).toHaveLength(Object.keys(codexHooksBlock()).length)
+    const seen = await ourHooksSeen(w)
+    expect(seen.every((h) => h.trustStatus === 'trusted'), JSON.stringify(seen)).toBe(true)
+    w.rxText = readFileSync(cxHooksFile(w), 'utf8')
+    w.rxTrust = Object.fromEntries(seen.map((h) => [h.key, h.currentHash ?? '']))
+    w.rxScript = readFileSync(stopScript(w), 'utf8')
+  })
+  reg.define(/^(nothing changes|the Node interpreter the hook scripts name moves with an upgrade|the hook scripts are moved to another directory, so every command changes), and install runs again$/, (w: ReinstallWorld, change: unknown) => {
+    if (change === 'nothing changes') {
+      w.irun = tcCli(w, ['install', '--yes'])
+    } else if (String(change).startsWith('the Node interpreter')) {
+      // The upgrade: a Node at a new place, the one the developer now runs
+      // install from (the owner's nvm routine), so install's interpreter
+      // probe picks it first and the hook scripts name it.
+      const dir = join(w.ihome!, '.nvm', 'versions', 'node', 'v99.0.0', 'bin')
+      mkdirSync(dir, { recursive: true })
+      w.rxNode = join(dir, 'node')
+      copyFileSync(process.execPath, w.rxNode)
+      chmodSync(w.rxNode, 0o755)
+      w.irun = tcCli(w, ['install', '--yes'], { node: w.rxNode })
+    } else {
+      // The directory holding the hook scripts is the developer's home's
+      // `.claude/hooks`: it moves when the home does, Codex's directory and
+      // install's record moving with it.
+      w.rxOldHome = w.ihome!
+      const moved = `${w.ihome!}-moved`
+      renameSync(w.ihome!, moved)
+      w.ihome = moved
+      w.irun = tcCli(w, ['install', '--yes'])
+    }
+    expect(w.irun.status, w.irun.out).toBe(0)
+  })
+  reg.define(/^every hook of treecontext's has its command byte for byte as it was, Codex still trusts each, and install names no hook to trust again$/, async (w: ReinstallWorld) => {
+    expect(readFileSync(cxHooksFile(w), 'utf8')).toBe(w.rxText)
+    const seen = await ourHooksSeen(w)
+    expect(Object.fromEntries(seen.map((h) => [h.key, h.currentHash ?? '']))).toEqual(w.rxTrust)
+    expect(seen.map((h) => h.trustStatus)).toEqual(seen.map(() => 'trusted'))
+    // The needle fires: the first install, which wrote the hooks, said it.
+    expect(w.rxFirst).toMatch(/Codex will ask you to trust|Codex runs none of treecontext's hooks until you trust them/)
+    // step-lint: allow unearned-absence -- the line above proves the needle fires on the first install's output
+    expect(w.irun!.stdout).not.toMatch(/Codex will ask you to trust|Codex runs none of treecontext's hooks until you trust them/)
+    if (w.rxNode) {
+      // Not vacuous: the upgrade did reach the hook scripts, which now name
+      // the new interpreter; the commands Codex hashes never named it.
+      const script = readFileSync(stopScript(w), 'utf8')
+      expect(script).not.toBe(w.rxScript)
+      expect(script).toContain(w.rxNode)
+      expect(w.rxText).not.toContain(process.execPath)
+    }
+  })
+  reg.define(/^install names each hook whose command changed and says Codex will ask to trust it again with `\/hooks`$/, async (w: ReinstallWorld) => {
+    const out = w.irun!.stdout
+    const line = out.split('\n').find((l) => /Codex will ask you to trust these hooks of treecontext's again/.test(l))
+    expect(line, out).toBeTruthy()
+    for (const event of Object.keys(codexHooksBlock())) expect(line).toContain(`${event} group `)
+    expect(out.split('\n').filter((l) => /Codex runs none of treecontext's hooks until you trust them/.test(l) && l.includes('/hooks'))).toHaveLength(1)
+    // Every command changed, and Codex itself no longer counts any trusted.
+    const text = readFileSync(cxHooksFile(w), 'utf8')
+    // The needle fires: before the move every command named the old home.
+    expect(w.rxText).toContain(`${w.rxOldHome!}/`)
+    // step-lint: allow unearned-absence -- the line above proves the needle fires on the file before the move
+    expect(text).not.toContain(`${w.rxOldHome!}/`)
+    const seen = await ourHooksSeen(w)
+    expect(seen).toHaveLength(Object.keys(codexHooksBlock()).length)
+    expect(seen.filter((h) => h.trustStatus === 'trusted')).toEqual([])
+  })
+
+  reg.define(/^Codex CLI 0\.167\.0 is installed, its hooks file holding a hook of the developer's that Codex counts as trusted, and its `config\.toml` holding a hook of the developer's$/, async (w: CodexWorld) => {
+    await openInstallWorld(w, ['.claude', '.codex'])
+    realCodexAt(w, '0.167.0')
+    writeFileSync(cxHooksFile(w), JSON.stringify({ hooks: { Stop: [DEV_STOP] } }, null, 2) + '\n')
+    writeFileSync(cxToml(w), '[[hooks.UserPromptSubmit]]\n[[hooks.UserPromptSubmit.hooks]]\ntype = "command"\ncommand = "log-prompt"\n')
+    await devTrusted(w)
+    expect((await codexSays(w)).find((h) => h.key === w.cxDevPlace)!.trustStatus).toBe('trusted')
+  })
+  reg.define(/^Codex's `hooks\.json` holds treecontext's hooks, in groups of their own after the developer's, for exactly the events Codex's list marks wired, with no PostToolUseFailure or PostToolBatch$/, (w: CodexWorld) => {
+    expect(w.irun!.status, w.irun!.out).toBe(0)
+    const hooks = cxHooks(w)
+    const wired = readClientEventList(CODEX_LIST).events.filter((e) => e.disposition === 'wired').map((e) => e.event).sort()
+    const ours = Object.entries(hooks).filter(([, gs]) => gs.some((g) => g.hooks.some((h) => h.command.endsWith(' --client codex')))).map(([e]) => e).sort()
+    expect(ours).toEqual(wired)
+    expect(hooks['PostToolUseFailure']).toBeUndefined()
+    expect(hooks['PostToolBatch']).toBeUndefined()
+    for (const [event, groups] of Object.entries(hooks)) {
+      const mine = groups.map((g) => g.hooks.every((h) => h.command.endsWith(' --client codex')))
+      // Every group is wholly treecontext's or wholly the developer's, and
+      // treecontext's come after the developer's.
+      expect(groups.every((g) => g.hooks.every((h) => h.command.endsWith(' --client codex')) || g.hooks.every((h) => !h.command.endsWith(' --client codex'))), event).toBe(true)
+      expect(mine.indexOf(true) === -1 || mine.slice(mine.indexOf(true)).every(Boolean), event).toBe(true)
+    }
+  })
+  reg.define(/^every hook of treecontext's names Codex CLI in its command$/, async (w: CodexWorld) => {
+    const said = await codexSays(w)
+    const ours = said.filter((h) => h.command.includes('tc-'))
+    expect(ours.length).toBe(Object.keys(codexHooksBlock()).length)
+    for (const h of ours) expect(h.command).toMatch(/ --client codex$/)
+  })
+  reg.define(/^the developer's own hooks, in `hooks\.json` and in `config\.toml`, read as the developer left them, and Codex still counts the first trusted$/, async (w: CodexWorld) => {
+    expect(cxHooks(w)['Stop']![0]).toEqual(DEV_STOP)
+    const toml = parseToml(readFileSync(cxToml(w), 'utf8')) as { hooks: Record<string, unknown> }
+    expect(toml.hooks['UserPromptSubmit']).toEqual([{ hooks: [{ type: 'command', command: 'log-prompt' }] }])
+    const dev = (await codexSays(w)).find((h) => h.command === DEV_STOP.hooks[0]!.command)!
+    expect(dev.key).toBe(w.cxDevPlace)
+    expect(dev.trustStatus).toBe('trusted')
+  })
+  reg.define(/^Codex's record of trusted hooks holds nothing install wrote$/, (w: CodexWorld) => {
+    expect(cxState(w)).toBe(w.cxState)
+  })
+  reg.define(/^the developer sees install say in one line that Codex runs none of treecontext's hooks until they are trusted, with `\/hooks` in Codex$/, (w: CodexWorld) => {
+    const lines = w.irun!.stdout.split('\n').filter((l) => /Codex runs none of treecontext's hooks until you trust them/.test(l))
+    expect(lines, w.irun!.stdout).toHaveLength(1)
+    expect(lines[0]).toContain('/hooks')
+  })
+
+  // The verbatim copy of the Claude Code block an earlier build wrote under
+  // the experimental flag: laid by that build's writer, kept out of the
+  // build in tests/helpers/earlier-build-writers.ts (`upsertCodexHooks`, the
+  // copy of `expectedHookCopy`), with no record of install's.
+  const layEarlierCopy = (w: InstallWorld): void => {
+    const r = upsertCodexHooks(cxHooksFile(w))
+    expect(r.status).toBe('updated')
+    expect(Object.keys(cxHooks(w))).toEqual(expect.arrayContaining(['PostToolUseFailure', 'PostToolBatch']))
+  }
+  const withHome = <T>(w: InstallWorld, fn: () => T): T => {
+    const before = process.env['HOME']
+    process.env['HOME'] = w.ihome!
+    try { return fn() } finally { if (before === undefined) delete process.env['HOME']; else process.env['HOME'] = before }
+  }
+  reg.define(/^Codex CLI 0\.167\.0 whose hooks file holds the verbatim copy of the Claude Code block an earlier build wrote under the experimental flag, beside a hook of the developer's$/, async (w: CodexWorld) => {
+    await openInstallWorld(w, ['.claude', '.codex'])
+    realCodexAt(w, '0.167.0')
+    writeFileSync(cxHooksFile(w), JSON.stringify({ hooks: { Stop: [DEV_STOP] } }, null, 2) + '\n')
+    await devTrusted(w)
+    withHome(w, () => layEarlierCopy(w))
+  })
+  reg.define(/^install runs again$/, (w: CodexWorld) => {
+    w.irun = tcCli(w, ['install', '--yes'])
+    expect(w.irun.status, w.irun.out).toBe(0)
+  })
+  reg.define(/^Codex's hooks file holds Codex's own block once and nothing else of treecontext's, PostToolUseFailure and PostToolBatch gone$/, (w: CodexWorld) => {
+    const data = JSON.parse(readFileSync(cxHooksFile(w), 'utf8')) as Record<string, unknown>
+    expect(withHome(w, () => codexBlockState(data, codexHooksBlock()).state)).toBe('current')
+    const hooks = cxHooks(w)
+    expect(hooks['PostToolUseFailure']).toBeUndefined()
+    expect(hooks['PostToolBatch']).toBeUndefined()
+    const tc = Object.values(hooks).flatMap((gs) => gs.flatMap((g) => g.hooks.map((h) => h.command))).filter((c) => c.includes('/tc-'))
+    expect(tc.length).toBe(Object.keys(codexHooksBlock()).length)
+  })
+  reg.define(/^the developer's own hook reads as the developer left it$/, async (w: CodexWorld) => {
+    expect(cxHooks(w)['Stop']![0]).toEqual(DEV_STOP)
+    const dev = (await codexSays(w)).find((h) => h.command === DEV_STOP.hooks[0]!.command)!
+    expect([dev.key, dev.trustStatus]).toEqual([w.cxDevPlace, 'trusted'])
+  })
+  reg.define(/^the developer sees install name the hooks Codex must be asked to trust again$/, (w: CodexWorld) => {
+    const line = w.irun!.stdout.split('\n').find((l) => /Codex will ask you to trust these hooks of treecontext's again/.test(l))
+    expect(line, w.irun!.stdout).toBeTruthy()
+    for (const event of Object.keys(codexHooksBlock())) expect(line).toContain(`${event} group `)
+  })
+
+  reg.define(/^Codex CLI 0\.167\.0 whose hooks file holds (the hooks install wrote and recorded writing|the verbatim copy of the Claude Code block an earlier build wrote under the experimental flag, before install kept a record), after a hook of the developer's written before install ran$/, async (w: CodexWorld, ours: unknown) => {
+    await openInstallWorld(w, ['.claude', '.codex'])
+    realCodexAt(w, '0.167.0')
+    writeFileSync(cxHooksFile(w), JSON.stringify({ hooks: { Stop: [DEV_STOP] } }, null, 2) + '\n')
+    await devTrusted(w)
+    if (String(ours).startsWith('the hooks install wrote')) {
+      const run = tcCli(w, ['install', '--yes'])
+      expect(run.status, run.out).toBe(0)
+      const record = JSON.parse(readFileSync(join(w.ihome!, '.treecontext', 'install-state.json'), 'utf8')) as { codexHooks?: { commands: string[] } }
+      expect(record.codexHooks?.commands.length).toBe(Object.keys(codexHooksBlock()).length)
+    } else {
+      const run = tcCli(w, ['install', '--yes', '--agent', 'claude'])
+      expect(run.status, run.out).toBe(0)
+      withHome(w, () => layEarlierCopy(w))
+      // The earlier build's entry for Codex, as it wrote it (the tools).
+      appendFileSync(cxToml(w), '\n[mcp_servers.treecontext]\ncommand = "treecontext"\nargs = ["serve", "--transport", "stdio", "--capture"]\n')
+    }
+  })
+  reg.define(/^Codex's hooks file holds the developer's hook alone, at the place it had$/, (w: CodexWorld) => {
+    expect(existsSync(cxHooksFile(w))).toBe(true)
+    expect(JSON.parse(readFileSync(cxHooksFile(w), 'utf8'))).toEqual({ hooks: { Stop: [DEV_STOP] } })
+  })
+  reg.define(/^Codex still counts the developer's hook trusted$/, async (w: CodexWorld) => {
+    const said = await codexSays(w)
+    expect(said.map((h) => [h.key, h.trustStatus])).toEqual([[w.cxDevPlace, 'trusted']])
+  })
+  reg.define(/^Codex's treecontext entry is gone$/, (w: CodexWorld) => {
+    const toml = existsSync(cxToml(w)) ? parseToml(readFileSync(cxToml(w), 'utf8')) as Record<string, Record<string, unknown>> : {}
+    expect(toml['mcp_servers']?.['treecontext']).toBeUndefined()
+  })
+
+  // ── D406: no Codex hook below the floor, an unread version, an unparsed file ──
+  // The version install reads is the stand-in `codex`'s (writeFakeCodex),
+  // put on the CLI's PATH; Codex's own reading of the entry is the real
+  // Codex's (`codex mcp get`), and the server the entry starts is started
+  // as Codex starts it.
+  const NO_HOOK_CASES: Record<string, { version: string | null; held: string }> = {
+    'its version reads 0.166.0': { version: '0.166.0', held: "treecontext's hooks an earlier install recorded writing at 0.167.0, beside a hook of the developer's" },
+    'its version cannot be read': { version: null, held: 'the verbatim copy of the Claude Code block an earlier build wrote under the experimental flag, beside a hook of the developer\'s' },
+    'its hooks file does not parse': { version: '0.167.0', held: "a hook of the developer's and treecontext's hooks an earlier install wrote" },
+  }
+  const fake = (w: InstallWorld, version: string | null): void => setFakeCodex(w, { version, sandbox: { exit: 0, stderr: '' } })
+  reg.define(/^Codex CLI where (its version reads 0\.166\.0|its version cannot be read|its hooks file does not parse), its hooks file holding (.+)$/, async (w: CodexWorld, which: unknown, held: unknown) => {
+    const c = NO_HOOK_CASES[String(which)]!
+    expect(String(held)).toBe(c.held)
+    await openInstallWorld(w, ['.claude', '.codex'])
+    writeFileSync(cxHooksFile(w), JSON.stringify({ hooks: { Stop: [DEV_STOP] } }, null, 2) + '\n')
+    if (String(which) === 'its version cannot be read') {
+      const run = tcCli(w, ['install', '--yes', '--agent', 'claude'])
+      expect(run.status, run.out).toBe(0)
+      withHome(w, () => layEarlierCopy(w))
+    } else {
+      // The earlier install, at 0.167.0, wrote and recorded its hooks.
+      fake(w, '0.167.0')
+      const run = tcCli(w, ['install', '--yes', '--agent', 'codex'])
+      expect(run.status, run.out).toBe(0)
+      expect(JSON.stringify(cxHooks(w))).toContain('--client codex')
+    }
+    if (String(which) === 'its hooks file does not parse') {
+      // The developer's edit left a trailing comma: the file no longer parses.
+      writeFileSync(cxHooksFile(w), readFileSync(cxHooksFile(w), 'utf8').replace(/\n\}\n$/, ',\n}\n'))
+      expect(() => JSON.parse(readFileSync(cxHooksFile(w), 'utf8'))).toThrow()
+    }
+    fake(w, c.version)
+    w.cxHeld = readFileSync(cxHooksFile(w), 'utf8')
+  })
+  reg.define(/^Codex's hooks file holds (the developer's hook alone, as the developer left it|byte for byte what it held)$/, (w: CodexWorld, after: unknown) => {
+    expect(w.irun!.status, w.irun!.out).toBe(0)
+    if (String(after).startsWith('byte for byte')) expect(readFileSync(cxHooksFile(w), 'utf8')).toBe(w.cxHeld)
+    else expect(JSON.parse(readFileSync(cxHooksFile(w), 'utf8'))).toEqual({ hooks: { Stop: [DEV_STOP] } })
+  })
+  reg.define(/^the server Codex's entry starts runs without capture$/, async (w: InstallWorld) => {
+    const seen = clientEntry(w, 'Codex CLI')
+    w.iproj ??= w.ihome!
+    expect(await startEntryAsClient(w.ihome!, seen, w.iproj)).toBe('standard')
+  })
+  reg.define(/^the developer sees install say in one line that Codex CLI stays tools-only, (naming 0\.166\.0 and that capture needs Codex CLI 0\.167\.0 or later|saying its version could not be read|quoting the parse error)$/, (w: CodexWorld, why: unknown) => {
+    const lines = w.irun!.stdout.split('\n').filter((l) => /Codex CLI stays tools-only/.test(l))
+    expect(lines, w.irun!.stdout).toHaveLength(1)
+    const line = lines[0]!
+    if (String(why).startsWith('naming')) expect(line).toMatch(/0\.166\.0.*capture needs Codex CLI 0\.167\.0 or later/)
+    else if (String(why).startsWith('saying')) expect(line).toMatch(/version could not be read/)
+    else {
+      let error = ''
+      try { JSON.parse(w.cxHeld!) } catch (e) { error = (e as Error).message }
+      expect(error).not.toBe('')
+      expect(line).toContain(error)
+    }
+  })
+
+  // ── D406: a hook the developer added after install ──────────────────
+  reg.define(/^Codex CLI 0\.167\.0 wired by install, and a hook of the developer's added after install for the same event and the same matcher as one of treecontext's, which Codex counts as trusted$/, async (w: CodexWorld) => {
+    await openInstallWorld(w, ['.claude', '.codex'])
+    realCodexAt(w, '0.167.0')
+    const run = tcCli(w, ['install', '--yes', '--agent', 'codex'])
+    expect(run.status, run.out).toBe(0)
+    const data = JSON.parse(readFileSync(cxHooksFile(w), 'utf8')) as { hooks: Record<string, unknown[]> }
+    // treecontext's Stop group has no matcher; the developer's has none either.
+    expect((data.hooks['Stop']![0] as { matcher?: string }).matcher).toBeUndefined()
+    data.hooks['Stop']!.push(DEV_STOP)
+    writeFileSync(cxHooksFile(w), JSON.stringify(data, null, 2) + '\n')
+    await devTrusted(w)
+    expect(w.cxDevPlace).toBe(`${cxHooksFile(w)}:stop:1:0`)
+  })
+  reg.define(/^install runs again and then uninstall runs$/, async (w: CodexWorld) => {
+    const again = tcCli(w, ['install', '--yes', '--agent', 'codex'])
+    expect(again.status, again.out).toBe(0)
+    w.cxReinstall = again
+    w.cxAfterReinstall = (await codexSays(w)).find((h) => h.command === DEV_STOP.hooks[0]!.command)
+    w.irun = tcCli(w, ['uninstall', '--yes', '--agent', 'codex'])
+    expect(w.irun.status, w.irun.out).toBe(0)
+    w.cxAfterUninstall = (await codexSays(w)).find((h) => h.command === DEV_STOP.hooks[0]!.command)
+  })
+  reg.define(/^after the reinstall the developer's hook is where it was, Codex still counts it trusted, and install named no hook of the developer's$/, (w: CodexWorld) => {
+    expect([w.cxAfterReinstall?.key, w.cxAfterReinstall?.trustStatus]).toEqual([w.cxDevPlace, 'trusted'])
+    // The line install says of a developer's hook it moved, never said here.
+    expect(w.cxReinstall!.stdout.split('\n').filter((l) => / moved your hook /.test(l))).toEqual([])
+    expect(w.irun!.stdout).toMatch(/ moved your hook /)
+  })
+  reg.define(/^after the uninstall the developer's hook is in Codex's hooks file with its command as the developer wrote it$/, (w: CodexWorld) => {
+    expect(JSON.parse(readFileSync(cxHooksFile(w), 'utf8'))).toEqual({ hooks: { Stop: [DEV_STOP] } })
+  })
+  reg.define(/^the developer sees uninstall name the developer's hook if taking treecontext's out moved it, saying Codex will ask to trust it again$/, (w: CodexWorld) => {
+    // It moved: Codex now finds it at another place, its record left behind.
+    expect(w.cxAfterUninstall!.key).toBe(`${cxHooksFile(w)}:stop:0:0`)
+    expect(w.cxAfterUninstall!.trustStatus).not.toBe('trusted')
+    const lines = w.irun!.stdout.split('\n').filter((l) => / moved your hook /.test(l))
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).toContain(`Stop group 1 hook 0 (${DEV_STOP.hooks[0]!.command}) to Stop group 0 hook 0`)
+    expect(lines[0]).toMatch(/Codex will ask you to trust it again with \/hooks/)
   })
 }

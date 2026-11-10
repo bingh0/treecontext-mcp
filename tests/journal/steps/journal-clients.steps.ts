@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { redirectHome } from '../../helpers/home.js'
 import { isAbsolute, join, relative } from 'node:path'
 import { homedir, tmpdir } from 'node:os'
 import { expect } from 'vitest'
@@ -15,6 +16,11 @@ import { TS_ROOT } from '../proc.js'
 import { type InstallWorld, tcCli, openInstallWorld, agentConfigPath, mcpLauncherIn, setFakeCodex, pathWithoutCodex, putAgyOnPath, agyMcpList, layEarlierGeminiInstall } from '../install-harness.js'
 import { CODEX_APPROVALS_FLOOR } from '../../../src/server/codex-client.js'
 import { failedRunLine } from '../../../src/first-moment.js'
+import { developerTrustsCodexHooks } from '../standins.js'
+import { upsertCodexHooks } from '../../helpers/earlier-build-writers.js'
+import { codexHooksBlock } from '../../../src/server/codex-hooks.js'
+import { type CodexListedHook } from '../../../src/server/codex-client.js'
+import { spawnSync } from 'node:child_process'
 import { documentedCommands, runLineRefusal } from '../../helpers/readme-commands.js'
 import { parse as parseToml, stringify as stringifyToml } from 'smol-toml'
 
@@ -439,7 +445,9 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
     expect(agy?.status).toBe('documented only')
     const team = readme.slice(readme.indexOf('### Working as a team'))
     expect(readme.indexOf('### Working as a team'), 'README has no team section').toBeGreaterThanOrEqual(0)
-    expect(team.slice(0, 3000).replace(/\s+/g, ' ')).toMatch(/Capture is verified only on Claude Code\.[^.]*Antigravity CLI[^.]*gets the tools[^.]*nothing of their session is captured/)
+    // D412: capture is verified live on Claude Code and on Codex CLI from
+    // 0.167.0; a teammate on agy with no hooks gets the tools only.
+    expect(team.slice(0, 3000).replace(/\s+/g, ' ')).toMatch(/Capture is verified live on Claude Code, and on Codex CLI from 0\.167\.0[^.]*\.\*\* A teammate on Antigravity CLI[^.]*gets the tools[^.]*nothing of their session is captured/)
     // And the block install wrote into agy's own instructions file,
     // ~/.gemini/GEMINI.md, which the teammate's agent reads every session:
     // capture is Claude Code's.
@@ -555,25 +563,52 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
     expectNoVerifiedClaim(after.row)
   })
 
+  // ── D407, D161: Codex's own block, read against what Codex says ─────
+  // A real install and a real doctor under a redirected HOME; the real
+  // Codex on PATH (0.167.0 on the binding host) answers doctor's
+  // `hooks/list`, and the developer's /hooks trust is the stand-in's, with
+  // Codex's own hashes (standins.ts developerTrustsCodexHooks).
+  reg.define(/^Codex CLI 0\.167\.0 is installed and its hook configuration holds (the block this build writes for Codex, every hook of it trusted|a block that differs from the one this build writes for Codex)$/, async (w: ClientsWorld, held: unknown) => {
+    w.clientName = 'Codex CLI'
+    await openInstallWorld(w, ['.claude', '.codex'])
+    const run = tcCli(w, ['install', '--yes', '--agent', 'codex'])
+    expect(run.status, run.out).toBe(0)
+    await developerTrustsCodexHooks(w.ihome!, w.iproj ?? w.ihome!)
+    if (String(held).startsWith('a block that differs')) {
+      // One event of treecontext's own block taken out by hand.
+      const file = join(w.ihome!, '.codex', 'hooks.json')
+      const data = JSON.parse(readFileSync(file, 'utf8')) as { hooks: Record<string, unknown> }
+      delete data.hooks['Stop']
+      writeFileSync(file, JSON.stringify(data, null, 2) + '\n')
+    }
+  })
   reg.define(/^the developer sees doctor's row for (Codex CLI) read present and (consistent|inconsistent)$/, (w: ClientsWorld, ...captures) => {
     const [client, verdict] = captures as string[]
     expect(client).toBe(w.clientName)
     const c = w.clause!
-    const block = 'the Claude Code block'
     const readmeRow = parseMatrix(readFileSync(join(TS_ROOT, 'README.md'), 'utf8')).find(r => r.client === client)
     expect(c.mode).toBe(readmeRow!.mode)
-    expect(c.mode).toContain('copies the hooks into its own configuration')
-    expect(c.state).toContain(`hooks copied into ${clientHookFile(CLIENT_SLUG[client!]!, w.ihome!)}: present and ${verdict} with ${block}`)
-    expectNoVerifiedClaim(c.row)
+    expect(c.state).toContain(`treecontext's hooks in ${join(w.ihome!, '.codex', 'hooks.json')}: present and ${verdict} with Codex's block`)
     if (verdict === 'consistent') {
       expect(c.status, c.row).toBe('ok')
+      expect(c.state).toContain('Codex runs treecontext\'s hooks')
       expect(c.remedy).toBe('nothing to do')
       expect(c.fix).toBeNull()
     } else {
       expect(c.status, c.row).toBe('warn')
-      // It says where the copy went wrong, in the client's own event names.
+      // It says where the block went wrong, in Codex's own event names.
       expect(c.state).toMatch(/differs on Stop\b/)
     }
+  })
+  reg.define(/^the row names `treecontext install --agent codex` as the command that rewrites it$/, (w: ClientsWorld) => {
+    const c = w.clause!
+    expect(c.remedy).toBe('treecontext install --agent codex, which rewrites them')
+    expect(c.fix).toBe('treecontext install --agent codex')
+    // The command does what it says: run as printed, the row reads the
+    // block consistent again (its hooks then wait for /hooks, as written).
+    const run = tcCli(w, ['install', '--agent', 'codex', '--yes'])
+    expect(run.status, run.out).toBe(0)
+    expect(readClause(w, 'Codex CLI').state).toContain(': present and consistent with Codex\'s block')
   })
 
   // ── doctor's Codex row says whether a headless worker can use the tools
@@ -626,6 +661,10 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
     await openInstallWorld(w, ['.claude', '.codex'])
     const run = tcCli(w, ['install', '--yes'])
     expect(run.status, run.out).toBe(0)
+    // D406: install wrote Codex's own hooks; the developer took the one
+    // step install leaves and trusted them with /hooks (the stand-in writes
+    // the records with Codex's own hashes), so the row grades the rest.
+    await developerTrustsCodexHooks(w.ihome!, w.iproj ?? w.ihome!)
     edit!(w)
     // No choice of the developer's is recorded for any row.
     const statePath = join(w.ihome!, '.treecontext', 'install-state.json')
@@ -662,6 +701,12 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
   })
   reg.define(/^the row names (`treecontext install --agent codex`|the line in Codex's configuration that sets it) as the remedy$/, (w: ClientsWorld, ...captures) => {
     const [remedy] = captures as string[]
+    // D407: the hooks clause's remedy, where the scenario read that clause.
+    if (!w.approval && w.clause) {
+      expect(remedy).toBe('`treecontext install --agent codex`')
+      expect(w.clause.remedy.startsWith('treecontext install --agent codex'), w.clause.remedy).toBe(true)
+      return
+    }
     const r = w.approval!
     if (remedy === '`treecontext install --agent codex`') {
       expect(r.remedy).toBe('treecontext install --agent codex')
@@ -688,6 +733,10 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
     await openInstallWorld(w, ['.claude', '.codex'])
     const run = tcCli(w, ['install', '--yes'])
     expect(run.status, run.out).toBe(0)
+    // D406: install wrote Codex's own hooks; the developer took the one
+    // step install leaves and trusted them with /hooks (the stand-in writes
+    // the records with Codex's own hashes), so the row grades the rest.
+    await developerTrustsCodexHooks(w.ihome!, w.iproj ?? w.ihome!)
     // The beta.3 shape: the server in capture mode, no variables, no
     // approvals, and no record of any.
     editCodexEntry(w, (e) => {
@@ -795,6 +844,7 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
     await openInstallWorld(w, client === 'Codex CLI' ? ['.claude', '.codex'] : ['.claude'])
     if (client === 'Antigravity CLI') putAgyOnPath(w)
     expect(tcCli(w, ['install', '--yes']).status).toBe(0)
+    if (client === 'Codex CLI') await developerTrustsCodexHooks(w.ihome!, w.iproj ?? w.ihome!)
     const off = tcCli(w, ['config', 'tool-approvals', 'off'])
     expect(off.status, off.out).toBe(0)
   })
@@ -1177,5 +1227,213 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
     expect(out).toMatch(/^\[\w+\]\s+Antigravity CLI:/m)
     // The first doctor run of this world printed exactly one Gemini CLI row (the When).
     expect(geminiRows(out)).toEqual([])
+  })
+
+  // ── D407: doctor's Codex row says whether Codex runs treecontext's hooks ──
+  // Every state is produced in a throwaway HOME and read by doctor from the
+  // Codex its PATH holds. The trust states come from the real `codex` on
+  // PATH (0.167.0 on the binding host) through its own `hooks/list`, after
+  // the developer's /hooks acts, which the stand-in makes with the hashes
+  // Codex itself reports (standins.ts developerTrustsCodexHooks; a record
+  // Codex keyed to a hook since gone is left the same way, by trusting a
+  // hook and taking it out). "Cannot be read" and the two version rows are
+  // the stand-in `codex` (writeFakeCodex), whose app server never answers.
+  type TrustWorld = ClientsWorld & { cxFilesBefore?: Record<string, string> }
+  const codexFiles = (w: ClientsWorld): Record<string, string> => {
+    const dir = join(w.ihome!, '.codex')
+    // Codex's configuration (config.toml, which also holds its trust
+    // records, and hooks.json); the app server keeps caches of its own
+    // beside them, which are Codex's writes, not doctor's.
+    return Object.fromEntries(['config.toml', 'hooks.json'].filter((f) => existsSync(join(dir, f))).map((f) => [f, readFileSync(join(dir, f), 'utf8')]))
+  }
+  const hooksFile = (w: ClientsWorld): string => join(w.ihome!, '.codex', 'hooks.json')
+  const install = (w: ClientsWorld, args: string[] = []): void => {
+    const run = tcCli(w, ['install', '--yes', '--agent', 'codex', ...args])
+    expect(run.status, run.out).toBe(0)
+  }
+  const trust = (w: ClientsWorld, which?: (h: CodexListedHook) => boolean): Promise<CodexListedHook[]> =>
+    developerTrustsCodexHooks(w.ihome!, w.iproj ?? w.ihome!, which)
+  const OWN = (h: CodexListedHook): boolean => h.command.endsWith(' --client codex')
+  const STATES: Record<string, (w: ClientsWorld) => Promise<void>> = {
+    'install has written its block at 0.167.0 and Codex reports every hook of it trusted': async (w) => {
+      install(w)
+      expect((await trust(w, OWN)).length).toBe(9)
+    },
+    'install has written its block at 0.167.0 and Codex reports none of it trusted': async (w) => { install(w) },
+    'install has written its block at 0.167.0 and Codex reports some of its hooks trusted and others not': async (w) => {
+      install(w)
+      expect((await trust(w, (h) => OWN(h) && ['sessionStart', 'stop'].includes(h.eventName))).length).toBe(2)
+    },
+    // The block's Stop hook as an earlier install left it (its command one
+    // word longer), trusted with the rest; install then rewrote it at the
+    // same place, so Codex's record there is for the hook as it was.
+    'Codex trusted the block and a hook of it has changed since': async (w) => {
+      install(w)
+      const data = JSON.parse(readFileSync(hooksFile(w), 'utf8')) as { hooks: Record<string, Array<{ hooks: Array<{ command: string }> }>> }
+      data.hooks['Stop']![0]!.hooks[0]!.command += ' --earlier'
+      writeFileSync(hooksFile(w), JSON.stringify(data, null, 2) + '\n')
+      expect((await trust(w, (h) => h.command.includes('/tc-'))).length).toBe(9)
+      install(w)
+    },
+    // The developer trusted a Stop hook of their own, then took it out of
+    // the file; install then wrote treecontext's Stop hook at that place.
+    'Codex holds a trust record, at the place of a treecontext hook, that was given to a different hook': async (w) => {
+      writeFileSync(hooksFile(w), JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: 'notify-send done' }] }] } }, null, 2) + '\n')
+      expect((await trust(w)).map((h) => h.key)).toEqual([`${hooksFile(w)}:stop:0:0`])
+      writeFileSync(hooksFile(w), '{}\n')
+      install(w)
+    },
+    'install has written its block at 0.167.0 and Codex\'s own account of its hooks cannot be read': async (w) => {
+      setFakeCodex(w, { version: '0.167.0', sandbox: { exit: 0, stderr: '' } })
+      install(w)
+    },
+    'its version is 0.167.0 and no treecontext hook is written': async (w) => {
+      install(w)
+      writeFileSync(hooksFile(w), '{}\n')
+    },
+    'its hooks file holds the verbatim copy of the Claude Code block an earlier build wrote under the experimental flag': async (w) => {
+      install(w)
+      writeFileSync(hooksFile(w), '{}\n')
+      const restoreHome = redirectHome(w.ihome!)
+      try { upsertCodexHooks(hooksFile(w)) } finally { restoreHome() }
+    },
+    'its version reads 0.166.0': async (w) => {
+      setFakeCodex(w, { version: '0.166.0', sandbox: { exit: 0, stderr: '' } })
+      install(w)
+    },
+    'its version reads 0.166.0 and its hooks file still holds the hooks an earlier install wrote': async (w) => {
+      setFakeCodex(w, { version: '0.167.0', sandbox: { exit: 0, stderr: '' } })
+      install(w)
+      setFakeCodex(w, { version: '0.166.0', sandbox: { exit: 0, stderr: '' } })
+    },
+    // A codex whose `--version` prints no version and exits 1.
+    'its version cannot be read': async (w) => {
+      setFakeCodex(w, { version: null, sandbox: { exit: 0, stderr: '' } })
+      install(w)
+    },
+    // Install wrote its block; a hand edit then left the file unparsable.
+    'its hooks file does not parse': async (w) => {
+      install(w)
+      writeFileSync(hooksFile(w), readFileSync(hooksFile(w), 'utf8').replace(/\}\s*$/, ',}\n'))
+    },
+  }
+  const stateRe = Object.keys(STATES).map((k) => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')
+  reg.define(new RegExp(`^Codex CLI is installed and (${stateRe})$`), async (w: TrustWorld, state: unknown) => {
+    w.clientName = 'Codex CLI'
+    await openInstallWorld(w, ['.claude', '.codex'])
+    if (!w.iCodexBin) expect(spawnSync('codex', ['--version'], { encoding: 'utf8' }).stdout.trim()).toBe('codex-cli 0.167.0')
+    await STATES[String(state)]!(w)
+    w.cxFilesBefore = codexFiles(w)
+  })
+  const SAYS: Record<string, (c: DoctorClause, w: ClientsWorld) => void> = {
+    'read that Codex runs treecontext\'s hooks': (c) => {
+      expect(c.status, c.row).toBe('ok')
+      expect(c.state).toMatch(/Codex runs treecontext's hooks: it reports every one of them trusted/)
+    },
+    'warn that Codex runs none of treecontext\'s hooks, naming each': (c) => {
+      expect(c.status).toBe('warn')
+      expect(c.state).toMatch(/Codex runs none of treecontext's hooks/)
+      for (const e of Object.keys(codexHooksBlock())) expect(c.state).toContain(`${e[0]!.toLowerCase()}${e.slice(1)} (`)
+    },
+    'warn that Codex runs only some of treecontext\'s hooks, naming each it does not run': (c) => {
+      expect(c.status).toBe('warn')
+      expect(c.state).toMatch(/Codex runs only some of treecontext's hooks/)
+      expect(c.state).toContain('userPromptSubmit (')
+      // step-lint: allow unearned-absence -- the needles are the names Codex gives these hooks, which the none-trusted row of this outline finds in the same clause by the same `<event> (` spelling
+      expect(c.state).not.toMatch(/sessionStart \(|\bstop \(/)
+    },
+    'warn that Codex reports the changed hook modified since it was trusted and does not run it, naming it': (c, w) => {
+      expect(c.status).toBe('warn')
+      expect(c.state).toContain(`stop (${hooksFile(w)}:stop:0:0)`)
+      expect(c.state).toMatch(/modified since it was trusted and does not run it/)
+      expect(c.state).toMatch(/Codex runs only some of treecontext's hooks/)
+    },
+    'warn that Codex reports each such treecontext hook modified since it was trusted and does not run it, naming each': (c, w) => {
+      expect(c.status).toBe('warn')
+      expect(c.state).toContain(`Codex reports stop (${hooksFile(w)}:stop:0:0) modified since it was trusted and does not run it`)
+    },
+    'say that the hooks are written and that doctor cannot tell whether Codex trusts them, never reading ok': (c) => {
+      expect(c.status).not.toBe('ok')
+      expect(c.state).toMatch(/present and consistent with Codex's block; doctor cannot tell whether Codex trusts them/)
+    },
+    'warn that nothing of a Codex session is captured': (c) => {
+      expect(c.status).toBe('warn')
+      expect(c.state).toMatch(/nothing of a Codex session is captured/)
+    },
+    'warn that the hooks are an earlier build\'s copy of Claude Code\'s block, not Codex\'s own': (c) => {
+      expect(c.status).toBe('warn')
+      expect(c.state).toMatch(/an earlier build's copy of Claude Code's block, not Codex's own/)
+    },
+    'say that Codex gets the tools only and that capture needs Codex CLI 0.167.0': (c) => {
+      expect(c.state).toMatch(/Codex gets the tools only: its version reads 0\.166\.0, and capture needs Codex CLI 0\.167\.0/)
+    },
+    'warn that treecontext\'s hooks are written for a Codex that gets the tools only': (c) => {
+      expect(c.status).toBe('warn')
+      expect(c.state).toMatch(/treecontext's hooks are written in .* for a Codex that gets the tools only: its version reads 0\.166\.0/)
+    },
+    'say that Codex gets the tools only, its version not read': (c) => {
+      expect(c.state).toMatch(/Codex gets the tools only: its version could not be read \(codex --version\)/)
+    },
+    'warn, quoting the parse error, that doctor cannot read treecontext\'s hooks there': (c, w) => {
+      expect(c.status).toBe('warn')
+      // The parse error is JSON.parse's own for the file as the hand edit left it.
+      let parseError = ''
+      try { JSON.parse(readFileSync(hooksFile(w), 'utf8')) } catch (e) { parseError = (e as Error).message }
+      expect(parseError).not.toBe('')
+      expect(c.state).toContain(`${hooksFile(w)} does not parse (`)
+      expect(c.state).toContain(parseError)
+      expect(c.state).toMatch(/nothing in it is read, treecontext's hooks or the developer's/)
+    },
+  }
+  const sayRe = Object.keys(SAYS).map((k) => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')
+  reg.define(new RegExp(`^the developer sees doctor's row for Codex CLI (${sayRe})$`), (w: ClientsWorld, say: unknown) => {
+    SAYS[String(say)]!(w.clause!, w)
+  })
+  reg.define(/^the row names (trusting them with `\/hooks` in Codex|looking in `\/hooks` in Codex|upgrading Codex CLI to 0\.167\.0 or later|`treecontext install --agent codex`, which takes them back|making `codex --version` answer, then `treecontext install --agent codex`|fixing the file by hand, never an install) as the remedy$/, (w: ClientsWorld, remedy: unknown) => {
+    // "the file" is the hooks file, which the row names by its path.
+    const want = String(remedy).replace(/`/g, '').replace('fixing the file by hand', `fixing ${hooksFile(w)} by hand`)
+    expect(w.clause!.remedy.startsWith(want), w.clause!.remedy).toBe(true)
+  })
+  reg.define(/^Codex's configuration and its record of trusted hooks are as they were before doctor ran$/, (w: TrustWorld) => {
+    expect(codexFiles(w)).toEqual(w.cxFilesBefore)
+  })
+
+  // ── D412, D410: the README's parts on Codex CLI ─────────────────────
+  // Read from the README itself: its "Codex CLI capture" section (§6),
+  // whitespace flattened so a line break never hides a phrase.
+  const codexParts = new WeakMap<ClientsWorld, string>()
+  reg.define(/^the README$/, (w: ClientsWorld) => {
+    codexParts.set(w, readFileSync(join(TS_ROOT, 'README.md'), 'utf8'))
+  })
+  reg.define(/^a developer reads its parts on Codex CLI$/, (w: ClientsWorld) => {
+    const readme = codexParts.get(w)!
+    const start = readme.indexOf('\n### Codex CLI capture')
+    expect(start, 'the README has no "Codex CLI capture" section').toBeGreaterThan(-1)
+    const rest = readme.slice(start + 1)
+    const end = rest.slice(3).search(/^##+ /m)
+    codexParts.set(w, (end === -1 ? rest : rest.slice(0, end + 3)).replace(/\s+/g, ' '))
+  })
+  const says = (w: ClientsWorld, ...res: RegExp[]): void => {
+    const text = codexParts.get(w)!
+    for (const re of res) expect(text, String(re)).toMatch(re)
+  }
+  reg.define(/^the developer reads 0\.167\.0 as the minimum Codex CLI for capture, and that below it Codex gets the tools only$/, (w: ClientsWorld) => {
+    says(w, /The minimum Codex CLI for capture is \*\*0\.167\.0\*\*/, /Below it, or where `codex --version` cannot be read, Codex gets the tools only/)
+  })
+  reg.define(/^the developer reads that Codex runs treecontext's hooks only once they are trusted with `\/hooks` in Codex, and that doctor says which are$/, (w: ClientsWorld) => {
+    says(w, /Codex runs a hook only once you trust it: open `\/hooks` in Codex/, /`treecontext doctor` reads Codex's own account of each hook's trust .* and says whether Codex runs treecontext's hooks, runs only some of them/)
+  })
+  reg.define(/^the developer reads that a Codex shell command's entry holds the text Codex returned and no exit code$/, (w: ClientsWorld) => {
+    says(w, /A shell command's entry holds the one text Codex returned: no exit code/)
+  })
+  reg.define(/^the developer reads that a Codex subagent is kept as a summary and is no leg$/, (w: ClientsWorld) => {
+    says(w, /A Codex subagent\*\* is registered, retired at its stop and kept as a summary .*; it is no leg/)
+  })
+  reg.define(/^the developer reads that a Codex main is re-oriented at a fresh start and on a resume and gets no bookmark ask, and that an Antigravity CLI agent receives no re-orientation packet$/, (w: ClientsWorld) => {
+    says(w, /is re-oriented at a fresh start and on a resume/, /It gets no bookmark ask/, /An Antigravity CLI agent receives no re-orientation packet/)
+  })
+  reg.define(/^the developer reads that a manual Codex compaction leaves a recovery note, an automatic one being unrecorded, and that a call Codex reported no result for, or a turn the developer interrupted, is kept and says so$/, (w: ClientsWorld) => {
+    says(w, /A manual compaction\*\* \(`\/compact`\) leaves a recovery note/, /An automatic compaction is unrecorded/,
+      /journaled at its turn's end as a call Codex reported no result for/, /A turn you interrupt \(Esc\) is kept as interrupted, with a capture-gap entry naming its reply as not captured/)
   })
 }

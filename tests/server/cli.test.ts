@@ -79,17 +79,20 @@ describe('parseArgs', () => {
     expect(args.namespace).toBe('agent-a')
   })
 
-  it('accepts --experimental-capture only alongside --agent (opt-in by name, ruling 2026-08-01)', () => {
-    const named = parseArgs([...base, 'install', '--agent', 'opencode', '--experimental-capture'])
-    expect(named.experimentalCapture).toBe(true)
-    expect(named.installAgents).toEqual(['opencode'])
+  it('refuses --experimental-capture in every form, saying it is gone and naming each floor (D406)', () => {
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation((code?: string | number | null | undefined) => {
       throw new Error(`exit ${code}`)
     })
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     try {
-      expect(() => parseArgs([...base, 'install', '--experimental-capture'])).toThrow('exit 1')
-      expect(errSpy.mock.calls.flat().join(' ')).toContain('requires --agent')
+      for (const argv of [['install', '--experimental-capture'], ['install', '--agent', 'codex', '--experimental-capture'], ['install', '--experimental-capture=agy']]) {
+        errSpy.mockClear()
+        expect(() => parseArgs([...base, ...argv])).toThrow('exit 1')
+        const said = errSpy.mock.calls.flat().join(' ')
+        expect(said).toContain('--experimental-capture is gone')
+        expect(said).toContain('Codex CLI 0.167.0')
+        expect(said).toContain('Antigravity CLI 1.5.3')
+      }
     } finally {
       exitSpy.mockRestore()
       errSpy.mockRestore()

@@ -42,6 +42,14 @@ export interface InstallState {
   toolApprovals?: ToolApprovalsState
   /** Client files install created where none was (Antigravity CLI's): uninstall deletes one it leaves empty, never a file the developer had. */
   createdFiles?: Record<string, { at: string }>
+  /** The hooks install wrote into Codex CLI's hooks file (D406, D361): the
+   *  file and each hook's command, so a reinstall, a tools-only install and
+   *  uninstall take back these and never a hook of the developer's. */
+  codexHooks?: { file: string; commands: string[]; at: string }
+  /** Every Codex hooks file install has wired and not taken back, by the
+   *  directory Codex read it from (CODEX_HOME, or `~/.codex`): so an
+   *  uninstall or a doctor run under one CODEX_HOME names another. */
+  codexWired?: string[]
 }
 
 /** The clients whose approvals a record that did not parse leaves unknown:

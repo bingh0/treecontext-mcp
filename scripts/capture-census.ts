@@ -1,7 +1,8 @@
 /**
  * Capture census: the dogfood routine's far-side check (D402).
  *
- * Counts a real Claude Code transcript's tool calls against the store. The
+ * Counts a real Claude Code transcript's tool calls against the store (and a
+ * Codex CLI rollout's, D409: parseCodexRollout). The
  * transcript is the client's account of what it ran; the store is what
  * treecontext kept. Two kinds of answer, never mixed:
  *
@@ -42,10 +43,10 @@ import { DEDUP_WINDOW_SECS, FULL_TAIL_SEPARATOR } from '../src/persistence/captu
 // ── Types ──────────────────────────────────────────────────────────────
 
 export type Outcome = 'succeeded' | 'failed' | 'no result'
-export type Status = 'stored' | 'staged' | 'before-id' | 'deduplicated' | 'LOST'
+export type Status = 'stored' | 'staged' | 'before-id' | 'deduplicated' | 'inferred' | 'LOST'
 export const OUTCOMES: readonly Outcome[] = ['succeeded', 'failed', 'no result']
 export const OBSERVED: readonly Status[] = ['stored', 'staged']
-export const INFERRED: readonly Status[] = ['before-id', 'deduplicated']
+export const INFERRED: readonly Status[] = ['before-id', 'deduplicated', 'inferred']
 export const STATUSES: readonly Status[] = [...OBSERVED, ...INFERRED, 'LOST']
 
 /** How far a node's moment may be from the call's result moment in the
@@ -69,6 +70,12 @@ export interface TranscriptCall {
   /** The assistant message the call was made in. */
   messageId: string | null
   file: string
+  /** Codex (D409): how the call was made, a direct call or a call inside
+   *  a code-mode script, and whether the transcript gives the call the id
+   *  Codex's hooks carry (`id`) or the census must infer it (`inference`),
+   *  with why. Absent for a Claude Code transcript, whose every call has
+   *  its id. */
+  codex?: { made: 'direct' | 'code-mode'; by: 'id' | 'inference'; why?: string; script?: string }
 }
 
 export interface CensusRow { call: TranscriptCall; status: Status }
@@ -138,6 +145,137 @@ export function parseTranscript(jsonl: string, file: string, since?: Date): Tran
   return [...calls.values()]
 }
 
+// ── Codex CLI's transcript (D409) ──────────────────────────────────────
+
+/** The text of every string literal in a code-mode script fragment, decoded. */
+function stringLiterals(src: string): string[] {
+  const out: string[] = []
+  for (const m of src.matchAll(/"((?:[^"\\\n]|\\.)*)"/g)) { try { out.push(JSON.parse(m[0]) as string) } catch { /* not JSON's spelling */ } }
+  return out
+}
+
+/** One tool a code-mode script calls (`tools.<name>(...)`), named as
+ *  Codex's hooks name it, with the input text the census looks for. */
+interface ScriptCall { tool: string; name: string; input: Record<string, unknown>; item: Record<string, unknown> | null }
+
+function scriptCalls(script: string): ScriptCall[] {
+  const out: ScriptCall[] = []
+  const re = /tools\.([A-Za-z_][\w]*)\(/g
+  for (const m of script.matchAll(re)) {
+    const tool = m[1]!
+    // The call's arguments: up to the next call of a tool, or the end.
+    const rest = script.slice(m.index! + m[0].length)
+    const next = rest.search(/tools\.[A-Za-z_][\w]*\(/)
+    const args = next === -1 ? rest : rest.slice(0, next)
+    const lits = stringLiterals(args)
+    if (tool === 'exec_command') {
+      const cmd = /cmd\s*:\s*("(?:[^"\\\n]|\\.)*")/.exec(args)
+      out.push({ tool, name: 'Bash', input: { command: cmd ? JSON.parse(cmd[1]!) as string : (lits[0] ?? '') }, item: null })
+    } else if (tool === 'apply_patch') {
+      out.push({ tool, name: 'apply_patch', input: { command: lits[0] ?? '' }, item: null })
+    } else {
+      const longest = lits.reduce((a, b) => (b.length > a.length ? b : a), '')
+      out.push({ tool, name: tool, input: longest ? { text: longest } : {}, item: null })
+    }
+  }
+  return out
+}
+
+/** Whether a completed-call record of Codex's transcript is the record of a script's call. */
+function itemIsCall(item: Record<string, unknown>, c: ScriptCall): boolean {
+  if (c.item) return false
+  if (item['type'] === 'CommandExecution') {
+    const cmd = item['command']
+    return c.tool === 'exec_command' && Array.isArray(cmd) && cmd[cmd.length - 1] === c.input['command']
+  }
+  if (item['type'] === 'McpToolCall') return c.tool === `mcp__${String(item['server'])}__${String(item['tool'])}`
+  if (item['type'] === 'FileChange') return c.tool === 'apply_patch'
+  return false
+}
+
+/** Why a code-mode call is inferred: the transcript holds no record of it as a completed call. */
+export const CODEX_INFER_WHY = 'the transcript holds no record of this call as a completed call (Codex writes none for a call the sandbox refused or a patch that failed), so no id names it'
+
+/**
+ * The calls of one Codex CLI rollout (its transcript, JSONL), D409.
+ * A direct call (`response_item` `function_call`) carries `call_id`, the
+ * id Codex's hooks carry for it. A code-mode script (`custom_tool_call`
+ * `exec`) runs tools of its own; each completed one has a record of its
+ * own (`event_msg` `item_completed`: a command, an MCP tool call, a file
+ * change) whose `id` is the id Codex's hooks carry, and the census counts
+ * the call by it. A call the script made that no completed-call record
+ * names is counted by inference, from its tool and the input text the
+ * script gave it. The session is the rollout's own (`session_meta`).
+ */
+export function parseCodexRollout(jsonl: string, file: string): TranscriptCall[] {
+  let session = ''
+  const out: TranscriptCall[] = []
+  const scripts = new Map<string, { calls: ScriptCall[]; at: number | null }>()
+  const direct = new Map<string, TranscriptCall>()
+  const epoch = (v: unknown): number | null => { const t = typeof v === 'string' ? Date.parse(v) : NaN; return Number.isNaN(t) ? null : t / 1000 }
+  for (const line of jsonl.split('\n')) {
+    if (line.trim() === '') continue
+    let d: Record<string, unknown>
+    try { d = JSON.parse(line) as Record<string, unknown> } catch { continue }
+    const p = (d['payload'] ?? {}) as Record<string, unknown>
+    const at = epoch(d['timestamp'])
+    if (d['type'] === 'session_meta') { session = String(p['session_id'] ?? p['id'] ?? ''); continue }
+    if (d['type'] === 'response_item' && p['type'] === 'function_call' && typeof p['call_id'] === 'string') {
+      let input: Record<string, unknown> = {}
+      try { input = JSON.parse(String(p['arguments'] ?? '{}')) as Record<string, unknown> } catch { /* kept empty */ }
+      const call: TranscriptCall = {
+        id: p['call_id'], name: `${typeof p['namespace'] === 'string' ? p['namespace'] : ''}${String(p['name'])}`, input,
+        outcome: 'no result', session, at, messageId: null, file, codex: { made: 'direct', by: 'id' },
+      }
+      direct.set(p['call_id'], call)
+      out.push(call)
+    } else if (d['type'] === 'response_item' && p['type'] === 'function_call_output' && typeof p['call_id'] === 'string') {
+      const call = direct.get(p['call_id'])
+      if (call) call.outcome = 'succeeded'
+    } else if (d['type'] === 'response_item' && p['type'] === 'custom_tool_call' && p['name'] === 'exec' && typeof p['call_id'] === 'string') {
+      scripts.set(p['call_id'], { calls: scriptCalls(String(p['input'] ?? '')), at })
+    } else if (d['type'] === 'event_msg' && p['type'] === 'item_completed') {
+      const item = (p['item'] ?? {}) as Record<string, unknown>
+      for (const sc of scripts.values()) {
+        const c = sc.calls.find((x) => itemIsCall(item, x))
+        if (c) { c.item = item; break }
+      }
+    } else if (d['type'] === 'response_item' && p['type'] === 'custom_tool_call_output' && typeof p['call_id'] === 'string') {
+      const script = p['call_id']
+      const sc = scripts.get(script)
+      if (!sc) continue
+      scripts.delete(script)
+      sc.calls.forEach((c, n) => {
+        const status = c.item ? String(c.item['status'] ?? '') : ''
+        out.push({
+          id: c.item ? String(c.item['id']) : `${script}#${n}`, name: c.name, input: c.input,
+          outcome: c.item ? (status === 'failed' ? 'failed' : 'succeeded') : 'no result', session, at: at ?? sc.at, messageId: null, file,
+          codex: c.item ? { made: 'code-mode', by: 'id', script } : { made: 'code-mode', by: 'inference', why: CODEX_INFER_WHY, script },
+        })
+      })
+    }
+  }
+  for (const c of out) if (c.session === '') c.session = session
+  return out
+}
+
+/** What the census says of a Codex transcript's calls: how many it found
+ *  by Codex's id (direct calls, code-mode calls) and how many it inferred,
+ *  and why (D409). */
+export function codexCounts(rows: CensusRow[]): { byId: { direct: number; codeMode: number }; inferred: number; lost: number; lines: string[] } {
+  const codex = rows.filter((r) => r.call.codex)
+  const byIdDirect = codex.filter((r) => r.call.codex!.by === 'id' && r.call.codex!.made === 'direct' && OBSERVED.includes(r.status)).length
+  const byIdCode = codex.filter((r) => r.call.codex!.by === 'id' && r.call.codex!.made === 'code-mode' && OBSERVED.includes(r.status)).length
+  const inferred = codex.filter((r) => r.status === 'inferred')
+  const lost = codex.filter((r) => r.status === 'LOST').length
+  const lines = [
+    `found by Codex's id: ${byIdDirect + byIdCode} (${byIdDirect} direct, ${byIdCode} in code mode, each named by the transcript's record of the completed call)`,
+    `matched by inference: ${inferred.length}${inferred.length > 0 ? `, because ${CODEX_INFER_WHY}` : ''}`,
+    ...inferred.map((r) => `  inferred ${r.call.name} ${JSON.stringify(inputNeedle(r.call.input))}`),
+  ]
+  return { byId: { direct: byIdDirect, codeMode: byIdCode }, inferred: inferred.length, lost, lines }
+}
+
 /** A session transcript and the subagent transcripts beside it. */
 export function transcriptFiles(sessionFile: string): string[] {
   const sub = join(sessionFile.replace(/\.jsonl$/, ''), 'subagents')
@@ -175,7 +313,21 @@ export function classify(calls: TranscriptCall[], store: StoreView): CensusRow[]
   const claimed = new Set<NodeView>()
   const ordered = [...calls].sort((a, b) => (a.at ?? 0) - (b.at ?? 0))
   const status = new Map<TranscriptCall, Status>()
+  // Codex (D409): the ids the transcript itself gives its calls. A call
+  // the census must infer is matched only to a captured row whose id is
+  // none of these: that row is some call's, and not one of the others.
+  const known = new Set(calls.filter((c) => c.codex?.by !== 'inference').map((c) => c.id))
   for (const call of ordered) {
+    if (call.codex?.by === 'inference') {
+      // Matched by session, tool and input text alone: a code-mode call's
+      // moment in the transcript is Codex's, its row's the hook's, and the
+      // two are not one clock's reading of one event.
+      const needle = inputNeedle(call.input)
+      const hit = store.nodesOf(call.session, call.name).find((n) => !claimed.has(n) && (n.toolUseId === null || !known.has(n.toolUseId))
+        && needle !== '' && (inputSectionOf(n.text) ?? '').includes(needle))
+      if (hit) { claimed.add(hit); status.set(call, 'inferred') } else status.set(call, 'LOST')
+      continue
+    }
     if (store.hasNodeWithId(call.id)) { status.set(call, 'stored'); continue }
     if (store.hasStagedWithId(call.id)) { status.set(call, 'staged'); continue }
     const nodes = store.nodesOf(call.session, call.name)
@@ -301,12 +453,18 @@ export function eventList(): { version: string; events: string[] } {
 const HELP = `capture-census: count a real Claude Code session's tool calls against the store
 
   npm run dogfood:census -- --transcript <session.jsonl> [--transcript ...] [--since <ISO date>] [--project <dir>] [--verbose]
+  npm run dogfood:census -- --codex <rollout.jsonl> [--codex ...] [--store <treecontext.db> | --project <dir>]
   npm run dogfood:census -- --session <id> [--since <ISO date>] [--project <dir>] [--verbose]
   npm run dogfood:census -- --live
   npm run dogfood:census -- --help
 
 --transcript  a session transcript (repeatable); the subagent transcripts under
               <session>/subagents/ are included
+--codex       a Codex CLI rollout (~/.codex/sessions/.../rollout-*.jsonl,
+              repeatable, D409): direct calls and the calls of code-mode
+              scripts, counted by Codex's id where the transcript's record of
+              the completed call carries it and by inference where it does not
+--store       the store database to read (default: the project's)
 --session     a session id, resolved under ~/.claude/projects/ for the project
               directory (--project, default: the current directory)
 --since       only calls made at or after this moment
@@ -342,14 +500,16 @@ still staged after the drain); 2 the script could not run, or --live's probe
 did not run as scripted; 3 nothing LOST but some calls inferred (unverified),
 or --live's client version differs from the event list's.`
 
-interface Args { transcripts: string[]; session: string | null; since: Date | undefined; project: string | null; live: boolean; verbose: boolean; help: boolean }
+interface Args { transcripts: string[]; codex: string[]; store: string | null; session: string | null; since: Date | undefined; project: string | null; live: boolean; verbose: boolean; help: boolean }
 
 export function parseArgs(argv: string[]): Args {
-  const a: Args = { transcripts: [], session: null, since: undefined, project: null, live: false, verbose: false, help: false }
+  const a: Args = { transcripts: [], codex: [], store: null, session: null, since: undefined, project: null, live: false, verbose: false, help: false }
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i]!
     const v = (): string => { const x = argv[++i]; if (x === undefined) throw new Error(`${k} needs a value`); return x }
     if (k === '--transcript') a.transcripts.push(resolve(v()))
+    else if (k === '--codex') a.codex.push(resolve(v()))
+    else if (k === '--store') a.store = resolve(v())
     else if (k === '--session') a.session = v()
     else if (k === '--since') { const d = new Date(v()); if (Number.isNaN(d.getTime())) throw new Error('--since needs an ISO date'); a.since = d }
     else if (k === '--project') a.project = resolve(v())
@@ -537,9 +697,27 @@ async function censusLive(): Promise<number> {
   return exit
 }
 
+function censusCodex(a: Args): number {
+  const calls: TranscriptCall[] = []
+  for (const f of a.codex) {
+    if (!existsSync(f)) throw new Error(`no Codex rollout at ${f}`)
+    calls.push(...parseCodexRollout(readFileSync(f, 'utf8'), f))
+  }
+  const store = a.store
+    ? { name: a.store, path: a.store, db: new DatabaseSync(a.store, { readOnly: true }) }
+    : openProjectStore(a.project ?? process.cwd())
+  try {
+    const rows = classify(calls, storeViewOf(store.db))
+    report(rows, store, a.verbose)
+    console.log(`\n${codexCounts(rows).lines.join('\n')}`)
+    return exitCodeOf(rows)
+  } finally { store.db.close() }
+}
+
 async function main(): Promise<number> {
   const a = parseArgs(process.argv.slice(2))
   if (a.help) { console.log(HELP); return 0 }
+  if (a.codex.length > 0) return censusCodex(a)
   return a.live ? censusLive() : censusTranscripts(a)
 }
 

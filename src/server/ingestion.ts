@@ -1,3 +1,4 @@
+import { PRE_TOOL_USE_MARK, NO_RESULT_MARK, NO_TURN_END_MARK, TURN_INTERRUPTED_KIND, GAP_TOOL_USE_ID_KEY, ownLaneRowSql } from '../persistence/capture-marks.js'
 import { stampEchoBoundaries } from '../persistence/echo-index.js'
 import type { MemoryStore } from '../memory-store.js'
 import type { Persistence } from '../persistence/store.js'
@@ -40,6 +41,7 @@ import { placedLaneOf } from '../persistence/lane-scope.js'
 import { legTraceOf } from '../persistence/session-registry.js'
 import { DOOR_KEY, IDENTITY_KEY } from '../runs.js'
 import { claimHookGaps, hookGapText } from '../hooks/gap-ledger.js'
+import { resolveEarlierCallEntries } from '../persistence/call-resolution.js'
 
 /**
  * What the IngestionLoop needs from a backend: the MemoryStore surface
@@ -430,6 +432,21 @@ export class IngestionLoop {
     return total
   }
 
+  /** Mark a call's earlier no-result or no-turn-end entry resolved by the
+   *  entry just written (persistence/call-resolution.ts). Non-fatal: a
+   *  failed mark leaves both entries as written, each true of its moment. */
+  private resolveCall(toolUseId: string, callSession: string | null | undefined, resolverId: string, how: 'result' | 'capture-gap'): void {
+    // A call is resolved only within its own client session: with none
+    // named, nothing is.
+    if (!callSession) return
+    try {
+      const marked = resolveEarlierCallEntries(this.ctx.store.database, toolUseId, callSession, resolverId, how)
+      if (marked.length > 0) dbg('ingest', 'a call\'s earlier entry resolved', { toolUseId, resolverId, marked, how })
+    } catch (err) {
+      dbg('ingest', 'call resolution failed (both entries stand as written)', { error: err instanceof Error ? err.message : String(err) })
+    }
+  }
+
   /** Turn each dropped hook event in the gap ledger into a capture-gap
    *  row (hooks/gap-ledger.ts), once: a record whose row already landed
    *  (by its gap id) is not written again, and the claimed ledger is let
@@ -443,17 +460,25 @@ export class IngestionLoop {
     for (const g of claim.gaps) {
       try {
         const db = this.ctx.store.database
-        const seen = db.prepare("SELECT 1 FROM nodes WHERE json_extract(metadata_json, '$.source') = 'capture-gap' AND json_extract(metadata_json, '$.gap_id') = ? LIMIT 1").get(g.id ?? '')
+        // Only the drain's own capture-gap row answers: its label, which the
+        // insert tool never lets a caller set, and the ledger record's id,
+        // which it drops from every caller's row (server.ts).
+        const seen = db.prepare(`SELECT 1 FROM nodes n WHERE COALESCE(n.source_label, '') = 'capture-gap' AND json_extract(n.metadata_json, '$.source') = 'capture-gap' AND json_extract(n.metadata_json, '$.gap_id') = ? AND ${ownLaneRowSql('n')} LIMIT 1`).get(g.id ?? '')
         if (seen) continue
-        await this.ctx.insert(hookGapText(g), {
+        const gap = await this.ctx.insert(hookGapText(g), {
           createdAt: g.at,
           metadata: {
             source: 'capture-gap', event: 'hook_dropped', hook: g.hook, gap_id: g.id,
             session_id: g.sessionId || undefined,
             ...(g.agentId ? { agent_id: g.agentId } : {}), ...(g.agentType ? { agent_type: g.agentType } : {}),
+            ...(g.toolUseId ? { [GAP_TOOL_USE_ID_KEY]: g.toolUseId } : {}),
             error: g.error.slice(0, 500), created_at: g.at, ingested_at: Date.now() / 1000,
           },
         })
+        // D408: a call whose result was dropped here and whose no-result or
+        // no-turn-end entry landed first is one call: that entry is marked
+        // resolved by this gap row, never deleted.
+        if (g.toolUseId) this.resolveCall(g.toolUseId, g.sessionId, gap.nodeId, 'capture-gap')
       } catch (err) {
         all = false
         warn('[IngestionLoop] A dropped hook event could not be recorded as a capture gap (retried next tick):', err)
@@ -622,6 +647,30 @@ export class IngestionLoop {
               ...recoverySnapshotBoundaries(recoveredText.length),
             }
           })
+        } else if ((row.capturedFrom === NO_RESULT_MARK || row.capturedFrom === NO_TURN_END_MARK) && row.toolUseId != null && this.ctx.store.database.prepare(
+          `SELECT 1 FROM staging WHERE session_id IS ? AND tool_use_id = ? AND (captured_from IS NULL OR captured_from NOT IN (?, ?, ?)) LIMIT 1`,
+        ).get(row.sessionId, row.toolUseId, PRE_TOOL_USE_MARK, NO_RESULT_MARK, NO_TURN_END_MARK)) {
+          // D408: the call's own result arrived after its turn's end was
+          // staged; the call is journaled once, from its result.
+        } else if (row.capturedFrom === PRE_TOOL_USE_MARK) {
+          // D408: Codex's PreToolUse is the account of a call held until the
+          // call's own PostToolUse or its turn's end; it is no entry itself.
+          // The call is journaled once, from whichever of the two comes.
+        } else if (row.kind === TURN_INTERRUPTED_KIND) {
+          // D408: a turn the developer interrupted (Codex's Interrupt, no
+          // Stop): a capture-gap entry naming its reply as not captured,
+          // and no assistant text, which no payload carried.
+          await target.insert(row.content, {
+            createdAt: row.timestamp,
+            metadata: {
+              source: 'capture-gap',
+              event: 'turn_interrupted',
+              role: row.role,
+              session_id: row.sessionId || undefined,
+              created_at: row.timestamp,
+              ingested_at: Date.now() / 1000,
+            },
+          })
         } else {
           // Build enriched metadata. created_at is the hook's CAPTURE time —
           // never drain-time wall clock, so backlog drains keep honest
@@ -778,6 +827,11 @@ export class IngestionLoop {
             createdAt: row.timestamp,
             metadata: meta,
           })
+
+          // D408: the call's own result after its no-result or no-turn-end
+          // entry landed: the call is one call, the earlier entry marked
+          // resolved by this one (never deleted: it was true when written).
+          if (row.toolUseId != null && row.capturedFrom == null) this.resolveCall(row.toolUseId, row.sessionId, result.nodeId, 'result')
 
           // V2 echo heal (docs/session-identity.md §7.3 + §7.7): the echo
           // of a treecontext_insert names the curated row its call

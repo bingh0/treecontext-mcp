@@ -68,7 +68,9 @@ describe("the README's install, uninstall and config tool-approvals forms are no
 
   test('the README documents each kind of form', () => {
     expect(install).toContain('treecontext install --no-tool-approvals')
-    expect(install).toContain('treecontext install --agent codex --experimental-capture')
+    expect(install).toContain('treecontext install --agent codex')
+    // D406: the experimental flag is gone, and no form the README documents names it.
+    expect(install.filter(f => f.includes('--experimental-capture'))).toEqual([])
     expect(uninstall).toContain('treecontext uninstall --agent vscode --hooks-only')
     expect(config).toContain('treecontext config tool-approvals off --agent agy')
     expect(config).toContain('treecontext config tool-approvals on')

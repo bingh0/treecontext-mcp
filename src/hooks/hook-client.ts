@@ -50,3 +50,15 @@ export function hookClientFrom(argv: readonly string[] = process.argv): string |
 export function clientStatesOutcome(client: string | null): boolean {
   return client !== null && CLIENTS_STATING_OUTCOME.has(client)
 }
+
+/** Codex CLI's name in its hook commands (D406): the block install writes
+ *  into `~/.codex/hooks.json` names it on every command. Codex's events
+ *  state no outcome for a call (D408: a shell command's non-zero exit
+ *  arrives by PostToolUse as ordinary text, and any other call that fails
+ *  fires no PostToolUse at all), so it is not in CLIENTS_STATING_OUTCOME. */
+export const CODEX_CLIENT = 'codex'
+
+/** Whether the hook runs for Codex CLI, by the command install wrote. */
+export function isCodexHook(argv: readonly string[] = process.argv): boolean {
+  return hookClientFrom(argv) === CODEX_CLIENT
+}

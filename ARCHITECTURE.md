@@ -59,9 +59,11 @@ library consumers ─ FlatStore.open()  (no server, no hooks, same store)
   PostToolBatch (one script for the three, by `hook_event_name`: a failed
   call, D400, and the batch's account of calls no event of their own
   captured, D401), UserPromptSubmit, Stop, SubagentStart and
-  SubagentStop. The same block is copied verbatim into
-  Codex CLI's `~/.codex/hooks.json`, only behind `--experimental-capture`
-  (Gemini CLI's translated copy went with its retirement, D399; uninstall
+  SubagentStop. From Codex CLI 0.167.0 install writes Codex its own
+  block into `~/.codex/hooks.json` (src/server/codex-hooks.ts, D406),
+  running the same scripts with `--client codex`; the verbatim copy an
+  earlier build wrote behind the removed `--experimental-capture` is
+  converged or taken back (Gemini CLI's translated copy went with its retirement, D399; uninstall
   sweeps one an earlier install left).
   VS Code and Cursor read the Claude settings file as-is and get
   nothing written; doctor gives each documented client a row naming its

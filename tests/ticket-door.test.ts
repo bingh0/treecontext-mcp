@@ -789,6 +789,36 @@ describe('the checkpointer is recorded at registration (D281)', () => {
   }, 60_000)
 })
 
+describe("a damaged ticket's worker writing through the insert tool (D303, D342)", () => {
+  // The worker's own server, as `serve` opens it in a trusted worker lane:
+  // the insert tool's door, the worker's session its lane.
+  const insertAsWorker = async (s: FlatStore, lane: string, content: string, metadata: Record<string, unknown>): Promise<void> => {
+    const { createServer } = await import('../src/server/server.js')
+    const { InMemoryTransport } = await import('@modelcontextprotocol/client')
+    const server = createServer(s, { ccSessionId: lane })
+    const [ct, st] = InMemoryTransport.createLinkedPair()
+    const c = new Client({ name: 'worker', version: '0' })
+    await server.connect(st)
+    await c.connect(ct)
+    try { await c.callTool({ name: 'treecontext_insert', arguments: { content, metadata } }) } finally { await c.close(); await server.close() }
+  }
+  it.each([
+    ['an ordinary note', { kind: 'note' }],
+    ['labelled as a door row (kind first-moment)', { kind: 'first-moment' }],
+    ['labelled as a door row (kind send-back)', { kind: 'send-back' }],
+    ['labelled as a handed prompt (an auto-capture user turn)', { source: 'auto-capture', role: 'user' }],
+  ])('its one row, %s, is still its own write: the leg ends invalid', async (_what, metadata) => {
+    const s = await open()
+    try {
+      const damaged = s.startWorker({ reading: readTicket('{"v":1,"run":"r1","role":"builder"'), prompt: '', host: 'laptop' })
+      const ref = { sessionId: damaged.leg.sessionId, agentId: WORKER_AGENT_ID }
+      expect(s.legOf(ref)!.ended).toBeNull()
+      await insertAsWorker(s, damaged.leg.sessionId, 'my instructions were invalid', metadata)
+      expect(s.legOf(ref)!.ended).toBe('invalid')
+    } finally { await s.close() }
+  })
+})
+
 describe('a process record never undoes how a leg ended', () => {
   it('a damaged ticket\'s worker whose one row landed before its process was recorded stays invalid; a cut is never undone by a re-run', async () => {
     const s = await open()

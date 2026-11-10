@@ -111,7 +111,7 @@ hand-written models, never the client's word.
 - `src/server/installer.ts` — agent detection, config writing, AGENTS.md
   block, doctor (one row per documented client: mode, state, remedy); the
   Claude Code hooks block (each command naming Claude Code, D404), and its (Codex) copy, naming no client, behind
-  `--experimental-capture`; Gemini CLI is an archived platform (D399):
+  Codex's own block (src/server/codex-hooks.ts); Gemini CLI is an archived platform (D399):
   install never wires it, uninstall's archived sweep removes what an
   earlier build wrote for it, and doctor names the leftovers
 - `src/server/idle-compaction.ts` — Claude Code's idle-compaction key
@@ -125,6 +125,35 @@ hand-written models, never the client's word.
   developer's own rules and never over them, the record of what install
   wrote and of an off the developer chose, and every echo, message and
   doctor clause read from what the client's files decide now, tool by tool
+- `src/server/codex-hooks.ts` — Codex CLI's own hooks block from 0.167.0
+  (D406, D407): the events it wires, written in groups of its own after the
+  developer's and converged without moving a hook of theirs (Codex keys its
+  trust by a hook's place), install's record of what it wrote, the take-back
+  below the floor and at uninstall, and doctor's row read from Codex's own
+  `hooks/list`; whether Codex loads the file is Codex's verdict
+  (`codexVerdictOf`), install's own check only what it steps around
+  (`codexPlacementError`), the path resolved hop by hop (`codexHooksTarget`)
+- `src/server/codex-home.ts` — Codex's own directory: `$CODEX_HOME` (resolved
+  and canonical, as Codex names it) or `~/.codex`; a value Codex refuses to
+  start with refuses Codex's step at install, uninstall and doctor; every
+  Codex probe is handed the resolved directory (`codexProbeEnv`)
+- `src/server/json-text-edit.ts` — a JSON text edited into a target value by
+  removals and appends alone, every other byte kept (`editJsonText`): it
+  renders as new text only values the caller owns whole (`owns`: this
+  build's block parts, `ownsBlockValue`), never a developer's; it edits an
+  element in place before it would take one out; and it answers only where
+  the result parses to the target and every developer value's own text
+  survives in order (`developerTextSurvives`), else null and install
+  changes nothing
+- `src/hooks/codex-calls.ts` — Codex's calls and turns at the hooks (D408):
+  a `PreToolUse` held in staging as a call's account, and at a turn's end
+  (Stop, Interrupt, SubagentStop) the calls with no result reported
+- `src/persistence/capture-marks.ts` — staging's `captured_from` marks
+  (`batch`, `pre-tool-use`, `no-result`, `no-turn-end`), the interrupted
+  turn's kind and the resolved-pair key (`resolved_by`), shared by the hooks
+  and the drain
+- `src/persistence/call-resolution.ts` — a call's no-result or no-turn-end
+  entry marked resolved by the entry that later landed for it
 - `src/server/codex-client.ts` — what install and doctor ask the Codex on
   PATH (D381, D387): its version against the per-tool approvals floor
   (0.166.0), its own reading of its configuration for a directory (the app
@@ -217,7 +246,9 @@ hand-written models, never the client's word.
 - `src/persistence/metadata-filter.ts` — a metadata filter's flat keys as
   SQL predicates (D268); the rest stays on the pool post-filter
 - `src/hooks/` — journaling hooks. Claude Code is the verified reference
-  platform; the other adapters are unverified scaffolding. `subagent-start`
+  platform, and Codex CLI runs the same scripts through the block install
+  writes for it (`--client codex`, D406); the unwired adapters left the build
+  with the experimental flag. `subagent-start`
   and `subagent-stop` register and retire subagents and are the hooks door
   of a leg (the inference from the role's brief, the first moment under
   the client's 10,000-character cap, the send-back once); `post-tool-use`
@@ -346,6 +377,16 @@ node dist/server/cli.js doctor      # after a build
 - Imported rows live in `handoff:` lanes (`session_id` =
   `handoff:<claimed session>`); the file's identity claims sit under
   `_handoff_claims`, never at the top level
+- A row written through the insert tool (`_door` `tools`, the server's
+  stamp) is a worker's own write whatever `kind` or label it carries: the
+  door-row and handed-prompt exemptions of the D303/D342 retirement read
+  only rows that did not come through the tools (flat-store.ts)
+- `npm run dogfood:census -- --codex <rollout.jsonl>` counts a Codex
+  rollout (D409, `parseCodexRollout`): a direct call by its `call_id`, a
+  code-mode script's call by the id of the transcript's record of the
+  completed call (`item_completed`), and a call with no such record by
+  inference (session, tool, input text, a row whose id the transcript names
+  nowhere), saying how many of each and why
 - The ticket door writes a worker's first moment and a re-run's message
   as the worker's capture (`source` auto-capture, in its own session), so
   the valve reaches them; what a run printed is not a row; its
@@ -497,3 +538,115 @@ node dist/server/cli.js doctor      # after a build
   first by rule. A worker of the ticket door, a caller that cannot be told
   apart (D240) and an unplaced caller search the whole store, the reply's
   `scope` saying which
+- A hook takes its client from the command install wrote (`--client
+  claude-code`, `--client codex`; hooks/hook-client.ts), never from the
+  payload: Codex's payloads are Claude-shaped. Only a client whose events
+  state how a call ended is in `CLIENTS_STATING_OUTCOME`; Codex is not, so
+  a Codex call is classed by its text
+- Codex's `PreToolUse` is staged with `captured_from` `pre-tool-use` and
+  the drain writes no entry from it; only a turn's end turns an account with
+  no other staged row for its call id into a `no-result` entry, and the
+  purge of processed staging one whose turn never ended into a
+  `no-turn-end` entry (unless a node or a gap-ledger line names the call).
+  Never let a `pre-tool-use` row count as a call's own event (the gates that
+  read `outcome IS NULL AND captured_from IS NULL` already skip it), or as an
+  entry (`countSessionEntries`). Both entries are staged at the call's own
+  moment (its account's timestamp), never the turn end's or the purge's:
+  `ingested_at` says when they were written
+- A call is one call to every reader. When its own result, or a capture-gap
+  row naming it (`gap_tool_use_id`), lands after its `no-result` or
+  `no-turn-end` entry, that entry is never deleted (it was true when
+  written) but marked `resolved_by` the entry that resolved it (with
+  `resolved_at`, `resolved_how`), by the drain (call-resolution.ts). Read
+  the mark only on a captured tool row carrying one of those marks
+  (`resolvedCallEntrySql`). The entry counts drop a resolved one; the census
+  counts calls by id; exits are counted from the resolver alone (a no-result
+  entry has no class); search shows both, the resolved one carrying
+  `resolved_by` as a superseded pointer carries `superseded_by`
+- Whether Codex loads `~/.codex/hooks.json` is Codex's own verdict, read
+  from its app server's `hooks/list` before install writes and again after
+  (`installCodexHooks`, each read bounded by
+  `CODEX_INSTALL_PROBE_TIMEOUT_MS`, one line said when a read passes
+  `CODEX_WAIT_NOTICE_MS`, none started in a dry run), asked from an empty
+  temporary directory (`neutralDirectory`), never the developer's project:
+  a project's own settings must not decide capture for every project. A
+  file it does not load is left byte for byte, its words quoted; a file it
+  stops loading after the write is put back byte for byte, and a put-back
+  that fails is said with the original text saved beside the file or under
+  `~/.treecontext`, and fails the run. Never hand-write Codex's grammar
+  into install: its own check (`codexPlacementError`) judges only the top
+  level, `hooks` and the nine events it writes, and must stay total over
+  every JSON value. Doctor asks from the project it reports on, and reads
+  only what Codex says of the user's file as treecontext's
+  (`codexVerdictOf`: the `sourcePath`, and warnings naming that file)
+- One invariant, one reading (D386, D406): treecontext's hooks are in
+  Codex's hooks file if and only if Codex's entry serves in capture mode,
+  since hooks that are written can run and only a capture-mode server
+  drains what they stage. The reading is `codexHooksPresent` (a file that
+  does not parse holds none that run: Codex loads none of it, and D406
+  keeps the entry tools-only there), the `present` of every Codex hooks
+  step, and `captureHooksInstalled` for doctor's mode check. A file
+  Codex loads but lists fewer of treecontext's hooks from (hooks off, a
+  managed policy) keeps the block and the capture-mode entry, said as
+  "Codex runs none now" with what turns them on, never as capture running.
+  Uninstall takes Codex's hooks back first: where they remain, the entry
+  stays in capture mode and the scripts they run stay, and the run fails
+- A gate that asks whether a call already has an entry (the turn end's
+  no-result staging, the purge's no-turn-end) or a resolution of a call's
+  earlier entry reads only rows the capture pipeline wrote, in the call's
+  own client session (`ownCallRowSql`, `callSessionSql`: a worker's rows
+  keep the client session as `_client_session_id`): a captured tool row
+  (`auto-capture`, a `tool_name`, its `tool_use_id`) or the drain's
+  capture-gap row (`gap_tool_use_id`), never a merge's copy or a handoff
+  lane's. The insert tool drops a caller's `gap_tool_use_id`,
+  `resolved_by`, `resolved_at` and `resolved_how` on every row
+  (`DRAIN_CALL_KEYS`); the gap ledger is read by session and id
+  (`ledgeredCallKey`)
+- Install never re-serialises Codex's hooks file: its change is text edits
+  (`codexHooksTextFor`, json-text-edit.ts) that keep every byte of the
+  developer's parts, numbers past 2^53, escapes, spacing and key order
+  included, so each of their hooks keeps the text, and the hash, Codex's
+  trust is keyed to; a change edits cannot make is a refusal, byte for byte.
+  Codex's `config.toml` is refused before anything of Codex's is written,
+  at install and at uninstall, where it may not be written, and a symlinked
+  one is written through to its target, its mode kept
+  (`writeTomlKeepingBackup`). Everything install writes for Codex lives in
+  `codexDir()` (CODEX_HOME), never a hard-coded `~/.codex`
+- A take-back (uninstall, a tools-only install) takes out exactly the
+  commands install's record names where it has one (`takenBackByRecord`);
+  recognition by a command's shape is only for a file no record names, and
+  is said in the output. Install's convergence and doctor still know an
+  earlier build's commands beside a record (D406's reinstall). Codex's own
+  reading is asked before and after a take-back too: one that leaves Codex
+  unable to load a file it loaded is put back. After install's write, an
+  error from Codex's `hooks/list` where it answered before is a rejection
+  (the file is put back), never "unknown". A hooks file the developer broke
+  after install keeps uninstall incomplete: the entry stays draining and
+  the run says what is left (`leftInText`). Install's record lists every
+  hooks file it wired (`codexWired`); uninstall and doctor name another
+  CODEX_HOME's and never touch it
+- An imported row (a `handoff:` lane) or a merge's copy (`_merge_label`)
+  never answers a capture gate, the drain's "already written" read or the
+  exit counts (`ownLaneRowSql`, `CAPTURED_TOOL_ROW`), and the import keeps
+  the sender's capture marks and `_client_session_id` under
+  `_handoff_claims` (HANDOFF_CLAIM_KEYS); the insert tool drops a caller's
+  `_client_session_id`
+- The insert tool drops a caller's `source` where it is one only the store
+  writes (`STORE_ONLY_SOURCES`: `capture-gap`, `recovery-snapshot`), saying so
+  (`source_ignored`), and `gap_id` on every row: the drain's "already
+  written" read of a dropped event, doctor's count of holes and the recovery
+  row's dedup read only the store's own rows. A call's exit class is
+  counted only on a captured tool row (`CAPTURED_TOOL_ROW` in flat-store.ts)
+- `~/.codex/hooks.json` is resolved with lstat and readlink
+  (`codexHooksTarget`), never `existsSync`: a symlink is written through to
+  where it resolves (created there when its directory exists), never
+  replaced; one that resolves nowhere writable is a refusal. Uninstall never
+  deletes a link: it deletes only a regular file install's record says it
+  created, and a take-back the file refuses fails the uninstall (the hooks
+  remain and still run)
+- Install never writes Codex's trust records (`[hooks.state]` in
+  `config.toml`) and never computes Codex's hash; doctor reads trust from
+  Codex's app server. A reinstall that changes nothing must leave
+  `~/.codex/hooks.json` byte for byte, since any change to a hook's place
+  or text makes Codex distrust it
+

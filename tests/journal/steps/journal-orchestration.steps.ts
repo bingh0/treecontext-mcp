@@ -20,13 +20,13 @@ import { sandboxedSpawnEnv } from '../../helpers/cli-spawn.js'
 import { storesDirIn } from '../../helpers/store-fixtures.js'
 import { ageText, UNKNOWN_WRITER_LABEL } from '../../../src/references.js'
 import {
-  runHook, hookJson, spawnHooksAtOnce, drainStaging, bashPayload,
+  runHook, hookJson, spawnHooksAtOnce, drainStaging, bashPayload, seedCheckpointAge, expectBookmarkAsked,
 } from '../capture-harness.js'
 import {
   openWorld, now, toolEntry, mcpNote, clear, statusPanel,
 } from './journal-reorientation.steps.js'
 import { type RunWorld } from '../run-world.js'
-import { runWorker, preCompact } from '../standins.js'
+import { runWorker, preCompact, recordedSession, replayRecordedSession, type ReplayedEvent } from '../standins.js'
 
 // ── journal-orchestration ───────────────────────────────────────────────
 //
@@ -66,6 +66,12 @@ import { runWorker, preCompact } from '../standins.js'
  *  D169 and D190 bindings will need the last) plus what these scenarios
  *  carry from a Given to a Then. */
 export interface OrchestrationWorld extends RunWorld {
+  /** D410, D409: a Codex set's events, the directory its session starts
+   *  in, the context its start printed and the replay's account. */
+  codexEvents?: Array<Record<string, unknown>>
+  codexCwd?: string
+  codexContext?: string
+  codexReplay?: ReplayedEvent[]
   /** Named entries of the D186 chain and their texts. */
   entries?: Record<string, { id: string; text: string }>
   /** The parsed response of the last search or fetch. */
@@ -2005,6 +2011,188 @@ export const orchestrationDefiner = (reg: Registry<OrchestrationWorld>): void =>
       }
     }
   })
+  // ── D410, D409: a Codex CLI main through the hooks install writes for Codex ──
+  // Codex's own events, recorded 2026-11-09 (tests/fixtures/codex-hooks),
+  // replayed through the commands of Codex's block (each naming Codex);
+  // the world's directories and, where a scenario names its own session,
+  // the session id are the only rewrites the replay makes. "With the hooks
+  // install wrote trusted" is the world in which Codex fires them, which the
+  // replay stands for.
+  const CODEX_SET = (file: string): Array<Record<string, unknown>> => recordedSession('0.167.0', file, 'codex')
+  const codexStart = (events: Array<Record<string, unknown>>, source: string): Record<string, unknown> => {
+    const e = events.find((x) => x['hook_event_name'] === 'SessionStart' && x['source'] === source)
+    expect(e, `the recording holds no SessionStart with source ${source}`).toBeTruthy()
+    return e!
+  }
+  const contextOf = (r: ReplayedEvent): string => {
+    const out = r.stdout.join('')
+    if (out.trim() === '') return ''
+    const json = JSON.parse(out) as Record<string, unknown>
+    // The one thing printed to a Codex main is its context: no warning.
+    expect(Object.keys(json)).toEqual(['hookSpecificOutput'])
+    return String((json['hookSpecificOutput'] as Record<string, unknown>)['additionalContext'] ?? '')
+  }
+
+  reg.define(/^a Codex CLI 0\.167\.0 session starting in a worktree of its checkout, as recorded, with the hooks install wrote trusted$/, async (w) => {
+    await openGitWorld(w, { mainStart: false })
+    addWorktree(w, 'feature-login', 'login-form')
+    w.codexEvents = CODEX_SET('interactive.ndjson')
+    w.sessionId = String(codexStart(w.codexEvents, 'startup')['session_id'])
+    w.codexCwd = w.worktrees!['feature-login']!
+  })
+  reg.define(/^its session-start hook receives the start as Codex sends it$/, (w) => {
+    const start = codexStart(w.codexEvents!, 'startup')
+    const replayed = replayRecordedSession(w, [start], { cwd: w.codexCwd ?? w.repo! })
+    expect(replayed[0]!.hooks).toEqual(['session-start'])
+    w.codexContext = contextOf(replayed[0]!)
+  })
+  reg.define(/^the store holds a self registration of that Codex session whose worktree and branch equal what git reports for that directory$/, (w) => {
+    const dir = w.codexCwd!
+    const reported = { worktree: basename(git(dir, 'rev-parse', '--show-toplevel')), branch: git(dir, 'rev-parse', '--abbrev-ref', 'HEAD') }
+    expect(reported).toEqual({ worktree: 'feature-login', branch: 'login-form' })
+    expect(rawAll(w, "SELECT worktree, branch, cwd FROM session_registry WHERE session_id = ? AND agent_id = ''", w.sessionId))
+      .toEqual([{ ...reported, cwd: dir }])
+  })
+  reg.define(/^a chapter summary written through the tools from that session is stamped with that worktree's name, never "unregistered"$/, async (w) => {
+    await sessionClient(w)
+    const reply = await insert(w, 'plan: wire the login form; next: write its tests', { next_session: true })
+    const meta = rawMeta(w, reply['node_id'] as string)
+    expect(meta).toMatchObject({ _worktree: 'feature-login', _writer: 'worktree:feature-login', _writer_src: 'self', _cc_session_id: w.sessionId })
+    expect(meta['_writer_src']).not.toBe('unregistered')
+  })
+
+  reg.define(/^a store holding a live chapter summary of the main checkout's lane$/, async (w) => {
+    // A Claude Code session of the main checkout wrote it through the tools.
+    await openGitWorld(w)
+    await sessionClient(w)
+    const reply = await insert(w, 'plan: wire the login form behind the flag; next: its error states', { next_session: true })
+    w.planId = reply['node_id'] as string
+  })
+  reg.define(/^a Codex CLI 0\.167\.0 main starting fresh in the main checkout, with the hooks install wrote trusted$/, (w) => {
+    w.codexEvents = CODEX_SET('interactive.ndjson')
+    w.codexCwd = w.repo!
+  })
+  reg.define(/^the hook's reply hands Codex, as context to add to the session, the packet a Claude Code session gets at a fresh start, opening with that chapter as the lane's own$/, (w) => {
+    const packet = w.codexContext!
+    expect(packet).not.toBe('')
+    // What a Claude Code session starting fresh in the same checkout is
+    // handed, through the same hook with no client named on its command.
+    const claude = sessionStart(w, w.repo!)
+    expect(packet).toBe(claude)
+    const first = packet.split('\n').find((l) => l.trim() !== '')!
+    expect(first).toMatch(/main/)
+    expect(packet).toContain(w.planId!)
+  })
+
+  reg.define(/^a Codex CLI 0\.167\.0 main registered at its start in the main checkout, which wrote a chapter summary and was quit$/, async (w) => {
+    await openGitWorld(w, { mainStart: false })
+    w.codexEvents = CODEX_SET('interactive.ndjson')
+    w.codexCwd = w.repo!
+    const start = codexStart(w.codexEvents, 'startup')
+    w.sessionId = String(start['session_id'])
+    replayRecordedSession(w, [start], { cwd: w.repo! })
+    await sessionClient(w)
+    const reply = await insert(w, 'plan: the resume path keeps the lane; next: the packet test', { next_session: true })
+    w.planId = reply['node_id'] as string
+    // Quit: Codex's SessionEnd, which the block does not wire.
+    const end = w.codexEvents.find((e) => e['hook_event_name'] === 'SessionEnd' && e['session_id'] === w.sessionId)!
+    expect(replayRecordedSession(w, [end], { cwd: w.repo! })[0]!.hooks).toEqual([])
+  })
+  reg.define(/^it is resumed, its start as Codex sends it on a resume$/, (w) => {
+    const resume = codexStart(w.codexEvents!, 'resume')
+    expect(resume['session_id']).toBe(w.sessionId)
+    const replayed = replayRecordedSession(w, [resume], { cwd: w.repo! })
+    w.codexContext = contextOf(replayed[0]!)
+  })
+  reg.define(/^the store holds the same self registration for it, not a second one$/, (w) => {
+    expect(rawAll(w, "SELECT session_id FROM session_registry WHERE agent_id = ''")).toEqual([{ session_id: w.sessionId }])
+  })
+  reg.define(/^the hook's reply hands Codex the packet a Claude Code session gets on a resume, opening with that chapter as the lane's own$/, (w) => {
+    const packet = w.codexContext!
+    const claude = sessionStart(w, w.repo!, 'resume')
+    expect(packet).toBe(claude)
+    expect(packet).toContain(w.planId!)
+  })
+
+  reg.define(/^the events Codex CLI sent, as recorded, for a manual compaction of a main session with the hooks install wrote trusted$/, async (w) => {
+    await openGitWorld(w, { mainStart: false })
+    const all = recordedSession('0.167.0', 'interactive.ndjson', 'codex')
+    const pre = all.findIndex((e) => e['hook_event_name'] === 'PreCompact')
+    expect(all[pre]!['trigger']).toBe('manual')
+    // The session's start, then the compaction: PreCompact, PostCompact and
+    // the start with source compact, as Codex fired them.
+    w.codexEvents = [all[0]!, ...all.slice(pre, pre + 3)]
+    expect(w.codexEvents.map((e) => [e['hook_event_name'], e['source'] ?? e['trigger']])).toEqual([
+      ['SessionStart', 'startup'], ['PreCompact', 'manual'], ['PostCompact', 'manual'], ['SessionStart', 'compact'],
+    ])
+    w.sessionId = String(all[0]!['session_id'])
+  })
+  reg.define(/^the hooks install writes for Codex receive those events and ingestion runs$/, async (w) => {
+    w.codexReplay = replayRecordedSession(w, w.codexEvents!, { cwd: w.repo! })
+    await drainStaging(w)
+  })
+  reg.define(/^a recovery snapshot of the session is taken at its PreCompact$/, (w) => {
+    const pre = w.codexReplay!.find((r) => r.event === 'PreCompact')!
+    expect(pre.hooks).toEqual(['pre-compact'])
+    const snaps = rawAll<{ session_id: string; created_at: number }>(w, 'SELECT session_id, created_at FROM snapshots')
+    expect(snaps.map((s) => s.session_id)).toEqual([w.sessionId])
+    expect(snaps[0]!.created_at).toBeGreaterThanOrEqual(pre.startedAt - 1)
+    expect(snaps[0]!.created_at).toBeLessThanOrEqual(pre.endedAt + 1)
+    // PostCompact reached no hook: Codex's list names it not captured.
+    expect(w.codexReplay!.find((r) => r.event === 'PostCompact')!.hooks).toEqual([])
+  })
+  // D375 as corrected 2026-11-10 for Codex (D409): the compacted session's
+  // own start (Codex's SessionStart with source compact) claims nothing; the
+  // next fresh start of another session in the lane claims the note, in that
+  // lane. That start is Codex's own recorded startup of another session
+  // (the headless set's), replayed in the same checkout.
+  reg.define(/^the next fresh start of a session in the same lane claims it, in that lane, as on Claude Code; the compacted session's own start after the compaction claims nothing$/, async (w) => {
+    const snaps = rawAll<{ id: number; claimed_by: string | null }>(w, 'SELECT id, claimed_by FROM snapshots WHERE session_id = ?', w.sessionId)
+    expect(snaps).toHaveLength(1)
+    // The compacted session's own start ran (its hook reached), and left the note unclaimed.
+    const own = w.codexReplay!.filter((r) => r.event === 'SessionStart')
+    expect(own.map((r) => r.hooks)).toEqual([['session-start'], ['session-start']])
+    expect(snaps[0]!.claimed_by).toBeNull()
+    expect(claimLinesOf(own.map((r) => contextOf(r)).join('\n'))).toEqual([])
+    expect(rawAll(w, "SELECT node_id FROM nodes WHERE json_extract(metadata_json, '$.source') = ?", RECOVERY_SNAPSHOT_SOURCE)).toEqual([])
+    // The next fresh start in the same checkout: another Codex session's startup.
+    const next = recordedSession('0.167.0', 'headless-session.ndjson', 'codex').find((e) => e['hook_event_name'] === 'SessionStart' && e['source'] === 'startup')!
+    const claimant = String(next['session_id'])
+    expect(claimant).not.toBe(w.sessionId)
+    const replayed = replayRecordedSession(w, [next], { cwd: w.repo! })
+    const packet = contextOf(replayed[0]!)
+    expect(claimLinesOf(packet)).toEqual([claimLine(snaps[0]!.id, w.sessionId!)])
+    expect(rawAll(w, 'SELECT claimed_by FROM snapshots WHERE id = ?', snaps[0]!.id)).toEqual([{ claimed_by: claimant }])
+    await drainStaging(w)
+    // The recovery row: in the claiming session, which the registry places in the same lane.
+    const rows = rawAll<{ session_key: string | null; metadata_json: string }>(w,
+      "SELECT session_key, metadata_json FROM nodes WHERE json_extract(metadata_json, '$.source') = ?", RECOVERY_SNAPSHOT_SOURCE)
+    expect(rows).toHaveLength(1)
+    const meta = JSON.parse(rows[0]!.metadata_json) as Record<string, unknown>
+    expect([meta['session_id'], rows[0]!.session_key, meta['original_session_id']]).toEqual([claimant, claimant, w.sessionId])
+    expect(w.store!.placedLaneOf(claimant)).toBe('main')
+    expect(w.store!.placedLaneOf(w.sessionId!)).toBe('main')
+  })
+  reg.define(/^a Codex CLI 0\.167\.0 main with the hooks install wrote trusted, whose turn has run long enough that a Claude Code session would be asked for a bookmark$/, async (w) => {
+    await openGitWorld(w, { mainStart: false })
+    w.codexEvents = CODEX_SET('headless-session.ndjson')
+    w.sessionId = String(w.codexEvents[0]!['session_id'])
+    replayRecordedSession(w, [w.codexEvents[0]!], { cwd: w.repo! })
+    await seedCheckpointAge(w, 21, 5)
+  })
+  reg.define(/^its stop hook receives the turn's end as Codex sends it$/, (w) => {
+    const stop = w.codexEvents!.find((e) => e['hook_event_name'] === 'Stop')!
+    w.codexReplay = replayRecordedSession(w, [stop], { cwd: w.repo! })
+  })
+  reg.define(/^the hook printed nothing, and asked Codex for no bookmark and no further turn$/, (w) => {
+    const r = w.codexReplay![0]!
+    expect(r.hooks).toEqual(['stop'])
+    expect(r.stdout).toEqual([''])
+    // Not vacuous: Claude Code's stop hook, given the same turn's end, asks.
+    const claude = runHook(w, 'stop', { hook_event_name: 'Stop', stop_hook_active: false, last_assistant_message: 'another turn', cwd: w.repo })
+    expectBookmarkAsked(claude.stdout)
+  })
+
 }
 
 /** A chapter summary written through the tools by the session the world

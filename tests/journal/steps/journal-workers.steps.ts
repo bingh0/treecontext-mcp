@@ -19,7 +19,7 @@ import { TS_ROOT, tsxArgv } from '../proc.js'
 import { drainStaging, runHook } from '../capture-harness.js'
 import { sandboxedSpawnEnv, nodeTsArgs, spawnCli, CLI_TS } from '../../helpers/cli-spawn.js'
 import { agentConfigPath } from '../install-harness.js'
-import { mintTicket, readTicket, type TicketFields } from '../../../src/ticket.js'
+import { mintTicket, readTicket, TICKET_ENV, WORKER_SESSION_ENV, type TicketFields } from '../../../src/ticket.js'
 import { DOOR_LINE_PREFIX, DOOR_BUSY_WAIT_MS, NOT_STARTED_EXIT } from '../../../src/ticket-door.js'
 import {
   momentText, PROMPT_HEADING, STATE_NOT_HISTORY_LINE, sendBackReason, invalidInstructionsMessage, firstMomentFactsOf, composeFirstMessage,
@@ -29,7 +29,7 @@ import { FIRST_MOMENT_KIND, SEND_BACK_KIND, CHECKPOINT_KIND } from '../../../src
 import { keyLookupReply, type KeyLookup } from '../../../src/key-lookup.js'
 import { storesDirIn } from '../../helpers/store-fixtures.js'
 import {
-  runWorker, registerThroughLibrary, lookupInSandbox, osAnsweringGone, STANDIN_WORKER, type Spawner, type WorkerPlan, type WorkerSpec, type Outcome, type StandinRecord,
+  runWorker, registerThroughLibrary, lookupInSandbox, osAnsweringGone, STANDIN_WORKER, recordedSession, replayRecordedSession, type ReplayedEvent, type Spawner, type WorkerPlan, type WorkerSpec, type Outcome, type StandinRecord,
 } from '../standins.js'
 import {
   type RunWorld, openRunWorld, sessionStartHook, sleeper, killAndReap, localMoment, rawOne, rawRegistration, stringSteps, liveProcess,
@@ -571,14 +571,15 @@ function harnessLookup(w: WorkersWorld, key = 'login-form', run = RUN): KeyLooku
 const WORKER_CLI = /`(codex exec|claude -p|agy -p)`/.source
 
 /** Codex's session start, as the install writes it and Codex runs it: the
- *  install's verbatim copy of the Claude Code block in ~/.codex/hooks.json,
+ *  block install writes for Codex in ~/.codex/hooks.json from Codex CLI
+ *  0.167.0 (the Codex on PATH; D406),
  *  its SessionStart command run through a shell with the hook payload on
  *  stdin. The script it execs is the install's, pointed at this checkout's
  *  source (its interpreter and module pins, the rest untouched), as the
  *  sh-dispatch test points it. */
 function runCodexSessionStart(w: WorkersWorld, session: string): void {
   mkdirSync(dirname(agentConfigPath('codex', w.home!)), { recursive: true })
-  const install = spawnCli(['install', '--yes', '--agent', 'codex', '--experimental-capture'], { home: w.home!, cwd: w.proj! })
+  const install = spawnCli(['install', '--yes', '--agent', 'codex'], { home: w.home!, cwd: w.proj! })
   expect(install.status, install.out).toBe(0)
   const copy = JSON.parse(readFileSync(join(dirname(agentConfigPath('codex', w.home!)), 'hooks.json'), 'utf8')) as {
     hooks: Record<string, Array<{ matcher?: string; hooks: Array<{ command: string }> }>>
@@ -613,9 +614,8 @@ export function ticketDoorSteps(define: (re: RegExp, fn: (w: WorkersWorld, ...ca
   // ── D288: a worker writes into its own lane, its role as writer ──
 
   // The parent's session start, through the hook its CLI runs: Claude
-  // Code's own session-start hook, or the verbatim copy of the Claude Code
-  // block `treecontext install --experimental-capture --agent codex` writes
-  // into Codex's hooks.json, run as Codex runs it (its command, through a
+  // Code's own session-start hook, or the block `treecontext install
+  // --agent codex` writes into Codex's hooks.json (D406), run as Codex runs it (its command, through a
   // shell, the same JSON on stdin). The outline has no Antigravity row
   // (owner, 2026-11-09, under D288): an Antigravity CLI main registers no
   // self, so no parent of it is ever registered; its case is the declared
@@ -1310,6 +1310,105 @@ export function ticketDoorSteps(define: (re: RegExp, fn: (w: WorkersWorld, ...ca
     const t = mintTicket({ run: RUN, key: 'login-form', role, checkpointer: role, parent: { id: 'p1' } })
     return t.slice(0, t.indexOf(`"role":"${role}"`) + `"role":"${role}"`.length)
   }
+
+  // The door of a worker whose hooks do not run (reworded 2026-11-09 from
+  // "hook-less", D406: a Codex worker's hooks may run now): the stand-in
+  // worker, which runs no hook, through the real `treecontext run`.
+  define(new RegExp(`^a worker starts through the door of a ${WORKER_CLI} worker whose hooks do not run with the spawner's prompt "([^"]+)"$`), async (w, _cli, prompt) => {
+    await startByDoor(w, { role: 'builder', prompt, spawner: 'wrapper', checkpointer: 'reviewer', plan: { first: {} } })
+  })
+  define(new RegExp(`^a ticket in the environment, (truncated after the role "builder"|minted in an older shape that still reads as the role "reviewer"), so that the door of a ${WORKER_CLI} worker whose hooks do not run cannot read it whole$`), async (w, damage, _cli) => {
+    await openRunWorld(w)
+    const raw = damage!.startsWith('truncated')
+      ? truncatedAfterRole('builder')
+      // An older treecontext's shape: no version this build knows, the
+      // task by another name, the parent as a bare session.
+      : JSON.stringify({ ticket_version: 0, v: 0, role: 'reviewer', task: 'login-form', session: 'p1' })
+    w.facts!['raw'] = raw
+    w.facts!['spec'] = { spawner: 'wrapper', prompt: 'wire the submit button', ticket: raw, plan: { first: { invalidRow: true, print: 'my instructions were invalid; stopped' } } } satisfies WorkerSpec
+  })
+  define(new RegExp(`^the worker starts through the door of a ${WORKER_CLI} worker whose hooks do not run$`), async (w, _cli) => {
+    await runWorker(w, specOf(w))
+  })
+
+  // ── D410: a `codex exec` worker with Codex's hooks ──────────────────
+  // The worker is started by the real `treecontext run`; the process the
+  // door launches is the stand-in (no model), which writes its environment
+  // to a file and waits. While it runs, Codex's hooks fire as the recorded
+  // ticketed worker's did on 2026-11-09 (tests/fixtures/codex-hooks,
+  // worker.ndjson): its start, a shell command and its turn's end, replayed
+  // through the commands of Codex's block with the environment the door
+  // handed the worker (its ticket and lane, the two variables the
+  // recording shows every hook held). The worker's Codex session is the
+  // recorded one.
+  define(/^a `codex exec` worker at Codex CLI 0\.167\.0, with the hooks install wrote trusted, started by the wrapper under the key "([^"]+)" with the role "([^"]+)"$/, async (w, key, role) => {
+    await openRunWorld(w)
+    const go = join(w.home!, `codex-worker-go-${randomUUID().slice(0, 8)}`)
+    const envFile = join(w.home!, `codex-worker-env-${randomUUID().slice(0, 8)}.json`)
+    w.facts!['go'] = go
+    w.facts!['env-file'] = envFile
+    w.facts!['spec'] = {
+      spawner: 'wrapper', prompt: 'wire the submit button',
+      ticket: ticketFields(w, { key: String(key), role: String(role), checkpointer: 'reviewer' }),
+      plan: { first: { envTo: envFile, waitFor: go } },
+    } satisfies WorkerSpec
+  })
+  define(/^its hooks receive, as Codex sends them, its start, a shell command it runs and the end of its turn$/, async (w) => {
+    const events = recordedSession('0.167.0', 'worker.ndjson', 'codex')
+    const shell = events.find((e) => e['hook_event_name'] === 'PostToolUse' && e['tool_name'] === 'Bash')!
+    const picked = new Set([
+      events.find((e) => e['hook_event_name'] === 'SessionStart')!,
+      ...events.filter((e) => e['tool_use_id'] === shell['tool_use_id']),
+      events.find((e) => e['hook_event_name'] === 'Stop')!,
+    ])
+    w.facts!['codex-session'] = String(events[0]!['session_id'])
+    w.facts!['codex-shell'] = shell
+    w.facts!['codex-stop'] = events.find((e) => e['hook_event_name'] === 'Stop')
+    const go = w.facts!['go'] as string
+    await runWorker(w, specOf(w), 'worker', async () => {
+      await waitForFile(`${go}.ready`)
+      const env = JSON.parse(readFileSync(w.facts!['env-file'] as string, 'utf8')) as Record<string, string>
+      expect(env[TICKET_ENV], 'the door handed the worker no ticket').toBeTruthy()
+      expect(env[WORKER_SESSION_ENV], 'the door handed the worker no lane').toBeTruthy()
+      w.facts!['codex-replay'] = replayRecordedSession(w, events, {
+        lines: (_l, e) => picked.has(e), env: { [TICKET_ENV]: env[TICKET_ENV]!, [WORKER_SESSION_ENV]: env[WORKER_SESSION_ENV]! },
+      })
+      writeFileSync(go, 'go')
+    })
+    expect(outOf(w).exitCode).toBe(0)
+    await drainStaging(w)
+  })
+  define(/^the store holds no self registration for its Codex session and one first-moment row in the worker's lane$/, (w) => {
+    const codex = w.facts!['codex-session'] as string
+    expect(rawAll(w, "SELECT kind FROM session_registry WHERE session_id = ? AND agent_id = ''", codex)).toEqual([])
+    const lane = outOf(w).sessionId!
+    expect(lane).not.toBe(codex)
+    const firsts = rawAll<{ n: number }>(w, "SELECT COUNT(*) AS n FROM nodes WHERE session_key = ? AND json_extract(metadata_json, '$.kind') = 'first-moment'", lane)
+    expect(firsts).toEqual([{ n: 1 }])
+    // Codex's session is linked to the worker's lane.
+    expect(JSON.stringify(rawRegistration(w, { sessionId: lane, agentId: WORKER_AGENT_ID }))).toContain(codex)
+  })
+  define(/^the shell command and the turn's last assistant message are in the worker's lane with the writer "([^"]+)"$/, (w, writer) => {
+    const lane = outOf(w).sessionId!
+    const shell = w.facts!['codex-shell'] as Record<string, unknown>
+    const stop = w.facts!['codex-stop'] as Record<string, unknown>
+    const rows = rawAll<{ c: string | Buffer; m: string }>(w, 'SELECT content AS c, metadata_json AS m FROM nodes WHERE session_key = ?', lane)
+      .map((r) => ({ content: decodeContent(r.c), meta: JSON.parse(r.m) as Record<string, unknown> }))
+    const call = rows.filter((r) => r.meta['tool_use_id'] === shell['tool_use_id'])
+    expect(call, 'the shell command is not in the worker\'s lane').toHaveLength(1)
+    expect(call[0]!.meta['_writer']).toBe(writer)
+    const reply = rows.filter((r) => r.meta['event'] === 'response' && r.content === stop['last_assistant_message'])
+    expect(reply, 'the turn\'s last reply is not in the worker\'s lane').toHaveLength(1)
+    expect(reply[0]!.meta['_writer']).toBe(writer)
+  })
+  define(/^none of its hooks printed anything to Codex, its first moment being the door's$/, (w) => {
+    const replay = w.facts!['codex-replay'] as ReplayedEvent[]
+    expect(replay.map((r) => r.event)).toEqual(['SessionStart', 'PreToolUse', 'PostToolUse', 'Stop'])
+    for (const r of replay) {
+      expect(r.hooks.length, `${r.event} reached no hook`).toBe(1)
+      expect(r.stdout.join(''), `${r.event} printed to Codex`).toBe('')
+    }
+  })
 
   define(/^the worker's registration sits in its own lane with every field the door could read, each unreadable field marked absent, and the raw ticket text kept$/, (w) => {
     const raw = w.facts!['raw'] as string

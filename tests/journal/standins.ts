@@ -43,7 +43,24 @@
  *  |                                        | by its plan, a version and the exit code and stderr of      |
  *  |                                        | `sandbox -- true` exactly; it runs nothing in a sandbox,    |
  *  |                                        | reads no configuration, calls no model and answers no other |
- *  |                                        | subcommand or sandbox command (exit 2, saying so)           |
+ *  |                                        | subcommand or sandbox command (exit 2, saying so). Its app  |
+ *  |                                        | server, where the plan gives `hooksList`, answers the n-th  |
+ *  |                                        | `hooks/list` with the plan's n-th line, a hand-written      |
+ *  |                                        | model of the answer shapes recorded from Codex CLI 0.167.0  |
+ *  |                                        | (codex-hooks.ts CodexFileVerdict), never Codex's own word;  |
+ *  |                                        | `'hang'` reads its stdin and never answers. It never reads  |
+ *  |                                        | the hooks file it answers about. Where the plan gives       |
+ *  |                                        | `lockBefore`, it takes write permission off that one path   |
+ *  |                                        | before that answer: the developer, or another program,      |
+ *  |                                        | changing the file system between install's two reads        |
+ *  |                                        | (codex-install-shapes, a put-back that fails), never an act |
+ *  |                                        | of Codex's own                                              |
+ *  | `writeCodexPassThrough`                | nothing: a `codex` on PATH that hands `--version` and       |
+ *  |                                        | `app-server` to the real Codex further along PATH, so the   |
+ *  |                                        | answers are Codex's own, and refuses everything else (exit  |
+ *  |                                        | 2, saying so), so that a doctor run reads Codex's account   |
+ *  |                                        | of its hooks and configuration and never runs Codex's       |
+ *  |                                        | sandbox or a model; it adds, drops or edits nothing         |
  *  | `writeFakeGemini`                      | the `gemini` on PATH of a machine with Gemini CLI, which    |
  *  |                                        | install and doctor no longer read (D399): they never run    |
  *  |                                        | it; run, it answers nothing and exits 127, saying so        |
@@ -69,6 +86,21 @@
  *  |                                        | field, an input, a response, an error or an id, or run a    |
  *  |                                        | hook the block does not name. The session reminder script   |
  *  |                                        | only prints and writes nothing, so it is not run            |
+ *  | `replayRecordedSession` with a Codex   | Codex CLI firing a recorded set's hook events (D409): the    |
+ *  |   set (`recordedSession(..., 'codex')`)| same rules, the events of tests/fixtures/codex-hooks, the   |
+ *  |                                        | commands of the block install writes for Codex             |
+ *  |                                        | (`codexHooksBlock`); `env` may hand every hook the         |
+ *  |                                        | variables the client's own environment held (a ticketed    |
+ *  |                                        | worker's ticket and lane, as recorded), never more         |
+ *  | `developerTrustsCodexHooks`,           | the developer trusting hooks in Codex's `/hooks`: a trust  |
+ *  |   `staleCodexTrustRecord`              | record per hook in Codex's config.toml with the hash Codex |
+ *  |                                        | itself reports (`hooks/list`); it computes no hash, trusts |
+ *  |                                        | no hook Codex does not list and writes nothing else; the   |
+ *  |                                        | record's shape (`[hooks.state."<key>"] trusted_hash`) is   |
+ *  |                                        | the one the far-side pass of 2026-11-09 read back from     |
+ *  |                                        | config.toml after the developer's real /hooks trust; the   |
+ *  |                                        | trust status a scenario asserts is always Codex's own      |
+ *  |                                        | answer (`hooks/list`), never one written here              |
  *  | `PID_SANDBOX` (a spec's `sandbox`,     | Codex CLI's sandbox on Linux (bwrap, a pid namespace of its |
  *  |   `lookupInSandbox`)                   | own, D403): a REAL pid namespace `unshare` makes, the      |
  *  |                                        | wrapper or the harness's lookup run inside it; it numbers  |
@@ -197,7 +229,7 @@
  * message), `exit`.
  */
 import { spawn, spawnSync } from 'node:child_process'
-import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { WORKER_AGENT_ID, type LegRef, type LegRegistration } from '../../src/persistence/leg-registry.js'
 import { mintTicket, TICKET_ENV, type TicketFields } from '../../src/ticket.js'
@@ -210,6 +242,8 @@ import { TS_ROOT } from './proc.js'
 import { type RunWorld, briefFor, subagentStartHook, liveProcess } from './run-world.js'
 import { type CaptureWorld, runHook, hookJson } from './capture-harness.js'
 import { claudeHooksBlock, hookScriptContent } from '../../src/server/installer.js'
+import { codexHooksBlock } from '../../src/server/codex-hooks.js'
+import { readCodexHooksTrust, type CodexListedHook } from '../../src/server/codex-client.js'
 
 /** The registry and door acts a binding may make only through this
  *  module: each is a door's own act (a registration, a retirement, a
@@ -723,6 +757,18 @@ export interface FakeCodexPlan {
   version: string | null
   /** `codex sandbox -- …`: the exit code and what it writes on stderr. */
   sandbox: { exit: number; stderr: string }
+  /**
+   * `codex app-server`: absent, it is not stood in for (exit 2, saying so,
+   * before any answer); `'hang'`, it reads its stdin and never answers; a
+   * list, the n-th `hooks/list` (counting every app server this stand-in
+   * started) is answered with the n-th line, one JSON-RPC message, and an
+   * app server past the list exits 2 unanswered. POSIX only.
+   */
+  hooksList?: 'hang' | string[]
+  /** Before the `answer`-th `hooks/list` (counting from 0), take write
+   *  permission off `path` (chmod a-w): a change made between install's two
+   *  reads, never Codex's. POSIX only. */
+  lockBefore?: { answer: number; path: string }
 }
 
 /**
@@ -749,10 +795,47 @@ export function writeFakeCodex(dir: string, plan: FakeCodexPlan): void {
     // command in the sandbox is not stood in for.
     `  sandbox) [ "$#" -eq 3 ] && [ "$2" = "--" ] && [ "$3" = "true" ] || { echo "stand-in codex: sandbox $* is not stood in for" >&2; exit 2; }`,
     `           printf '%s\\n' ${q(plan.sandbox.stderr)} >&2; exit ${plan.sandbox.exit} ;;`,
+    ...appServerCase(dir, plan.hooksList, plan.lockBefore),
     '  *) echo "stand-in codex: $1 is not stood in for" >&2; exit 2 ;;',
     'esac',
     '',
   ].join('\n'), { mode: 0o755 })
+}
+
+/**
+ * A `codex` in `dir` that is no stand-in: it hands `--version` and
+ * `app-server` to the real Codex at `real` (an absolute path, found further
+ * along PATH by the caller), so every answer is Codex's own, and refuses
+ * every other subcommand (exit 2, saying so). A doctor run under it reads
+ * Codex's version, its account of its hooks and its configuration, and
+ * never runs Codex's sandbox or a model. POSIX only.
+ */
+export function writeCodexPassThrough(dir: string, real: string): void {
+  const q = (t: string): string => `'${t.replace(/'/g, `'\\''`)}'`
+  writeFileSync(join(dir, 'codex'), [
+    '#!/bin/sh',
+    'case "$1" in',
+    `  --version|app-server) exec ${q(real)} "$@" ;;`,
+    '  *) echo "pass-through codex: $1 is not handed to the real Codex here" >&2; exit 2 ;;',
+    'esac',
+    '',
+  ].join('\n'), { mode: 0o755 })
+}
+
+/** The stand-in app server's case arm and its answer files (writeFakeCodex). */
+function appServerCase(dir: string, list: FakeCodexPlan['hooksList'], lockBefore?: FakeCodexPlan['lockBefore']): string[] {
+  for (const f of readdirSync(dir)) if (f.startsWith('hooks-list.')) rmSync(join(dir, f), { force: true })
+  if (list === undefined) return []
+  if (list === 'hang') return ['  app-server) while IFS= read -r l; do :; done; sleep 3600 ;;']
+  list.forEach((line, n) => writeFileSync(join(dir, `hooks-list.${n}.json`), `${line}\n`))
+  const sq = (t: string): string => `'${t.replace(/'/g, `'\\''`)}'`
+  const d = sq(dir)
+  return [
+    `  app-server) n=$(cat ${d}/hooks-list.count 2>/dev/null || echo 0); echo $((n + 1)) > ${d}/hooks-list.count`,
+    ...(lockBefore ? [`              [ "$n" -eq ${lockBefore.answer} ] && chmod a-w ${sq(lockBefore.path)}`] : []),
+    `              f=${d}/hooks-list.$n.json; [ -f "$f" ] || { echo "stand-in codex: no hooks/list answer $n" >&2; exit 2; }`,
+    '              while IFS= read -r l; do case "$l" in *hooks/list*) cat "$f"; exit 0 ;; esac; done; exit 2 ;;',
+  ]
 }
 
 /**
@@ -824,27 +907,38 @@ export async function startEntryAsClient(
   }
 }
 
-// ── Claude Code firing recorded hook events (D400, D401, D402) ─────────
+// ── A client firing recorded hook events (D400, D401, D402, D409) ──────
 
 /** The recorded sessions: every hook event a real `claude -p` fired, in
  *  order, as the client wrote it (tests/fixtures/claude-code-hooks). */
 export const RECORDED_HOOK_EVENTS = join(TS_ROOT, 'tests', 'fixtures', 'claude-code-hooks')
 
+/** Codex CLI's recorded sets (D409): every hook event a real Codex fired,
+ *  in order, as it wrote it (tests/fixtures/codex-hooks). */
+export const RECORDED_CODEX_EVENTS = join(TS_ROOT, 'tests', 'fixtures', 'codex-hooks')
+
+/** The clients whose events are recorded, each with its fixture directory. */
+export type RecordedClient = 'claude-code' | 'codex'
+const RECORDED_DIRS: Readonly<Record<RecordedClient, string>> = { 'claude-code': RECORDED_HOOK_EVENTS, codex: RECORDED_CODEX_EVENTS }
+
 /** One recorded session, line by line, each payload exactly as the client
- *  wrote it. */
-export function recordedSession(version: string, file: string): Array<Record<string, unknown>> {
-  return readFileSync(join(RECORDED_HOOK_EVENTS, version, file), 'utf8').split('\n').filter((l) => l.trim() !== '')
-    .map((l) => { const e = JSON.parse(l) as Record<string, unknown>; RECORDED.add(e); return e })
+ *  wrote it: Claude Code's by default, Codex CLI's with `'codex'`, each read
+ *  from that client's own fixture directory and branded with its client. */
+export function recordedSession(version: string, file: string, client: RecordedClient = 'claude-code'): Array<Record<string, unknown>> {
+  return readFileSync(join(RECORDED_DIRS[client], version, file), 'utf8').split('\n').filter((l) => l.trim() !== '')
+    .map((l) => { const e = JSON.parse(l) as Record<string, unknown>; RECORDED.set(e, client); return e })
 }
 
-/** The events `recordedSession` returned, by identity (module-private): a
- *  payload built or copied by hand is not in it, and `replayRecordedSession`
- *  refuses it, so a binding cannot pass a hand-written payload off as the
- *  client's. */
-const RECORDED = new WeakSet<object>()
+/** The events `recordedSession` returned, by identity (module-private),
+ *  with the client they were recorded from: a payload built or copied by
+ *  hand is not in it, and `replayRecordedSession` refuses it, so a binding
+ *  cannot pass a hand-written payload off as the client's. */
+const RECORDED = new WeakMap<object, RecordedClient>()
 export function isRecordedEvent(e: object): boolean { return RECORDED.has(e) }
+/** The client a recorded event came from, or null for a hand-written one. */
+export function recordedClientOf(e: object): RecordedClient | null { return RECORDED.get(e) ?? null }
 
-/** What a matcher entry is matched against, per event, as Claude Code's
+/** What a matcher entry is matched against, per event, as the client's
  *  hooks reference has it: the start's source, the compaction's trigger,
  *  a tool event's tool name; an event with no matcher field matches every
  *  entry. */
@@ -854,19 +948,22 @@ function matcherSubject(payload: Record<string, unknown>): string | null {
     case 'PreCompact': return typeof payload['trigger'] === 'string' ? payload['trigger'] : null
     case 'PreToolUse': case 'PostToolUse': case 'PostToolUseFailure': case 'PermissionRequest':
       return typeof payload['tool_name'] === 'string' ? payload['tool_name'] : null
+    case 'SubagentStart': case 'SubagentStop':
+      return typeof payload['agent_type'] === 'string' ? payload['agent_type'] : null
     default: return null
   }
 }
 
 /**
- * The hook commands Claude Code would run for one event, read from the
- * block install writes (`claudeHooksBlock`, the one definition the settings
- * writer, the Codex copy and doctor all use): every command of every
+ * The hook commands the client would run for one event, read from the
+ * block install writes for that client (`claudeHooksBlock`, the one
+ * definition the settings writer and doctor use, or `codexHooksBlock`, the
+ * one install writes into Codex's hooks.json, D406): every command of every
  * matcher entry under the event's name whose matcher matches, in order. An
  * event the block does not name has none.
  */
-export function installedCommandsFor(payload: Record<string, unknown>): string[] {
-  const block = claudeHooksBlock()
+export function installedCommandsFor(payload: Record<string, unknown>, client: RecordedClient = 'claude-code'): string[] {
+  const block = client === 'codex' ? codexHooksBlock() : claudeHooksBlock()
   const event = String(payload['hook_event_name'] ?? '')
   const subject = matcherSubject(payload)
   const out: string[] = []
@@ -934,16 +1031,23 @@ export interface ReplayedEvent {
  * responses, errors and ids are the client's.
  */
 export function replayRecordedSession(
-  w: CaptureWorld, events: Array<Record<string, unknown>>, opts: { sessionId?: string; lines?: (line: number, payload: Record<string, unknown>) => boolean } = {},
+  w: CaptureWorld, events: Array<Record<string, unknown>>, opts: {
+    sessionId?: string; lines?: (line: number, payload: Record<string, unknown>) => boolean
+    /** Variables the client's environment hands every hook beside the
+     *  sandbox's (a ticketed worker's ticket and lane, D410). */
+    env?: Record<string, string>
+    /** A directory for `cwd` other than the world's project (a worktree). */
+    cwd?: string
+  } = {},
 ): ReplayedEvent[] {
   for (const e of events) {
     if (!RECORDED.has(e)) throw new Error('replayRecordedSession was handed an event that did not come from recordedSession: a payload written or copied by hand is never the client\'s (D402)')
   }
-  const env = sandboxedSpawnEnv(w.home!, { TREECONTEXT_BINDINGS_FILE: join(w.home!, '.treecontext', 'bindings.json') })
+  const env = sandboxedSpawnEnv(w.home!, { TREECONTEXT_BINDINGS_FILE: join(w.home!, '.treecontext', 'bindings.json'), ...opts.env })
   const out: ReplayedEvent[] = []
   events.forEach((recorded, line) => {
     if (opts.lines && !opts.lines(line, recorded)) return
-    const payload: Record<string, unknown> = { ...recorded, cwd: w.proj }
+    const payload: Record<string, unknown> = { ...recorded, cwd: opts.cwd ?? w.proj }
     for (const k of ['transcript_path', 'agent_transcript_path']) {
       if (typeof recorded[k] === 'string') payload[k] = join(w.proj!, basename(String(recorded[k])))
     }
@@ -951,7 +1055,7 @@ export function replayRecordedSession(
     const hooks: string[] = []
     const stdout: string[] = []
     const startedAt = Date.now() / 1000
-    for (const command of installedCommandsFor(payload)) {
+    for (const command of installedCommandsFor(payload, RECORDED.get(recorded)!)) {
       const dispatch = hookDispatchOf(command)
       if (dispatch === null) continue
       const r = spawnSync(process.execPath, nodeTsArgs(CLI_TS, ['hook', dispatch, ...hookArgsOf(command)]), {
@@ -964,4 +1068,48 @@ export function replayRecordedSession(
     out.push({ line, event: String(payload['hook_event_name']), payload, hooks, startedAt, endedAt: Date.now() / 1000, stdout })
   })
   return out
+}
+
+// ── The developer trusting Codex's hooks with /hooks (D406, D407) ──────
+
+/** Codex's own account of its hooks under a redirected HOME: the real
+ *  Codex on PATH, its app server's `hooks/list` (no model call, no
+ *  sign-in), for `cwd`. This is Codex's word, not a stand-in. */
+export async function codexHooksSeen(home: string, cwd: string): Promise<CodexListedHook[]> {
+  const read = await readCodexHooksTrust(cwd, 20_000, sandboxedSpawnEnv(home, { CODEX_HOME: join(home, '.codex') }))
+  if (!read.ok) throw new Error(`Codex's own account of its hooks could not be read: ${read.why}`)
+  return read.hooks
+}
+
+/**
+ * The developer trusting hooks in Codex's `/hooks`: what that screen does,
+ * which is write a trust record for each chosen hook into Codex's
+ * `config.toml`, `[hooks.state."<key>"]` with `trusted_hash` the hash Codex
+ * itself reports for the hook now (recorded on the far-side pass of
+ * 2026-11-09). The hash is Codex's, read from its own `hooks/list`; the
+ * stand-in computes none. It may trust only hooks Codex lists, and writes
+ * nothing else: a record is appended as Codex's own table syntax, the rest
+ * of the file left byte for byte. `which` picks the hooks (all by default).
+ * Returns the hooks it trusted.
+ */
+export async function developerTrustsCodexHooks(home: string, cwd: string, which: (h: CodexListedHook) => boolean = () => true): Promise<CodexListedHook[]> {
+  const chosen = (await codexHooksSeen(home, cwd)).filter(which)
+  const toml = join(home, '.codex', 'config.toml')
+  const before = existsSync(toml) ? readFileSync(toml, 'utf8') : ''
+  const records = chosen.map((h) => `\n[hooks.state.${JSON.stringify(h.key)}]\ntrusted_hash = ${JSON.stringify(h.currentHash)}\n`).join('')
+  writeFileSync(toml, `${before}${before === '' || before.endsWith('\n') ? '' : '\n'}${records}`)
+  return chosen
+}
+
+/**
+ * A trust record Codex holds at a hook's place for a hook that was there
+ * before (D407's fifth state): the developer trusted a hook of their own at
+ * `key`, and that hook has since gone. Written as `/hooks` writes a record,
+ * with the hash Codex reported for that earlier hook, which the caller read
+ * from Codex's `hooks/list` while the hook was there.
+ */
+export function staleCodexTrustRecord(home: string, key: string, hash: string): void {
+  const toml = join(home, '.codex', 'config.toml')
+  const before = existsSync(toml) ? readFileSync(toml, 'utf8') : ''
+  writeFileSync(toml, `${before}${before === '' || before.endsWith('\n') ? '' : '\n'}\n[hooks.state.${JSON.stringify(key)}]\ntrusted_hash = ${JSON.stringify(hash)}\n`)
 }

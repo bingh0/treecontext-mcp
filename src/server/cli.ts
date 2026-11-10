@@ -537,6 +537,11 @@ export function parseArgs(argv: string[]): CliArgs {
         process.exit(0)
         break
       default:
+        if (arg.startsWith('--experimental-capture=')) {
+          // Any spelling of the removed flag is refused with its own line (D406).
+          args.experimentalCapture = true
+          break
+        }
         if (arg.startsWith('-')) {
           error(`Unknown flag: ${arg}`)
         }
@@ -549,15 +554,21 @@ export function parseArgs(argv: string[]): CliArgs {
     i++
   }
 
-  // Owner ruling 2026-08-01 (install charter: "experimental capture is an
-  // opt-in by name"): the flag alone would opt in EVERY detected
-  // unverified platform at once — refuse unless the platform is named.
-  if (args.experimentalCapture && (!args.installAgents || args.installAgents.length === 0)) {
-    error('--experimental-capture requires --agent <name>: capture on an unverified platform is an opt-in by name, not a blanket switch')
+  // D406 (amending D57): the experimental flag is gone. It opted an
+  // unverified client into capture, and none is left for it to opt in:
+  // each captured client is wired by default from its version floor. An
+  // install given it, in any form, is refused before anything is written,
+  // in one line that tells a script's author what replaced it.
+  if (args.experimentalCapture) {
+    error(EXPERIMENTAL_FLAG_GONE)
   }
 
   return args
 }
+
+/** The one line an install given the experimental flag is refused with (D406). */
+export const EXPERIMENTAL_FLAG_GONE = '--experimental-capture is gone: each captured client is wired by default from its version floor '
+  + '(Codex CLI 0.167.0, Antigravity CLI 1.5.3; Claude Code always). Nothing was written; run the command again without the flag.'
 
 function error(msg: string): never {
   console.error(`error: ${msg}`)
@@ -569,7 +580,7 @@ function printUsage(): void {
 
 Usage:
   treecontext serve [options]
-  treecontext install [-y] [--dry-run] [--force] [--agent <name>] [--experimental-capture (requires --agent)] [--no-tool-approvals]
+  treecontext install [-y] [--dry-run] [--force] [--agent <name>] [--no-tool-approvals]
   treecontext uninstall [-y] [--dry-run] [--agent <name>] [--hooks-only]
   treecontext doctor
   treecontext doctor --dump-logs
@@ -701,11 +712,6 @@ Install options:
                        approvals, env). To start from the default entry:
                        uninstall --agent X, then install
   --npx                Unavailable during the beta (install globally instead)
-  --experimental-capture
-                       Also copy the Claude Code hooks into a client that
-                       copies them into its own configuration (Codex CLI);
-                       requires --agent. MCP tools always install; this
-                       opts into unverified capture.
 
 Uninstall options:
   --agent <name>       Uninstall for a specific agent only (repeatable)
@@ -1566,7 +1572,6 @@ async function main(): Promise<void> {
       // (The low-level `serve` command stays explicit — configs always pass
       // the flag, so a wrapper-launched server runs lexical regardless.)
       lexical: args.provided.has('lexical') ? args.lexical : true,
-      experimentalCapture: args.experimentalCapture,
       noToolApprovals: args.noToolApprovals,
     }).catch((e: unknown) => { if (!retired(e)) throw e; process.exitCode = 1 })
     return

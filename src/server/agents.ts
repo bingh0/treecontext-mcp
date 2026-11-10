@@ -10,6 +10,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { isOwnHookCommand } from './hook-command-owner.js'
+import { codexDir } from './codex-home.js'
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -190,28 +191,28 @@ export const AGENTS: AgentDefinition[] = [
     slug: 'codex',
     configFormat: 'toml-codex',
     detectDirs: {
-      linux: [join(home(), '.codex')],
-      darwin: [join(home(), '.codex')],
-      win32: [join(home(), '.codex')],
+      linux: [codexDir()],
+      darwin: [codexDir()],
+      win32: [codexDir()],
     },
     configPath: {
-      linux: join(home(), '.codex', 'config.toml'),
-      darwin: join(home(), '.codex', 'config.toml'),
-      win32: join(home(), '.codex', 'config.toml'),
+      linux: join(codexDir(), 'config.toml'),
+      darwin: join(codexDir(), 'config.toml'),
+      win32: join(codexDir(), 'config.toml'),
     },
     hooks: {
       settingsPath: {
-        linux: join(home(), '.codex', 'hooks.json'),
-        darwin: join(home(), '.codex', 'hooks.json'),
-        win32: join(home(), '.codex', 'hooks.json'),
+        linux: join(codexDir(), 'hooks.json'),
+        darwin: join(codexDir(), 'hooks.json'),
+        win32: join(codexDir(), 'hooks.json'),
       },
       format: 'codex-hooks',
     },
     instructions: {
       path: {
-        linux: join(home(), '.codex', 'AGENTS.md'),
-        darwin: join(home(), '.codex', 'AGENTS.md'),
-        win32: join(home(), '.codex', 'AGENTS.md'),
+        linux: join(codexDir(), 'AGENTS.md'),
+        darwin: join(codexDir(), 'AGENTS.md'),
+        win32: join(codexDir(), 'AGENTS.md'),
       },
     },
   },

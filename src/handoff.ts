@@ -80,6 +80,13 @@ export const HANDOFF_CLAIM_KEYS: readonly string[] = [
   // claim and never read here as a stamp this store made.
   ...WRITER_STAMP_KEYS,
   '_cap_refused',
+  // A captured call's marks and the client session it was staged in, and
+  // the drain's own marks on a gap row or a resolved entry: the sender's
+  // capture facts, which the gates and counters of this store read only on
+  // its own rows (capture-marks.ts ownLaneRowSql), kept as the file's claim
+  // so no reader takes them for this store's.
+  '_client_session_id', 'tool_use_id', 'captured_from', 'outcome', 'stated_by', 'exit_by',
+  'gap_id', 'gap_tool_use_id', 'resolved_by', 'resolved_at', 'resolved_how',
 ]
 
 /** What the receiving store stamps on a row that arrived by import, and

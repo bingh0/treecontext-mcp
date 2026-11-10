@@ -24,8 +24,9 @@ const fakeHome = mkdtempSync(join(tmpdir(), 'tc-orphan-wrappers-'))
 const restoreHome = redirectHome(fakeHome)
 
 const {
-  installAgentHookWrappers, installClaudeHookScripts, uninstall,
+  installClaudeHookScripts, uninstall,
 } = await import('../../src/server/installer.js')
+const { installAgentHookWrappers } = await import('../helpers/earlier-build-writers.js')
 
 const hooksDir = join(fakeHome, '.claude', 'hooks')
 const cursorDir = join(fakeHome, '.cursor')
@@ -35,14 +36,14 @@ function seedOrphanedCursor(): void {
   mkdirSync(cursorDir, { recursive: true })
   writeFileSync(join(cursorDir, 'hooks.json'), JSON.stringify({ hooks: {} }))
   installClaudeHookScripts(false)
-  installAgentHookWrappers('cursor', false)
+  installAgentHookWrappers('cursor')
   expect(readdirSync(hooksDir).filter(f => f.startsWith('tc-cursor-')).length).toBeGreaterThan(0)
   rmSync(cursorDir, { recursive: true, force: true })
 }
 
 /** The wrappers an earlier build wrote for Gemini CLI, before its retirement (D399). */
 function seedGeminiWrappers(): void {
-  installAgentHookWrappers('gemini', false)
+  installAgentHookWrappers('gemini')
   expect(geminiWrappers().length).toBe(4)
 }
 

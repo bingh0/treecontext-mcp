@@ -73,3 +73,9 @@ export function isOwnHookCommand(cmd: unknown): boolean {
   if (runsOwnHookScript(cmd, [...CLAUDE_SCRIPT_NAMES, ...LEGACY_WRAPPER_NAMES])) return true
   return LEGACY_COPY_ENTRY_RE.test(normalizeHookPath(cmd)) || TC_SUBCOMMAND_RE.test(cmd)
 }
+
+/** Doctor's mode words for Codex CLI, the README matrix's too (D406, D407):
+ *  here, in the leaf, so installer.ts and codex-hooks.ts share it without
+ *  an import cycle deciding which loads first. */
+export const CODEX_HOOK_MODE = 'keeps its own hook configuration, where install writes Codex\'s own block from 0.167.0 '
+  + '(~/.codex/hooks.json beside the developer\'s hooks; Codex runs a hook only once it is trusted with /hooks)'

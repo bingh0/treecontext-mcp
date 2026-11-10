@@ -8,7 +8,7 @@ import {
   type RunWorld, openRunWorld, seedCheckpoints, sessionClient, insertEchoed, subagentStopHook, blocks,
   rawOne, rawMetaOf, rawRowOf, rawRegistration, rawCheckpoints, cpLabel, stringSteps, subagentStartHook, briefFor, agentToolReturns,
 } from '../run-world.js'
-import { hooksLeg, workerLeg, retiredWithoutReturn } from '../standins.js'
+import { hooksLeg, workerLeg, retiredWithoutReturn, recordedSession, replayRecordedSession, type ReplayedEvent } from '../standins.js'
 import { hooksDoorSteps } from './journal-legs-hooks.steps.js'
 
 // ── journal-legs ────────────────────────────────────────────────────────
@@ -339,6 +339,69 @@ export const legsDefiner = (reg: Registry<LegsWorld>): void => {
     expect(report, 'the report is among the hits').toBeTruthy()
     expect(report!.content).toContain('src/login/Form.tsx')
     expect(report!.metadata['_writer']).toBe('explorer')
+  })
+
+  // ── D411: a Codex CLI subagent is a registered helper, never a leg ──
+  // The subagent set Codex 0.167.0 fired on 2026-11-09 (tests/fixtures/
+  // codex-hooks), replayed through the commands of Codex's block. The
+  // brief names the role Codex names its subagent, "default", so that a
+  // hook inferring a leg from a brief would find one here.
+  define(/^a Codex CLI 0\.167\.0 main with its hooks trusted, and a brief row for the role Codex names its subagent, "default", naming the run "([^"]+)" and the key "([^"]+)"$/, async (w, run, key) => {
+    await openRunWorld(w, { sessionStart: false })
+    const events = recordedSession('0.167.0', 'subagent.ndjson', 'codex')
+    const start = events.find((e) => e['hook_event_name'] === 'SubagentStart')!
+    expect(start['agent_type']).toBe('default')
+    w.sessionId = String(events[0]!['session_id'])
+    w.facts!['codex-events'] = events
+    w.facts!['codex-agent'] = String(start['agent_id'])
+    w.facts!['codex-reply'] = String(events.find((e) => e['hook_event_name'] === 'SubagentStop')!['last_assistant_message'])
+    // The main's own start, through its SessionStart hook.
+    const first = replayRecordedSession(w, [events[0]!])
+    expect(first[0]!.hooks).toEqual(['session-start'])
+    await briefFor(w, 'default', String(run), String(key))
+    await sessionClient(w)
+  })
+  define(/^the main spawns a subagent that finishes with its reply, as Codex sends its start and its stop$/, async (w) => {
+    const events = w.facts!['codex-events'] as Array<Record<string, unknown>>
+    const replayed = replayRecordedSession(w, events, { lines: (l) => l > 0 })
+    w.facts!['codex-replay'] = replayed
+    for (const r of replayed.filter((x) => x.event === 'SubagentStart' || x.event === 'SubagentStop')) {
+      expect(r.hooks.length, r.event).toBe(1)
+      // Nothing printed to Codex: no first moment injected, no block.
+      expect(r.stdout.join(''), r.event).toBe('')
+    }
+    await drainStaging(w)
+  })
+  define(/^the store holds the subagent's registration under Codex's id for it, with no run and no key, retired at its stop$/, (w) => {
+    const ref = { sessionId: w.sessionId!, agentId: w.facts!['codex-agent'] as string }
+    const r = rawRegistration(w, ref)
+    expect([r['run'], r['run_key'], r['key_src'], r['start_checkpoints']]).toEqual([null, null, null, null])
+    expect(r['agent_type']).toBe('default')
+    expect(r['stopped_at']).not.toBeNull()
+    const stop = (w.facts!['codex-replay'] as ReplayedEvent[]).find((x) => x.event === 'SubagentStop')!
+    expect(Number(r['stopped_at'])).toBeGreaterThanOrEqual(stop.startedAt - 1)
+  })
+  define(/^the main searching the words of that reply finds it marked as the subagent's summary$/, async (w) => {
+    const reply = w.facts!['codex-reply'] as string
+    const read = parseTool(await w.client!.callTool({ name: 'treecontext_query', arguments: { query: reply, top_k: 10, scope: 'all' } }))
+    const hits = read['results'] as Array<{ content: string; metadata: Record<string, unknown> }>
+    const summary = hits.find((h) => h.metadata['kind'] === SUBAGENT_SUMMARY_KIND)
+    expect(summary, JSON.stringify(hits.map((h) => h.metadata['kind']))).toBeTruthy()
+    expect(summary!.content).toBe(reply)
+    expect(summary!.metadata['_writer_agent_id']).toBe(w.facts!['codex-agent'])
+  })
+  define(/^no first-moment row and no send-back were written for it$/, (w) => {
+    const kinds = rawAll<{ k: string | null }>(w, "SELECT json_extract(metadata_json, '$.kind') AS k FROM nodes").map((r) => r.k)
+    // step-lint: allow unearned-absence -- the kinds are the door rows' own (FIRST_MOMENT_KIND, SEND_BACK_KIND), which this file's hooks-door scenarios find by these same strings
+    expect(kinds).not.toContain('first-moment')
+    // step-lint: allow unearned-absence -- as above: the send-back scenarios of this file find the row by this kind
+    expect(kinds).not.toContain('send-back')
+    expect(rawRegistration(w, { sessionId: w.sessionId!, agentId: w.facts!['codex-agent'] as string })['send_backs']).toBe(0)
+  })
+  define(/^the harness looking up the key "([^"]+)" on the run "([^"]+)" does not count it among the run's legs$/, (w, key, run) => {
+    const l = w.store!.lookupKey({ run: String(run), key: String(key) })
+    const legs = JSON.stringify(l)
+    expect(legs).not.toContain(w.facts!['codex-agent'] as string)
   })
 
   define(/^the explorer's stop is not blocked and no checkpoint is asked for$/, (w) => {

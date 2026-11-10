@@ -230,16 +230,41 @@ upgrade changes:
 - It rewrites Codex's `config.toml`, which does not keep comments, after
   keeping the file as it was beside it, as
   `config.toml.treecontext-bak-<UTC timestamp>`.
-- It starts the server in capture mode only where capture hooks run. A
-  Codex entry now carries `--no-capture` unless you installed with
-  `--experimental-capture`; Cursor and VS Code keep capture where they run
-  the Claude Code hooks.
+- It writes Codex CLI's own hooks into `~/.codex/hooks.json` from Codex CLI
+  0.167.0, beside your own hooks, and starts Codex's server in capture mode
+  (§6, "Codex CLI capture"); Codex runs them once you trust them with
+  `/hooks` in Codex. Below 0.167.0, or where `codex --version` cannot be
+  read, Codex stays tools-only and its entry carries `--no-capture`. One
+  rule holds for Codex: treecontext's hooks are in `~/.codex/hooks.json` if
+  and only if Codex's entry starts the server in capture mode, since hooks
+  that are written can run and only a capture-mode server drains what they
+  stage. Install asks Codex about that file from an empty directory, so a
+  project whose own `.codex/config.toml` turns hooks off decides nothing for
+  your other projects; where Codex itself loads none of treecontext's hooks
+  (`[features] hooks = false`, a managed policy), the hooks stay, install
+  says Codex runs none of them now and what turns them on, and never says
+  capture is running. A take-back the file refuses (read-only) leaves the
+  entry in capture mode, at install and at uninstall, which then fails and
+  says so. Install changes `hooks.json` by inserting its own groups and
+  taking out its own, never by rewriting the file: every hook of yours
+  keeps its text (a large number, an escape, your spacing and key order),
+  so Codex keeps trusting it. A `config.toml` you made read-only is a
+  refusal before anything of Codex's is written; a symlinked one is written
+  through to its target, the link and mode kept. Where `CODEX_HOME` is set,
+  install, uninstall and doctor use that directory and name it; one that
+  does not exist (Codex itself refuses to start then) gets nothing written
+  and is said. Cursor and VS Code keep capture where they run the Claude
+  Code hooks.
+- `--experimental-capture` is gone: install refuses it in any form, before
+  writing anything, since each captured client is now wired by default from
+  its version floor. A reinstall turns the copy of the Claude Code block an
+  earlier build wrote under that flag into Codex's own block, and uninstall
+  still takes that copy back.
 - `--force` keeps your additions to an entry; it rewrites what install
   owns and nothing more. To start over, run `treecontext uninstall --agent
   <name>`, then `treecontext install`.
 - Gemini CLI is retired (Google deprecated it for Antigravity CLI): install
-  no longer detects or wires it, with or without `--experimental-capture`,
-  and doctor gives it no client row. `treecontext uninstall --agent gemini`
+  no longer detects or wires it, and doctor gives it no client row. `treecontext uninstall --agent gemini`
   removes the entry, the copied hooks and the `tc-gemini-*` wrappers an
   earlier install left (a full `treecontext uninstall` does too), keeping
   every other key of `~/.gemini/settings.json`; doctor names them while
@@ -270,6 +295,7 @@ This detects your installed agents and wires treecontext into them. Add
 | `~/.claude/skills/treecontext-reference/SKILL.md` | the reference skill your agent loads on demand |
 | `~/.claude/settings.json` (again) | `permissions.allow` gets `mcp__treecontext__treecontext_status`, `_query`, `_export` and `_insert`, the tool approvals below |
 | `~/.codex/config.toml` | where Codex CLI is detected (or on its own with `--agent codex`): the treecontext MCP entry, with `[mcp_servers.treecontext.tools.<tool>] approval_mode = "approve"` for status, query, export and insert |
+| `~/.codex/hooks.json` | from Codex CLI 0.167.0: Codex's own hooks, in groups of their own after yours, for `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`, `Interrupt`, `PreCompact`, `SubagentStart` and `SubagentStop`, each running the `~/.claude/hooks/tc-*` scripts with `--client codex`; Codex runs none of them until you trust them with `/hooks` in Codex |
 | `~/.gemini/config/mcp_config.json` | where Antigravity CLI is detected (or on its own with `--agent agy`): Antigravity CLI's MCP entry |
 | `~/.gemini/antigravity-cli/settings.json` | where Antigravity CLI is detected (or on its own with `--agent agy`): `permissions.allow` gets `mcp(treecontext/<tool>)` for status, query, export and insert |
 | `~/.gemini/GEMINI.md` | the instruction block of Antigravity CLI |
@@ -470,8 +496,9 @@ adds `_insert` and nothing that removes. Details in
   trail; it can answer your chapter, never retire it (fixed at the drain
   if a note's writer was guessed wrong).
 - **Something looks off?** Run `treecontext doctor` first.
-- **Capture is verified only on Claude Code.** A teammate on Codex,
-  Antigravity CLI, Cursor, VS Code or OpenCode gets the tools: they can search and
+- **Capture is verified live on Claude Code, and on Codex CLI from 0.167.0
+  with its hooks trusted.** A teammate on Antigravity CLI, Cursor, VS Code
+  or OpenCode, or on an older Codex, gets the tools: they can search and
   write notes, but nothing of their session is captured for them (§6).
 - **The main checkout is a lane like any worktree.** In the main checkout
   or a linked worktree, `treecontext_status`, the fresh-start packet and
@@ -498,10 +525,8 @@ adds `_insert` and nothing that removes. Details in
   headless worker started by `treecontext run` searches the whole store.
   The recovery snapshot is claimed only in the lane it was written for. A
   client running the Claude Code hooks registers its sessions and claims
-  in its own lane, Codex CLI included once
-  `--experimental-capture` has copied the block; the adapters' own
-  scripts (Cursor, Codex, opencode), unverified scaffolding,
-  register no session and claim none.
+  in its own lane, and so does a Codex CLI main running the hooks install
+  writes for Codex.
 
 ### Running work as legs
 
@@ -762,7 +787,9 @@ line above with `--message-arg`.
 
 Every agent that speaks MCP gets the eight tools, and through them the
 whole journal: search, notes, export and import. **Automatic capture is
-promised only where it has been verified live — Claude Code alone today.**
+promised only where it has been verified live: Claude Code; Codex CLI
+from 0.167.0 with its hooks trusted (§6, "Codex CLI capture").** Below
+0.167.0 Codex CLI gets the tools only.
 
 ### Compatibility matrix
 
@@ -774,19 +801,13 @@ a test result.
 | Client | Hook events it offers | Documentation checked | Mode | Status |
 | --- | --- | --- | --- | --- |
 | Claude Code | SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, PostToolUseFailure, PostToolBatch, PermissionRequest, Stop, PreCompact, SubagentStart, SubagentStop, SessionEnd, and more | hooks docs 2026-09-23; live probe 2026-09-25 on release 2.1.282; PostToolUseFailure and PostToolBatch rest on sessions recorded on release 2.1.319, 2026-11-09 (tests/fixtures/claude-code-hooks) | reads the Claude settings file as-is (it owns `~/.claude/settings.json`, where install writes the hooks: SessionStart, UserPromptSubmit, PostToolUse, PostToolUseFailure, PostToolBatch, Stop, PreCompact, SubagentStart, SubagentStop; reinstall to add the two subagent hooks and the two failed and refused call hooks) | verified live |
-| Codex CLI | SessionStart, SessionEnd, UserPromptSubmit, PreToolUse, PostToolUse, PermissionRequest, PreCompact, PostCompact, SubagentStart, SubagentStop, Stop, Interrupt | learn.chatgpt.com/docs/hooks (no date shown), checked 2026-10-05 | copies the hooks into its own configuration (`~/.codex/hooks.json` or `[hooks]` in `~/.codex/config.toml`, repo `.codex/hooks.json`; same JSON contract as Claude Code) | documented only |
+| Codex CLI | SessionStart, UserPromptSubmit, PreToolUse, PermissionRequest, PostToolUse, PreCompact, PostCompact, SubagentStart, SubagentStop, Stop, Interrupt, PreModelRequest, PostModelRequest, SessionEnd (tests/fixtures/codex-hooks/events.json) | learn.chatgpt.com/docs/hooks (no date shown), checked 2026-11-10; sessions recorded on Codex CLI 0.167.0, 2026-11-09 (tests/fixtures/codex-hooks) | keeps its own hook configuration, where install writes Codex's own block from 0.167.0 (~/.codex/hooks.json beside the developer's hooks; Codex runs a hook only once it is trusted with /hooks) | verified live (Codex CLI 0.167.0, recorded 2026-11-09; from 0.167.0, its own hooks written by install and trusted by the developer with `/hooks`) |
 | VS Code (Copilot agent mode) | SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, PreCompact, SubagentStart, SubagentStop, Stop | code.visualstudio.com/docs/copilot/customization/hooks and /docs/agents/reference/hooks-reference (dated 2026-09-30) | reads the Claude settings file when its Claude-hooks setting is on (`chat.useClaudeHooks`, off by default; read as-is, matcher values ignored; also reads `.github/hooks/*.json`) | documented only |
 | Cursor | sessionStart, sessionEnd, beforeSubmitPrompt, preToolUse, postToolUse, stop, preCompact, subagentStart, subagentStop, and more | cursor.com/docs/agent/hooks and /docs/reference/third-party-hooks (no date shown), checked 2026-10-05 | reads the Claude settings file by default (as-is, through its Include Third-Party configs setting) | documented only |
 | OpenCode | none: JS/TS plugins only, no shell hooks | opencode.ai/docs/plugins (updated 2026-10-03) | offers no shell hooks, so the tools are its whole surface (the MCP tools; JS/TS plugins are not hooks) | documented only |
 | Antigravity CLI | SessionStart, PreToolUse, PostToolUse, PreInvocation, PostInvocation, Stop | antigravity.google/docs/hooks (no date shown), checked 2026-11-08 | keeps its own hook configuration, which install leaves alone, so the tools are its whole surface (`~/.gemini/config/hooks.json`, workspace `.agents/hooks.json`; no adapter, nothing is captured) | documented only |
 
-Codex CLI's copy is the Claude Code block, `PostToolUseFailure` and
-`PostToolBatch` included, its commands naming no client: Codex's payloads
-are shaped like Claude Code's, so the copy never claims that Codex stated
-how a call ended, and a Codex call is classed by its output's text. Codex CLI 0.167.0 does not have those two
-events and skips them without a warning (checked 2026-11-09 through its
-app server's `hooks/list`), so a failed call, or one Codex refused before
-running it, is not captured there. VS Code and Cursor read the Claude
+VS Code and Cursor read the Claude
 settings file, the two events included; how either treats
 `PostToolUseFailure` and `PostToolBatch` (whether it fires them, and with
 what payload) has not been checked, so their capture of a failed or refused
@@ -807,23 +828,112 @@ supported targets.
 verified.** MCP tools are registered anywhere the agent speaks MCP —
 those work regardless — but a hook entry sitting in your settings reads
 as a promise that capture is running, and we won't make that promise on
-an adapter nobody has run. For the client that copies hooks into its own
-configuration, Codex CLI, the copy is an opt-in by name, and
-`treecontext doctor` names the command on that client's row:
-
-```bash
-treecontext install --agent codex --experimental-capture
-```
-
-The copy is the Claude Code block itself, verbatim, running the same hook
-scripts.
+a client or a version nobody has run. Codex CLI's hooks are written from
+the version verified live, 0.167.0, and never below it.
 `treecontext doctor` gives every documented client one row with three
 halves: its mode (from the matrix above), the state it found, and the
-remedy. A copy reads present and consistent when it matches the block
-this build would write, or present and inconsistent with the events it
-differs on and the same command to rewrite it; VS Code's row reads
-`chat.useClaudeHooks` from VS Code's own `settings.json`; Cursor's and
-OpenCode's remedy is nothing to do. No row calls capture verified.
+remedy. Codex CLI's row reads Codex's own account of which of
+treecontext's hooks it trusts; VS Code's row reads `chat.useClaudeHooks`
+from VS Code's own `settings.json`; Cursor's and OpenCode's remedy is
+nothing to do.
+
+### Codex CLI capture
+
+The minimum Codex CLI for capture is **0.167.0**, the oldest version a live
+run verified. Below it, or where `codex --version` cannot be read, Codex
+gets the tools only, and install takes back any hooks it wrote for Codex.
+After upgrading Codex, run install again to write its hooks:
+
+```bash
+treecontext install --agent codex
+```
+
+- **The one step install leaves.** Install writes Codex's own hooks into
+  `~/.codex/hooks.json`, after yours, and never into a group of yours.
+  Codex runs a hook only once you trust it: open `/hooks` in Codex and
+  trust each of treecontext's. Codex keys its trust by a hook's place and
+  text, so install leaves a file it has nothing to change byte for byte,
+  and names every hook it writes or moves, since Codex will ask to trust
+  that hook again. Install never marks a hook trusted. `treecontext
+  doctor` reads Codex's own account of each hook's trust (its app
+  server's `hooks/list`) and says whether Codex runs treecontext's hooks,
+  runs only some of them, or reports one modified since it was trusted.
+  Doctor asks Codex from the project it runs in, so where that project's
+  own `.codex/config.toml` turns hooks off, the row says so and names the
+  file; and it warns where Codex's entry and the hooks in the file
+  disagree (hooks there with an entry that does not drain them, or the
+  reverse), with `treecontext install --agent codex` as the remedy.
+- **What a Codex entry holds.** Each prompt, each tool call with Codex's
+  id for it, and each turn's last reply, read from Codex's own `Stop`
+  payload. A shell command's entry holds the one text Codex returned: no
+  exit code, and no split between its output and its error stream, so its
+  class (success, soft fail, error) is read from that text and the entry
+  says so. A call of any other tool that fails (an MCP tool's error
+  reply, a patch that did not apply) fires no result event on Codex; it is
+  journaled at its turn's end as a call Codex reported no result for, with
+  its input and no class, never a guess at why. A turn you interrupt
+  (Esc) is kept as interrupted, with a capture-gap entry naming its reply
+  as not captured: Codex puts the partial reply in no payload.
+- **A Codex main** registers itself at its start, so the notes it writes
+  through the tools are stamped with its lane, and is re-oriented at a
+  fresh start and on a resume with the packet a Claude Code session gets.
+  It gets no bookmark ask: treecontext's hooks print Codex nothing at a
+  turn's end, since Codex honours a Stop hook's block and `codex exec`
+  prints only the last reply. An Antigravity CLI agent receives no
+  re-orientation packet.
+- **A Codex subagent** is registered, retired at its stop and kept as a
+  summary of the main that started it; it is no leg, since the message
+  that spawned it is an opaque blob no hook can read. Its tool calls carry
+  it as their writer where Codex's event names it.
+- **A manual compaction** (`/compact`) leaves a recovery note: Codex's
+  `PreCompact` takes the snapshot, and the next fresh start in the same
+  lane claims it, as on Claude Code. An automatic compaction is
+  unrecorded.
+- **A `codex exec` worker** started by `treecontext run` is never a self:
+  its hooks link its Codex session to the worker's lane, print it nothing,
+  and its captured rows land in that lane with the worker's role as
+  writer.
+
+### Codex CLI as a main: best effort
+
+The supported way to use Codex with treecontext is as a **worker**: Claude
+Code as the main, Codex started headless through `treecontext run` (§5),
+its first moment, lane and checkpoint handled by the ticket door. Codex
+as the main session is best effort: what is written above works as
+written, and the limits below are stated rather than worked around. They
+are deepened only if users ask.
+
+- **No bookmark ask and no send-back** from Codex's stop hook: treecontext's
+  hooks print Codex nothing at a turn's end. A worker's send-back stays the
+  ticket door's.
+- **Subagents are helpers, never legs**: the message Codex's spawn tool
+  carries is an opaque blob no hook can read.
+- **`/clear` and a resume's packet are not promised.** What a Codex session
+  is handed after Codex's own clear is unrecorded; a resume was recorded
+  once and follows Claude Code's.
+- **An automatic compaction is unrecorded**: only a manual `/compact` leaves
+  a recovery note.
+- **An interrupt while a call runs** keeps the call as one Codex reported no
+  result for: Codex sends nothing that tells a call cut short from one that
+  failed, and the partial reply is in no payload.
+- **Hooks files install refuses.** Install changes `~/.codex/hooks.json` only
+  by inserting its own groups and taking them out again, leaving every
+  hook of yours byte for byte (a large number, an escape, your spacing and
+  key order). Where its groups cannot be placed or taken out that way (an
+  earlier build's hook inside a group of yours that also carries other
+  settings, a key written twice in a part install must change), it changes
+  nothing and says so, and Codex stays tools-only until you tidy the file.
+  An empty `{}` or `[]` of yours may not come back byte for byte after an
+  install and an uninstall: an empty `hooks` or event is dropped, and an
+  emptied object keeps its inner whitespace.
+- **Look-alike commands.** Where install's record names the hooks it wrote,
+  uninstall takes back exactly those. A hooks file an earlier build wrote,
+  with no record, is read by the shape of treecontext's commands, and a hook
+  of yours whose command is the very same text is taken back with them;
+  uninstall says when it took hooks back that way.
+- **`CODEX_HOME`** is followed for `hooks.json` and `config.toml` (recorded
+  2026-11-10); that Codex reads its global `AGENTS.md` from there too is
+  from Codex's documentation, not verified by a live session.
 
 ### Orchestration matrix
 
@@ -849,20 +959,15 @@ proved the door and said nothing about permissions. The cells below are the
 | Client | Headless worker through the ticket door | The worker's pen (how the tools reach it) | The worker's own tool calls captured | A main that registers itself and spawns workers | Subagent legs through the hooks door | The pointer on the Agent tool's return |
 | --- | --- | --- | --- | --- | --- | --- |
 | Claude Code | verified live (`claude -p --model sonnet` through `treecontext run` from inside a Claude Code session after the environment scrub, no `--allowedTools`, its checkpoint in its own lane, 2026-11-08) | install writes its MCP entry (verified live, 2026-11-01) | verified through a stand-in (its real hooks, 2026-11-01) | verified through a stand-in (its real SessionStart hook, 2026-11-01) | verified live (its real SubagentStart and SubagentStop hooks; on 2.1.271 and later in auto mode the report arrives through the `SubagentHandback` tool and is read from the subagent's transcript, 2.1.316, 2026-11-02) | verified through a stand-in (its real PostToolUse hook, 2026-11-01) |
-| Codex CLI | verified live (`codex exec` 0.167.0 through `treecontext run`, default approvals with install's per-tool approvals, read-only sandbox, 2026-11-08) | install writes its MCP entry with `env_vars` and the four approvals (a hand-written entry needs those too; verified live: a worker's insert in its own lane, 2026-11-07, and bypass-free, 2026-11-08) | documented only (the experimental hooks copy, 2026-10-05) | documented only (its SessionStart hook in the copy, 2026-10-05) | documented only (SubagentStart and SubagentStop in its hook set, 2026-10-05) | documented only (PostToolUse in its hook set, 2026-10-05) |
+| Codex CLI | verified live (`codex exec` 0.167.0 through `treecontext run`, default approvals with install's per-tool approvals, read-only sandbox, 2026-11-08) | install writes its MCP entry with `env_vars` and the four approvals (a hand-written entry needs those too; verified live: a worker's insert in its own lane, 2026-11-07, and bypass-free, 2026-11-08) | verified through a stand-in (a ticketed `codex exec` 0.167.0's events recorded 2026-11-09, replayed through the hooks install writes for Codex; the build's own live run is the release gate's) | verified live (Codex CLI 0.167.0, its interactive interface at default approvals, with the hooks install writes, trusted with `/hooks`: its SessionStart recorded 2026-11-09 registers the main, replayed through those hooks) | not possible: no spawn message a hook can read (Codex's spawn tool carries an opaque blob), so a subagent's brief, key and first moment cannot be told (a Codex subagent is a registered helper with a summary, 2026-11-09) | not possible: no spawn message a hook can read, so no leg is named and the spawn's return carries no pointer (2026-11-09) |
 | Antigravity CLI | verified live (`agy -p` 1.5.1 in the default request-review preset, with install's persisted allow rules, no `--mode` or skip flag, 2026-11-08) | install writes its MCP entry and four allow rules (verified live: an insert in its own lane; a delete auto-denied as the negative control; with approvals off the insert is refused, 2026-11-08) | documented only: no adapter yet, and its PostToolUse payload carries no tool output (hooks docs read 2026-11-01) | documented only: no adapter yet (hooks docs read 2026-11-01) | not possible: no SubagentStart or SubagentStop event (hooks docs read 2026-11-01) | not possible: no event fires on a subagent's return (hooks docs read 2026-11-01) |
 
 ### Copilot capture (preview)
 
-The Copilot adapter has been rewritten against Copilot's documented
-payload shapes and now shares the reference platform's capture code
-rather than a copy of it, so the two cannot drift. What it has **not**
-had is a run against a live Copilot session — and someone doing exactly
-that is what would finish the job:
-
-VS Code reads the Claude settings file itself when `chat.useClaudeHooks`
-is on, so treecontext writes no Copilot hook file any more, flag or not
-(D226): turn the setting on and the hooks `treecontext install` wrote for
+Copilot has no adapter of its own any more (the unwired adapters left the
+build with the experimental flag, D406). VS Code reads the Claude settings
+file itself when `chat.useClaudeHooks` is on, so treecontext writes no
+Copilot hook file (D226): turn the setting on and the hooks `treecontext install` wrote for
 Claude Code are the ones it runs. Then use Copilot normally and check
 whether your node count grows (§4). **Please report either outcome** —
 working or not — on the issue tracker. That report is the verification

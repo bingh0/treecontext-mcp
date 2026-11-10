@@ -111,7 +111,7 @@ export interface InstallWorld extends World {
  * would leave paths in this harness pointing at the developer's real profile —
  * a redirected test that quietly installs for real is worse than no test.
  */
-export function tcCli(w: InstallWorld, args: string[], opts: { cwd?: string } = {}): CliRun {
+export function tcCli(w: InstallWorld, args: string[], opts: { cwd?: string; node?: string } = {}): CliRun {
   // A scenario that set a Claude Code version has put a fake `claude` in a
   // directory of its own; it goes first on the child's PATH and nowhere else.
   // A stand-in `codex` goes first beside it, and a scenario on a machine
@@ -124,7 +124,7 @@ export function tcCli(w: InstallWorld, args: string[], opts: { cwd?: string } = 
   const withAgy = w.iAgyBin ? `${w.iAgyBin}${delimiter}${withGemini}` : withGemini
   const path = pathWithFakeClaude(w, w.iCodexBin ? `${w.iCodexBin}${delimiter}${withAgy}` : withAgy)
   const env = w.iClaudeBin || w.iCodexBin || w.iPathWithoutCodex || w.iAgyBin || w.iGeminiBin ? { PATH: path } : undefined
-  return spawnCli(args, { home: w.ihome!, cwd: opts.cwd ?? TS_ROOT, ...(env ? { env } : {}) })
+  return spawnCli(args, { home: w.ihome!, cwd: opts.cwd ?? TS_ROOT, ...(env ? { env } : {}), ...(opts.node ? { node: opts.node } : {}) })
 }
 
 /**

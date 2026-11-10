@@ -8,6 +8,8 @@
  *  - Close cleanly
  */
 
+import { PRE_TOOL_USE_MARK, NO_TURN_END_MARK, NO_TURN_END_LINE, ownCallRowSql } from './capture-marks.js'
+import { ledgeredCallIds } from '../hooks/gap-ledger.js'
 import type { Database, Statement } from './database.js'
 import { encodeContent, decodeContent } from './content-codec.js'
 import { indexTextFor, applyLiftedBoundaries, EXPLICIT_INDEX_LEN_KEY, EXPLICIT_PREVIEW_LEN_KEY } from './index-text.js'
@@ -1003,10 +1005,44 @@ export class Persistence {
    *  never count against its claimant's live-claim footprint. */
   purgeProcessedStaging(maxAge = 86400): number {
     const cutoff = Date.now() / 1000 - maxAge
+    this.resolveAbandonedAccounts(cutoff)
     const result = this.db
       .prepare('DELETE FROM staging WHERE processed = 1 AND timestamp < ?')
       .run(cutoff)
     return result.changes
+  }
+
+  /**
+   * D408, D3: a Codex PreToolUse account about to be purged with no other
+   * staged row for its call, no entry naming it and no line of the gap
+   * ledger naming it (a result dropped there whose capture-gap row the
+   * drain has not written yet) is staged once more as a call whose result
+   * and turn end never reached the journal (NO_TURN_END_MARK), so no
+   * invocation leaves with no trace. Its moment is the call's (the
+   * account's own timestamp): it reads as the call, never as the session's
+   * latest activity, and the entry's ingested_at says when it was written.
+   * Asked of the table: a store without the call id has no accounts.
+   */
+  resolveAbandonedAccounts(cutoff: number): number {
+    const cols = (this.db.prepare('PRAGMA table_info(staging)').all() as Array<{ name: string }>).map((c) => c.name)
+    if (!cols.includes('captured_from') || !cols.includes('agent_id')) return 0
+    const now = Date.now() / 1000
+    // The ledger sits beside the store's own file (hooks/gap-ledger.ts).
+    const file = (this.db.prepare('PRAGMA database_list').all() as Array<{ name: string; file: string }>).find((d) => d.name === 'main')?.file
+    const ledgered = file ? [...ledgeredCallIds(file)] : []
+    const r = this.db.prepare(
+      `INSERT INTO staging (session_id, role, content, tool_name, timestamp, priority, processed, created_at,
+         index_len, preview_len, namespace, agent_id, agent_type, kind, tool_use_id, outcome, captured_from)
+       SELECT p.session_id, 'assistant', p.content || char(10) || ?, p.tool_name, MIN(p.timestamp), p.priority, 0, ?,
+              p.index_len, p.preview_len, p.namespace, p.agent_id, p.agent_type, NULL, p.tool_use_id, NULL, ?
+         FROM staging p
+        WHERE p.processed = 1 AND p.timestamp < ? AND p.captured_from = ?
+          AND NOT EXISTS (SELECT 1 FROM staging o WHERE o.session_id = p.session_id AND o.tool_use_id = p.tool_use_id AND o.id <> p.id)
+          AND NOT EXISTS (SELECT 1 FROM nodes n WHERE ${ownCallRowSql('n', 'p.tool_use_id', 'p.session_id')})
+          AND (p.session_id || char(10) || p.tool_use_id) NOT IN (SELECT value FROM json_each(?))
+        GROUP BY p.tool_use_id`,
+    ).run(NO_TURN_END_LINE, now, NO_TURN_END_MARK, cutoff, PRE_TOOL_USE_MARK, JSON.stringify(ledgered))
+    return Number(r.changes)
   }
 
   countUnprocessedStaging(): number {

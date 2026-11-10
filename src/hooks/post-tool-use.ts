@@ -11,7 +11,8 @@ import {
   activeIndexCap,
 } from '../persistence/capture-constants.js'
 import { dbg } from '../debug.js'
-import { hookClientFrom, clientStatesOutcome } from './hook-client.js'
+import { hookClientFrom, clientStatesOutcome, isCodexHook } from './hook-client.js'
+import { stagePreToolUse } from './codex-calls.js'
 import { ECHO_LABEL_PREFIX, echoToolOf } from '../persistence/echo-index.js'
 
 /** Separator between the indexed preview and the full tail (C4).
@@ -388,6 +389,8 @@ function callIdOf(v: unknown): string | undefined {
 export const POST_TOOL_USE = 'PostToolUse'
 export const POST_TOOL_USE_FAILURE = 'PostToolUseFailure'
 export const POST_TOOL_BATCH = 'PostToolBatch'
+/** Codex's event before a call runs (D408), wired for Codex alone. */
+export const PRE_TOOL_USE = 'PreToolUse'
 
 /** D404: the client whose own event states that a call succeeded: the
  *  client the hook's command names, when that client's events state how a
@@ -441,6 +444,16 @@ export function main(preParsed?: Record<string, unknown>) {
   try {
     const input = preParsed ?? parseHookInput()
     const event = input.hook_event_name
+
+    // D408: Codex's PreToolUse is the account of a call that may end with
+    // no result; it is held in staging until the call's PostToolUse or its
+    // turn's end. Only for a hook whose command names Codex: Claude Code's
+    // block does not wire the event, and a payload never says its client.
+    if (event === PRE_TOOL_USE) {
+      if (isCodexHook()) stagePreToolUse(resolveDbPath(input.cwd), input, Date.now() / 1000)
+      process.exit(0)
+      return
+    }
 
     // D401: the batch's account of every call it resolved, after each
     // call's own hooks have finished; it adds only the calls no event of

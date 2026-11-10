@@ -30,7 +30,18 @@ describe('the MCP launcher outlives an uninstall of Claude Code while another ag
     ok(h, ['install', '--yes', '--agent', 'claude'])
     ok(h, ['install', '--yes', '--agent', 'codex'])
     expect(existsSync(launcher(h))).toBe(true)
-    const out = ok(h, ['uninstall', '--yes', '--agent', 'claude'])
+    // Where the Codex on PATH is at its capture floor, install wrote Codex's
+    // own hooks, which run Claude Code's hook scripts: uninstalling Claude
+    // Code alone then keeps those scripts too, says the uninstall is
+    // incomplete and exits non-zero. With no such Codex it exits 0. Either
+    // way the launcher is kept and said.
+    const partial = spawnCli(['uninstall', '--yes', '--agent', 'claude'], { home: h })
+    const out = partial.stdout
+    if (partial.status !== 0) {
+      expect(partial.status, out + partial.stderr).toBe(1)
+      expect(out).toMatch(/kept the Claude Code hook scripts .*Codex CLI still runs them through its own hooks/)
+      expect(out).toContain('Uninstall incomplete')
+    }
     expect(existsSync(launcher(h)), 'Codex still starts treecontext through the launcher').toBe(true)
     expect(out).toMatch(/kept the MCP launcher .*Codex CLI still starts treecontext through it/)
     ok(h, ['uninstall', '--yes'])

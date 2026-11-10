@@ -91,11 +91,13 @@ describe('doctor: hooks on unmanaged platforms', () => {
     expect(row!.fix).not.toContain('install --force')
 
     // It should say why install will not fix it, name the foreign build, and
-    // still offer the opt-in route for someone who wants capture there.
+    // name the remedy that is true now that the flag is gone (D406): taking
+    // the hooks out.
     expect(row!.detail).toContain(copilotHooksFile)
     expect(row!.detail).toContain('does not manage hooks')
     expect(row!.detail).toContain('different treecontext build')
-    expect(row!.detail).toContain('--experimental-capture')
+    expect(row!.detail).not.toContain('--experimental-capture')
+    expect(row!.detail).toContain('treecontext uninstall --agent vscode --hooks-only')
   }, 60_000)
 
   it("grades an earlier build's copy beside the Claude route as a second route, with the uninstall as its remedy (D226)", async () => {

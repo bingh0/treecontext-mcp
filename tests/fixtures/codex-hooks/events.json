@@ -1,0 +1,116 @@
+{
+  "client": "Codex CLI",
+  "version": "0.167.0",
+  "read_at": "2026-11-10",
+  "sources": [
+    "Codex's hooks documentation, developers.openai.com/codex/hooks (redirecting to learn.chatgpt.com/docs/hooks), read 2026-11-10; the page states no version or date, so its list is taken as Codex CLI 0.167.0's only where the binary agrees",
+    "the event names Codex CLI 0.167.0's own binary knows, read on the far-side pass of 2026-11-09 (a dump hook registered on every name; Codex ignores a name it does not know without a word); the documentation names the same fourteen",
+    "live runs of Codex CLI 0.167.0 recorded in 0.167.0/ (2026-11-09)"
+  ],
+  "provenance": "Event names come from Codex's hooks documentation, its binary and the recordings; `when`, `disposition` and `lost` are treecontext's own words. Nothing mechanical sees an event Codex has that neither this list nor a recording names, so the hooks documentation is re-read at every Codex upgrade.",
+  "events": [
+    {
+      "event": "SessionStart",
+      "when": "a session starts, resumes or compacts (the documentation also names clear and fork)",
+      "disposition": "wired",
+      "observed": true
+    },
+    {
+      "event": "UserPromptSubmit",
+      "when": "the developer submits a prompt",
+      "disposition": "wired",
+      "observed": true
+    },
+    {
+      "event": "PreToolUse",
+      "when": "before a tool call runs",
+      "disposition": "wired",
+      "observed": true
+    },
+    {
+      "event": "PostToolUse",
+      "when": "a tool call produced a result, a shell command's non-zero exit and a write the sandbox refused included",
+      "disposition": "wired",
+      "observed": true
+    },
+    {
+      "event": "Stop",
+      "when": "a turn ends",
+      "disposition": "wired",
+      "observed": true
+    },
+    {
+      "event": "Interrupt",
+      "when": "the developer interrupts a turn of the main thread; no Stop fires for that turn",
+      "disposition": "wired",
+      "observed": true
+    },
+    {
+      "event": "PreCompact",
+      "when": "before Codex compacts the context",
+      "disposition": "wired",
+      "observed": true
+    },
+    {
+      "event": "SubagentStart",
+      "when": "a subagent starts",
+      "disposition": "wired",
+      "observed": true
+    },
+    {
+      "event": "SubagentStop",
+      "when": "a subagent stops",
+      "disposition": "wired",
+      "observed": true
+    },
+    {
+      "event": "PermissionRequest",
+      "when": "Codex is about to ask the developer to approve a call",
+      "disposition": "not-captured",
+      "lost": "the approval prompt itself; whether a call the developer denies fires a PostToolUse is unrecorded, so such a call may leave only its PreToolUse account (a call Codex reported no result for)",
+      "observed": false
+    },
+    {
+      "event": "PreModelRequest",
+      "when": "before each model request",
+      "disposition": "not-captured",
+      "lost": "the moment of each model request; no conversation content",
+      "observed": false
+    },
+    {
+      "event": "PostModelRequest",
+      "when": "after each model request",
+      "disposition": "not-captured",
+      "lost": "each model request's status, error and token counts; no conversation content",
+      "observed": false
+    },
+    {
+      "event": "PostCompact",
+      "when": "a compaction ends",
+      "disposition": "not-captured",
+      "lost": "the end of a compaction; Codex's payload carries no summary of the compacted conversation, so nothing the journal lacks. The SessionStart that follows it (source compact) is what the journal acts on",
+      "observed": true
+    },
+    {
+      "event": "SessionEnd",
+      "when": "a session ends",
+      "disposition": "not-captured",
+      "lost": "a session's end moment; declined until 0.1.0-beta.5, as for Claude Code (features/OUT-OF-SCOPE.md, D395)",
+      "observed": true
+    },
+    {
+      "event": "PostToolUseFailure",
+      "when": "Claude Code's event for a call that failed; Codex CLI 0.167.0 has no such event",
+      "disposition": "not-in-client",
+      "lost": "Codex states no outcome for a call: a shell command that exits non-zero arrives by PostToolUse with no exit code and is classed by its text, and a call of any other tool that fails (an MCP tool's error reply, a patch that did not apply) fires no PostToolUse, so it is journaled at its turn's end from its PreToolUse as a call Codex reported no result for, with no output and no class",
+      "observed": false
+    },
+    {
+      "event": "PostToolBatch",
+      "when": "Claude Code's account of every call of one assistant message; Codex CLI 0.167.0 has no such event",
+      "disposition": "not-in-client",
+      "lost": "an account of the calls the client resolved without running them; on Codex such a call is known only by its PreToolUse, journaled at its turn's end as a call Codex reported no result for, and a call that fired no PreToolUse at all leaves no entry",
+      "observed": false
+    }
+  ]
+}

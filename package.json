@@ -54,17 +54,11 @@
     "smol-toml": "^1.9.1",
     "zod": "^4.6.7"
   },
-  "peerDependenciesMeta": {
-    "@opencode-ai/plugin": {
-      "optional": true
-    }
-  },
   "devDependencies": {
     "@bcoe/v8-coverage": "1.0.2",
     "@bingh/docketry": "^0.2.0",
     "@jridgewell/trace-mapping": "0.3.31",
     "@modelcontextprotocol/client": "^2.4.0",
-    "@opencode-ai/plugin": "^1.19.5",
     "@types/istanbul-lib-coverage": "2.0.6",
     "@types/istanbul-lib-report": "3.0.3",
     "@types/istanbul-reports": "3.0.4",

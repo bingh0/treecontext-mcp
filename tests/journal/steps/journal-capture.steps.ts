@@ -18,6 +18,8 @@ import { RECOVERY_SNAPSHOT_SOURCE, RECOVERY_QUERIES_KEY, RECOVERY_QUOTE_CAP, REC
 import { ftsNodeIds } from '../../helpers/echo-capture.js'
 import { recordedSession, replayRecordedSession, type ReplayedEvent } from '../standins.js'
 import { classifyExit, EXIT_BY_KEY } from '../../../src/server/event-processing.js'
+import { composeToolEntry } from '../../../src/hooks/post-tool-use.js'
+import { NO_RESULT_LINE, NO_TURN_END_LINE } from '../../../src/persistence/capture-marks.js'
 import { type CaptureWorld, openCaptureSandbox, adoptCaptureStore, openCaptureWorld, runHook, spawnHook, spawnHooksAtOnce, spawnServeChild, waitForServeLog, drainStaging, type RawNode, rawJournal, bashPayload, writeTranscript, seedCheckpointAge, expectBookmarkAsked } from '../capture-harness.js'
 
 /** What the transcript still ends at when Stop fires: the turn before. */
@@ -113,6 +115,10 @@ type ReplayWorld = CaptureWorld & {
   replays?: ReplayedEvent[][]
   calls?: Array<NamedCall & { payload: Record<string, unknown> }>
   batchIds?: string[]
+  /** Codex's id for the interrupted turn (D408). */
+  codexTurn?: string
+  /** The moment staging held for a call's PreToolUse account (D408). */
+  accountAt?: number
 }
 
 /** A named call as the recorded files hold it: the payload of the event
@@ -1143,10 +1149,29 @@ export const captureDefiner = (reg: Registry<CaptureWorld>): void => {
   reg.define(/^the call's entry is classed an error$/, (w: ReplayWorld) => {
     expect(onlyEntryOf(w, w.calls![0]!.id).metadata['exit_type']).toBe('error')
   })
+  // The class each recorded text earns where the text decides (D404),
+  // written down here from the recordings, never asked of the classifier
+  // (a mirror would pass whatever it said): Claude Code's succeeded call
+  // printing "error: 0 found, 0 failed" (2.1.321) holds "error:", the
+  // classifier's first word list, so an older store reads it error, the
+  // misreading the stated-success mark ends on a current one; Codex's
+  // `ls /no-such-path-fixture` (0.167.0) prints "No such file or
+  // directory", a soft fail.
+  const TEXT_DECIDES: Record<string, string> = {
+    'toolu_01GDmjXWabPpieoJbbUASiPG': 'error',
+    'exec-1fecf91f-8828-47db-9e35-bcab3d0bb3d0': 'soft_fail',
+    // The hand payload of a client that states nothing: its output reads
+    // "error: no such table", and the scenario's own Then says an error.
+    'call_silent_1': 'error',
+  }
+  const textClassOf = (id: string): string => {
+    expect(TEXT_DECIDES[id], `no class written down for ${id}`).toBeDefined()
+    return TEXT_DECIDES[id]!
+  }
   reg.define(/^it says its class was read from its output$/, (w: ReplayWorld) => {
     const row = onlyEntryOf(w, w.calls![0]!.id)
     expect(row.metadata[EXIT_BY_KEY]).toBe('text')
-    expect(row.metadata['exit_type']).toBe(classifyExit(row.content))
+    expect(row.metadata['exit_type']).toBe(textClassOf(w.calls![0]!.id))
   })
 
   // A store one schema below this build's (036): the stated-success column
@@ -1185,7 +1210,292 @@ export const captureDefiner = (reg: Registry<CaptureWorld>): void => {
   })
   reg.define(/^the call's entry takes the class its text decides$/, (w: ReplayWorld) => {
     const row = onlyEntryOf(w, w.calls![0]!.id)
-    expect(row.metadata['exit_type']).toBe(classifyExit(row.content))
+    expect(row.metadata['exit_type']).toBe(textClassOf(w.calls![0]!.id))
   })
 
+
+  // ── Codex CLI 0.167.0 captured through its own hooks (D408, D404, D406) ──
+  // Every event is Codex's own, recorded on 2026-11-09 (tests/fixtures/
+  // codex-hooks), replayed through the commands of the block install writes
+  // for Codex (each naming Codex, `--client codex`), and read back from the
+  // store file. The calls are named by Codex's id for each, checked against
+  // the recording first, so a Given cannot drift from what Codex sent.
+  const CODEX = '0.167.0'
+  /** The recorded calls the Codex scenarios name, by Codex's id. */
+  const CODEX_CALLS = {
+    head: 'exec-108faeb3-f0b8-4aed-8e5b-b185b88798a7',
+    ls: 'exec-1fecf91f-8828-47db-9e35-bcab3d0bb3d0',
+    touch: 'exec-ed7d47c4-e6b1-4911-88a2-6cc988ad89ae',
+    insert: 'exec-f8a07c3f-8904-4da2-9f71-2c55e020b724',
+    query: 'exec-43bc9c5a-dc6f-4ffa-b6b0-b76ca399dd69',
+    exportMissing: 'exec-457ba960-c00f-46c9-a267-39841080fe6e',
+    patchMismatch: 'exec-de7bcb71-2211-458e-b99a-0f5a406787b5',
+    patchOk: 'exec-db6f870f-2b54-4f7c-acb4-a4fc1067cf11',
+  } as const
+  /** The events Codex fired for one call, by name, from the recording. */
+  const codexEventsOf = (w: ReplayWorld, id: string): string[] =>
+    w.recorded!.flatMap((r) => r.events).filter((e) => e['tool_use_id'] === id).map((e) => String(e['hook_event_name']))
+  const codexCall = (w: ReplayWorld, id: string, what: string): NamedCall & { payload: Record<string, unknown> } => {
+    const events = w.recorded!.flatMap((r) => r.events).filter((e) => e['tool_use_id'] === id)
+    expect(events.length, `the recording holds no event for ${what} (${id})`).toBeGreaterThan(0)
+    return { id, tool: String(events[0]!['tool_name']), what, payload: events[events.length - 1]! }
+  }
+  /** Replay every recorded set of the world through Codex's block, then drain. */
+  const replayCodex = async (w: ReplayWorld): Promise<void> => {
+    w.replays = w.recorded!.map((r) => replayRecordedSession(w, r.events, r.through !== undefined ? { lines: (l) => l <= r.through! } : {}))
+    for (const ev of w.replays.flat()) {
+      // Every event Codex's list marks wired reached its hook, and printed
+      // nothing but a main's start context.
+      if (['UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop', 'Interrupt'].includes(ev.event)) {
+        expect(ev.hooks.length, `${ev.event} at line ${ev.line} reached no hook install wires for Codex`).toBe(1)
+        expect(ev.stdout.join(''), `${ev.event} printed to Codex`).toBe('')
+      }
+    }
+    await drainStaging(w)
+  }
+
+  reg.define(/^the events Codex CLI sent, as recorded, for sessions that submit a prompt, run a shell command, call treecontext's insert tool and end their turns$/, async (w: ReplayWorld) => {
+    await openCaptureWorld(w)
+    w.recorded = [{ events: recordedSession(CODEX, 'headless-session.ndjson', 'codex') }]
+    const kinds = w.recorded[0]!.events.map((e) => e['hook_event_name'])
+    expect(kinds).toContain('UserPromptSubmit')
+    expect(kinds).toContain('Stop')
+    w.calls = [codexCall(w, CODEX_CALLS.head, 'a shell command'), codexCall(w, CODEX_CALLS.insert, "treecontext's insert tool")]
+    expect(w.calls.map((c) => c.tool)).toEqual(['Bash', 'mcp__treecontext__treecontext_insert'])
+  })
+  reg.define(/^the hooks install writes for Codex receive those events and ingestion runs$/, async (w: ReplayWorld) => {
+    await replayCodex(w)
+  })
+  reg.define(/^the journal holds the prompt with role "user"$/, (w: ReplayWorld) => {
+    const prompts = w.recorded!.flatMap((r) => r.events).filter((e) => e['hook_event_name'] === 'UserPromptSubmit').map((e) => String(e['prompt']))
+    const users = rawJournal(w).filter((r) => r.metadata['role'] === 'user').map((r) => r.content)
+    expect(users).toEqual(prompts)
+  })
+  reg.define(/^each tool call with its tool name, its input, what Codex returned as its output and Codex's own id for the call$/, (w: ReplayWorld) => {
+    // Every call the recording carries a PostToolUse for, not only the two
+    // the Given names.
+    const posts = w.recorded!.flatMap((r) => r.events).filter((e) => e['hook_event_name'] === 'PostToolUse')
+    expect(posts.length).toBe(5)
+    for (const e of posts) {
+      const row = onlyEntryOf(w, String(e['tool_use_id']))
+      expect(row.metadata['tool_name']).toBe(e['tool_name'])
+      expect(row.content).toContain(`Tool: ${String(e['tool_name'])}`)
+      const input = e['tool_input'] as Record<string, unknown>
+      for (const v of Object.values(input)) if (typeof v === 'string') expect(row.content.slice(0, row.content.indexOf('\nOutput:'))).toContain(v)
+      const said = typeof e['tool_response'] === 'string' ? e['tool_response'] : ((e['tool_response'] as { content: Array<{ text: string }> }).content[0]!.text)
+      expect(row.content.slice(row.content.indexOf('\nOutput:'))).toContain(said.trim().split('\n')[0]!)
+    }
+  })
+  reg.define(/^the turn's last assistant message as Codex sent it at the turn's end$/, (w: ReplayWorld) => {
+    const said = w.recorded!.flatMap((r) => r.events).filter((e) => e['hook_event_name'] === 'Stop').map((e) => String(e['last_assistant_message']))
+    const replies = rawJournal(w).filter((r) => r.metadata['event'] === 'response').map((r) => r.content)
+    expect(replies).toEqual(said)
+  })
+  reg.define(/^each entry's moment is when its event arrived$/, (w: ReplayWorld) => {
+    const events = w.replays!.flat()
+    for (const row of rawJournal(w)) {
+      const at = row.metadata['created_at'] as number
+      const id = row.metadata['tool_use_id']
+      // The event that carried the entry: a call's PostToolUse, a prompt's
+      // submit, a reply's Stop.
+      const ev = id !== undefined
+        ? events.find((e) => e.payload['tool_use_id'] === id && e.event === 'PostToolUse') ?? events.find((e) => e.payload['tool_use_id'] === id && e.event === 'Stop')
+        : row.metadata['role'] === 'user' ? events.find((e) => e.event === 'UserPromptSubmit')
+          : events.find((e) => e.event === 'Stop')
+      if (!ev) {
+        // A call Codex reported no result for is journaled at its turn's
+        // end, at the call's own moment: the moment its PreToolUse arrived.
+        const pre = events.find((e) => e.payload['tool_use_id'] === id && e.event === 'PreToolUse')!
+        expect(at).toBeGreaterThanOrEqual(pre.startedAt)
+        expect(at).toBeLessThanOrEqual(pre.endedAt)
+        continue
+      }
+      expect(at, `${row.content.slice(0, 40)}`).toBeGreaterThanOrEqual(ev.startedAt)
+      expect(at).toBeLessThanOrEqual(ev.endedAt)
+    }
+  })
+
+  reg.define(/^the events Codex CLI sent, as recorded, for a shell command that exits non-zero and a write its sandbox refused$/, async (w: ReplayWorld) => {
+    await openCaptureWorld(w)
+    const all = recordedSession(CODEX, 'headless-session.ndjson', 'codex')
+    w.recorded = [{ events: all.filter((e) => e['tool_use_id'] === CODEX_CALLS.ls || e['tool_use_id'] === CODEX_CALLS.touch) }]
+    w.calls = [codexCall(w, CODEX_CALLS.ls, 'a shell command that exits non-zero'), codexCall(w, CODEX_CALLS.touch, 'a write the sandbox refused')]
+    expect(codexEventsOf(w, CODEX_CALLS.ls)).toEqual(['PreToolUse', 'PostToolUse'])
+    expect(codexEventsOf(w, CODEX_CALLS.touch)).toEqual(['PreToolUse', 'PostToolUse'])
+    expect(String(w.calls[1]!.payload['tool_response'])).toContain('Read-only file system')
+  })
+  reg.define(/^the events Codex CLI sent for a shell command that exits non-zero, as recorded$/, async (w: ReplayWorld) => {
+    await openCaptureWorld(w)
+    const all = recordedSession(CODEX, 'headless-session.ndjson', 'codex')
+    w.recorded = [{ events: all.filter((e) => e['tool_use_id'] === CODEX_CALLS.ls) }]
+    w.calls = [codexCall(w, CODEX_CALLS.ls, 'a shell command that exits non-zero')]
+    // It arrived by Codex's PostToolUse, the event a Claude Code reading
+    // would take for a stated success.
+    expect(codexEventsOf(w, CODEX_CALLS.ls)).toEqual(['PreToolUse', 'PostToolUse'])
+  })
+  reg.define(/^each call is in the journal with its command and the text Codex returned as its output$/, (w: ReplayWorld) => {
+    for (const c of w.calls!) {
+      const row = onlyEntryOf(w, c.id)
+      expect(row.content).toContain(String((c.payload['tool_input'] as Record<string, unknown>)['command']))
+      expect(row.content.slice(row.content.indexOf('\nOutput:'))).toContain(String(c.payload['tool_response']).trim())
+    }
+  })
+  reg.define(/^neither entry carries a failed mark, since Codex states no outcome for a shell command$/, (w: ReplayWorld) => {
+    for (const c of w.calls!) {
+      const row = onlyEntryOf(w, c.id)
+      expect(row.metadata['outcome'], c.what).toBeUndefined()
+      expect(row.metadata['captured_from'], c.what).toBeUndefined()
+    }
+  })
+  // The class each recorded text earns, written down rather than asked of
+  // the classifier (a mirror would pass whatever it said): ls's "No such
+  // file or directory" is a soft fail; the sandbox's "Read-only file system"
+  // is in none of the classifier's word lists, so that text decides
+  // success, a miss of the vocabulary reported in unit 10, not changed here.
+  const TEXT_CLASS: Record<string, string> = { [CODEX_CALLS.ls]: 'soft_fail', [CODEX_CALLS.touch]: 'success' }
+  reg.define(/^each entry takes the exit class its text decides$/, (w: ReplayWorld) => {
+    for (const c of w.calls!) {
+      const row = onlyEntryOf(w, c.id)
+      expect(row.metadata['exit_type'], c.what).toBe(TEXT_CLASS[c.id])
+      expect(row.metadata[EXIT_BY_KEY], c.what).toBe('text')
+    }
+  })
+  reg.define(/^it says its class was read from its output, never that the client stated it$/, (w: ReplayWorld) => {
+    const row = onlyEntryOf(w, w.calls![0]!.id)
+    expect(row.metadata[EXIT_BY_KEY]).toBe('text')
+    expect(row.metadata[EXIT_BY_KEY]).not.toBe('client')
+    // Not vacuous: had the hook read Codex's PostToolUse as a stated
+    // success, the class would be success, which this text is not.
+    expect(classifyExit(row.content)).not.toBe('success')
+  })
+
+  const NO_RESULT_CALLS: Record<string, { set: string; id: string; tool: string }> = {
+    'an MCP tool call Codex got an error reply for': { set: 'headless-session.ndjson', id: CODEX_CALLS.exportMissing, tool: 'mcp__treecontext__treecontext_export' },
+    'a file edit whose patch did not match the file': { set: 'file-edit.ndjson', id: CODEX_CALLS.patchMismatch, tool: 'apply_patch' },
+  }
+  reg.define(/^the events Codex CLI sent, as recorded, for (an MCP tool call Codex got an error reply for|a file edit whose patch did not match the file), its PreToolUse with no PostToolUse by the turn's end$/, async (w: ReplayWorld, which) => {
+    await openCaptureWorld(w)
+    const c = NO_RESULT_CALLS[String(which)]!
+    w.recorded = [{ events: recordedSession(CODEX, c.set, 'codex') }]
+    w.calls = [codexCall(w, c.id, String(which))]
+    expect(w.calls[0]!.tool).toBe(c.tool)
+    expect(codexEventsOf(w, c.id)).toEqual(['PreToolUse'])
+    // The turn ended after it: Codex's Stop is in the set, after the call.
+    const events = w.recorded[0]!.events
+    expect(events.findIndex((e) => e['hook_event_name'] === 'Stop')).toBeGreaterThan(events.findIndex((e) => e['tool_use_id'] === c.id))
+  })
+  reg.define(/^the journal holds one entry for the call, with its tool name, its input and Codex's own id for it$/, (w: ReplayWorld) => {
+    const c = w.calls![0]!
+    const row = onlyEntryOf(w, c.id)
+    expect(row.metadata['tool_name']).toBe(c.tool)
+    for (const v of Object.values(c.payload['tool_input'] as Record<string, unknown>)) {
+      if (typeof v === 'string') expect(row.content).toContain(v.split('\n')[0]!)
+    }
+  })
+  reg.define(/^the entry is marked as a call Codex reported no result for, with no exit class and no word on why$/, (w: ReplayWorld) => {
+    const row = onlyEntryOf(w, w.calls![0]!.id)
+    expect(row.metadata['captured_from']).toBe('no-result')
+    expect(row.metadata['exit_type']).toBeUndefined()
+    expect(row.metadata[EXIT_BY_KEY]).toBeUndefined()
+    expect(row.metadata['outcome']).toBeUndefined()
+    // Exactly the call as Codex sent it and the one line saying no result
+    // was reported: no Output section, and no word on why.
+    const c = w.calls![0]!
+    expect(row.content).toBe(`${composeToolEntry(c.tool, c.payload['tool_input'], undefined).content}\n${NO_RESULT_LINE}`)
+  })
+
+  // D408's last clauses: a turn that ended in no event the hooks received
+  // (a crash, a kill, a worker cut at its timeout) leaves its call's
+  // account in staging; the purge of processed staging journals it.
+  reg.define(/^the events Codex CLI sent, as recorded, for a file edit whose patch did not match the file, its turn ended by no Stop or Interrupt the hooks received$/, async (w: ReplayWorld) => {
+    await openCaptureWorld(w)
+    const all = recordedSession(CODEX, 'file-edit.ndjson', 'codex')
+    expect(all.some((e) => e['hook_event_name'] === 'Stop'), 'the recording ends its turn').toBe(true)
+    // The client never sent its turn's end: the replay leaves it out.
+    w.recorded = [{ events: all.filter((e) => e['hook_event_name'] !== 'Stop' && e['hook_event_name'] !== 'Interrupt') }]
+    w.calls = [codexCall(w, CODEX_CALLS.patchMismatch, 'a file edit whose patch did not match the file')]
+    expect(codexEventsOf(w, CODEX_CALLS.patchMismatch)).toEqual(['PreToolUse'])
+  })
+  reg.define(/^ingestion runs and the processed staging is later purged$/, async (w: ReplayWorld) => {
+    await replayCodex(w)
+    const id = w.calls![0]!.id
+    // Before the purge the call has no entry: no turn's end staged one.
+    expect(rawJournal(w).filter((r) => r.metadata['tool_use_id'] === id)).toEqual([])
+    const db = new DatabaseSync(w.dbPath!, { readOnly: true })
+    try { w.accountAt = (db.prepare("SELECT timestamp AS t FROM staging WHERE tool_use_id = ? AND captured_from = 'pre-tool-use'").get(id) as { t: number }).t } finally { db.close() }
+    // The store's own purge of processed staging, as the server's sweep
+    // runs it a day later; every processed row is past a cutoff of now.
+    w.store!.store.purgeProcessedStaging(0)
+    await drainStaging(w)
+  })
+  reg.define(/^the journal holds one entry for the call, with its tool name, its input and Codex's own id for it, dated at the moment Codex started the call$/, (w: ReplayWorld) => {
+    const c = w.calls![0]!
+    const row = onlyEntryOf(w, c.id)
+    expect(row.metadata['tool_name']).toBe(c.tool)
+    for (const v of Object.values(c.payload['tool_input'] as Record<string, unknown>)) {
+      if (typeof v === 'string') expect(row.content).toContain(v.split('\n')[0]!)
+    }
+    expect(row.metadata['created_at']).toBe(w.accountAt)
+    expect(Number(row.metadata['ingested_at'])).toBeGreaterThanOrEqual(w.accountAt!)
+  })
+  reg.define(/^the entry says Codex started the call and neither its result nor the end of its turn reached the journal, with no exit class$/, (w: ReplayWorld) => {
+    const c = w.calls![0]!
+    const row = onlyEntryOf(w, c.id)
+    expect(row.metadata['captured_from']).toBe('no-turn-end')
+    expect(row.content).toBe(`${composeToolEntry(c.tool, c.payload['tool_input'], undefined).content}\n${NO_TURN_END_LINE}`)
+    expect(row.metadata['exit_type']).toBeUndefined()
+    expect(row.metadata[EXIT_BY_KEY]).toBeUndefined()
+    expect(row.metadata['outcome']).toBeUndefined()
+  })
+
+  reg.define(/^the events Codex CLI sent, as recorded, for a file edit that succeeded, its PreToolUse and its PostToolUse$/, async (w: ReplayWorld) => {
+    await openCaptureWorld(w)
+    w.recorded = [{ events: recordedSession(CODEX, 'file-edit-ok.ndjson', 'codex') }]
+    w.calls = [codexCall(w, CODEX_CALLS.patchOk, 'a file edit that succeeded')]
+    expect(codexEventsOf(w, CODEX_CALLS.patchOk)).toEqual(['PreToolUse', 'PostToolUse'])
+  })
+  reg.define(/^the journal holds one entry for the call, from its PostToolUse, with what Codex returned as its output$/, (w: ReplayWorld) => {
+    const c = w.calls![0]!
+    const row = onlyEntryOf(w, c.id)
+    expect(row.metadata['captured_from']).toBeUndefined()
+    expect(row.content.slice(row.content.indexOf('\nOutput:'))).toContain(String(c.payload['tool_response']).trim().split('\n')[0]!)
+  })
+
+  // The interrupted turn: the interactive set's third turn, from its
+  // prompt to Codex's Interrupt (lines 11 to 16), which fired no Stop.
+  reg.define(/^the events Codex CLI sent, as recorded, for a turn the developer interrupted, ending in Codex's interrupt and no turn's end$/, async (w: ReplayWorld) => {
+    await openCaptureWorld(w)
+    const all = recordedSession(CODEX, 'interactive.ndjson', 'codex')
+    const end = all.findIndex((e) => e['hook_event_name'] === 'Interrupt')
+    const turn = all[end]!['turn_id']
+    const start = all.findIndex((e) => e['turn_id'] === turn)
+    expect(all[start]!['hook_event_name']).toBe('UserPromptSubmit')
+    const events = all.slice(start, end + 1)
+    expect(events.some((e) => e['hook_event_name'] === 'Stop')).toBe(false)
+    w.recorded = [{ events }]
+    w.codexTurn = String(turn)
+  })
+  reg.define(/^the journal says the turn was interrupted, with a capture-gap entry naming its reply as not captured$/, (w: ReplayWorld) => {
+    const gaps = rawJournal(w).filter((r) => r.metadata['source'] === 'capture-gap' && r.metadata['event'] === 'turn_interrupted')
+    expect(gaps).toHaveLength(1)
+    expect(gaps[0]!.content).toMatch(/^\[capture gap\] The developer interrupted this turn/)
+    expect(gaps[0]!.content).toContain(w.codexTurn!)
+    expect(gaps[0]!.content).toMatch(/its reply was not captured/)
+  })
+  reg.define(/^the journal holds no assistant entry for that turn$/, (w: ReplayWorld) => {
+    expect(rawJournal(w).filter((r) => r.metadata['event'] === 'response')).toEqual([])
+    expect(rawJournal(w).filter((r) => r.metadata['role'] === 'assistant' && !r.metadata['tool_name'] && r.metadata['source'] !== 'capture-gap')).toEqual([])
+  })
+  reg.define(/^every call of the turn whose PreToolUse had no PostToolUse is journaled as a call Codex reported no result for$/, (w: ReplayWorld) => {
+    const events = w.recorded![0]!.events
+    const pre = events.filter((e) => e['hook_event_name'] === 'PreToolUse').map((e) => String(e['tool_use_id']))
+    const post = new Set(events.filter((e) => e['hook_event_name'] === 'PostToolUse').map((e) => String(e['tool_use_id'])))
+    const unresolved = pre.filter((id) => !post.has(id)).sort()
+    const noResult = rawJournal(w).filter((r) => r.metadata['captured_from'] === 'no-result').map((r) => String(r.metadata['tool_use_id'])).sort()
+    // Exactly those calls, each once; every call that had its PostToolUse
+    // is journaled once, from it. (The recorded turn's two calls both had
+    // theirs, so this turn holds no call with no result.)
+    expect(noResult).toEqual(unresolved)
+    for (const id of post) expect(onlyEntryOf(w, id).metadata['captured_from']).toBeUndefined()
+  })
 }

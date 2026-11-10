@@ -282,24 +282,9 @@ runFeatures(join(HERE, '../../features'), {
     // Antigravity rows' modes are reworded; its VS Code, Cursor and OpenCode rows
     // wait with it, and their Given lost the removed installer step).
     {
-      feature: 'journal-storage',
-      scenarios: [
-        // Unit 9b: ruled in 2026-11-10 (D419), built and covered by tests/server/doctor-project-root.test.ts and tests/hooks/git-self-placement.test.ts; steps not written yet.
-        "doctor names the store an earlier treecontext bound to a stub's directory, and leaves it as it was",
-        "a session below a `.git` file git cannot read is placed in the checkout its store is bound to",
-      ],
-    },
-    {
       feature: 'journal-capture',
       scenarios: [
         // Unit 10: unit 10 (D406-D412, Codex CLI 0.167.0 captured through its own hooks, doctor reading Codex's trust, the experimental capture flag removed).
-        "a Codex session's prompt, tool calls and last reply are journaled",
-        "a Codex shell command that fails is journaled with what Codex said, and no outcome the client never gave",
-        "a failing Codex shell command replayed through Codex's hooks is classed by its text, never by the client's word",
-        "a Codex call that ends with no result reported is journaled once, unclassified, <call>",
-        "a Codex call whose turn never reached an end the journal heard is kept, and says only what is known",
-        "a Codex call that succeeded is journaled once, though two events carried it",
-        "a Codex turn the developer interrupted is journaled as interrupted, its partial reply named as not captured",
         // Unit 11: unit 11 (D413-D418, Antigravity CLI 1.5.3 captured through a named hook, its output read from agy's transcript).
         "an Antigravity session's prompt, tool calls and reply are journaled with the output agy's transcript holds",
         "a call's output is read from agy's transcript at the end of the model call that made it",
@@ -313,30 +298,20 @@ runFeatures(join(HERE, '../../features'), {
       feature: 'journal-workers',
       scenarios: [
         // Unit 10: unit 10 (D406-D412, Codex CLI 0.167.0 captured through its own hooks, doctor reading Codex's trust, the experimental capture flag removed).
-        "a `codex exec` worker with Codex's hooks is never registered as a self, its hooks print it nothing, and what it does lands in its own lane",
-        "the first-moment row is the first row of the worker's lane through the <door>",
-        "a worker whose ticket is <damage> is registered with what was read, told its instructions were invalid, and ends visibly through the <door>",
         // Unit 11: unit 11 (D413-D418, Antigravity CLI 1.5.3 captured through a named hook, its output read from agy's transcript).
         "a <worker> worker under a <parent> parent writes into its own lane with its role as writer",
         "an `agy -p` worker started by `treecontext run` is never a self, and its captured calls land in its own lane",
       ],
     },
     {
-      feature: 'journal-agent-surface',
-      scenarios: [
-        // Unit 10: unit 10 (D406-D412, Codex CLI 0.167.0 captured through its own hooks, doctor reading Codex's trust, the experimental capture flag removed).
-        "the handshake names the clients whose sessions are captured",
-      ],
-    },
-    {
       feature: 'journal-clients',
       scenarios: [
         // Unit 10: unit 10 (D406-D412, Codex CLI 0.167.0 captured through its own hooks, doctor reading Codex's trust, the experimental capture flag removed).
+        // Held for unit 11: its third "verified live" row is Antigravity CLI's, which unit 11 earns. Codex's part needs no live run and is in place: its row reads "verified live" from 0.167.0 with the recording's version and date (README §6).
         "every matrix row carries its client, its events, its documentation date and one status",
-        "Codex's block that matches reads present and consistent",
-        "Codex's block that drifted reads inconsistent with its remedy",
-        "doctor's row for Codex CLI says whether Codex runs treecontext's hooks, when <state>",
-        "the README says from which Codex CLI capture runs, the step install leaves, and what a Codex entry does not hold",
+        // Held for the release gate: the cell for a ticketed Codex worker's own tool calls may read "verified live" only with the date of the build's own live run, which no build test makes (no live `codex exec`). The other three Codex cells read as this scenario asks (README: main "verified live" with 0.167.0 and 2026-11-09 at default approvals; subagent legs and the pointer "not possible: no spawn message a hook can read"). Gate: in a throwaway project with this build installed and Codex's hooks trusted, run
+        //   treecontext run --run gate --role checker --key gate-check --parent release-gate --prompt-file task.md -- codex exec -s read-only -
+        // with task.md asking for one shell command (`ls`) and one treecontext_insert, then the census over that worker's rollout (npm run dogfood:census -- --codex <rollout.jsonl> --store <store.db>); when every call is found by Codex's id in the worker's lane, set the cell to "verified live (codex exec 0.167.0 through treecontext run, default approvals, <date>)" and drop this entry.
         "the orchestration matrix's Codex CLI cells say what a Codex hook can and cannot do",
         // Unit 11: unit 11 (D413-D418, Antigravity CLI 1.5.3 captured through a named hook, its output read from agy's transcript).
         "doctor reports <client> as a client that <mode>",
@@ -351,16 +326,6 @@ runFeatures(join(HERE, '../../features'), {
       feature: 'journal-install',
       scenarios: [
         // Unit 10: unit 10 (D406-D412, Codex CLI 0.167.0 captured through its own hooks, doctor reading Codex's trust, the experimental capture flag removed).
-        "every hook event Codex CLI has is wired or named as not captured",
-        "the capture census counts a Codex session's calls and says which it could only infer",
-        "the experimental capture flag is refused, saying it is gone and naming each client's floor, <named>",
-        "install wires Codex CLI 0.167.0 for capture with its own hooks, and names the one step left",
-        "install writes no Codex CLI hook where <case>, takes back what install wrote, and says why",
-        "a reinstall turns the copy an earlier build wrote into Codex's own block",
-        "uninstall takes back the hooks install wrote for Codex CLI and keeps the developer's, <case>",
-        "a hook the developer added after install keeps its words, and the developer is told when Codex will ask to trust it again",
-        "a reinstall where <case> <outcome>",
-        "install refuses an install naming Gemini CLI, saying it is retired",
         // Unit 11: unit 11 (D413-D418, Antigravity CLI 1.5.3 captured through a named hook, its output read from agy's transcript).
         "a client below the version its capture was verified at gets tools, not capture hooks",
         "the server runs in capture mode for <agent> only where its capture hooks are installed",
@@ -378,21 +343,9 @@ runFeatures(join(HERE, '../../features'), {
       ],
     },
     {
-      feature: 'journal-legs',
-      scenarios: [
-        // Unit 10: unit 10 (D406-D412, Codex CLI 0.167.0 captured through its own hooks, doctor reading Codex's trust, the experimental capture flag removed).
-        "a Codex CLI subagent is registered, retired and summarised, and is never a leg",
-      ],
-    },
-    {
       feature: 'journal-orchestration',
       scenarios: [
         // Unit 10: unit 10 (D406-D412, Codex CLI 0.167.0 captured through its own hooks, doctor reading Codex's trust, the experimental capture flag removed).
-        "a Codex CLI main registers itself at its start and the server stamps its rows from it",
-        "a Codex CLI main's fresh start is handed its lane's chapter",
-        "at a Codex CLI turn's end treecontext's hooks print nothing",
-        "a resumed Codex CLI main is the same session and is handed what a resume is handed",
-        "a Codex CLI compaction leaves a recovery note that the next fresh start in its lane claims",
         // Unit 11: unit 11 (D413-D418, Antigravity CLI 1.5.3 captured through a named hook, its output read from agy's transcript).
         "an Antigravity CLI session the ticket door did not start is captured as a session no hook registered",
       ],

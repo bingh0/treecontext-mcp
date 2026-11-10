@@ -69,6 +69,10 @@ export interface HookGap {
   lost: string
   /** A bounded prefix of the event's own text, when it had one. */
   text?: string | null
+  /** The client's id for the tool call the dropped event carried (D408:
+   *  a call whose result was ledgered is never journaled as one the
+   *  client reported no result for). */
+  toolUseId?: string | null
 }
 
 /** The ledger paths for a store, in the order a hook tries them. */
@@ -142,4 +146,30 @@ export function hookGapText(g: HookGap): string {
   return `[capture gap] The ${g.hook} event of ${who} at ${new Date(g.at * 1000).toISOString()} was dropped: `
     + `the store could not be written (${g.error}). ${g.lost}`
     + (g.text ? `\nText prefix: ${g.text}` : '')
+}
+
+/** The key a ledgered call is named by: its client session and its id, so
+ *  that a line of one session never answers for another's call. */
+export function ledgeredCallKey(sessionId: string, toolUseId: string): string {
+  return `${sessionId}\n${toolUseId}`
+}
+
+/** The client's calls the store's ledgers name, live or claimed and not
+ *  yet written (D408), each by its session and id (ledgeredCallKey). A
+ *  read: a ledger nobody can read names none. */
+export function ledgeredCallIds(dbPath: string): Set<string> {
+  const ids = new Set<string>()
+  for (const path of gapLedgerPaths(dbPath)) {
+    let names: string[] = []
+    try { names = readdirSync(dirname(path)) } catch { continue }
+    for (const name of names) {
+      if (name !== basename(path) && !name.startsWith(`${basename(path)}${CLAIMED}`)) continue
+      let text = ''
+      try { text = readFileSync(join(dirname(path), name), 'utf8') } catch { continue }
+      for (const line of text.split('\n')) {
+        try { const g = JSON.parse(line) as HookGap; if (g.toolUseId && g.sessionId) ids.add(ledgeredCallKey(g.sessionId, g.toolUseId)) } catch { /* a torn line */ }
+      }
+    }
+  }
+  return ids
 }

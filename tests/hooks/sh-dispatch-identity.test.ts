@@ -31,9 +31,10 @@ import { markClaudeCodeInstalled, redirectHome } from '../helpers/home.js'
 import { sandboxedSpawnEnv, spawnCli, CLI_TS } from '../helpers/cli-spawn.js'
 import { type CaptureWorld, openCaptureWorld, hookJson } from '../journal/capture-harness.js'
 import {
-  installClaudeHookScripts, upsertClaudeSettingsHooks, removeClaudeSettingsHooks, upsertCodexHooks,
+  installClaudeHookScripts, upsertClaudeSettingsHooks, removeClaudeSettingsHooks,
   claudeHookCommand, claudeHookDispatch, claudeHookCommandsWithoutExec,
 } from '../../src/server/installer.js'
+import { upsertCodexHooks } from '../helpers/earlier-build-writers.js'
 import { UNKNOWN_PREDECESSOR } from '../../src/hooks/session-start.js'
 
 const POSIX = process.platform !== 'win32'
@@ -94,7 +95,7 @@ describe.skipIf(!POSIX)('hook dispatch through /bin/sh -c keeps the claude pid (
       writeFileSync(settings, '{}')
       upsertClaudeSettingsHooks(settings, false)
       const codex = join(home, 'codex-hooks.json')
-      upsertCodexHooks(codex, false, false)
+      upsertCodexHooks(codex)
       for (const f of [settings, codex]) {
         const commands = [...readFileSync(f, 'utf8').matchAll(/"command": "((?:[^"\\]|\\.)*)"/g)].map((m) => JSON.parse(`"${m[1]}"`) as string)
         expect(commands.length, f).toBeGreaterThanOrEqual(7)

@@ -461,7 +461,7 @@ export function writeStaging(dbPath: string, entry: StagingEntry, andThen?: (db:
     recordHookGap(dbPath, {
       hook: stagingHookOf(entry), sessionId: entry.sessionId ?? null,
       ...(entry.agentId ? { agentId: entry.agentId } : {}), ...(entry.agentType ? { agentType: entry.agentType } : {}),
-      at: entry.timestamp, error: msg,
+      at: entry.timestamp, error: msg, ...(entry.toolUseId ? { toolUseId: entry.toolUseId } : {}),
       lost: `The ${entry.toolName ? `${entry.toolName} call` : entry.role === 'user' ? 'developer turn' : entry.role === 'snapshot' ? 'recovery snapshot claim' : 'assistant turn'} it captured was not staged.`,
       text: entry.content,
     })
@@ -617,6 +617,7 @@ export function stagingHookOf(entry: Pick<StagingEntry, 'toolName' | 'role' | 'k
   if (entry.toolName) return 'post-tool-use'
   if (entry.role === 'user') return 'user-prompt-submit'
   if (entry.role === 'snapshot') return 'session-start'
+  if (entry.kind === 'turn-interrupted') return 'stop'
   if (entry.kind) return 'subagent-stop'
   return 'stop'
 }
@@ -728,10 +729,14 @@ export function getRecentStaging(
   sessionId: string,
   limit = 20,
 ): Array<{ role: string; content: string; toolName: string | null; timestamp: number }> {
+  // D408: a Codex PreToolUse held as a call's account is no entry of its
+  // own (its PostToolUse or its no-result entry is), so it is not recent
+  // activity either. Asked of the table: a store below 034 has no mark.
+  const held = stagingHasCallId(db) ? `AND (captured_from IS NULL OR captured_from <> 'pre-tool-use')` : ''
   return db.prepare(
     `SELECT role, content, tool_name as toolName, timestamp
      FROM staging
-     WHERE session_id = ? OR session_id IS NULL
+     WHERE (session_id = ? OR session_id IS NULL) ${held}
      ORDER BY timestamp DESC, id DESC
      LIMIT ?`
   ).all(sessionId, limit) as Array<{ role: string; content: string; toolName: string | null; timestamp: number }>

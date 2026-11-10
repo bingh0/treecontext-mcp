@@ -1,5 +1,6 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { TS_ROOT } from '../proc.js'
 import { tmpdir } from 'node:os'
 import { expect } from 'vitest'
 import { type Registry } from 'gherkin-node-test/vitest'
@@ -141,6 +142,22 @@ export const agentSurfaceDefiner = (reg: Registry<AgentSurfaceWorld>): void => {
     }
   })
 
+  // D412: the capture line, read off the live handshake with its line
+  // breaks taken as spaces (the card wraps at 76 columns). Which clients get
+  // the re-orientation packet is the README's (ruled 2026-11-10), and the
+  // card stays within its 2048 bytes (D210) with every clause the other
+  // scenarios of this file pin.
+  reg.define(/^they say that hooks capture a session on Claude Code, and on Codex CLI or Antigravity CLI where their hooks are installed and running, and that elsewhere only what the agent inserts is kept$/, (w: AgentSurfaceWorld) => {
+    const flat = w.instructions!.replace(/\s*\n\s*/g, ' ')
+    expect(flat).toContain('Hooks capture a session on Claude Code, and on Codex CLI or Antigravity CLI where their hooks are installed and running; elsewhere only what you insert is kept.')
+    // The needle fires: the card before D412, as Codex itself recorded it
+    // in a tool listing (tests/fixtures/codex-hooks/0.167.0/rollouts).
+    const before = readFileSync(join(TS_ROOT, 'tests', 'fixtures', 'codex-hooks', '0.167.0', 'rollouts', 'headless-session.rollout.jsonl'), 'utf8')
+    expect(before).toMatch(/On Claude Code, hooks auto-capture/)
+    // step-lint: allow unearned-absence -- the line above proves the needle fires on the card Codex recorded before D412
+    expect(flat).not.toMatch(/On Claude Code, hooks auto-capture/)
+    expect(Buffer.byteLength(w.instructions!, 'utf8')).toBeLessThanOrEqual(2048)
+  })
   reg.define(/^they tell the agent to attach a media_ref to file insertions$/, (w: AgentSurfaceWorld) => {
     expect(w.instructions).toMatch(/media_ref/)
     expect(w.instructions).toMatch(/attach|insert a node with media_ref/i)

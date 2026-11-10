@@ -218,14 +218,19 @@ describe('Gemini CLI is never detected, whatever of its own is there (D399)', ()
       expect(detected(h, { PATH: `${bin}${delimiter}${process.env['PATH'] ?? ''}` }), 'gemini on PATH').toBe(expected)
     }
   })
-  test('install refuses to wire Gemini CLI by name, with the experimental flag or without, and writes nothing', () => {
+  test('install refuses to wire Gemini CLI by name, and with the removed flag refuses the flag first, writing nothing either way', () => {
     for (const flags of [[], ['--experimental-capture']]) {
       const h = home(['.gemini'])
       writeFileSync(join(h, '.gemini', 'installation_id'), 'x')
       const run = spawnCli(['install', '--yes', '--agent', 'gemini', ...flags], { home: h })
       expect(run.status, run.out).toBe(1)
-      expect(run.stderr).toContain('Gemini CLI is retired (Google deprecated it for Antigravity CLI)')
-      expect(run.stderr).toContain('`treecontext uninstall --agent gemini`')
+      if (flags.length === 0) {
+        expect(run.stderr).toContain('Gemini CLI is retired (Google deprecated it for Antigravity CLI)')
+        expect(run.stderr).toContain('`treecontext uninstall --agent gemini`')
+      } else {
+        // D406: the flag is gone, refused before anything is read or written.
+        expect(run.stderr).toContain('--experimental-capture is gone')
+      }
       expect(run.out).not.toMatch(/Fatal|No matching agents/)
       expect(readdirSync(join(h, '.gemini'))).toEqual(['installation_id'])
       expect(existsSync(join(h, '.treecontext', 'config.toml')), 'install wrote its config before refusing').toBe(false)

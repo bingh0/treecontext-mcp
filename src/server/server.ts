@@ -37,6 +37,7 @@ import { dbg, warn } from '../debug.js'
 import type { FlatStore } from '../flat-store.js'
 import { MAIN_WRITER, stampMetadata, WRITER_STAMP_KEYS, type WriterStamp } from '../persistence/session-registry.js'
 import { EXIT_BY_KEY } from './event-processing.js'
+import { DRAIN_CALL_KEYS, STORE_ONLY_SOURCES } from '../persistence/capture-marks.js'
 
 /** The marks the drain writes on a captured call from staging, never a
  *  caller's to claim (D400, D401, D404). */
@@ -479,6 +480,7 @@ export function createServer(
         // treecontext_import writes them, so a caller's copy is a forgery
         // that would read as "imported from <file>" and place the row in a
         // handoff lane. They are dropped, never stored.
+        let sourceIgnored: string | undefined
         if (metadataCopy) {
           for (const k of Object.keys(metadataCopy)) if (k.startsWith('_handoff_')) delete metadataCopy[k]
           // The writer stamp is the store's alone (D169, D190): a caller's
@@ -489,6 +491,26 @@ export function createServer(
           // (`exit_by`), never a caller's: a note claiming `exit_by` client
           // would be counted as the client's word.
           delete metadataCopy[EXIT_BY_KEY]
+          // D408: a capture-gap row's call id (`gap_tool_use_id`) and a
+          // resolved entry's marks (`resolved_by`, `resolved_at`,
+          // `resolved_how`) are the drain's: a caller's copy would hide a
+          // call's trace from the turn's end and the purge, or read as a
+          // call resolved. Dropped on every row.
+          for (const k of DRAIN_CALL_KEYS) delete metadataCopy[k]
+          // The client session a worker's captured row was staged in is the
+          // drain's word (ingestion.ts, workerLaneOf), read by the capture
+          // gates (capture-marks.ts callSessionSql): never a caller's.
+          delete metadataCopy['_client_session_id']
+          // The sources only the store writes (STORE_ONLY_SOURCES): a
+          // capture-gap row (a hole the drain found; its `gap_id` is what the
+          // drain reads to write a dropped event's row once) and a recovery
+          // snapshot (its claim is what the drain dedups by, D375). A
+          // caller's copy would hide a real gap or recovery note, or show a
+          // hole that is not one, so the label is dropped and said back.
+          if (typeof metadataCopy['source'] === 'string' && STORE_ONLY_SOURCES.includes(metadataCopy['source'])) {
+            sourceIgnored = metadataCopy['source']
+            delete metadataCopy['source']
+          }
           // D400, D401, D404: a caller may label its row a capture (a client
           // with no hooks inserts its own), but what a client's own event
           // said about a call is the drain's to write from staging: the
@@ -727,6 +749,10 @@ export function createServer(
           response.writer_note = 'No session-start hook placed this session in a checkout, so the store cannot tell who wrote '
             + 'this entry: it is stamped "writer unknown" (unregistered), in the lane of undetermined writers, never the main '
             + 'checkout\'s or any other lane\'s own, and a role named in its metadata is kept as a claim, not as its writer.'
+        }
+        if (sourceIgnored !== undefined) {
+          response.source_ignored = sourceIgnored
+          response.source_note = `"${sourceIgnored}" is a source only the store writes (a hole the drain found, or the recovery note it keeps across a compaction), so this insert's label was dropped: the entry is an ordinary one.`
         }
         if (sessionIdIgnored !== undefined) {
           response.session_id_ignored = sessionIdIgnored

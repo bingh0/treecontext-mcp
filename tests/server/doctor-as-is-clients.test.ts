@@ -67,11 +67,8 @@ beforeEach(() => {
 afterEach(() => { rmSync(home, { recursive: true, force: true }) })
 
 describe.each(['vscode', 'cursor'])('%s, an as-is client', (slug) => {
-  it('the experimental flag writes nothing for it and says why in one line', () => {
-    const r = ok(['install', '--yes', '--agent', slug, '--experimental-capture'])
-    expect(r.stdout).toContain(slug === 'vscode'
-      ? 'hooks: nothing to write — VS Code reads the Claude settings file; turn chat.useClaudeHooks on'
-      : 'hooks: nothing to write — Cursor reads the Claude settings file by default')
+  it('install writes nothing of its own for it, and its row reads ok', () => {
+    ok(['install', '--yes', '--agent', slug])
     expect(existsSync(ownHookFile[slug]!())).toBe(false)
     expect(wrappers(slug)).toEqual([])
     // The tools are still wired.

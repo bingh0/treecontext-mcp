@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process'
 import { join } from 'node:path'
+import { codexProbeEnv } from './codex-home.js'
 import type { CodexApprovalSupport } from './tool-approvals.js'
 
 // ── What doctor and install ask the Codex CLI on PATH (D381, D387) ─────
@@ -70,10 +71,11 @@ export function runBounded(file: string, args: string[], timeoutMs: number, env?
 
 /** A Codex probe, through a shell hop on Windows, where `codex` is a .cmd shim. */
 async function runCodex(args: string[], timeoutMs: number): Promise<BoundedRun> {
-  const direct = await runBounded('codex', args, timeoutMs)
+  const env = codexProbeEnv()
+  const direct = await runBounded('codex', args, timeoutMs, env)
   if (!direct.missing || process.platform !== 'win32') return direct
   // The arguments are literals of this module, so the hop carries no input.
-  return runBounded(process.env['ComSpec'] ?? 'cmd.exe', ['/d', '/s', '/c', `codex ${args.join(' ')}`], timeoutMs)
+  return runBounded(process.env['ComSpec'] ?? 'cmd.exe', ['/d', '/s', '/c', `codex ${args.join(' ')}`], timeoutMs, env)
 }
 
 /** The x.y.z in `codex --version`'s answer (`codex-cli 0.167.0`), or null. */
@@ -191,7 +193,7 @@ export function readCodexConfig(cwd: string, timeoutMs: number = CODEX_PROBE_TIM
     try {
       // On Windows `codex` is a .cmd shim; the arguments are literals.
       child = spawn(win ? (process.env['ComSpec'] ?? 'cmd.exe') : 'codex', win ? ['/d', '/s', '/c', 'codex app-server'] : ['app-server'], {
-        cwd, stdio: ['pipe', 'pipe', 'pipe'], detached: GROUPS,
+        cwd, stdio: ['pipe', 'pipe', 'pipe'], detached: GROUPS, ...(codexProbeEnv() ? { env: codexProbeEnv() } : {}),
       })
     } catch (e) {
       resolve({ ok: false, why: e instanceof Error ? e.message : String(e) })
@@ -253,4 +255,85 @@ export function codexOriginFile(origins: Record<string, CodexOrigin>, key: strin
   if (name.file) return name.file
   if (name.dotCodexFolder) return join(name.dotCodexFolder, 'config.toml')
   return name.type ? `Codex's ${name.type} configuration` : fallback
+}
+
+// ── Codex's own account of its hooks and their trust (D407) ────────────
+
+/** One hook as Codex's app server reports it (`hooks/list`, Codex CLI 0.167.0). */
+export interface CodexListedHook {
+  key: string
+  eventName: string
+  command: string
+  sourcePath: string
+  /** `trusted`, `untrusted` or `modified` (recorded 2026-11-09 and 2026-11-10). */
+  trustStatus: string
+  currentHash?: string
+}
+
+export type CodexHooksTrust =
+  | { ok: true; hooks: CodexListedHook[]; warnings: unknown[]; errors: unknown[] }
+  | { ok: false; why: string }
+
+/**
+ * Codex's own account of the hooks it loads for `cwd` and whether it trusts
+ * each: its app server's `hooks/list` over stdio (no model call, no
+ * sign-in). Doctor reads it and never computes Codex's hash itself (D407).
+ * Bounded, and nothing it starts outlives it.
+ */
+export function readCodexHooksTrust(cwd: string, timeoutMs: number = CODEX_PROBE_TIMEOUT_MS, env?: NodeJS.ProcessEnv): Promise<CodexHooksTrust> {
+  return new Promise((resolve) => {
+    let child: ReturnType<typeof spawn>
+    const win = process.platform === 'win32'
+    try {
+      child = spawn(win ? (process.env['ComSpec'] ?? 'cmd.exe') : 'codex', win ? ['/d', '/s', '/c', 'codex app-server'] : ['app-server'], {
+        cwd, stdio: ['pipe', 'pipe', 'pipe'], detached: GROUPS, ...((env ?? codexProbeEnv()) ? { env: env ?? codexProbeEnv() } : {}),
+      })
+    } catch (e) {
+      resolve({ ok: false, why: e instanceof Error ? e.message : String(e) })
+      return
+    }
+    let out = ''
+    let err = ''
+    let settled = false
+    const settle = (r: CodexHooksTrust): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      try { child.stdin?.end() } catch { /* closed */ }
+      try {
+        if (GROUPS && child.pid !== undefined) process.kill(-child.pid, 'SIGKILL')
+        else child.kill('SIGKILL')
+      } catch { /* gone */ }
+      resolve(r)
+    }
+    const timer = setTimeout(() => settle({ ok: false, why: `codex app-server did not answer hooks/list within ${timeoutMs >= 1000 ? `${Math.round(timeoutMs / 1000)} s` : `${timeoutMs} ms`}` }), timeoutMs)
+    child.stderr?.on('data', (d: Buffer) => { err += d.toString() })
+    child.stdin?.on('error', () => { /* the close handler reports it */ })
+    child.stdout?.on('data', (d: Buffer) => {
+      out += d.toString()
+      const lines = out.split('\n')
+      out = lines.pop() ?? ''
+      for (const line of lines) {
+        let msg: Record<string, unknown>
+        try { msg = JSON.parse(line) as Record<string, unknown> } catch { continue }
+        if (msg['id'] !== 1) continue
+        const data = (msg['result'] as { data?: Array<{ cwd?: string; hooks?: CodexListedHook[]; warnings?: unknown[]; errors?: unknown[] }> } | undefined)?.data
+        if (Array.isArray(data)) {
+          const here = data.find(d => d.cwd === cwd) ?? data[0]
+          settle({ ok: true, hooks: Array.isArray(here?.hooks) ? here.hooks : [], warnings: here?.warnings ?? [], errors: here?.errors ?? [] })
+        } else {
+          settle({ ok: false, why: `codex app-server answered hooks/list with ${JSON.stringify(msg['error'] ?? msg).slice(0, 300)}` })
+        }
+      }
+    })
+    child.on('error', (e) => settle({ ok: false, why: e.message }))
+    child.on('close', (code) => {
+      const said = err.split('\n').map(l => l.trim()).filter(l => l !== '').slice(-2).join(' / ')
+      settle({ ok: false, why: `codex app-server exited ${code ?? 'on a signal'} before answering hooks/list${said ? `: ${said}` : ''}` })
+    })
+    const send = (m: unknown): void => { child.stdin?.write(`${JSON.stringify(m)}\n`) }
+    send({ method: 'initialize', id: 0, params: { clientInfo: { name: 'treecontext-doctor', version: '1' } } })
+    send({ method: 'initialized' })
+    send({ method: 'hooks/list', id: 1, params: { cwds: [cwd] } })
+  })
 }

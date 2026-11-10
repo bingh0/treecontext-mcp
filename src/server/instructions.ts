@@ -284,11 +284,11 @@ const WORKER_START_LINES: readonly string[] = [
 
 const CARD_BODY: readonly string[] = [
   '',
-  'On Claude Code, hooks auto-capture tool-use and user messages; elsewhere',
-  'only what you insert is kept. Use treecontext_insert for the *why*:',
-  'decisions, plans, rejected alternatives, constraints, findings.',
-  'When the user attaches a file, insert a node with media_ref (uri, mime_type)',
-  'and a text description so it is findable later.',
+  'Hooks capture a session on Claude Code, and on Codex CLI or Antigravity',
+  'CLI where their hooks are installed and running; elsewhere only what you',
+  'insert is kept. Insert the *why*: decisions, plans, rejected alternatives,',
+  'constraints, findings. Attach a file as a node with media_ref (uri,',
+  'mime_type) and a text description.',
   '',
   'Hits return a bounded preview ending in an availability marker -',
   'treecontext_export(node_id) fetches the whole thing. "[capture gap]"',

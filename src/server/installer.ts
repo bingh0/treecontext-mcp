@@ -37,8 +37,13 @@ import {
   type AgyEntryState, type ApprovalClause, type ApprovalClient, type ClaudeSettingsSource, type ClientView, type CodexApprovalSupport, type ApprovalsChoice,
 } from './tool-approvals.js'
 import {
-  CODEX_APPROVALS_FLOOR, codexApprovalSupport, codexOriginFile, readCodexConfig, readCodexVersion, runCodexSandboxCheck, sandboxRow,
+  CODEX_APPROVALS_FLOOR, codexApprovalSupport, codexOriginFile, readCodexConfig, readCodexVersion, runCodexSandboxCheck, sandboxRow, readCodexHooksTrust,
 } from './codex-client.js'
+import {
+  codexCaptureOf, installCodexHooks, takeBackCodexHooksFile, readCodexHooksFile,
+  codexToolsOnlyLine, codexHooksPath, codexHookReport, codexHooksPresent, writeTarget, unwritableFile, otherWiredCodexLine, CODEX_INSTALL_PROBE_TIMEOUT_MS, type CodexHooksOutcome,
+} from './codex-hooks.js'
+import { codexHome, codexHomeNote } from './codex-home.js'
 import { forgetCreatedFile, installCreated, installStateUnreadable, recordCreatedFile, repairInstallState } from './install-state.js'
 import {
   type AgentDefinition, type Platform,
@@ -48,7 +53,7 @@ import {
 } from './agents.js'
 import {
   TC_HOOK_PREFIX, CLAUDE_HOOK_SCRIPTS, HOOK_SCRIPTS_DIR_NAME, AGENT_HOOK_WRAPPER_STEMS,
-  escapeRegex, runsOwnHookScript, CLAUDE_SCRIPT_NAMES, isOwnHookCommand as copyOwnedCommand,
+  escapeRegex, runsOwnHookScript, CLAUDE_SCRIPT_NAMES, isOwnHookCommand as copyOwnedCommand, CODEX_HOOK_MODE,
 } from './hook-command-owner.js'
 export { AGENT_HOOK_WRAPPER_STEMS } from './hook-command-owner.js'
 import {
@@ -72,7 +77,6 @@ export interface InstallOptions {
    * session is exactly how an adapter earns that pass, so the flag exists —
    * but nobody gets it by accident.
    */
-  experimentalCapture?: boolean
   /**
    * Write no tool approval in any client, take back what an earlier install
    * wrote, and record the choice so every later install keeps it (D390).
@@ -952,10 +956,18 @@ function backupStamp(at: Date = new Date()): string {
  * nothing for a file that did not exist.
  */
 export function writeTomlKeepingBackup(path: string, data: Record<string, unknown>, mode?: number): string[] {
+  // D53: a file the developer made read-only, a directory that refuses the
+  // write, or a link that resolves nowhere writable is never rewritten (the
+  // callers refuse it before any write of the run; this is the last guard).
+  // A symlink is written through to where it resolves, the link kept.
+  const refused = unwritableFile(path)
+  if (refused) throw new Error(refused)
+  const place = writeTarget(path)
+  const target = place.ok ? place.target : path
   let note: string[] = []
-  if (existsSync(path)) {
-    const bytes = readFileSync(path)
-    const keepMode = statSync(path).mode & 0o777
+  if (existsSync(target)) {
+    const bytes = readFileSync(target)
+    const keepMode = statSync(target).mode & 0o777
     const stem = `${tomlBackupStem(path)}${backupStamp()}`
     let bak = stem
     for (let n = 2; ; n++) {
@@ -969,7 +981,7 @@ export function writeTomlKeepingBackup(path: string, data: Record<string, unknow
     }
     note = [`comments are not preserved; the file as it was is at ${bak}`]
   }
-  atomicWrite(path, stringifyToml(data) + '\n', mode)
+  atomicWrite(target, stringifyToml(data) + '\n', mode)
   return note
 }
 
@@ -1226,13 +1238,17 @@ export const COPYING_CLIENTS = new Set(['codex'])
  */
 export function captureHooksInstalled(
   agent: AgentDefinition, platform: Platform,
-  opts: { experimentalCapture?: boolean; claudeBlockPlanned?: boolean } = {},
+  opts: { codexCapture?: boolean; claudeBlockPlanned?: boolean } = {},
 ): boolean {
   if (CAPTURE_PLATFORMS.has(agent.slug)) return true
   if (!agent.hooks) return false
-  if (COPYING_CLIENTS.has(agent.slug)) {
-    if (opts.experimentalCapture) return true
-    return clientHookReport(agent, platform)?.hooksPresent === true
+  if (agent.slug === 'codex') {
+    // D386, D406: treecontext's hooks in Codex's hooks file, whichever
+    // build wrote them (codexHooksPresent), the one reading install,
+    // uninstall and doctor share; or a dry run's plan of what its hooks
+    // step would leave there.
+    if (opts.codexCapture !== undefined) return opts.codexCapture
+    return codexHooksPresent()
   }
   if (AS_IS_CLIENTS.has(agent.slug)) {
     const block = opts.claudeBlockPlanned === true || claudeHooksBlockState(platform) !== 'absent'
@@ -1275,12 +1291,6 @@ function globalConfigCapture(): boolean {
  * doctor flags such a copy as a second route.
  */
 export const AS_IS_CLIENTS = new Set(['vscode', 'cursor'])
-
-/** The one line the flagged install prints for an as-is client. */
-const AS_IS_CLIENT_LINE: Readonly<Record<string, string>> = {
-  vscode: 'VS Code reads the Claude settings file; turn chat.useClaudeHooks on',
-  cursor: 'Cursor reads the Claude settings file by default',
-}
 
 // States the TRIGGER_CORE orientation protocol (instructions.ts) with
 // hook-channel framing; protocol conformance is enforced by
@@ -1546,27 +1556,6 @@ exit 0
 `
 }
 
-/**
- * Write one agent's hook wrappers. Idempotent; overwrites so a repo move or
- * resolution-logic change propagates on `install` — the same policy as
- * installMcpLauncher. Called by the install flow before the config upsert,
- * so a config can never reference a wrapper install did not write.
- */
-export function installAgentHookWrappers(agent: AgentHookAgent, dryRun: boolean): ActionResult[] {
-  const results: ActionResult[] = []
-  for (const stem of AGENT_HOOK_WRAPPER_STEMS[agent]) {
-    const scriptPath = agentHookWrapperPath(agent, stem)
-    if (dryRun) {
-      results.push({ type: 'hook-script', path: scriptPath, status: 'dry-run' })
-      continue
-    }
-    const existed = existsSync(scriptPath)
-    ensureDir(scriptPath)
-    writeFileSync(scriptPath, agentHookWrapperContent(agent, stem), { mode: 0o755 })
-    results.push({ type: 'hook-script', path: scriptPath, status: existed ? 'updated' : 'created' })
-  }
-  return results
-}
 
 /**
  * Remove one agent's hook wrappers. Owned by that agent's uninstall branch —
@@ -2302,20 +2291,6 @@ export function removeClaudeSettingsHooks(path: string, dryRun: boolean): Action
   return { type: 'hook-settings', path, status: dryRun ? 'dry-run' : 'updated', detail: 'removed tc hooks' }
 }
 
-/**
- * Command string invoking an agent hook wrapper. The wrapper resolves its
- * own interpreter and module at runtime, so the command carries ONE token —
- * the stable wrapper path — where it used to carry `"<execPath>" "<entry>"`,
- * two version-stamped halves a node upgrade strands together. The bash-form
- * spelling (quoted, forward slashes on Windows) comes from claudeHookCommand
- * so the shell-hazard rule keeps one definition; these runners are opt-in
- * (`--experimental-capture`), and forward slashes are the one spelling every
- * shell here opens as a file.
- */
-function wrapperCommandString(agent: AgentHookAgent, stem: string): string {
-  return claudeHookCommand(agentHookWrapperPath(agent, stem), 'bash')
-}
-
 // ── Copies of the Claude Code block: Codex CLI verbatim ──
 //
 // The copying client keeps its own hook configuration rather than reading
@@ -2359,14 +2334,6 @@ function stripOwnedHooks(hooks: Record<string, unknown>): boolean {
   return changed
 }
 
-/** Replace treecontext's entries in a hooks map with `block`, keeping the rest. */
-function writeHookCopy(hooks: Record<string, unknown>, block: Record<string, ClaudeHookMatcher[]>): void {
-  stripOwnedHooks(hooks)
-  for (const [event, matchers] of Object.entries(block)) {
-    const existing = Array.isArray(hooks[event]) ? hooks[event] as unknown[] : []
-    hooks[event] = [...existing, ...structuredClone(matchers)]
-  }
-}
 
 /** JSON with object keys sorted, so two equal entries always print alike. */
 function canonicalJson(v: unknown): string {
@@ -2512,24 +2479,6 @@ export function buildVscodeHooksConfig(): Record<string, unknown> {
   }
 }
 
-export function upsertVscodeHooks(path: string, force: boolean, dryRun: boolean): ActionResult {
-  const config = buildVscodeHooksConfig()
-  // Skip only when content already matches — a presence-only check would
-  // strand legacy bare-`node` configs (PATH-dependent, broken for
-  // GUI-launched agents) until the user thinks to pass --force.
-  if (existsSync(path) && !force) {
-    const existing = readJsonSafe(path)
-    if (JSON.stringify(existing) === JSON.stringify(config)) {
-      return { type: 'hook-settings', path, status: 'skipped', detail: 'already configured' }
-    }
-  }
-
-  const status = existsSync(path) ? 'updated' : 'created'
-
-  if (dryRun) return { type: 'hook-settings', path, status: 'dry-run' }
-  atomicWrite(path, JSON.stringify(config, null, 2) + '\n')
-  return { type: 'hook-settings', path, status }
-}
 
 /**
  * Strip one agent's OWN entries from a hooks-map config, deleting the file
@@ -2600,34 +2549,6 @@ export function removeVscodeHooks(path: string, dryRun: boolean): ActionResult |
 /** Keys of a Codex hooks.json that are not hook events. */
 const CODEX_NON_EVENT_KEYS = new Set(['hooks', 'mcpServers', 'servers', 'mcp_servers'])
 
-/**
- * Write Codex CLI's verbatim copy of the Claude Code block into hooks.json
- * under `hooks`, the shape of Claude Code's own settings file. Builds before
- * the copy wrote per-agent wrapper entries at the TOP level of this file;
- * those are taken out here, so one run converges any earlier install on
- * today's copy. Foreign keys and foreign hooks are kept. `force` is
- * accepted for the install flow's uniform call and changes nothing: the
- * copy is always rewritten when it differs.
- */
-export function upsertCodexHooks(path: string, _force: boolean, dryRun: boolean): ActionResult {
-  const data = readJsonSafe(path)
-  const before = canonicalJson(data)
-  const legacy: Record<string, unknown> = {}
-  for (const [k, v] of Object.entries(data)) if (!CODEX_NON_EVENT_KEYS.has(k)) legacy[k] = v
-  stripOwnedHooks(legacy)
-  for (const k of Object.keys(data)) if (!CODEX_NON_EVENT_KEYS.has(k) && !(k in legacy)) delete data[k]
-  Object.assign(data, legacy)
-  const hooks = (data.hooks && typeof data.hooks === 'object' ? data.hooks : {}) as Record<string, unknown>
-  writeHookCopy(hooks, expectedHookCopy())
-  data.hooks = hooks
-  if (existsSync(path) && canonicalJson(data) === before) {
-    return { type: 'hook-settings', path, status: 'skipped', detail: 'already configured' }
-  }
-  const status = existsSync(path) ? 'updated' : 'created'
-  if (dryRun) return { type: 'hook-settings', path, status: 'dry-run' }
-  atomicWrite(path, JSON.stringify(data, null, 2) + '\n')
-  return { type: 'hook-settings', path, status }
-}
 
 /**
  * Take treecontext's entries out of the `[hooks]` table of Codex's
@@ -2672,42 +2593,7 @@ export function removeCodexHooks(path: string, dryRun: boolean): ActionResult | 
 
 // ── Cursor hooks (~/.cursor/hooks.json) ────────────────────────────
 
-function buildCursorHooksConfig(): Record<string, unknown> {
-  return {
-    version: 1,
-    hooks: {
-      sessionStart: [{ command: wrapperCommandString('cursor', 'session-start') }],
-      beforeSubmitPrompt: [{ command: wrapperCommandString('cursor', 'user-prompt-submit') }],
-      postToolUse: [{ command: wrapperCommandString('cursor', 'post-tool-use') }],
-      preCompact: [{ command: wrapperCommandString('cursor', 'pre-compact') }],
-    },
-  }
-}
 
-export function upsertCursorHooks(path: string, force: boolean, dryRun: boolean): ActionResult {
-  const desired = buildCursorHooksConfig()
-  const desiredHooks = desired.hooks as Record<string, unknown>
-  const existing = existsSync(path) ? readJsonSafe(path) : {}
-  const existingHooks = (existing.hooks ?? {}) as Record<string, unknown>
-  // Skip only when our owned hook keys already match — a presence-only
-  // check would strand legacy bare-`node` configs until --force.
-  if (existsSync(path) && !force) {
-    const ownedCurrent = Object.keys(desiredHooks).every(
-      key => JSON.stringify(existingHooks[key]) === JSON.stringify(desiredHooks[key]),
-    )
-    if (ownedCurrent) {
-      return { type: 'hook-settings', path, status: 'skipped', detail: 'already configured' }
-    }
-  }
-
-  // Merge rather than overwrite so non-treecontext hooks survive.
-  const config = { ...existing, version: 1, hooks: { ...existingHooks, ...desiredHooks } }
-  const status = existsSync(path) ? 'updated' : 'created'
-
-  if (dryRun) return { type: 'hook-settings', path, status: 'dry-run' }
-  atomicWrite(path, JSON.stringify(config, null, 2) + '\n')
-  return { type: 'hook-settings', path, status }
-}
 
 export function removeCursorHooks(path: string, dryRun: boolean): ActionResult | null {
   return removeOwnedHooksMap(path, 'cursor', dryRun)
@@ -3600,8 +3486,8 @@ export async function configToolApprovals(on: boolean, only: string[] | null): P
 }
 
 /** What install and uninstall say of Gemini CLI, retired (D399). */
-export const RETIRED_GEMINI_LINE = 'Gemini CLI is retired (Google deprecated it for Antigravity CLI): install no longer wires it, '
-  + `with or without --experimental-capture. Antigravity CLI is wired as \`agy\` (treecontext install --agent agy); `
+export const RETIRED_GEMINI_LINE = 'Gemini CLI is retired (Google deprecated it for Antigravity CLI): install no longer wires it. '
+  + `Antigravity CLI is wired as \`agy\` (treecontext install --agent agy); `
   + `a treecontext entry or hooks an earlier install left for Gemini CLI are removed by \`${GEMINI_SWEEP_COMMAND}\`.`
 
 export async function install(opts: InstallOptions): Promise<AgentInstallResult[]> {
@@ -3615,7 +3501,7 @@ export async function install(opts: InstallOptions): Promise<AgentInstallResult[
     const named = opts.agents.map(s => s.toLowerCase())
     if (named.includes('gemini')) {
       console.error(RETIRED_GEMINI_LINE)
-      const err = new Error(`Gemini CLI is retired: install does not wire it${opts.experimentalCapture ? ', with or without --experimental-capture' : ''}`)
+      const err = new Error('Gemini CLI is retired: install does not wire it')
       ;(err as Error & { code?: string }).code = 'INSTALL_RETIRED'
       throw err
     }
@@ -3654,9 +3540,18 @@ export async function install(opts: InstallOptions): Promise<AgentInstallResult[
   const choiceOf = (slug: ApprovalClient): ApprovalsChoice => opts.noToolApprovals === true
     ? { state: 'off', at: new Date().toISOString(), how: 'install' }
     : approvalsChoice(slug)
+  // D406: the Codex on PATH, read once, for its approvals (D381) and for
+  // whether install writes its hooks: at the floor or later, Codex gets its
+  // own block where Codex loads its hooks file (its own verdict, asked of
+  // it before and after the write, codex-hooks.ts installCodexHooks), and
+  // its entry starts the server in capture mode only on that step's word;
+  // otherwise it stays tools-only.
+  const codexWanted = agents.some(a => a.slug === 'codex')
+  const codexVersion = codexWanted ? await readCodexVersion() : null
   const codexSupport: CodexApprovalSupport | null = approvalScope.includes('codex') && choiceOf('codex').state === 'on'
-    ? codexApprovalSupport(await readCodexVersion())
+    ? codexApprovalSupport(codexVersion)
     : null
+  const codexCapture = codexWanted ? codexCaptureOf(codexVersion) : null
   const approvalSummaries: ApprovalSummary[] = []
   let approvalsRecorded = opts.noToolApprovals === true && approvalScope.length > 0
   const dryNote = (added: string[]): { note: string } | Record<string, never> => opts.dryRun && added.length > 0 ? { note: `dry run: would approve ${andList(added)}` } : {}
@@ -3708,12 +3603,60 @@ export async function install(opts: InstallOptions): Promise<AgentInstallResult[
     console.log(`${agent.name}:`)
     try {
 
+    // Codex's refusals, before anything of Codex's is written (D53): a
+    // CODEX_HOME Codex itself refuses to start with, or a config.toml
+    // install may not write. Its entry and its hooks are one fact (D386,
+    // D406), so neither is written without the other: nothing is.
+    if (agent.slug === 'codex') {
+      const ch = codexHome()
+      const note = codexHomeNote()
+      if (note) console.log(`  ${note}`)
+      const cfg = getConfigPath(agent, platform)
+      const refusal = !ch.ok ? ch.why : cfg ? unwritableFile(cfg) : null
+      if (refusal) {
+        console.log(`  none written — Codex CLI: ${refusal}; install changes nothing of Codex's, its entry, hooks and instructions alike`)
+        failed.push({ agent: agent.name, message: `${refusal}; install changed nothing of Codex's` })
+        agentResult.actions.push({ type: 'mcp-config', path: cfg ?? ch.dir, status: 'error', detail: refusal })
+        results.push(agentResult)
+        continue
+      }
+    }
+
+    // D406: Codex's hooks step runs before its entry is written, at the
+    // floor (its own block) and below it (the take-back) alike, since the
+    // entry's capture mode is read from what the step leaves in Codex's
+    // hooks file (`present`, codexHooksPresent): treecontext's hooks are in
+    // the file if and only if the entry starts the server in capture mode,
+    // because hooks that are written can run and only a capture-mode server
+    // drains what they stage. Its lines are said under the entry's.
+    let codexHooks: CodexHooksOutcome | null = null
+    let codexTakeBack: CodexHooksOutcome | null = null
+    const codexScriptLines: string[] = []
+    if (agent.slug === 'codex' && agent.hooks && codexCapture?.state === 'capture') {
+      codexHooks = await installCodexHooks(opts.dryRun, {
+        ask: (cwd) => readCodexHooksTrust(cwd, CODEX_INSTALL_PROBE_TIMEOUT_MS),
+        config: (cwd) => readCodexConfig(cwd, CODEX_INSTALL_PROBE_TIMEOUT_MS),
+        onWait: (line) => console.log(line),
+        // The scripts the block runs are written first, so the block never
+        // names a script install did not write (D406: wherever a hook
+        // install writes runs them, Claude Code wired or not).
+        beforeWrite: () => {
+          const scriptResults = installClaudeHookScripts(opts.dryRun, opts.debug)
+          agentResult.actions.push(...scriptResults)
+          for (const s of scriptResults) codexScriptLines.push(`  hooks: ${s.path} [${s.status}${s.detail ? ` — ${s.detail}` : ''}]`)
+        },
+      })
+    } else if (agent.slug === 'codex' && agent.hooks && codexCapture && codexCapture.state !== 'capture') {
+      codexTakeBack = await takeBackCodexHooksFile(opts.dryRun, { ask: (cwd) => readCodexHooksTrust(cwd, CODEX_INSTALL_PROBE_TIMEOUT_MS), onWait: (line) => console.log(line) })
+    }
+    const codexStep = codexHooks ?? codexTakeBack
+
     // MCP config
     const configPath = getConfigPath(agent, platform)
     if (configPath) {
       // Capture mode wherever a capture hooks block runs for the agent (D386).
       const entry = buildMcpEntry(agent, opts.useNpx, opts.lexical, captureHooksInstalled(agent, platform, {
-        experimentalCapture: opts.experimentalCapture === true,
+        ...(codexStep ? { codexCapture: codexStep.present } : {}),
         claudeBlockPlanned: opts.dryRun && agents.some(a => a.slug === 'claude'),
       }))
 
@@ -3808,19 +3751,42 @@ export async function install(opts: InstallOptions): Promise<AgentInstallResult[
 
     // Hooks
     const unverifiedCapture = agent.hooks && !CAPTURE_PLATFORMS.has(agent.slug)
-    const asIsNoop = unverifiedCapture && opts.experimentalCapture && AS_IS_CLIENTS.has(agent.slug)
-    if (unverifiedCapture && opts.experimentalCapture && !asIsNoop) {
-      console.log(`  hooks: EXPERIMENTAL — capture on ${agent.name} is unverified.`)
-      console.log(`         Installing anyway because --experimental-capture was passed.`)
-      console.log(`         Please report whether entries actually appear:`)
-      console.log(`         https://github.com/bingh0/treecontext-mcp/issues`)
-    }
-    if (asIsNoop) {
-      // An as-is client reads the Claude settings file itself: the installer
-      // writes nothing for it, flag or not (D208, D226). A second route of
-      // our own beside the Claude one would run every hook twice.
-      console.log(`  hooks: nothing to write — ${AS_IS_CLIENT_LINE[agent.slug]}`)
-    } else if (unverifiedCapture && !opts.experimentalCapture) {
+    if (agent.slug === 'codex' && agent.hooks) {
+      // D406: Codex's own block from 0.167.0, by default, beside the
+      // developer's hooks, said here (written above, before the entry);
+      // below the floor, or where its version cannot be read, what install
+      // wrote for Codex is taken back and Codex stays tools-only. A hooks
+      // file Codex does not load is left byte for byte; one install may not
+      // write (D53) is a refusal, said loudly, and the run fails.
+      if (codexHooks) {
+        for (const l of codexScriptLines) console.log(l)
+        if (codexHooks.action) agentResult.actions.push(codexHooks.action)
+        for (const l of codexHooks.lines) console.log(l)
+        if (codexHooks.refused) {
+          failed.push({ agent: agent.name, message: `Codex's hooks file: ${codexHooks.refused}; install changed nothing in it, and Codex CLI stays tools-only` })
+          agentResult.actions.push({ type: 'hook-settings', path: codexHooksPath(), status: 'error', detail: codexHooks.refused })
+        }
+      } else if (codexTakeBack && codexCapture && codexCapture.state !== 'capture') {
+        const out = codexTakeBack
+        if (out.action) agentResult.actions.push(out.action)
+        for (const l of out.lines) console.log(l)
+        if (out.refused) failed.push({ agent: agent.name, message: `Codex's hooks file: ${out.refused}` })
+        console.log(`  hooks: none — ${codexToolsOnlyLine(codexCapture)}`)
+        if (out.present) console.log('  hooks: treecontext\'s hooks remain in Codex\'s hooks file, so Codex CLI\'s entry starts the server in capture mode to drain what they stage')
+      } else {
+        console.log('  hooks: none written — Codex CLI stays tools-only')
+      }
+      // One place for Codex's hooks: an entry of treecontext's in
+      // config.toml's [hooks] would fire beside hooks.json's (Codex merges
+      // the two and warns), so one an earlier build left there goes; the
+      // developer's own hooks in that table stay as they are.
+      const tomlPath = getConfigPath(agent, platform)
+      const tomlResult = tomlPath ? stripCodexTomlHooks(tomlPath, opts.dryRun) : null
+      if (tomlResult) {
+        agentResult.actions.push(tomlResult)
+        console.log(`  hooks: ${tomlPath} [${tomlResult.status} — ${tomlResult.detail}]`)
+      }
+    } else if (unverifiedCapture) {
       // The adapter exists but has never been exercised against this
       // platform's live payloads. Writing its hook config anyway is the
       // loudest possible advertisement that capture works here — louder
@@ -3830,9 +3796,6 @@ export async function install(opts: InstallOptions): Promise<AgentInstallResult[
       // there, saying so plainly.
       console.log(`  hooks: skipped — automatic capture is unverified on ${agent.name}`)
       console.log(`         MCP tools work; nothing is captured for you.`)
-      if (COPYING_CLIENTS.has(agent.slug)) {
-        console.log(`         To copy the hooks anyway: treecontext install --agent ${agent.slug} --experimental-capture`)
-      }
     } else if (agent.hooks) {
       const settingsPath = getHookSettingsPath(agent, platform)
       if (agent.hooks.format === 'claude-settings' && settingsPath) {
@@ -3869,47 +3832,6 @@ export async function install(opts: InstallOptions): Promise<AgentInstallResult[
           if (idle.line) console.log(idle.line)
           if (idle.statePath) console.log(`  install state: ${idle.statePath} [${opts.dryRun ? 'dry-run' : 'recorded'}]`)
         }
-      } else if (agent.hooks.format === 'vscode-hooks' && settingsPath) {
-        agentResult.actions.push(...installAgentHookWrappers('vscode', opts.dryRun))
-        const hookResult = upsertVscodeHooks(settingsPath, opts.force, opts.dryRun)
-        agentResult.actions.push(hookResult)
-        console.log(`  hooks: ${settingsPath} [${hookResult.status}${hookResult.detail ? ` — ${hookResult.detail}` : ''}]`)
-        console.log(`  hooks: SessionStart (orientation + snapshot)`)
-        console.log(`  hooks: UserPromptSubmit (conversation capture)`)
-        console.log(`  hooks: PostToolUse (conversation capture)`)
-        console.log(`  hooks: PreCompact (checkpoint before compaction)`)
-      } else if (agent.hooks.format === 'codex-hooks' && settingsPath) {
-        // A copying client (D154, D161, D208): its own configuration gets a
-        // copy of the Claude Code block, verbatim for Codex CLI, running the
-        // same Claude Code hook scripts, which are written first so the copy
-        // never names a script install did not write.
-        const scriptResults = installClaudeHookScripts(opts.dryRun, opts.debug)
-        agentResult.actions.push(...scriptResults)
-        for (const s of scriptResults) {
-          console.log(`  hooks: ${s.path} [${s.status}${s.detail ? ` — ${s.detail}` : ''}]`)
-        }
-        const hookResult = upsertCodexHooks(settingsPath, opts.force, opts.dryRun)
-        agentResult.actions.push(hookResult)
-        console.log(`  hooks: ${settingsPath} [${hookResult.status}${hookResult.detail ? ` — ${hookResult.detail}` : ''}]`)
-        // One copy, in one place: an entry of ours in config.toml's [hooks]
-        // would fire beside hooks.json's.
-        const tomlPath = agent.slug === 'codex' ? getConfigPath(agent, platform) : null
-        const tomlResult = tomlPath ? stripCodexTomlHooks(tomlPath, opts.dryRun) : null
-        if (tomlResult) {
-          agentResult.actions.push(tomlResult)
-          console.log(`  hooks: ${tomlPath} [${tomlResult.status} — ${tomlResult.detail}]`)
-        }
-        const copied = Object.keys(expectedHookCopy())
-        console.log(`  hooks: copied the Claude Code block (${copied.join(', ')})`)
-      } else if (agent.hooks.format === 'cursor-hooks' && settingsPath) {
-        agentResult.actions.push(...installAgentHookWrappers('cursor', opts.dryRun))
-        const hookResult = upsertCursorHooks(settingsPath, opts.force, opts.dryRun)
-        agentResult.actions.push(hookResult)
-        console.log(`  hooks: ${settingsPath} [${hookResult.status}${hookResult.detail ? ` — ${hookResult.detail}` : ''}]`)
-        console.log(`  hooks: sessionStart (orientation + snapshot)`)
-        console.log(`  hooks: beforeSubmitPrompt (conversation capture)`)
-        console.log(`  hooks: postToolUse (conversation capture)`)
-        console.log(`  hooks: preCompact (checkpoint before compaction)`)
       }
     } else if (agent.slug === 'opencode') {
       // The unverified plugin adapter is not advertised (D30); this is what
@@ -4144,11 +4066,47 @@ export async function uninstall(opts: {
     console.log()
   }
 
+  // D386, D406: Codex's hooks are taken back before anything else, since
+  // what the take-back leaves decides the rest: treecontext's hooks that
+  // remain in Codex's hooks file (a file that refuses the write, or one
+  // install cannot read its hooks in) still run once trusted, so Codex's
+  // entry stays, in capture mode, to drain what they stage, the scripts
+  // they run stay, and the run says so and fails.
+  // Before any of that, Codex's refusals (D53): a CODEX_HOME Codex refuses
+  // to start with, or a config.toml uninstall may not write, leaves every
+  // file of Codex's as it is, its hooks and its entry alike.
+  const codexAgent = agents.find(a => a.hooks?.format === 'codex-hooks')
+  const codexCfg = codexAgent ? getConfigPath(codexAgent, platform) : null
+  const codexHomeNow = codexHome()
+  const codexRefusal = !codexAgent ? null
+    : !codexHomeNow.ok ? codexHomeNow.why
+      : codexCfg && existsSync(codexCfg) ? unwritableFile(codexCfg) : null
+  if (codexAgent && codexHomeNote()) console.log(`${codexAgent.name}: ${codexHomeNote()}`)
+  const codexOut = codexAgent && !codexRefusal
+    ? await takeBackCodexHooksFile(opts.dryRun, { ask: (cwd) => readCodexHooksTrust(cwd, CODEX_INSTALL_PROBE_TIMEOUT_MS), onWait: (line) => console.log(line) })
+    : null
+  // Hooks left written in a file that does not parse run again once the
+  // developer repairs it: kept, as hooks a read-only file keeps.
+  const codexKept = codexOut?.present === true || codexOut?.leftInText === true || (codexRefusal !== null && codexHooksPresent())
+  // The agents whose hooks this run takes away: Codex not, where its hooks remain.
+  const leaving = new Set(agents.filter(a => !(a.hooks?.format === 'codex-hooks' && codexKept)).map(a => a.slug))
+
   for (const agent of agents) {
     const agentResult: AgentInstallResult = { agent: agent.name, slug: agent.slug, actions: [] }
     const configPath = getConfigPath(agent, platform)
 
-    if (configPath && !opts.hooksOnly) {
+    if (agent.hooks?.format === 'codex-hooks' && codexRefusal) {
+      agentResult.refused = `${codexRefusal}; uninstall changed nothing of Codex's, its entry, hooks and instructions alike`
+      console.log(`${agent.name}: refused — ${agentResult.refused}`)
+      results.push(agentResult)
+      continue
+    }
+
+    if (configPath && !opts.hooksOnly && agent.hooks?.format === 'codex-hooks' && codexKept) {
+      const mode = setEntryCapture(agent, configPath, true, opts.dryRun)
+      if (mode) agentResult.actions.push(mode)
+      console.log(`${agent.name}: mcp entry kept in ${configPath}, in capture mode — treecontext's hooks remain in ${codexHooksPath()} and still run once trusted, so the server stays to drain what they stage; take them out (below) and run uninstall again${mode && mode.status !== 'skipped' ? ` [${mode.status}]` : ''}`)
+    } else if (configPath && !opts.hooksOnly) {
       let result: ActionResult | null
       if (agent.configFormat === 'toml-codex') {
         result = removeTomlMcp(configPath, opts.dryRun)
@@ -4176,8 +4134,8 @@ export async function uninstall(opts: {
       // A Codex copy runs these same scripts. Removing them under
       // it would leave every entry of the copy aimed at nothing, so the
       // scripts stay and the command that removes the copy first is named.
-      const copies = copiesRunningClaudeScripts(platform, new Set(agents.map(a => a.slug)))
-      const removing = new Set(agents.map(a => a.slug))
+      const copies = copiesRunningClaudeScripts(platform, leaving)
+      const removing = leaving
       const launcherUsers = AGENTS.filter(a => !removing.has(a.slug) && hasTreecontextEntry(a, platform))
       const scriptResults = removeClaudeHookScripts(opts.dryRun, opts.hooksOnly, copies.length > 0, launcherUsers.length > 0)
       if (launcherUsers.length > 0 && !opts.hooksOnly) {
@@ -4187,8 +4145,8 @@ export async function uninstall(opts: {
       if (copies.length > 0) {
         const cmds = copies.map(a => `treecontext uninstall --agent ${a.slug}`).join(' and ')
         agentResult.refused = `kept the Claude Code hook scripts in ${join(homedir(), '.claude', HOOK_SCRIPTS_DIR_NAME)}: `
-          + `${copies.map(a => a.name).join(' and ')} still run${copies.length === 1 ? 's' : ''} them through ${copies.length === 1 ? 'its' : 'their'} copy of the hooks; `
-          + `remove ${copies.length === 1 ? 'that copy' : 'those copies'} first: ${cmds}, then uninstall Claude Code again`
+          + `${copies.map(a => a.name).join(' and ')} still run${copies.length === 1 ? 's' : ''} them through ${copies.length === 1 ? 'its' : 'their'} own hooks; `
+          + `remove those hooks first: ${cmds}, then uninstall Claude Code again`
         console.log(`${agent.name}: refused — ${agentResult.refused}`)
       }
       const settingsPath = getHookSettingsPath(agent, platform)
@@ -4233,15 +4191,26 @@ export async function uninstall(opts: {
         }
       }
     } else if (agent.hooks?.format === 'codex-hooks') {
+      // An earlier build's per-agent wrappers, known by their names.
       agentResult.actions.push(...removeAgentHookWrappers('codex', opts.dryRun))
-      const settingsPath = getHookSettingsPath(agent, platform)
-      if (settingsPath) {
-        const hookResult = removeCodexHooks(settingsPath, opts.dryRun)
-        if (hookResult) {
-          agentResult.actions.push(hookResult)
-          console.log(`${agent.name}: hooks removed from ${settingsPath}`)
-        }
+      // D406: the hooks install recorded writing and, where no record names
+      // them, an earlier build's (its verbatim copy of the Claude Code block
+      // among them), known by their commands; never a hook of the
+      // developer's, and each of the developer's hooks the removal moved is
+      // named, since Codex will ask to trust it again.
+      const out = codexOut ?? await takeBackCodexHooksFile(opts.dryRun)
+      if (out.action) agentResult.actions.push(out.action)
+      for (const l of out.lines) console.log(`${agent.name}:${l.replace(/^ {2}hooks:/, ' hooks:')}`)
+      const elsewhere = otherWiredCodexLine()
+      if (elsewhere) console.log(`${agent.name}: treecontext's hooks are ${elsewhere}`)
+      if (out.leftInText && !out.refused) {
+        agentResult.refused = `treecontext's hooks are still written in ${codexHooksPath()}, which does not parse now, and will run when it does; repair the file and run uninstall again (Codex CLI's entry is kept draining until then)`
+        console.log(`${agent.name}: incomplete — ${agentResult.refused}`)
       }
+      // A take-back the file refused is not a finished uninstall: the hooks
+      // remain and still run, so the run says so and exits non-zero, as
+      // install does for the same refusal (D53).
+      if (out.refused) agentResult.refused = out.refused
       const tomlPath = getConfigPath(agent, platform)
       const tomlResult = tomlPath ? stripCodexTomlHooks(tomlPath, opts.dryRun) : null
       if (tomlResult) {
@@ -4263,11 +4232,13 @@ export async function uninstall(opts: {
     // A copying client whose copy is gone runs no capture hooks, so its
     // entry converges to no capture (D386) and keeps everything else
     // (D385): doctor reads the hooks-only uninstall as correct straight away.
+    // Codex's entry follows what is left in its hooks file (D406).
     if (opts.hooksOnly && configPath && COPYING_CLIENTS.has(agent.slug)) {
-      const mode = setEntryCapture(agent, configPath, false, opts.dryRun)
+      const keep = agent.hooks?.format === 'codex-hooks' && codexKept
+      const mode = setEntryCapture(agent, configPath, keep, opts.dryRun)
       if (mode) {
         agentResult.actions.push(mode)
-        console.log(`${agent.name}: mcp entry set to no capture in ${configPath} [${mode.status}${mode.detail ? ` — ${mode.detail}` : ''}]`)
+        console.log(`${agent.name}: mcp entry ${keep ? 'kept in capture mode' : 'set to no capture'} in ${configPath}${keep ? ' — treecontext\'s hooks remain and still run once trusted' : ''} [${mode.status}${mode.detail ? ` — ${mode.detail}` : ''}]`)
       }
     }
 
@@ -4353,7 +4324,7 @@ export async function uninstall(opts: {
     // an install for another agent alone wrote them, so a full uninstall takes
     // them, sparing the launcher while another agent's entry still names it.
     if (!opts.hooksOnly && !agents.some(a => a.slug === 'claude')) {
-      const removing = new Set(agents.map(a => a.slug))
+      const removing = leaving
       const launcherUsers = AGENTS.filter(a => !removing.has(a.slug) && hasTreecontextEntry(a, platform))
       const copies = copiesRunningClaudeScripts(platform, removing)
       const orphaned = removeClaudeHookScripts(opts.dryRun, false, copies.length > 0, launcherUsers.length > 0)
@@ -4984,9 +4955,8 @@ export function unmanagedHookState(
   const issue = hookSettingsInterpreterIssue(data)
 
   // Hooks that point at this install and run a resolvable interpreter are
-  // working hooks — the state someone gets by opting in with
-  // --experimental-capture. Warning about those would nag a user for doing
-  // exactly what the flag invites, every time they run doctor. Only a real
+  // working hooks, the state an earlier build's opt-in left. Warning about
+  // those would nag a user every time they run doctor. Only a real
   // defect earns the row: a foreign build, a vanished target, or a bad
   // interpreter. Those are the ones `install` will never come back to repair.
   if (foreign.length === 0 && !missingTarget && !issue) {
@@ -4997,7 +4967,10 @@ export function unmanagedHookState(
   if (foreign.length > 0) notes.push(`they run a different treecontext build: ${foreign[0]}`)
   if (missingTarget) notes.push('some hook targets no longer exist')
   if (issue) notes.push(`hook ${issue}`)
-  notes.push(`to reinstall them against this build: treecontext install --force --agent ${agent.slug} --experimental-capture`)
+  // The adapters these hooks ran left the build with the experimental flag
+  // (D406), and install writes none for this client: the remedy that is
+  // true today is taking them out.
+  notes.push(`no build installs these hooks any more; to remove them: treecontext uninstall --agent ${agent.slug} --hooks-only`)
 
   return {
     present: true,
@@ -5021,7 +4994,7 @@ export function unmanagedHookState(
  * state it found and the remedy, so no row is the half-answer D161 removes.
  */
 export const CLIENT_HOOK_MODES: Readonly<Record<string, string>> = {
-  codex: 'copies the hooks into its own configuration (~/.codex/hooks.json or [hooks] in ~/.codex/config.toml, repo .codex/hooks.json; same JSON contract as Claude Code)',
+  codex: CODEX_HOOK_MODE,
   vscode: 'reads the Claude settings file when its Claude-hooks setting is on (chat.useClaudeHooks, off by default; read as-is, matcher values ignored; also reads .github/hooks/*.json)',
   cursor: 'reads the Claude settings file by default (as-is, through its Include Third-Party configs setting)',
   opencode: 'offers no shell hooks, so the tools are its whole surface (the MCP tools; JS/TS plugins are not hooks)',
@@ -5226,7 +5199,7 @@ export function clientHookReport(agent: AgentDefinition, platform: Platform): Cl
 function clientHookReportBase(agent: AgentDefinition, platform: Platform): ClientHookReport | null {
   const mode = CLIENT_HOOK_MODES[agent.slug]
   if (!mode) return null
-  const copyCmd = `treecontext install --agent ${agent.slug} --experimental-capture`
+  const copyCmd = `treecontext install --agent ${agent.slug}`
 
   if (COPYING_CLIENTS.has(agent.slug)) {
     const copy = copiedHookState(agent, platform)
@@ -6718,6 +6691,14 @@ export async function doctor(): Promise<DiagnosticResult[]> {
   const agentRows: DiagnosticResult[] = []
   let agentsCapture = 0
   let agentsModeWrong = 0
+  // Codex's own directory, where CODEX_HOME names one (codex-home.ts): the
+  // directory every Codex row reads, or one Codex itself refuses to start
+  // with, which no agent row would show (nothing of Codex's is found there).
+  {
+    const ch = codexHome()
+    if (!ch.ok) results.push({ check: 'Codex CLI directory', status: 'warn', detail: ch.why, fix: 'point CODEX_HOME at a directory that exists, or unset it, then run treecontext install --agent codex' })
+    else if (ch.fromEnv) results.push({ check: 'Codex CLI directory', status: 'ok', detail: codexHomeNote() ?? ch.dir })
+  }
   // The fix each mode-disagreeing row names, for the indexer row (one cause, one command).
   const modeFixes: string[] = []
   // The Codex on PATH, read once if a Codex row needs it.
@@ -6786,7 +6767,14 @@ export async function doctor(): Promise<DiagnosticResult[]> {
 
     // Every documented client but Claude Code gets the three halves on its
     // row: the mode, the state found, the remedy (D161, D208).
-    const client = CAPTURE_PLATFORMS.has(agent.slug) ? null : clientHookReport(agent, platform)
+    const client = CAPTURE_PLATFORMS.has(agent.slug) ? null
+      : agent.slug === 'codex'
+        // D407: Codex's own account of which hooks it trusts, read from its
+        // app server; never computed here.
+        // Asked from the project doctor runs in: the report is on this
+        // project, whose own settings Codex reads (codexHookReport).
+        ? await codexHookReport(process.cwd(), { version: () => readCodexVersion(), trust: (cwd) => readCodexHooksTrust(cwd), config: (cwd) => readCodexConfig(cwd) })
+        : clientHookReport(agent, platform)
 
     // Mode detection from MCP args. On a client other than Claude Code this
     // is the SERVER's mode: the client itself captures nothing unless its
@@ -6807,11 +6795,22 @@ export async function doctor(): Promise<DiagnosticResult[]> {
       const hasNoDebug = mcpArgs.includes('--no-debug')
       const label = client ? 'server mode' : 'mode'
       const thisClient = client
-        ? ` (this client: ${captureExpected ? (COPYING_CLIENTS.has(agent.slug) ? 'experimental hooks, unverified' : 'reads the Claude Code hooks block') : 'tools only'})`
+        ? ` (this client: ${captureExpected ? (agent.slug === 'codex' ? 'its own hooks' : 'reads the Claude Code hooks block') : 'tools only'})`
         : ''
       hasModeProblem = hasCapture !== captureExpected
+      // A Codex hooks file that does not parse is the client row's to name,
+      // with its one remedy (fixing the file by hand): the entry's mode beside
+      // it is no second finding (an uninstall keeps it draining, an install
+      // keeps it tools-only, until the file parses again).
+      if (agent.slug === 'codex' && readCodexHooksFile().state !== 'ok' && readCodexHooksFile().state !== 'absent') hasModeProblem = false
       const note = !hasModeProblem ? ''
-        : hasCapture
+        : agent.slug === 'codex'
+          // D386, D406: the hooks in Codex's hooks file and the entry's
+          // mode, one fact; either way round, install converges the entry.
+          ? hasCapture
+            ? ` — but no hook of treecontext's is in ${codexHooksPath()}, so this server has nothing to drain`
+            : ` — but treecontext's hooks are in ${codexHooksPath()} and run once Codex trusts and loads them, and this server does not drain what they stage`
+          : hasCapture
           ? ' — but no capture hooks run for this client'
           : " — but this client's hooks run, and this server does not drain what they stage"
       if (hasCapture) {
@@ -7133,8 +7132,7 @@ export async function doctor(): Promise<DiagnosticResult[]> {
     // and --force when the MCP half needs it too. A mode that disagrees with
     // the hooks needs no force: install converges its own flags (D385), and
     // the flagged install that rewrites a copy converges them with it.
-    const copyWarn = client?.warn === true && COPYING_CLIENTS.has(agent.slug)
-    const flag = copyWarn ? ' --experimental-capture' : ''
+    const flag = ''
     // An agy row whose one finding is the missing entry names the plain
     // install its headless clause names: install writes the entry (D383).
     const agyEntryOnly = agent.slug === 'agy' && installNeeded && !interpreterProblem && !channelProblem

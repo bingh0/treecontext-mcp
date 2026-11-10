@@ -48,6 +48,7 @@ import { hookNowSec } from '../checkpoints.js'
 import { hasLegColumns } from '../persistence/leg-registry.js'
 import { briefsInEffect } from '../runs.js'
 import { dbg } from '../debug.js'
+import { isCodexHook } from './hook-client.js'
 
 /** The SubagentStart hook's output: its context, injected into the
  *  subagent at its start (Claude Code's hookSpecificOutput). */
@@ -97,6 +98,11 @@ async function run(preParsed?: Record<string, unknown>): Promise<void> {
       registerSubagent(db, sessionId, agentId, agentType ?? null, where, at)
       registered = true
       dbg('hook:subagent-start', 'registered', { sessionId, agentId, agentType: agentType ?? null })
+      // D411: a Codex subagent is a registered helper, never a leg: the
+      // message that spawned it is an opaque blob no hook can read, so no
+      // key is inferred from its role's brief, no first moment is written
+      // and nothing is printed to Codex. Legs on Codex wait for beta.5.
+      if (isCodexHook()) return
       if (!agentType || !hasLegColumns(db)) return
       // The hooks door: a role with a brief in effect makes the subagent a
       // leg (D305, D320). A store below 031 has no legs. The cheap read

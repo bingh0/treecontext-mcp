@@ -164,7 +164,7 @@ export interface CliSpawnResult {
 
 export function spawnCli(
   args: string[],
-  opts: { home: string; cwd?: string; input?: string; env?: Record<string, string | undefined> },
+  opts: { home: string; cwd?: string; input?: string; env?: Record<string, string | undefined>; node?: string },
 ): CliSpawnResult {
   return spawnNodeTs(CLI_TS, args, opts)
 }
@@ -181,10 +181,12 @@ export function spawnCli(
 export function spawnNodeTs(
   script: string,
   args: string[],
-  opts: { home: string; cwd?: string; input?: string; env?: Record<string, string | undefined> },
+  opts: { home: string; cwd?: string; input?: string; env?: Record<string, string | undefined>; node?: string },
 ): CliSpawnResult {
   const env = sandboxedSpawnEnv(opts.home, opts.env)
-  const r = spawnSync(process.execPath, nodeTsArgs(script, args), {
+  // `node`: another interpreter binary to run the child under (a Node
+  // upgrade that moved the interpreter); this process's own otherwise.
+  const r = spawnSync(opts.node ?? process.execPath, nodeTsArgs(script, args), {
     cwd: opts.cwd ?? opts.home,
     env,
     input: opts.input ?? '',

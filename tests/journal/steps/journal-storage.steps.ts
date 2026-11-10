@@ -1,6 +1,6 @@
 import fs, { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync, existsSync, statSync, realpathSync } from 'node:fs'
 import { createHash, randomBytes } from 'node:crypto'
-import { execFileSync, spawn } from 'node:child_process'
+import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { createRequire, syncBuiltinESMExports } from 'node:module'
 import { once } from 'node:events'
 import { dirname, join } from 'node:path'
@@ -28,11 +28,12 @@ import { CLI_TS, nodeTsArgs, sandboxedSpawnEnv, spawnCli } from '../../helpers/c
 import { loadConfigFile } from '../../../src/server/config.js'
 import { newerSchemaLine } from '../../../src/persistence/migrations.js'
 import { SCHEMA_CHECK_TTL_MS } from '../../../src/server/server.js'
-import { openCaptureWorld, spawnHook, bashPayload, drainStaging } from '../capture-harness.js'
+import { openCaptureWorld, spawnHook, bashPayload, drainStaging, runHook, type CaptureWorld } from '../capture-harness.js'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { readVerdict } from '../../../src/persistence/backup-verdict.js'
 import { type RunWorld, openRunWorld } from '../run-world.js'
 import { runWorker } from '../standins.js'
+import { TS_ROOT } from '../proc.js'
 
 // ── journal-storage ─────────────────────────────────────────────────────
 
@@ -84,6 +85,10 @@ export interface StorageWorld extends RunWorld {
   stubDir?: string
   repoRoot?: string
   doctorOut?: string
+  /** D419: the earlier build's store, and the bindings file and the old store's rows as doctor found them. */
+  earlier?: { store: string; bindings?: string; rows?: string[] }
+  /** D419 placement: the linked worktree, the directory below its `.git` file, the session started there. */
+  wtSub?: { repo: string; top: string; below: string; branch: string; session: string }
   /** The cap-that-bites scenario: its raw handle, sprint shape and sweep. */
   sprintRaw?: DatabaseSync
   sprintSessions?: number
@@ -1852,6 +1857,109 @@ export const storageBudgetDefiner = (reg: Registry<StorageWorld>): void => {
     expect(row).toContain('no repository: keyed by this directory itself')
     // step-lint: allow unearned-absence -- the line two above proves the same needle shape (`follow <dir> `) fires on this row
     expect(row).not.toContain(`follow ${w.stubDir!} `)
+  })
+
+  // ── D419: an earlier build's binding to a stub's directory ────────────
+  // The earlier binding is laid by the real resolver in a subprocess,
+  // resolving the stub's directory, the identity every earlier build derived
+  // for a project below a stub (tests/helpers/resolve-driver.ts); its store
+  // holds a journal of its own. Doctor is the real CLI, run from the project.
+  const resolveIn = (home: string, dir: string): string => {
+    const r = spawnSync(process.execPath, nodeTsArgs(join(TS_ROOT, 'tests', 'helpers', 'resolve-driver.ts'), [dir]), {
+      env: sandboxedSpawnEnv(home), cwd: TS_ROOT, encoding: 'utf8', timeout: 30_000,
+    })
+    expect(r.status, r.stderr).toBe(0)
+    return (JSON.parse(r.stdout) as { storeName: string }).storeName
+  }
+  const storeRows = (home: string, store: string): string[] => {
+    const db = new DatabaseSync(join(home, '.treecontext', 'stores', store, 'treecontext.db'), { readOnly: true })
+    try { return (db.prepare('SELECT node_id, content FROM nodes ORDER BY node_id').all() as Array<{ node_id: string; content: string | Buffer }>).map((r) => `${r.node_id} ${decodeContent(r.content)}`) } finally { db.close() }
+  }
+  reg.define(/^a directory holding an empty directory named `\.git`, below it a project with no repository, and a store an earlier treecontext bound to that directory for the project$/, async (w: StorageWorld) => {
+    const base = stubTree(w)
+    w.stubDir = join(base, 'holder')
+    mkdirSync(w.stubDir)
+    plantStub(w.stubDir, 'an empty directory named `.git`')
+    w.budgetProject = join(w.stubDir, 'project')
+    mkdirSync(w.budgetProject)
+    expect(gitTop(w.budgetProject).ok, 'git accepts the stub as a repository').toBe(false)
+    const store = resolveIn(w.budgetHome!, w.stubDir)
+    const dir = join(w.budgetHome!, '.treecontext', 'stores', store)
+    mkdirSync(dir, { recursive: true })
+    const raw = new DatabaseSync(join(dir, 'treecontext.db'))
+    const old = await FlatStore.open({ database: openNodeSqlite(raw), ownsDatabase: true, migrate: true })
+    try { await old.insert('the journal an earlier treecontext kept for this project', { metadata: { kind: 'note' } }) } finally { await old.close() }
+    w.earlier = { store }
+  })
+  reg.define(/^the server is started from the project and doctor runs from it$/, async (w: StorageWorld) => {
+    await serveFromProject(w)
+    await statusOver(w)
+    w.earlier!.bindings = readFileSync(join(w.budgetHome!, '.treecontext', 'bindings.json'), 'utf8')
+    w.earlier!.rows = storeRows(w.budgetHome!, w.earlier!.store)
+    w.doctorOut = spawnCli(['doctor'], { home: w.budgetHome!, cwd: w.budgetProject! }).out
+  })
+  reg.define(/^doctor names the earlier store, says it is left as it was, and gives the command that merges it into the project's store$/, (w: StorageWorld) => {
+    const row = projectRootRow(w)
+    const now = resolveIn(w.budgetHome!, w.budgetProject!)
+    expect(now).not.toBe(w.earlier!.store)
+    expect(row).toContain(`an earlier treecontext bound this project to ${w.stubDir!}, taking its .git for a root, in store "${w.earlier!.store}", which is left as it was`)
+    expect(row).toContain(`treecontext stores merge ${w.earlier!.store} ${now}`)
+  })
+  reg.define(/^no store or binding was moved or merged$/, (w: StorageWorld) => {
+    const bindings = readFileSync(join(w.budgetHome!, '.treecontext', 'bindings.json'), 'utf8')
+    expect(bindings).toBe(w.earlier!.bindings)
+    const projects = (JSON.parse(bindings) as { projects: Record<string, { store: string }> }).projects
+    expect(projects[fingerprintOf(`path:${realpathSync(w.stubDir!)}`)]?.store).toBe(w.earlier!.store)
+    expect(storeRows(w.budgetHome!, w.earlier!.store)).toEqual(w.earlier!.rows)
+    expect(w.earlier!.rows!.some((r) => r.includes('the journal an earlier treecontext kept'))).toBe(true)
+    const now = projects[fingerprintOf(`path:${realpathSync(w.budgetProject!)}`)]!.store
+    expect(storeRows(w.budgetHome!, now).filter((r) => r.includes('the journal an earlier treecontext kept'))).toEqual([])
+  })
+
+  // ── D419 with D190: a session's placement reads the binding's resolution
+  // Real git (`git init`, `git worktree add`) and the real session-start
+  // hook, a subprocess under the sandboxed home, read back from SQLite.
+  reg.define(/^a linked worktree "([^"]+)" of a repository, holding a `\.git` file git does not accept in a directory below its top$/, (w: StorageWorld, name: unknown) => {
+    const base = stubTree(w)
+    const repo = join(base, 'repo')
+    const g = (cwd: string, ...args: string[]): string => execFileSync('git', args, { cwd, env: { ...gitEnv(), GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim()
+    mkdirSync(repo)
+    g(repo, 'init', '-q', '-b', 'main')
+    g(repo, 'commit', '-q', '--allow-empty', '-m', 'init')
+    const top = join(base, String(name))
+    const branch = `${String(name)}-work`
+    g(repo, 'worktree', 'add', '-q', '-b', branch, top)
+    const below = join(top, 'vendored', 'deeper')
+    mkdirSync(below, { recursive: true })
+    writeFileSync(join(top, 'vendored', '.git'), 'this file is named .git and is no repository\n')
+    expect(gitTop(below).ok, 'git read past the .git file').toBe(false)
+    w.wtSub = { repo, top, below, branch, session: `cc-${randomBytes(6).toString('hex')}` }
+  })
+  const startSession = (w: StorageWorld, session: string, cwd: string): void => {
+    runHook({ home: w.budgetHome!, proj: cwd, sessionId: session } as CaptureWorld, 'session-start', { hook_event_name: 'SessionStart', source: 'startup', cwd })
+  }
+  const registration = (w: StorageWorld, session: string): unknown => {
+    const stores = readdirSync(join(w.budgetHome!, '.treecontext', 'stores'))
+    const out = stores.map((st) => {
+      const db = new DatabaseSync(join(w.budgetHome!, '.treecontext', 'stores', st, 'treecontext.db'), { readOnly: true })
+      try { return db.prepare("SELECT worktree, branch FROM session_registry WHERE session_id = ? AND agent_id = ''").get(session) } finally { db.close() }
+    }).filter((r) => r !== undefined)
+    expect(out, `the registrations of ${session}`).toHaveLength(1)
+    return { ...(out[0] as object) }
+  }
+  reg.define(/^a session starts in a directory below that file$/, (w: StorageWorld) => {
+    startSession(w, w.wtSub!.session, w.wtSub!.below)
+  })
+  reg.define(/^the session is registered in the worktree "([^"]+)" on the worktree's branch, as a session at the worktree's top is$/, (w: StorageWorld, name: unknown) => {
+    const s = w.wtSub!
+    expect(registration(w, s.session)).toEqual({ worktree: String(name), branch: s.branch })
+    const atTop = `cc-${randomBytes(6).toString('hex')}`
+    startSession(w, atTop, s.top)
+    expect(registration(w, atTop)).toEqual(registration(w, s.session))
+  })
+  reg.define(/^the project's store is the repository's store$/, (w: StorageWorld) => {
+    const stores = readdirSync(join(w.budgetHome!, '.treecontext', 'stores'))
+    expect(stores).toEqual([resolveIn(w.budgetHome!, w.wtSub!.repo)])
   })
 
   // S: a budget the file cannot mean.

@@ -58,6 +58,8 @@ import { hasRegistry, retireSubagent, subagentOf, INTERNAL_SUMMARY_KIND } from '
 import { SUBAGENT_SUMMARY_KIND } from '../handoff.js'
 import { STORE_SAFETY_CAP, activeIndexCap } from '../persistence/capture-constants.js'
 import { dbg } from '../debug.js'
+import { isCodexHook } from './hook-client.js'
+import { stageNoResultCalls } from './codex-calls.js'
 
 /**
  * What this stop is, read once on the connection the hook writes with
@@ -204,7 +206,10 @@ async function run(preParsed?: Record<string, unknown>): Promise<void> {
     // Code 2.1.271 and later, auto mode; D371); with no hand-back the
     // payload's text is the report, and with neither the transcript's
     // last assistant text stands in.
-    const transcript = typeof input['agent_transcript_path'] === 'string' && input['agent_transcript_path'] !== '' ? input['agent_transcript_path'] : null
+    // D411: a Codex subagent's report is read from the payload alone, never
+    // from its transcript first: Codex's transcript is not Claude Code's.
+    const codex = isCodexHook()
+    const transcript = !codex && typeof input['agent_transcript_path'] === 'string' && input['agent_transcript_path'] !== '' ? input['agent_transcript_path'] : null
     let report = transcript ? extractHandbackReport(transcript) : null
     let reportSrc: 'handback' | 'payload' | 'transcript' | null = report ? 'handback' : null
     if (!report && typeof input['last_assistant_message'] === 'string' && input['last_assistant_message'].trim() !== '') {
@@ -229,7 +234,9 @@ async function run(preParsed?: Record<string, unknown>): Promise<void> {
     // A lookup that cannot read the store in that budget is no evidence:
     // the stop is a subagent's and the report a subagent summary (D263).
     let stop: ReturnType<typeof atStopOn> = { leg: null, checkpointSinceStart: false, internal: false }
-    if (ref) {
+    // D408: the subagent's calls Codex reported no result for, at its stop.
+    if (codex && sessionId && agentId) stageNoResultCalls(dbPath, sessionId, agentId, at)
+    if (ref && !codex) {
       let guard: DatabaseType | null = null
       try {
         guard = openHookDb(dbPath, { readonly: true, timeoutMs: STOP_GUARD_TIMEOUT_MS })
