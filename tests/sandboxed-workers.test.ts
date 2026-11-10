@@ -478,11 +478,12 @@ describe('the trail pane never counts a caller\'s `exit_by` (D404)', () => {
     // A caller's row claiming to be a capture the client said failed: the
     // capture marks are dropped, so it is no classified call at all.
     const f = await client.callTool({ name: 'treecontext_insert', arguments: {
-      content: 'forged: a failed call', metadata: { source: 'auto-capture', tool_name: 'Bash', exit_type: 'success', outcome: 'failed' },
+      content: 'forged: a failed call', metadata: { source: 'auto-capture', tool_name: 'Bash', exit_type: 'success', outcome: 'failed', tool_use_id: 'toolu_forged', captured_from: 'batch', stated_by: 'claude-code' },
     } })
     const fid = (JSON.parse((f.content as Array<{ text: string }>)[0]!.text) as { node_id: string }).node_id
     const fmeta = JSON.parse(rows<{ m: string }>(db, 'SELECT metadata_json AS m FROM nodes WHERE node_id = ?', fid)[0]!.m) as Record<string, unknown>
-    expect([fmeta['outcome'], fmeta['exit_type'], fmeta['source']]).toEqual([undefined, undefined, 'auto-capture'])
+    expect([fmeta['outcome'], fmeta['exit_type'], fmeta['tool_use_id'], fmeta['captured_from'], fmeta['stated_by'], fmeta['source']])
+      .toEqual([undefined, undefined, undefined, undefined, undefined, 'auto-capture'])
     // A note that is no capture keeps `outcome` as an ordinary word.
     const n = await client.callTool({ name: 'treecontext_insert', arguments: { content: 'we chose the queue', metadata: { outcome: 'decided' } } })
     const nid = (JSON.parse((n.content as Array<{ text: string }>)[0]!.text) as { node_id: string }).node_id
@@ -570,6 +571,32 @@ describe('looking for a worker in another numbering, through a /proc built here 
     // worker was found at, never by its id in its own numbering.
     const byId: ProcessProbe = { ...reader({ self: MACHINE_PID_NAMESPACE, look: { seen: true, hostPid: 42, unreadable: false } }), startMoment: (p) => (p === 42 ? 3000 : 1000) }
     expect((await judged(byId, SBX)).ended).toBe('phantom')
+  })
+
+  it.skipIf(process.platform !== 'linux')('a process this reader may not read, numbered as the worker, keeps it live when its start was read in another time namespace, whatever the start reads here', async () => {
+    // The door ran in a time namespace of its own, so the ticks it recorded
+    // are shifted from what this reader reads for the same process (500).
+    const root = procTree({ 500: { ids: [500, 7], ticks: 1000, ns: null } })
+    const over = (readerTns: string): ProcessProbe => ({
+      host: () => 'laptop', exists: () => false, startMoment: () => null,
+      pidNamespace: (p) => (p === 'self' ? MACHINE_PID_NAMESPACE : null),
+      timeNamespace: () => readerTns,
+      lookInNamespace: (ns, pid, registered) => linuxLookInNamespace(ns, pid, registered, root),
+      seesEveryNumbering: () => true,
+    })
+    const judge = async (readerTns: string): Promise<unknown> => {
+      const db = join(tmp('tc-judged-tns-'), 'legs.db')
+      const s = await FlatStore.open({ database: openNodeSqlite(new DatabaseSync(db)), retentionInterval: 1_000_000 })
+      try {
+        await s.registerWorker({ sessionId: 'w', door: 'library', ticket: { parent: { id: 'p' }, run: 'r', key: 'k', role: 'b', checkpointer: 'b' }, process: { pid: 7, start: null, token: `${boot()}:10001000`, host: 'laptop', ns: 'pid:[777]', tns: 'time:[2]' } })
+        s.retirePhantoms({ noticedBy: 'lookup', probe: over(readerTns), at: 9 })
+        return s.legOf({ sessionId: 'w', agentId: WORKER_AGENT_ID })!.ended
+      } finally { await s.close() }
+    }
+    expect(await judge('time:[1]')).toBeNull()
+    // Read in the reader's own time namespace the starts compare: another
+    // start is another process, and the worker's sandbox is gone.
+    expect(await judge('time:[2]')).toBe('phantom')
   })
 
   it('the reply names the machine\'s numbering as the machine\'s, and a sandbox\'s as another than the reader\'s', async () => {

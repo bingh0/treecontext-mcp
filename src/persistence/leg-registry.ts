@@ -862,7 +862,11 @@ export function retirePhantoms(db: RegistryHandle, opts: {
     }
     if (readerNs !== null && workerNs !== null && workerNs !== readerNs) {
       const registered = { start: newest.start, token: newest.token ?? null }
-      const look = probe.lookInNamespace ? probe.lookInNamespace(workerNs, newest.pid, registered) : null
+      // The registered start goes to the look only where it compares with
+      // what this reader reads (one time namespace): across two, a process
+      // this reader may not read, numbered as the worker, may be the worker
+      // whatever its start reads here, and keeps it live.
+      const look = probe.lookInNamespace ? probe.lookInNamespace(workerNs, newest.pid, comparable(newest) ? registered : undefined) : null
       if (look !== null && look.hostPid !== null) {
         // Found in its own numbering: judged there, by D317, with the
         // readings taken where it was found (its id there is in the

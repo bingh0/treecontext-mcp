@@ -98,7 +98,13 @@
  *  |                                        | start read in another time namespace, a process the reader |
  *  |                                        | may not read or a /proc that hides it) now leaves the      |
  *  |                                        | worker live, and no other is known on Linux; the wrong     |
- *  |                                        | "gone" the outline needs has no real source left to run    |
+ *  |                                        | "gone" the outline needs has no real source left to run.   |
+ *  |                                        | "None known" is a claim to test, not a fact: three reviews |
+ *  |                                        | each found a route after an earlier wording said none was  |
+ *  |                                        | left (the last, 2026-11-10: a process the reader may not   |
+ *  |                                        | read whose start was read in another time namespace). A    |
+ *  |                                        | route found later is closed and its real sandbox becomes a |
+ *  |                                        | test; the stand-in never stands in for one that still runs |
  *
  * ── What a stand-in may do ────────────────────────────────────────────
  *
