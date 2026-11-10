@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import {
   mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync,
-  mkdirSync, symlinkSync, readdirSync,
+  mkdirSync, symlinkSync, readdirSync, chmodSync,
 } from 'node:fs'
 import { join, basename, isAbsolute } from 'node:path'
 import { homedir, tmpdir } from 'node:os'
@@ -326,6 +326,65 @@ describe('upsertJsonMcp', () => {
     expect((data.mcpServers as Record<string, unknown>).treecontext).toEqual({ command: 'treecontext' })
     expect(existsSync(`${p}.bak`)).toBe(true)
     expect(readFileSync(`${p}.bak`, 'utf8')).toBe('not json at all {{{')
+    // The line install prints names the backup.
+    expect(r.detail).toContain(`the file as it was is at ${p}.bak`)
+  })
+
+  it('a dry run leaves a corrupt file where it is, makes no backup, and says what a run would do', () => {
+    const p = join(dir, 'mcp.json')
+    writeFileSync(p, '{"mcpServers": {"mine": {"command": "x"}},,}')
+    const r = upsertJsonMcp(p, 'mcpServers', { command: 'treecontext' }, false, true)
+    expect(r.status).toBe('dry-run')
+    expect(readFileSync(p, 'utf8')).toBe('{"mcpServers": {"mine": {"command": "x"}},,}')
+    expect(readdirSync(dir)).toEqual(['mcp.json'])
+    expect(r.detail).toContain(`install would keep it as it is at ${p}.bak and write a fresh one`)
+  })
+
+  it('a second corrupt file never replaces the first one\'s backup', () => {
+    const p = join(dir, 'mcp.json')
+    writeFileSync(p, 'first broken {{{')
+    upsertJsonMcp(p, 'mcpServers', { command: 'treecontext' }, false, false)
+    writeFileSync(p, 'second broken {{{')
+    const r = upsertJsonMcp(p, 'mcpServers', { command: 'treecontext' }, false, false)
+    expect(readFileSync(`${p}.bak`, 'utf8')).toBe('first broken {{{')
+    const dated = readdirSync(dir).filter(n => n.startsWith('mcp.json.bak-'))
+    expect(dated).toHaveLength(1)
+    expect(readFileSync(join(dir, dated[0]!), 'utf8')).toBe('second broken {{{')
+    expect(r.detail).toContain(join(dir, dated[0]!))
+    // And a dry run after that names a third, free name, and makes nothing.
+    writeFileSync(p, 'third broken {{{')
+    const before = readdirSync(dir).sort()
+    const d = upsertJsonMcp(p, 'mcpServers', { command: 'treecontext' }, false, true)
+    expect(readdirSync(dir).sort()).toEqual(before)
+    expect(d.detail).toMatch(/would keep it as it is at .*mcp\.json\.bak-\d{8}T\d{6}Z/)
+  })
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('a corrupt file whose backup cannot be made is a refusal: nothing is written', () => {
+    const p = join(dir, 'mcp.json')
+    writeFileSync(p, 'broken {{{')
+    chmodSync(dir, 0o500)
+    try {
+      expect(() => upsertJsonMcp(p, 'mcpServers', { command: 'treecontext' }, false, false))
+        .toThrow(/does not parse as JSON and could not be kept aside .*nothing was written/)
+      expect(readFileSync(p, 'utf8')).toBe('broken {{{')
+    } finally {
+      chmodSync(dir, 0o700)
+    }
+    expect(readdirSync(dir)).toEqual(['mcp.json'])
+  })
+
+  it('a directory where the config file should be is moved aside, never onto an earlier backup', () => {
+    const p = join(dir, 'mcp.json')
+    writeFileSync(`${p}.bak`, 'an earlier backup')
+    mkdirSync(p)
+    writeFileSync(join(p, 'inside'), 'kept')
+    const r = upsertJsonMcp(p, 'mcpServers', { command: 'treecontext' }, false, false)
+    expect(r.status).toBe('created')
+    expect(readFileSync(`${p}.bak`, 'utf8')).toBe('an earlier backup')
+    const dated = readdirSync(dir).filter(n => n.startsWith('mcp.json.bak-'))
+    expect(dated).toHaveLength(1)
+    expect(readFileSync(join(dir, dated[0]!, 'inside'), 'utf8')).toBe('kept')
+    expect((readJson(p).mcpServers as Record<string, unknown>).treecontext).toEqual({ command: 'treecontext' })
   })
 
   it('skips when --code-annotation present (legacy code-index flag)', () => {

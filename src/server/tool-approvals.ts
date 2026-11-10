@@ -856,8 +856,13 @@ export function agyHeadlessClause(args: {
     return { text: `${label}: agy has no treecontext tools — ${mcpPath} holds no treecontext server${backup}`, warn: true, remedy: install, fix: install }
   }
   if (entry.state === 'unreadable') {
-    const remedy = `fix ${mcpPath} so it parses as JSON, then ${install}`
-    return { text: `${label}: agy has no treecontext tools — ${mcpPath} does not parse, and agy refuses it`, warn: true, remedy, fix: remedy }
+    // Install by itself is enough: it keeps the file as it is beside it and
+    // writes a fresh one. Servers of the developer's in the broken file then
+    // live only in that backup, so the remedy says how to keep them in place.
+    // The remedy stays the bare command: doctor's one-command-per-row pass
+    // replaces an install remedy by the row's fix, so the words live here.
+    const whatInstallDoes = `install keeps the file as it is beside it, as ${mcpPath}.bak or a dated name where that is taken, and writes a fresh one; to keep servers of yours in place, fix the file so it parses as JSON first`
+    return { text: `${label}: agy has no treecontext tools — ${mcpPath} does not parse, and agy refuses it (${whatInstallDoes})`, warn: true, remedy: install, fix: install }
   }
   if (entry.disabled) {
     const remedy = `your "disabled": true on the treecontext server in ${mcpPath}, yours to change (install leaves it): agy mcp enable treecontext`

@@ -10,6 +10,7 @@ import { HOOK_CLIENT_FLAG, CLAUDE_CODE_CLIENT } from '../hooks/hook-client.js'
 import {
   existsSync, readFileSync, writeFileSync, renameSync, mkdirSync,
   unlinkSync, readdirSync, lstatSync, statSync, rmSync,  realpathSync, readlinkSync, chmodSync,
+  copyFileSync, constants as fsConstants,
 } from 'node:fs'
 import { execFileSync, spawnSync } from 'node:child_process'
 import type { DatabaseSync } from 'node:sqlite'
@@ -666,28 +667,63 @@ function atomicWrite(filePath: string, content: string, mode?: number): void {
 
 // ── JSON config merge ──────────────────────────────────────────────
 
-function backupCorrupt(filePath: string): string {
-  const bakPath = `${filePath}.bak`
-  try {
-    renameSync(filePath, bakPath)
-  } catch {
-    // If rename fails (permissions etc.), continue — we'll overwrite
-    return bakPath
-  }
-  return bakPath
+/** The name a file that does not parse is kept under: `<file>.bak` while
+ *  that name is free, else a dated name beside it, numbered where even
+ *  that is taken. Never a name something already holds. */
+function freeBackupPath(filePath: string): string {
+  const first = `${filePath}.bak`
+  if (!pathHeld(first)) return first
+  const stem = `${first}-${backupStamp()}`
+  let bak = stem
+  for (let n = 2; pathHeld(bak); n++) bak = `${stem}-${n}`
+  return bak
 }
 
-function readJsonSafe(path: string, backup = false): Record<string, unknown> {
-  if (!existsSync(path)) return {}
-  try {
-    return JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>
-  } catch {
-    if (backup) {
-      const bakPath = backupCorrupt(path)
-      console.error(`[warn] corrupt JSON at ${path} — backed up to ${bakPath}`)
+/** Whether anything sits at a path, a dangling link included. */
+function pathHeld(path: string): boolean {
+  try { lstatSync(path); return true } catch { return false }
+}
+
+/**
+ * Keep a configuration file that does not parse beside itself before install
+ * writes a fresh one, and say where. It never writes over an earlier backup
+ * (D120's rule, never destroy, applied to the developer's own file: a second
+ * broken file used to be renamed onto the first one's `.bak`), and a backup
+ * that cannot be made is a refusal: the caller writes nothing (D53). A file
+ * is copied, exclusively, so the original stays until the fresh one replaces
+ * it; a directory at the file's path is moved, since nothing can be written
+ * there while it stays.
+ */
+function backupCorrupt(filePath: string): string {
+  let isDir = false
+  try { isDir = statSync(filePath).isDirectory() } catch { /* the copy below says why */ }
+  for (let attempt = 0; ; attempt++) {
+    const bak = freeBackupPath(filePath)
+    try {
+      if (isDir) renameSync(filePath, bak)
+      else copyFileSync(filePath, bak, fsConstants.COPYFILE_EXCL)
+      return bak
+    } catch (err) {
+      // Another process took the name between the look and the copy: look again.
+      if ((err as NodeJS.ErrnoException).code === 'EEXIST' && attempt < 5) continue
+      throw new Error(`${filePath} does not parse as JSON and could not be kept aside as ${bak} (${(err as NodeJS.ErrnoException).code ?? String(err)}); nothing was written. Fix or move the file, then run install again.`)
     }
-    return {}
   }
+}
+
+/** A JSON file's object, or `{}` for a missing one; `corrupt` says the file
+ *  is there and does not parse (or cannot be read). */
+function readJsonState(path: string): { data: Record<string, unknown>; corrupt: boolean } {
+  if (!existsSync(path)) return { data: {}, corrupt: false }
+  try {
+    return { data: JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>, corrupt: false }
+  } catch {
+    return { data: {}, corrupt: true }
+  }
+}
+
+function readJsonSafe(path: string): Record<string, unknown> {
+  return readJsonState(path).data
 }
 
 // ── Convergence: what install owns in an entry (D385) ──────────────
@@ -990,7 +1026,10 @@ export function upsertJsonMcp(
   path: string, rootKey: string, entry: Record<string, unknown>,
   force: boolean, dryRun: boolean,
 ): ActionResult {
-  const data = readJsonSafe(path, true)
+  // A file that does not parse is kept beside itself before the fresh one is
+  // written, never in a dry run (which changes nothing and says what a run
+  // would do), and never over an earlier backup.
+  const { data, corrupt } = readJsonState(path)
   const servers = (data[rootKey] ?? {}) as Record<string, unknown>
 
   const existing = servers.treecontext
@@ -1010,10 +1049,14 @@ export function upsertJsonMcp(
   const status = existing ? 'updated' : 'created'
   data[rootKey] = servers
 
-  const detail = keptDetail(report, dryRun)
   if (dryRun) {
+    const detail = keptDetail(report, dryRun, corrupt
+      ? [`the file does not parse as JSON; install would keep it as it is at ${freeBackupPath(path)} and write a fresh one`] : [])
     return { type: 'mcp-config', path, status: 'dry-run', ...(detail ? { detail } : {}) }
   }
+  const bak = corrupt ? backupCorrupt(path) : null
+  const detail = keptDetail(report, dryRun, bak
+    ? [`the file did not parse as JSON, so a fresh one was written; the file as it was is at ${bak}`] : [])
   atomicWrite(path, JSON.stringify(data, null, 2) + '\n')
   return { type: 'mcp-config', path, status, ...(detail ? { detail } : {}) }
 }
@@ -3084,13 +3127,28 @@ export function agySettingsSources(cwd: string): AgySettingsRead {
 
 /**
  * The backup an earlier install made of agy's MCP configuration when it did
- * not parse (install moves such a file to `<file>.bak` and writes a fresh
- * one), told by a `.bak` beside it that still does not parse; null otherwise.
+ * not parse (install keeps such a file beside it, as `<file>.bak` or a dated name
+ * where that is taken, and writes a fresh one), told by such a backup that
+ * still does not parse; null otherwise.
  */
 export function agyReplacedBackup(path: string = agyMcpConfigPath()): string | null {
-  const bak = `${path}.bak`
-  if (!existsSync(bak)) return null
-  try { JSON.parse(readFileSync(bak, 'utf8')); return null } catch { return bak }
+  // `<file>.bak`, or a dated `<file>.bak-<stamp>` where that name was taken:
+  // the newest one that still does not parse.
+  let names: string[]
+  try { names = readdirSync(dirname(path)) } catch { return null }
+  const stem = `${basename(path)}.bak`
+  const found: Array<{ bak: string; at: number }> = []
+  for (const n of names) {
+    if (n !== stem && !n.startsWith(`${stem}-`)) continue
+    const bak = join(dirname(path), n)
+    try {
+      const st = statSync(bak)
+      if (!st.isFile()) continue
+      try { JSON.parse(readFileSync(bak, 'utf8')) } catch { found.push({ bak, at: st.mtimeMs }) }
+    } catch { /* gone, or not ours to read */ }
+  }
+  found.sort((a, b) => b.at - a.at)
+  return found[0]?.bak ?? null
 }
 
 /** What agy's MCP configuration holds for treecontext. */

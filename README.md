@@ -18,7 +18,7 @@ is and why it is shaped this way; [ARCHITECTURE.md](ARCHITECTURE.md) is
 how it hangs together; [docs/security.md](docs/security.md) is the
 trust contract.
 
-> **This is a public beta (`0.1.0-beta.3.1`).** It installs from npm under
+> **This is a public beta (`0.1.0-beta.4`).** It installs from npm under
 > the `beta` dist-tag, as `treecontext-mcp@beta`. The store schema may still change between beta
 > releases; migrations are additive, but treat your journal as replaceable
 > for now.
@@ -328,7 +328,10 @@ later install until you say `on`.
 
 On Windows, `~` means `%USERPROFILE%`. Existing config is merged, not
 overwritten — your other MCP servers and hooks are left alone, and a
-corrupt config file is backed up to `.bak` rather than clobbered.
+corrupt config file is kept beside itself as `<file>.bak` (a dated
+`<file>.bak-<UTC timestamp>` where that name is taken, never over an
+earlier backup) before a fresh one is written; a dry run moves nothing,
+and a backup that cannot be made refuses the write.
 
 **Idle compaction.** `treecontext install` turns Claude Code's idle
 compaction off, by writing `"idleCompaction": false` into

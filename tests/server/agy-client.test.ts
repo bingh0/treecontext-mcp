@@ -1,6 +1,6 @@
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { delimiter, join } from 'node:path'
+import { delimiter, dirname, join } from 'node:path'
 import { afterEach, describe, expect, test } from 'vitest'
 import { pathHidingMachineClients, spawnCli } from '../helpers/cli-spawn.js'
 import {
@@ -155,7 +155,11 @@ describe("doctor's agy clause in the states the outline does not list", () => {
   test('a configuration agy cannot parse', () => {
     const c = agyHeadlessClause({ ...base, entry: { state: 'unreadable' } })
     expect(c.warn).toBe(true)
-    expect(c.text).toMatch(/does not parse, and agy refuses it$/)
+    expect(c.text).toMatch(/does not parse, and agy refuses it \(install keeps the file as it is beside it, as .+\.bak or a dated name where that is taken, and writes a fresh one; to keep servers of yours in place, fix the file so it parses as JSON first\)$/)
+    // The remedy and the fix are the install command alone: install by
+    // itself is enough, and doctor's row carries one command.
+    expect(c.remedy).toBe('treecontext install --agent agy')
+    expect(c.fix).toBe('treecontext install --agent agy')
   })
   test("a project file whose rules doctor cannot place is said, never silently skipped", () => {
     const c = agyHeadlessClause({ ...base, entry: { state: 'present', disabled: false }, unplaced: ['/p.json'] })
@@ -547,6 +551,39 @@ describe.skipIf(process.platform === 'win32')('install and uninstall for agy (D3
     expect(spawnCli(['install', '--yes'], { home: h }).status).toBe(0)
     expect(readFileSync(`${mcpPath(h)}.bak`, 'utf8')).toBe('{"mcpServers": {"github": ')
     expect(agyRow(spawnCli(['doctor'], { home: h }).stdout)).toContain(`an earlier install replaced ${mcpPath(h)} because it did not parse, so any servers of yours that were in it survive only in ${mcpPath(h)}.bak`)
+  })
+
+  test('an MCP configuration that does not parse: doctor names install as the remedy, a dry run moves nothing, and a second broken file keeps the first backup', () => {
+    const h = home()
+    const broken = '{"mcpServers": {"github": '
+    writeFileSync(mcpPath(h), broken)
+    // Doctor: the fix line is the install command alone; the remedy says
+    // what install does with the file and how to keep one's own servers.
+    const out = spawnCli(['doctor'], { home: h }).stdout
+    const row = agyRow(out)
+    expect(row).toContain(`${mcpPath(h)} does not parse, and agy refuses it (install keeps the file as it is beside it, as ${mcpPath(h)}.bak or a dated name where that is taken, and writes a fresh one; to keep servers of yours in place, fix the file so it parses as JSON first); remedy: treecontext install`)
+    // The fix line is an install command and nothing else (the plain one on
+    // a machine with nothing wired, as here).
+    const fix = out.split('\n')[out.split('\n').indexOf(row) + 1] ?? ''
+    expect(fix).toMatch(/^ +fix: treecontext install( --agent agy)?$/)
+    // A dry run: the file is where it was, byte for byte, and no backup exists.
+    const dry = spawnCli(['install', '--yes', '--dry-run'], { home: h })
+    expect(dry.status).toBe(0)
+    expect(readFileSync(mcpPath(h), 'utf8')).toBe(broken)
+    expect(existsSync(`${mcpPath(h)}.bak`)).toBe(false)
+    expect(dry.stdout).toContain(`install would keep it as it is at ${mcpPath(h)}.bak and write a fresh one`)
+    // The run: the backup is named in install's own line.
+    const run = spawnCli(['install', '--yes'], { home: h })
+    expect(run.status).toBe(0)
+    expect(run.stdout).toContain(`the file as it was is at ${mcpPath(h)}.bak`)
+    // Broken again: the first backup stays, and doctor names the newer one.
+    const again = '{"mcpServers": {"gitlab": '
+    writeFileSync(mcpPath(h), again)
+    expect(spawnCli(['install', '--yes'], { home: h }).status).toBe(0)
+    expect(readFileSync(`${mcpPath(h)}.bak`, 'utf8')).toBe(broken)
+    const dated = readdirSync(dirname(mcpPath(h))).filter(n => n.startsWith('mcp_config.json.bak-'))
+    expect(dated).toHaveLength(1)
+    expect(readFileSync(join(dirname(mcpPath(h)), dated[0]!), 'utf8')).toBe(again)
   })
 })
 
