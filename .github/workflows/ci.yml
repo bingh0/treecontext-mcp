@@ -84,6 +84,28 @@ jobs:
       # run its sandbox check; none of them calls a model.
       - name: install Codex CLI
         run: npm i -g @openai/codex@0.167.0
+      # The Antigravity CLI scenarios read agy's own listing of its MCP
+      # servers (`agy mcp list`) and its version line; none of them calls a
+      # model or needs a login. agy ships no npm package and its installer
+      # takes no version: it installs the newest build (the installer checks
+      # the download against the manifest's SHA-512), and the harness stands
+      # in for the version line alone where agy has moved past the recorded
+      # one (tests/journal/install-harness.ts).
+      - name: install Antigravity CLI (Linux, macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          curl -fsSL https://antigravity.google/cli/install.sh | bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/agy" --version
+      - name: install Antigravity CLI (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          irm https://antigravity.google/cli/install.ps1 | iex
+          $bin = Join-Path $env:LOCALAPPDATA "agy\bin"
+          Add-Content -Path $env:GITHUB_PATH -Value $bin
+          & (Join-Path $bin "agy.exe") --version
 
       - run: npm run typecheck
       # The hook-budget suite times the hooks as they ship: built (dist)
