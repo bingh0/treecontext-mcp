@@ -17,7 +17,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import { DatabaseSync } from 'node:sqlite'
 import { openNodeSqlite } from '../src/persistence/node-sqlite.js'
 import { FlatStore } from '../src/flat-store.js'
-import { readTicket, mintTicket, declaresDoor, TICKET_ENV, WORKER_SESSION_ENV } from '../src/ticket.js'
+import { readTicket, mintTicket, declaresDoor, ticketClaimOf, TICKET_ENV, WORKER_SESSION_ENV } from '../src/ticket.js'
 import {
   composeFirstMessage, STATE_NOT_HISTORY_LINE, PROMPT_HEADING, doorRowBoundaries, FIRST_MOMENT_PREVIEW_LEN, NO_CHECKPOINTER_LINE, sendBackReason,
 } from '../src/first-moment.js'
@@ -734,7 +734,7 @@ describe('the lane variable is honoured only for its own ticket', () => {
     } finally { await s.close() }
   })
 
-  it('serve given a lane nobody registered writes by the ordinary ladder, never into the invented lane', async () => {
+  it('serve given a ticket and a lane this store holds no registration for stamps the ticket\'s claim, never a registered worker\'s stamp (D424)', async () => {
     const s = await open()
     await s.close()
     const home = mkdtempSync(join(tmpdir(), 'tc-door-home-'))
@@ -755,8 +755,40 @@ describe('the lane variable is honoured only for its own ticket', () => {
     const row = raw<{ session_key: string | null; m: string | null }>("SELECT session_key, metadata_json AS m FROM nodes WHERE CAST(content AS TEXT) = 'state: a row from an invented lane'")
     expect(row).toHaveLength(1)
     const m = JSON.parse(row[0]!.m ?? '{}') as Record<string, unknown>
-    expect([row[0]!.session_key === 'worker-invented', m['_cc_session_id'] === 'worker-invented', m['_writer'] === 'builder']).toEqual([false, false, false])
+    // The door registered the worker in another store: the row is keyed to
+    // the session the door named, under the ticket's role, as a claim.
+    expect([row[0]!.session_key, m['_cc_session_id'], m['_writer'], m['_writer_src'], m['_parent'], m['_parent_src']])
+      .toEqual(['worker-invented', 'worker-invented', 'builder', 'ticket-claim', 'p1', 'declared'])
+    // Never the stamp the store writes from a worker's registration, and
+    // no registration is written for it.
+    expect(m['_writer_agent_id']).toBeUndefined()
+    expect(raw('SELECT 1 FROM session_registry')).toHaveLength(0)
   }, 60_000)
+
+  it('a ticket claims a lane only where the store holds no registration for it, and only with both variables (D424)', async () => {
+    const s = await open()
+    try {
+      const t = mintTicket({ run: 'r1', key: 'k', role: 'builder', parent: { id: 'p1' } })
+      const db = new DatabaseSync(path(), { readOnly: true })
+      try {
+        const h = openNodeSqlite(db)
+        expect(ticketClaimOf(h, { [TICKET_ENV]: t, [WORKER_SESSION_ENV]: 'worker-elsewhere' })).toEqual({ session: 'worker-elsewhere', role: 'builder', parent: 'p1' })
+        // The lane alone, or the ticket alone, claims nothing.
+        expect(ticketClaimOf(h, { [WORKER_SESSION_ENV]: 'worker-elsewhere' })).toBeNull()
+        expect(ticketClaimOf(h, { [TICKET_ENV]: t })).toBeNull()
+        // A ticket that names no role claims as a worker.
+        expect(ticketClaimOf(h, { [TICKET_ENV]: '{"v":1,"run":"r1"', [WORKER_SESSION_ENV]: 'worker-elsewhere' })?.role).toBe('worker')
+      } finally { db.close() }
+      // A lane this store registered, under another ticket: never claimed.
+      const { leg } = s.startWorker({ reading: readTicket(t), prompt: 'go', host: 'laptop' })
+      const other = mintTicket({ run: 'r2', key: 'k2', role: 'reviewer', parent: { id: 'p9' } })
+      const db2 = new DatabaseSync(path(), { readOnly: true })
+      try {
+        expect(ticketClaimOf(openNodeSqlite(db2), { [TICKET_ENV]: other, [WORKER_SESSION_ENV]: leg.sessionId })).toBeNull()
+      } finally { db2.close() }
+      expect(s.trustedWorkerLane({ [TICKET_ENV]: other, [WORKER_SESSION_ENV]: leg.sessionId })).toBeNull()
+    } finally { await s.close() }
+  })
 })
 
 describe('the checkpointer is recorded at registration (D281)', () => {

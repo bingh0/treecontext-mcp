@@ -637,6 +637,78 @@ export function ticketDoorSteps(define: (re: RegExp, fn: (w: WorkersWorld, ...ca
     } satisfies WorkerSpec
   })
 
+  // ── D424: the door's store and the worker's server's store differ ──
+  //
+  // The world's own store is the checkout's: a Claude Code main registers
+  // in it through its real session-start hook, which also leaves the
+  // session's beacon beside it. The door is given a second store file; the
+  // stand-in's tools are a real `treecontext serve` opening the checkout's
+  // (the plan's `toolsStore`), started in the checkout's directory with the
+  // worker's own environment, as its client would start it.
+  define(/^a Claude Code session live as the main of a checkout, registered in that checkout's store$/, async (w) => {
+    await openRunWorld(w, { sessionStart: false })
+    w.sessionId = 'p1'
+    sessionStartHook(w)
+    expect(rawOne(w, "SELECT 1 AS one FROM session_registry WHERE session_id = 'p1' AND agent_id = ''")).toBeTruthy()
+    // The beacon a server in this directory would read the session from.
+    expect(existsSync(join(dirname(w.dbPath!), 'sessions')), 'the main session left no beacon beside the store').toBe(true)
+  })
+  define(/^a worker whose hooks do not run, started in that checkout through the ticket door of another store, with a ticket naming the role "([^"]+)" and the parent "([^"]+)"$/, async (w, role, parent) => {
+    const doorPath = join(dirname(w.dbPath!), 'door-store.db')
+    const door = await FlatStore.open({ database: openNodeSqlite(new DatabaseSync(doorPath)), retentionInterval: 1_000_000 })
+    w.defer(async () => { await door.close() })
+    w.facts!['door-path'] = doorPath
+    w.facts!['spec'] = {
+      spawner: 'library', prompt: 'check the form', doorStore: { store: door, dbPath: doorPath },
+      ticket: { run: 'r1', key: 'login-form', role, parent: { id: parent } },
+      plan: { first: {} },
+    } satisfies WorkerSpec
+  })
+  define(/^the worker inserts a note through its tools, its server opening the checkout's store$/, async (w) => {
+    const spec = specOf(w)
+    spec.plan.first.notes = 1
+    spec.plan.first.viaTools = true
+    spec.plan.first.toolsStore = w.dbPath!
+    await runWorker(w, spec)
+  })
+  const claimedNote = (w: WorkersWorld): { session_key: string; m: Record<string, unknown> } => {
+    const rows = rawAll<{ session_key: string; m: string }>(w, "SELECT session_key, metadata_json AS m FROM nodes WHERE CAST(content AS TEXT) LIKE 'first run note 1 %'")
+    expect(rows, 'the note is not in the checkout\'s store').toHaveLength(1)
+    return { session_key: rows[0]!.session_key, m: JSON.parse(rows[0]!.m) as Record<string, unknown> }
+  }
+  define(/^the note sits in the checkout's store in the session the door named for the worker, stamped with the writer "([^"]+)", the parent "([^"]+)" as declared, and its source as the ticket's claim$/, (w, writer, parent) => {
+    const o = outOf(w)
+    const note = claimedNote(w)
+    expect(o.sessionId, 'the door named no session').toMatch(/^worker-/)
+    expect([note.session_key, note.m['_cc_session_id'], note.m['_writer'], note.m['_writer_src'], note.m['_parent'], note.m['_parent_src'], note.m['_door'], note.m['_identity']])
+      .toEqual([o.sessionId, o.sessionId, writer, 'ticket-claim', parent, 'declared', 'tools', 'declared'])
+    // Never a registered worker's stamp: no worker agent id rides on it.
+    expect(note.m['_writer_agent_id']).toBeUndefined()
+  })
+  define(/^the main session's lane holds no row of the worker's$/, (w) => {
+    expect(rawAll(w, "SELECT 1 FROM nodes WHERE session_key = 'p1' AND CAST(content AS TEXT) LIKE 'first run note %'")).toHaveLength(0)
+    expect(rawAll(w, "SELECT 1 FROM nodes WHERE json_extract(metadata_json, '$._cc_session_id') = 'p1' AND CAST(content AS TEXT) LIKE 'first run note %'")).toHaveLength(0)
+    expect(claimedNote(w).m['_writer']).not.toBe('main')
+  })
+  define(/^the checkout's store holds no registration for the worker, and the door's store holds the worker's registration under the same session$/, (w) => {
+    const o = outOf(w)
+    expect(rawAll(w, 'SELECT 1 FROM session_registry WHERE session_id = ?', o.sessionId)).toHaveLength(0)
+    expect(rawAll(w, "SELECT 1 FROM session_registry WHERE kind = 'worker'")).toHaveLength(0)
+    const door = new DatabaseSync(w.facts!['door-path'] as string, { readOnly: true })
+    try {
+      const reg = door.prepare("SELECT agent_type, kind FROM session_registry WHERE session_id = ? AND agent_id = 'worker'").get(o.sessionId!) as { agent_type: string; kind: string } | undefined
+      expect(reg).toEqual({ agent_type: 'checker', kind: 'worker' })
+      // And none of the worker's note went to the door's store.
+      expect(door.prepare("SELECT COUNT(*) AS n FROM nodes WHERE CAST(content AS TEXT) LIKE 'first run note %'").get()).toEqual({ n: 0 })
+    } finally { door.close() }
+  })
+  define(/^the insert's reply says the entry is stamped by the ticket's claim, the worker being registered in another store$/, (w) => {
+    const reply = outOf(w).log[0]!.inserts![0]!
+    expect([reply['writer'], reply['writer_src']]).toEqual(['checker', 'ticket-claim'])
+    expect(String(reply['writer_note'])).toMatch(/holds no registration for the worker: its door registered it in another store/)
+    expect(String(reply['writer_note'])).toContain(outOf(w).sessionId!)
+  })
+
   define(/^the worker inserts (\d+) notes and exits$/, async (w, n) => {
     const spec = specOf(w)
     // Through its tools: a real `treecontext serve` inside the worker, the

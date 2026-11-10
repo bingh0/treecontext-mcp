@@ -416,7 +416,13 @@ node dist/server/cli.js doctor      # after a build
   worker in `TREECONTEXT_WORKER_SESSION` and `serve` stamps tool rows into
   it, but only through `trustedWorkerLane`: the registration there must be
   the one the ticket in the same environment describes. Never honour the
-  variable alone. The door spawns a worker as its own process group and
+  variable alone. A server holding a ticket and a lane its store holds no
+  registration for at all (the door registered the worker in another
+  store) stamps the ticket's claim (`ticketClaimOf`, D424): the session
+  the door named, the ticket's role as writer, `_writer_src`
+  `ticket-claim`, never `declared` and never the beacon's session; it
+  writes no registration, and a server whose own client session the pid
+  rung reads keeps that. The door spawns a worker as its own process group and
   signals the group; any exit of the worker by a signal, whoever sent it,
   ends what is left of the group, SIGTERM then SIGKILL after the grace, by
   its number only while `reapedGroupIsOurs` (D393). After the run settles

@@ -1925,13 +1925,19 @@ async function main(): Promise<void> {
     // honoured; anything else falls to the ordinary identity ladder, and
     // to the ordinary handshake: the same trust decides that a worker is
     // told to begin from its first message, never the routine (D382).
-    const { trustedWorkerLane } = await import('../ticket.js')
+    const { trustedWorkerLane, ticketClaimOf } = await import('../ticket.js')
     const workerSession = trustedWorkerLane(db, process.env)
+    // D424: a worker whose door registered it in another store is still a
+    // worker here: where this store holds nothing for the lane its door
+    // named, its rows take the ticket's own words, marked as a claim,
+    // never the session of whichever client last ran in this directory.
+    const ticketClaim = workerSession === null ? ticketClaimOf(db, process.env) : null
     await startServer({
       database: db,
       migrate: true,
       ...serveOpts,
       ...(workerSession !== null ? { ccSessionId: workerSession, worker: true } : {}),
+      ...(ticketClaim !== null ? { ticketClaim } : {}),
       // Runtime-derived, not args-derived: capture requires owning the
       // drain, and info carries resolved paths.
       capture: args.capture,

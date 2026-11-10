@@ -592,3 +592,20 @@ Feature: Workers — a headless worker on any CLI, through the ticket door
     Then the store holds no self registration for the worker's conversation
     And the shell command's entry and the note sit in the worker's own lane, stamped with the writer "builder" and the parent session "p1"
     And the main lane holds none of the worker's rows
+
+  # A worker whose door and whose server read different stores (D424,
+  # 2026-11-10, beta.4): the door registers the worker in the store it
+  # was given, and the worker's client starts its treecontext server in
+  # the worker's directory, which may be bound to another. That server
+  # holds the ticket and no registration.
+
+  @D424 @D288
+  Scenario: a worker whose server opens a store holding no registration for it writes under its ticket's claim, never as the main session
+    Given a Claude Code session live as the main of a checkout, registered in that checkout's store
+    And a worker whose hooks do not run, started in that checkout through the ticket door of another store, with a ticket naming the role "checker" and the parent "p1"
+    When the worker inserts a note through its tools, its server opening the checkout's store
+    Then the note sits in the checkout's store in the session the door named for the worker, stamped with the writer "checker", the parent "p1" as declared, and its source as the ticket's claim
+    And the main session's lane holds no row of the worker's
+    And the checkout's store holds no registration for the worker, and the door's store holds the worker's registration under the same session
+    And the insert's reply says the entry is stamped by the ticket's claim, the worker being registered in another store
+

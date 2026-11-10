@@ -110,7 +110,7 @@ if (leg && (step.viaTools || step.reads)) {
   // lane the door named), each note a treecontext_insert call; then the
   // reads its plan names, through the same tools.
   const transport = new StdioClientTransport({
-    command: process.execPath, args: nodeTsArgs(CLI_TS, ['serve', '--lexical', '--store', dbPath]),
+    command: process.execPath, args: nodeTsArgs(CLI_TS, ['serve', '--lexical', '--store', step.toolsStore ?? dbPath]),
     env: Object.fromEntries(Object.entries(process.env).filter((e): e is [string, string] => e[1] !== undefined)), cwd: process.cwd(), stderr: 'ignore',
   })
   const client = new Client({ name: 'standin-worker', version: '0' })

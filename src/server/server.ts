@@ -12,6 +12,7 @@
  * deletion phase, 2026-07-25.
  */
 
+import type { TicketClaim } from '../ticket.js'
 import { readFileSync, statSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { McpServer } from '@modelcontextprotocol/server'
@@ -184,6 +185,12 @@ export interface CreateServerOptions {
    * `sessionId`. When set, this always wins over the pid/beacon rungs.
    */
   ccSessionId?: string | null | (() => string | null)
+  /** D424: the claim of a worker whose ticket this store holds no
+   *  registration for (ticket.ts ticketClaimOf). Where the caller's own
+   *  client session cannot be read exactly (the pid rung), the row is
+   *  keyed to the session the door named and stamped with the ticket's
+   *  role, `_writer_src` `ticket-claim`. */
+  ticketClaim?: TicketClaim | null
   /**
    * Override for the claude process's PID used by the rung-1 "pid" beacon
    * match (docs/session-identity.md §3). Defaults to
@@ -366,8 +373,15 @@ export function createServer(
       cwd: serverOpts.claudeCwd ?? process.cwd(),
     })
     if (resolution.src === 'pid') cachedPidResolution = resolution
+    // D424: a ticketed worker with no registration here and no client
+    // session of its own (a `claude -p` child's hook registers one, read
+    // by the pid rung) is never another client's session a beacon left in
+    // this directory: its session is the one its door named.
+    else if (ticketClaim) return { ccSessionId: ticketClaim.session, src: 'explicit' }
     return resolution
   }
+  const ticketClaim = serverOpts.ticketClaim ?? null
+  const claims = (cc: CcSessionResolution): boolean => ticketClaim !== null && cc.ccSessionId === ticketClaim.session
 
   // D190: who wrote a row written through the tools. The server knows
   // the Claude Code session (above) but not, from the transport, whether
@@ -381,6 +395,11 @@ export function createServer(
   const writerStamp = (ctx: MemoryStore, cc: CcSessionResolution): WriterStamp => {
     const store = ctx as Stamping
     if (typeof store.writerStampFor !== 'function' || cc.ccSessionId === null || cc.ambiguous) return { src: 'unregistered' }
+    // D424: the ticket's own words, where this store holds no
+    // registration for the worker: the role, and the parent as declared.
+    if (ticketClaim !== null && claims(cc)) {
+      return { src: 'ticket-claim', writer: ticketClaim.role, ...(ticketClaim.parent ? { trace: { _parent: ticketClaim.parent, _parent_src: 'declared' } } : {}) }
+    }
     try {
       return store.writerStampFor(cc.ccSessionId)
     } catch (err) {
@@ -550,7 +569,7 @@ export function createServer(
         // worker's row, and its dedup, to another lane's session. Said back
         // as session_id_ignored. Other callers' metadata is unchanged.
         let sessionIdIgnored: unknown
-        if (stamp.src === 'declared' && stamp.agentId === WORKER_AGENT_ID && ccResolution.ccSessionId !== null
+        if (((stamp.src === 'declared' && stamp.agentId === WORKER_AGENT_ID) || stamp.src === 'ticket-claim') && ccResolution.ccSessionId !== null
           && metadataCopy && metadataCopy['session_id'] !== undefined) {
           sessionIdIgnored = metadataCopy['session_id']
           delete metadataCopy['session_id']
@@ -575,7 +594,7 @@ export function createServer(
           // registered by a hook (the session's self or a subagent the
           // hooks registered) or declared (a worker's ticket).
           merged[DOOR_KEY] = 'tools'
-          if (stamp.src !== 'unregistered') merged[IDENTITY_KEY] = stamp.src === 'declared' ? 'declared' : 'hook'
+          if (stamp.src !== 'unregistered') merged[IDENTITY_KEY] = stamp.src === 'declared' || stamp.src === 'ticket-claim' ? 'declared' : 'hook'
           opts.metadata = merged
         }
         if (media_ref) {
@@ -734,6 +753,10 @@ export function createServer(
             response.writer_note = `The ${stamp.writer} subagent is this session's one live subagent and the session's own agent has `
               + `been silent since it started, so this entry is stamped "${stamp.writer}" provisionally; the call's own echo `
               + 'confirms or corrects the writer when it is captured.'
+          } else if (stamp.src === 'ticket-claim') {
+            response.writer_note = `This session holds a worker's ticket, but this store holds no registration for the worker: its door registered it in another store. `
+              + `The entry is stamped with the ticket's role, "${stamp.writer}", as the ticket's claim (ticket-claim), in the session the door named ("${ccResolution.ccSessionId}"), `
+              + 'never as the session of a client running in this directory; that session id is the one the door\'s own store holds the worker under.'
           } else if (stamp.src === 'concurrent') {
             const names = (stamp.candidates ?? []).map((c) => c.agent_type ?? c.agent_id)
             response.writer_candidates = stamp.candidates
@@ -1065,7 +1088,7 @@ export function createServer(
                 ? "a subagent of this session is live but the session's own agent has been active beside it, so the caller cannot be told apart and no subagent scope applies"
                 : 'several subagents of this session are live, so the caller cannot be told apart and no subagent scope applies',
             }
-          } else if (stamp.src === 'declared') {
+          } else if (stamp.src === 'declared' || stamp.src === 'ticket-claim') {
             // D374: a worker of the ticket door is fed by its brief and the
             // key lookup (D336), not by a scope; it searches as before.
             scopeNote = {
@@ -1885,6 +1908,8 @@ export interface StartServerOptions {
    *  worker's lane the ticket door named (D288, ticket.ts
    *  WORKER_SESSION_ENV). */
   ccSessionId?: string
+  /** D424: see CreateServerOptions.ticketClaim. */
+  ticketClaim?: TicketClaim
   /** Transport type. Default: 'stdio'. */
   transport?: McpTransport
   /** Byte threshold for output shielding. 0 = disabled. */
@@ -2049,6 +2074,7 @@ export async function startServer(opts: StartServerOptions): Promise<void> {
   if (opts.lockHook) createOpts.lockHook = opts.lockHook
   if (opts.projectDir) createOpts.projectDir = opts.projectDir
   if (opts.ccSessionId) createOpts.ccSessionId = opts.ccSessionId
+  if (opts.ticketClaim) createOpts.ticketClaim = opts.ticketClaim
 
   if (resolvedPolicy !== 'full') {
     dbg('startup', `Policy: ${resolvedPolicy} — limited tool set`)

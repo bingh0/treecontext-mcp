@@ -364,9 +364,14 @@ export function newestMainEvent(db: RegistryHandle, sessionId: string): number |
  *  - `declared`: the writer named itself, no hook vouching (D293): a
  *    worker's session, whose identity its ticket declared, or a library
  *    caller naming its role or its leg;
- *  - `store`: a row the store recorded on a door's behalf (STORE_WRITER).
+ *  - `store`: a row the store recorded on a door's behalf (STORE_WRITER);
+ *  - `ticket-claim`: the writer is the role a worker's ticket names, in
+ *    the session its door named, while this store holds no registration
+ *    for it (D424, ticket.ts ticketClaimOf): the door registered the
+ *    worker in another store. The ticket's word, vouched for by nothing
+ *    here, and never read as a registered worker's stamp (`declared`).
  */
-export type WriterSource = 'registry' | 'provisional' | 'concurrent' | 'self' | 'ambiguous' | 'unregistered' | 'echo' | 'hook' | 'declared' | 'store'
+export type WriterSource = 'registry' | 'provisional' | 'concurrent' | 'self' | 'ambiguous' | 'unregistered' | 'echo' | 'hook' | 'declared' | 'store' | 'ticket-claim'
 
 export interface WriterStamp {
   src: WriterSource

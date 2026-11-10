@@ -209,7 +209,11 @@
  * a worker's CLI makes through those same tools: `query` a
  * treecontext_query call with these arguments, `status` a
  * treecontext_status call; each reply recorded whole in its log line as
- * `reads`; reads imply the real serve), `handshakes` (handshake reads,
+ * `reads`; reads imply the real serve), `toolsStore` (D424: the store
+ * file that serve opens instead of the door's, as a worker's client
+ * starts its server in a directory bound to another store than the one
+ * its door was given; the stand-in itself still reads its leg from the
+ * door's), `handshakes` (handshake reads,
  * D382: before any write, each a real `treecontext serve` started over
  * stdio with its own environment, `initialize`'s instructions recorded
  * whole in its log line as `handshakes`, in order; an entry's `ticket`
@@ -411,6 +415,8 @@ export const STANDIN_CLAUDE_P = join(TS_ROOT, 'tests', 'helpers', 'standin-claud
 export interface WorkerStep {
   notes?: number; label?: string; texts?: string[]; checkpoint?: string; checkpoints?: string[]; invalidRow?: boolean; print?: string
   exit?: number | 'hang'; waitFor?: string; at?: number; viaTools?: boolean
+  /** D424: the store file its tools' serve opens instead of the door's. */
+  toolsStore?: string
   /** D403: a file it waits for, after writing `<file>.ready`, before it
    *  writes anything. */
   waitBeforeWrites?: string
@@ -498,6 +504,9 @@ export interface WorkerSpec {
   /** How the leg is expected to read once ended (for the lookup's Then). */
   expectEnd?: 'retired' | 'phantom' | 'cut'
   cwd?: string
+  /** D424: the store the door is given, where it is not the world's
+   *  own (the library spawner only): its handle and its file. */
+  doorStore?: { store: FlatStore; dbPath: string }
   /** The door's clock (the library call's), for a run replayed at its
    *  own moments. */
   clock?: () => number
@@ -567,7 +576,7 @@ let standinRuns = 0
 export async function runWorker(w: RunWorld, spec: WorkerSpec, name = 'worker', during?: (logPath: string) => Promise<void>): Promise<Outcome> {
   const logPath = join(w.home!, `standin-${++standinRuns}.jsonl`)
   const standinEnv = {
-    STANDIN_DB: w.dbPath!, STANDIN_LOG: logPath, STANDIN_PLAN: JSON.stringify(spec.plan),
+    STANDIN_DB: spec.doorStore?.dbPath ?? w.dbPath!, STANDIN_LOG: logPath, STANDIN_PLAN: JSON.stringify(spec.plan),
     ...(spec.claudeP ? { STANDIN_CLAUDE_PLAN: JSON.stringify(spec.claudeP) } : {}),
   }
   const script = spec.claudeP ? STANDIN_CLAUDE_P : STANDIN_WORKER
@@ -584,7 +593,7 @@ export async function runWorker(w: RunWorld, spec: WorkerSpec, name = 'worker', 
     let result: WorkerRunResult
     try {
       const p = spawnWorker({
-        store: w.store!, ticket: spec.ticket, prompt: spec.prompt, command: process.execPath, args: nodeTsArgs(script), cwd,
+        store: spec.doorStore?.store ?? w.store!, ticket: spec.ticket, prompt: spec.prompt, command: process.execPath, args: nodeTsArgs(script), cwd,
         ...(spec.libraryOwnEnv ? {} : { env: spawnerEnv }), ...(spec.timeoutSecs ? { timeoutMs: spec.timeoutSecs * 1000 } : {}),
         ...(spec.checkTicket ? { checkTicket: true, spawner: { sessionId: w.sessionId! } } : {}),
         ...(spec.clock ? { clock: spec.clock } : {}),

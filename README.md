@@ -849,6 +849,17 @@ Everything the worker writes through the tools lands in its lane, stamped
 with its role. Where the worker's client has its own hooks installed, its
 captured calls land in that lane too (§5, "Headless workers").
 
+The worker's client starts its treecontext server in the worker's
+directory, so the tools write to the store that directory is bound to. Run
+the worker from the project whose store `treecontext run` uses. Where the
+two differ (a `--store` or `--project-dir` naming another store), the
+door's store holds the worker's registration, first message and summary
+row, and what the worker writes through the tools lands in its own
+directory's store: in the session the door named (`worker-…`, the same id
+in both stores), stamped with its ticket's role and marked `ticket-claim`,
+since that store holds no registration for it. It is never filed as the
+session of a client running in that directory.
+
 ### Compatibility matrix
 
 What each client's own documentation says about its hooks, and the date

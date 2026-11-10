@@ -262,3 +262,40 @@ export function trustedWorkerLane(db: RegistryHandle, env: NodeJS.ProcessEnv = p
   if (!leg || leg.kind !== 'worker') return null
   return ticketMatches(leg, readTicket(raw)) ? lane : null
 }
+
+/** A worker's claim on a store that holds no registration for it (D424). */
+export interface TicketClaim {
+  /** The session the door named (WORKER_SESSION_ENV): the same id the
+   *  door's own store registered the worker under. */
+  session: string
+  /** The role the ticket names; `worker` where it names none. */
+  role: string
+  /** The parent the ticket declares, when it names one. */
+  parent: string | null
+}
+
+/**
+ * What a server holding a worker's ticket and the lane its door named may
+ * stamp when this store holds no registration at all for that lane (D424):
+ * the door registered the worker in another store (`treecontext run
+ * --store`, or a project bound elsewhere) and the worker's server resolved
+ * this one from its directory. The process is a worker, never the session
+ * of whichever client last ran here, so its rows take the ticket's own
+ * words, marked as a claim. Null where the lane is trusted
+ * (trustedWorkerLane decides first), where either variable is missing, or
+ * where the registry holds any registration under that session: a lane
+ * registered with another ticket (a nested worker's inherited variable)
+ * is never claimed (D288), and falls to the ordinary identity ladder.
+ */
+export function ticketClaimOf(db: RegistryHandle, env: NodeJS.ProcessEnv = process.env): TicketClaim | null {
+  const session = workerSessionIn(env)
+  const raw = ticketTextIn(env)
+  if (session === null || raw === null) return null
+  try {
+    const held = db.prepare('SELECT 1 AS one FROM session_registry WHERE session_id = ? LIMIT 1').get(session)
+    if (held) return null
+  } catch { /* a store with no registry holds no registration */ }
+  const t = readTicket(raw).ticket
+  const text = (v: unknown): string | null => (typeof v === 'string' && v.trim() !== '' ? v : null)
+  return { session, role: text(t.role) ?? WORKER_AGENT_ID, parent: text(t.parent?.id) }
+}

@@ -75,7 +75,7 @@ export { hostProbe, START_TOLERANCE_SECS } from './persistence/process-probe.js'
 // same call from a shell).
 export {
   TICKET_ENV, WORKER_SESSION_ENV, TICKET_VERSION, REQUIRED_TICKET_FIELDS, TICKET_FIELDS, mintTicket, readTicket,
-  ticketTextIn, workerSessionIn, declaresDoor, ticketMatches, trustedWorkerLane,
+  ticketTextIn, workerSessionIn, declaresDoor, ticketMatches, trustedWorkerLane, ticketClaimOf,
 } from './ticket.js'
 export type { TicketFields, TicketReading } from './ticket.js'
 export {
