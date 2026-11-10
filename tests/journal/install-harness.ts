@@ -12,7 +12,7 @@ import { markClaudeCodeInstalled } from '../helpers/home.js'
 export { markClaudeCodeInstalled }
 import type { World } from './world.js'
 import { TS_ROOT } from './proc.js'
-import { writeFakeClaude, writeFakeCodex, writeFakeGemini, type FakeCodexPlan } from './standins.js'
+import { writeFakeClaude, writeFakeCodex, writeFakeGemini, writeFakeAgy, type FakeCodexPlan } from './standins.js'
 
 // ── Install-wave harness: the real CLI, a redirected HOME, and the ─────
 //    other side of every boundary it claims to cross.
@@ -222,6 +222,20 @@ export function putAgyOnPath(w: InstallWorld): void {
   w.iAgyBin = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-agy-bin-')))
   w.defer(() => rmSync(w.iAgyBin!, { recursive: true, force: true }))
   symlinkSync(realAgy(), join(w.iAgyBin, process.platform === 'win32' ? 'agy.exe' : 'agy'))
+}
+
+/**
+ * The agy on the world's PATH reading the version a Given names. The real
+ * agy where its own `--version` says that version; where the host's agy has
+ * moved on (agy updates itself in the background), a stand-in for the
+ * version line alone, its `mcp list` handed to the real agy, so every
+ * listing a scenario reads is still agy's own.
+ */
+export function agyReading(w: InstallWorld, version: string): void {
+  putAgyOnPath(w)
+  const real = realAgy()
+  const says = spawnSync(real, ['--version'], { encoding: 'utf8' }).stdout.trim()
+  if (says !== version) writeFakeAgy(w.iAgyBin!, version, real)
 }
 
 /**

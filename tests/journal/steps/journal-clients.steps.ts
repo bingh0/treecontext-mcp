@@ -502,6 +502,13 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
     w.claudeBlock = settings.hooks!
     expect(Object.keys(w.claudeBlock), 'the Claude Code hooks block is missing events')
       .toEqual(expect.arrayContaining(['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'PreCompact', 'Stop']))
+    if (w.clientName === 'VS Code' || w.clientName === 'Cursor' || w.clientName === 'OpenCode') {
+      // The client's own entry and instructions, written by the real
+      // installer: install writes no hooks for these three, so their row's
+      // state is read with the tools wired.
+      const wired = tcCli(w, ['install', '--yes', '--agent', CLIENT_SLUG[w.clientName]!])
+      expect(wired.status, wired.out).toBe(0)
+    }
     if (w.clientName === 'VS Code') {
       // Off said out loud, in the file VS Code keeps, with the comment and
       // trailing comma VS Code's own editor allows.
@@ -523,23 +530,41 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
     expect(run.status, run.out).toBe(0)
     w.doctorOut = run.stdout
   })
+  reg.define(new RegExp(`^the developer sees doctor's row for ${CLIENT_RE} say the client (.+)$`), (w: ClientsWorld, ...captures) => {
+    const [client, mode] = captures as string[]
+    expect(client).toBe(w.clientName)
+    const c = w.clause!
+    // The mode is the README matrix's Mode cell, exactly, so a reworded
+    // parenthetical on either side fails, and it carries the feature's phrase.
+    const readmeRow = parseMatrix(readFileSync(join(TS_ROOT, 'README.md'), 'utf8')).find(r => r.client.startsWith(client!))
+    expect(readmeRow, `the README matrix has no row for ${client}`).toBeDefined()
+    expect(c.mode).toBe(readmeRow!.mode)
+    expect(c.mode).toContain(mode)
+  })
   reg.define(/^the row states the current installation state$/, (w: ClientsWorld) => {
     const c = w.clause!
     const home = w.ihome!.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
     const expected: Record<string, RegExp> = {
-      'Codex CLI': new RegExp(`^hooks not copied into ${home}[\\\\/]\\.codex[\\\\/]hooks\\.json \\(capture unverified — MCP tools only\\)$`),
+      'Codex CLI': new RegExp(`^no treecontext hook is written in ${home}[\\\\/]\\.codex[\\\\/]hooks\\.json, so nothing of a Codex session is captured$`),
       'VS Code': new RegExp(`^chat\\.useClaudeHooks is off in ${vscodeSettings(w.ihome!).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} and the Claude Code hooks block is installed$`),
       'Cursor': /^the Claude Code hooks block is installed — Cursor reads it \(capture unverified\)$/,
       'OpenCode': /^no hooks to install — MCP tools only \(nothing is captured\)$/,
-      'Antigravity CLI': new RegExp(`^no treecontext hooks in ${home}[\\\\/]\\.gemini[\\\\/]config[\\\\/]hooks\\.json — MCP tools only \\(nothing is captured\\)$`),
+      'Antigravity CLI': new RegExp(`^no treecontext hook is written in ${home}[\\\\/]\\.gemini[\\\\/]config[\\\\/]hooks\\.json, so nothing of agy's sessions is captured(; agy's version reads [^;]+)?$`),
     }
-    expect(c.state).toMatch(expected[w.clientName!]!)
-    // Tools only is the correct state without the opt-in, so the row is not
-    // a warning and carries no fix line of its own.
+    expect(c.state, `${c.row}\n  fix: ${c.fix}`).toMatch(expected[w.clientName!]!)
+    if (w.clientName === 'Codex CLI' || w.clientName === 'Antigravity CLI') {
+      // A client install writes hooks for, with none written: nothing of
+      // its sessions is captured, which is a warning whose fix is install.
+      expect(c.status, c.row).toBe('warn')
+      expect(c.fix, c.row).toMatch(/^treecontext install\b/)
+      return
+    }
+    // A client install writes no hooks for: tools only is its whole state,
+    // so the row is not a warning and carries no fix line of its own.
     expect(c.status, c.row).toBe('ok')
     expect(c.fix).toBeNull()
   })
-  reg.define(/^the row names (the flagged command that copies them|turning that setting on|nothing) as the remedy$/, (w: ClientsWorld, ...captures) => {
+  reg.define(/^the row names (turning that setting on|nothing) as the remedy$/, (w: ClientsWorld, ...captures) => {
     const [remedy] = captures as string[]
     if (remedy === 'nothing' && w.approval) {
       // The headless clause's remedy (D387): nothing, and no fix line.
@@ -548,21 +573,8 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
       return
     }
     const c = w.clause!
-    const slug = CLIENT_SLUG[w.clientName!]!
     if (remedy === 'nothing') {
       expect(c.remedy).toBe('nothing to do')
-      return
-    }
-    if (remedy === 'the flagged command that copies them') {
-      const command = `treecontext install --agent ${slug} --experimental-capture`
-      expect(c.remedy).toBe(`to copy them: ${command}`)
-      // The remedy is a command that does what it says: run it as printed,
-      // and doctor's row now reads the copy present and consistent.
-      runNamedCommand(w, command)
-      const after = readClause(w, w.clientName!)
-      expect(after.state).toMatch(/: present and consistent with the Claude Code block/)
-      expect(after.remedy).toBe('nothing to do')
-      expectNoVerifiedClaim(after.row)
       return
     }
     // Turning the setting on: the remedy names it and names no install; once
@@ -1629,5 +1641,45 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
   reg.define(/^the developer reads that a manual Codex compaction leaves a recovery note, an automatic one being unrecorded, and that a call Codex reported no result for, or a turn the developer interrupted, is kept and says so$/, (w: ClientsWorld) => {
     says(w, /A manual compaction\*\* \(`\/compact`\) leaves a recovery note/, /An automatic compaction is unrecorded/,
       /journaled at its turn's end as a call Codex reported no result for/, /A turn you interrupt \(Esc\) is kept as interrupted, with a capture-gap entry naming its reply as not captured/)
+  })
+
+  // ── D413, D418, D421, D388: the README's parts for Antigravity CLI ────
+  // Read from the README itself: its "Antigravity CLI capture" section
+  // (§6, whitespace flattened) and agy's row of the orchestration matrix.
+  reg.define(/^the README's install section, its compatibility matrix and its orchestration matrix$/, (w: ClientsWorld) => {
+    w.readme = readFileSync(join(TS_ROOT, 'README.md'), 'utf8')
+    for (const heading of ['\n## 2. Install', '\n### Compatibility matrix', '\n### Orchestration matrix']) {
+      expect(w.readme.includes(heading), `the README has no "${heading.trim()}" heading`).toBe(true)
+    }
+  })
+  reg.define(/^a developer reads the parts for Antigravity CLI$/, (w: ClientsWorld) => {
+    const readme = w.readme!
+    const start = readme.indexOf('\n### Antigravity CLI capture')
+    expect(start, 'the README has no "Antigravity CLI capture" section').toBeGreaterThan(-1)
+    const rest = readme.slice(start + 1)
+    const end = rest.slice(3).search(/^##+ /m)
+    codexParts.set(w, (end === -1 ? rest : rest.slice(0, end + 3)).replace(/\s+/g, ' '))
+    w.orchRows = parseOrchestrationMatrix(readme).rows.filter(r => r.client === 'Antigravity CLI')
+    expect(w.orchRows.map(r => r.client)).toEqual(['Antigravity CLI'])
+  })
+  reg.define(/^the developer reads 1\.5\.3 as the first Antigravity CLI version whose hooks install writes, and that an older one stays tools-only$/, (w: ClientsWorld) => {
+    says(w, /The first Antigravity CLI version whose hooks install writes is \*\*1\.5\.3\*\*/, /Below it, or where `agy --version` cannot be read, agy stays tools-only/)
+  })
+  reg.define(/^the developer reads which of agy's events install wires and that it never wires PreToolUse, with the reason$/, (w: ClientsWorld) => {
+    says(w, /Events wired:\*\* SessionStart, PreInvocation, PostToolUse, PostInvocation and Stop\./, /PreToolUse is never wired:\*\* its hook must answer with a permission decision, so it would change what agy permits/)
+  })
+  reg.define(/^the developer reads that a call agy refuses in a headless run, under any permission preset but `always-proceed`, leaves no entry, that agy states no outcome for a shell command, and that a subagent is captured as a session of its own, not linked to the session that started it, and is no leg$/, (w: ClientsWorld) => {
+    says(w, /a call agy refuses in a headless run, under any permission preset but `always-proceed`, leaves no entry/,
+      /agy states no outcome for a shell command/,
+      /A subagent's conversation is captured as a session of its own, not linked to the session that started it, and is never a leg/)
+  })
+  reg.define(/^the developer reads every Antigravity CLI cell of the orchestration matrix with the agy version and date it was checked against$/, (w: ClientsWorld) => {
+    const [row] = w.orchRows!
+    // The needle fires: agy's row has a cell for each of the six roles.
+    expect(row!.cells).toHaveLength(6)
+    for (const cell of row!.cells) {
+      expect(cell, `"${cell}" names no agy version`).toMatch(/\b1\.5\.\d+\b/)
+      expect(cell, `"${cell}" carries no date`).toMatch(/\b\d{4}-\d{2}-\d{2}\b/)
+    }
   })
 }

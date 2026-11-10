@@ -38,15 +38,12 @@ Feature: Workers — a headless worker on any CLI, through the ticket door
       | parent          | worker       |
       | Claude Code     | `codex exec` |
       | Codex           | `claude -p`  |
-      | Antigravity CLI | `claude -p`  |
-    # No Antigravity row until beta.4 (owner, 2026-11-09): an Antigravity
-    # CLI main registered no self (the fence's Antigravity CLI entry, D370
-    # amended by D383). From agy 1.5.3 with treecontext's named hook, its
-    # SessionStart registers it (D416), so an agy main is a registered
-    # parent; one below 1.5.3, or with no hook, stays the declared parent
-    # of the D294 outline below. The Antigravity row's parent is
-    # registered by agy's recorded SessionStart replayed through the hook
-    # install writes, never by a registration the binding writes itself.
+    # No Antigravity row (owner, 2026-11-10, D421, D422): an Antigravity
+    # CLI main is best effort in beta.4 and registers no self, so it is
+    # never a registered parent; a worker started under one names it as
+    # the declared parent of the D294 outline below. Its self
+    # registration waits on the fence for beta.5 or a user's request
+    # (the fence's entry on an Antigravity CLI main's identity).
 
   @D288 @D384
   Scenario: a worker is retired at exit and its last output is the summary row the pointer names

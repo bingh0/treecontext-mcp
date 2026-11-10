@@ -447,6 +447,8 @@ Feature: Journal capture — everything worth recalling enters the journal
     # twice would be one. Recorded 2026-11-09 (agy 1.5.3, `agy -c -p`): a
     # second turn fires no SessionStart and opens with a model call
     # numbered 0 again, which is where its prompt is journaled.
+    # A subagent's message back to its parent reopens the parent's turn
+    # the same way, so the parent's prompt is journaled again there.
 
   @D415
   Scenario: a call whose output agy's transcript does not hold is kept, and says its output was not captured

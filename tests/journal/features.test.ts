@@ -282,15 +282,10 @@ runFeatures(join(HERE, '../../features'), {
     // Antigravity rows' modes are reworded; its VS Code, Cursor and OpenCode rows
     // wait with it, and their Given lost the removed installer step).
     // journal-capture left the register again with unit 11 (D415, D421).
-    {
-      feature: 'journal-workers',
-      scenarios: [
-        // Unit 10: unit 10 (D406-D412, Codex CLI 0.167.0 captured through its own hooks, doctor reading Codex's trust, the experimental capture flag removed).
-        // Unit 11: unit 11 (D413-D418, Antigravity CLI 1.5.3 captured through a named hook, its output read from agy's transcript).
-        // Held for the owner (charter question, unit 11): its Antigravity CLI row's parent is "registered by agy's recorded SessionStart replayed through the hook install writes" (the outline's comment, D416), which D421 and D422 defer: an agy main registers no self in beta.4. The row cannot be bound as written; the Claude Code and Codex rows are unchanged.
-        "a <worker> worker under a <parent> parent writes into its own lane with its role as writer",
-      ],
-    },
+    // journal-workers left the register again on 2026-11-10: the D288 parent
+    // outline's Antigravity row, back in unit 11's charter under D416, was
+    // removed with D421 and D422 (an agy main registers no self in beta.4);
+    // the outline's Claude Code and Codex rows bind.
     {
       feature: 'journal-clients',
       scenarios: [
@@ -300,12 +295,8 @@ runFeatures(join(HERE, '../../features'), {
         // with task.md asking for one shell command (`ls`) and one treecontext_insert, then the census over that worker's rollout (npm run dogfood:census -- --codex <rollout.jsonl> --store <store.db>); when every call is found by Codex's id in the worker's lane, set the cell to "verified live (codex exec 0.167.0 through treecontext run, default approvals, <date>)" and drop this entry.
         "the orchestration matrix's Codex CLI cells say what a Codex hook can and cannot do",
         // Unit 11: unit 11 (D413-D418, Antigravity CLI 1.5.3 captured through a named hook, its output read from agy's transcript).
-        // Not bound in unit 11's budget: its Codex, VS Code, Cursor, OpenCode and Antigravity rows need their Then and Given rebound to doctor's current wording (the experimental flag gone); no behaviour is missing (D413, D414's mode line is doctor's AGY_HOOK_MODE).
-        "doctor reports <client> as a client that <mode>",
         // Not bound in unit 11's budget: README and doctor say it (README §5 `agy -p`, doctor's preset clause, bound by the D414 outline); the worker run through `treecontext run` replaying the recorded refusal (tests/fixtures/agy-hooks/1.5.3/headless-refusal.*) needs the run world in this wave.
         "the README and doctor say when a headless agy worker returns nothing because agy refused it a tool",
-        // Held for the owner (charter question, unit 11): its third Then says "a subagent is kept as a helper of the session that started it, its report kept" (D418), which D421 replaced: a subagent's conversation is its own session, never linked, no helper. The README says D421's words (§6, "Antigravity CLI capture").
-        "the README names the oldest Antigravity CLI whose hooks install writes, and what its capture leaves out",
       ],
     },
     {

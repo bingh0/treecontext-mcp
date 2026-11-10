@@ -282,7 +282,7 @@ Feature: Other clients — a dated matrix and a doctor that knows each one
     When a developer reads the parts for Antigravity CLI
     Then the developer reads 1.5.3 as the first Antigravity CLI version whose hooks install writes, and that an older one stays tools-only
     And the developer reads which of agy's events install wires and that it never wires PreToolUse, with the reason
-    And the developer reads that a call agy refuses in a headless run, under any permission preset but `always-proceed`, leaves no entry, that agy states no outcome for a shell command, and that a subagent is kept as a helper of the session that started it, its report kept, and is no leg
+    And the developer reads that a call agy refuses in a headless run, under any permission preset but `always-proceed`, leaves no entry, that agy states no outcome for a shell command, and that a subagent is captured as a session of its own, not linked to the session that started it, and is no leg
     And the developer reads every Antigravity CLI cell of the orchestration matrix with the agy version and date it was checked against
 
   @D423 @D421
