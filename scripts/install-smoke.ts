@@ -125,12 +125,14 @@ function main(): void {
       process.exit(1)
     }
 
-    // `install` configures agents it DETECTS, and detection is "does this
-    // agent's directory exist". An empty HOME therefore installs nothing at
-    // all — correct behaviour, and a smoke test that accepted it would be
-    // asserting nothing. Stand up the one directory that makes this look like
-    // a machine with Claude Code on it, which is what a tester has.
-    mkdirSync(join(home, '.claude'), { recursive: true })
+    // `install` configures agents it DETECTS. An empty HOME therefore
+    // installs nothing at all — correct behaviour, and a smoke test that
+    // accepted it would be asserting nothing. Claude Code is detected by its
+    // `claude` command or by files of its own, never by the bare `~/.claude`
+    // directory install's own launcher lives in (0.1.0-beta.4): stand up
+    // one of its own, its `projects` directory, so this looks like a machine
+    // with Claude Code on it whether or not the runner has the command.
+    mkdirSync(join(home, '.claude', 'projects'), { recursive: true })
     run(bin, ['install', '--yes'], env, 'treecontext install')
 
     const settings = join(home, '.claude', 'settings.json')
