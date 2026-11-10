@@ -281,45 +281,31 @@ runFeatures(join(HERE, '../../features'), {
     // doctor-per-client outline's Then lost its definition too (its Codex and
     // Antigravity rows' modes are reworded; its VS Code, Cursor and OpenCode rows
     // wait with it, and their Given lost the removed installer step).
-    {
-      feature: 'journal-capture',
-      scenarios: [
-        // Unit 10: unit 10 (D406-D412, Codex CLI 0.167.0 captured through its own hooks, doctor reading Codex's trust, the experimental capture flag removed).
-        // Unit 11: unit 11 (D413-D418, Antigravity CLI 1.5.3 captured through a named hook, its output read from agy's transcript).
-        "an Antigravity session's prompt, tool calls and reply are journaled with the output agy's transcript holds",
-        "a call's output is read from agy's transcript at the end of the model call that made it",
-        "a prompt Antigravity repeats on every event is journaled once per turn",
-        "a call whose output agy's transcript does not hold is kept, and says its output was not captured",
-        "a shell command that fails on Antigravity is journaled with what it printed, its ending read from its text",
-        "an Antigravity subagent's conversation is journaled as its own session, writer unknown, and its parent keeps the call that started it",
-      ],
-    },
+    // journal-capture left the register again with unit 11 (D415, D421).
     {
       feature: 'journal-workers',
       scenarios: [
         // Unit 10: unit 10 (D406-D412, Codex CLI 0.167.0 captured through its own hooks, doctor reading Codex's trust, the experimental capture flag removed).
         // Unit 11: unit 11 (D413-D418, Antigravity CLI 1.5.3 captured through a named hook, its output read from agy's transcript).
+        // Held for the owner (charter question, unit 11): its Antigravity CLI row's parent is "registered by agy's recorded SessionStart replayed through the hook install writes" (the outline's comment, D416), which D421 and D422 defer: an agy main registers no self in beta.4. The row cannot be bound as written; the Claude Code and Codex rows are unchanged.
         "a <worker> worker under a <parent> parent writes into its own lane with its role as writer",
-        "an `agy -p` worker started by `treecontext run` is never a self, and its captured calls land in its own lane",
       ],
     },
     {
       feature: 'journal-clients',
       scenarios: [
         // Unit 10: unit 10 (D406-D412, Codex CLI 0.167.0 captured through its own hooks, doctor reading Codex's trust, the experimental capture flag removed).
-        // Held for unit 11: its third "verified live" row is Antigravity CLI's, which unit 11 earns. Codex's part needs no live run and is in place: its row reads "verified live" from 0.167.0 with the recording's version and date (README §6).
-        "every matrix row carries its client, its events, its documentation date and one status",
         // Held for the release gate: the cell for a ticketed Codex worker's own tool calls may read "verified live" only with the date of the build's own live run, which no build test makes (no live `codex exec`). The other three Codex cells read as this scenario asks (README: main "verified live" with 0.167.0 and 2026-11-09 at default approvals; subagent legs and the pointer "not possible: no spawn message a hook can read"). Gate: in a throwaway project with this build installed and Codex's hooks trusted, run
         //   treecontext run --run gate --role checker --key gate-check --parent release-gate --prompt-file task.md -- codex exec -s read-only -
         // with task.md asking for one shell command (`ls`) and one treecontext_insert, then the census over that worker's rollout (npm run dogfood:census -- --codex <rollout.jsonl> --store <store.db>); when every call is found by Codex's id in the worker's lane, set the cell to "verified live (codex exec 0.167.0 through treecontext run, default approvals, <date>)" and drop this entry.
         "the orchestration matrix's Codex CLI cells say what a Codex hook can and cannot do",
         // Unit 11: unit 11 (D413-D418, Antigravity CLI 1.5.3 captured through a named hook, its output read from agy's transcript).
+        // Not bound in unit 11's budget: its Codex, VS Code, Cursor, OpenCode and Antigravity rows need their Then and Given rebound to doctor's current wording (the experimental flag gone); no behaviour is missing (D413, D414's mode line is doctor's AGY_HOOK_MODE).
         "doctor reports <client> as a client that <mode>",
-        "doctor's row for Antigravity CLI says whether a headless agy worker can use the tools, when <state>",
-        "doctor's row for Antigravity CLI says what it found of agy's hooks, when <state>",
+        // Not bound in unit 11's budget: README and doctor say it (README §5 `agy -p`, doctor's preset clause, bound by the D414 outline); the worker run through `treecontext run` replaying the recorded refusal (tests/fixtures/agy-hooks/1.5.3/headless-refusal.*) needs the run world in this wave.
         "the README and doctor say when a headless agy worker returns nothing because agy refused it a tool",
+        // Held for the owner (charter question, unit 11): its third Then says "a subagent is kept as a helper of the session that started it, its report kept" (D418), which D421 replaced: a subagent's conversation is its own session, never linked, no helper. The README says D421's words (§6, "Antigravity CLI capture").
         "the README names the oldest Antigravity CLI whose hooks install writes, and what its capture leaves out",
-        "the README says what is promised for each client as a main and as a worker, and documents the workflow every client shares",
       ],
     },
     {
@@ -327,29 +313,11 @@ runFeatures(join(HERE, '../../features'), {
       scenarios: [
         // Unit 10: unit 10 (D406-D412, Codex CLI 0.167.0 captured through its own hooks, doctor reading Codex's trust, the experimental capture flag removed).
         // Unit 11: unit 11 (D413-D418, Antigravity CLI 1.5.3 captured through a named hook, its output read from agy's transcript).
-        "a client below the version its capture was verified at gets tools, not capture hooks",
-        "the server runs in capture mode for <agent> only where its capture hooks are installed",
-        "the hook scripts a client's hooks run are there whenever a client's hooks name them, <case>",
-        "install wires Antigravity CLI for the tools and lets a headless agy worker use the four that read and write",
-        "the sweep for Gemini CLI leaves Antigravity CLI's hooks file alone",
+        // Held for the release gate: its fourth Then is a real agy run firing both the developer's hook and treecontext's with no error in agy's log, which no build test makes (no live agy). Gate: the commands in the unit 11 report.
         "install writes Antigravity CLI its own named hook beside the developer's",
-        "install writes no Antigravity CLI hook where <case>, and says why",
-        "uninstall takes back the named hook install wrote and nothing else",
-        "with install's own record lost, uninstall knows treecontext's named hook by its commands and keeps the file",
-        "an Antigravity CLI below 1.5.3 has the named hook an earlier install wrote taken back",
-        "a named hook the developer switched off stays off through a reinstall",
-        "a reinstall converges the named hook an earlier build wrote and keeps the developer's",
-        "every hook event Antigravity CLI has is wired or named as not captured",
       ],
     },
-    {
-      feature: 'journal-orchestration',
-      scenarios: [
-        // Unit 10: unit 10 (D406-D412, Codex CLI 0.167.0 captured through its own hooks, doctor reading Codex's trust, the experimental capture flag removed).
-        // Unit 11: unit 11 (D413-D418, Antigravity CLI 1.5.3 captured through a named hook, its output read from agy's transcript).
-        "an Antigravity CLI session the ticket door did not start is captured as a session no hook registered",
-      ],
-    },
+    // journal-orchestration left the register with unit 11 (D421).
     {
       feature: 'journal-search-modes',
       scenarios: [

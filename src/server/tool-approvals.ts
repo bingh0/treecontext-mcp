@@ -821,6 +821,19 @@ export type AgyEntryState =
  * any ask or deny rule of the developer's over one of them, named with its
  * file. An off the developer chose is a state, not a failure (D390).
  */
+/** agy 1.5.3's own permission presets (D414, read from its settings by the owner, 2026-11-09). */
+export const AGY_PRESETS = ['always-proceed', 'request-review', 'strict'] as const
+
+/** What agy's permission preset means for an `agy -p` worker (D414). */
+export function agyPresetWords(preset: { value: unknown } | 'absent'): string {
+  const refusedOther = 'a worker needing any other tool, a shell command among them, may be refused it in a headless run and return nothing (agy ends the turn with no reply and no error) unless you allow that tool, or give that one run the preset with agy\'s session-only `--settings`'
+  if (preset === 'absent') return `agy's permission preset is not set (toolPermission is absent from its settings): ${refusedOther}`
+  const v = preset.value
+  if (v === 'always-proceed') return 'agy\'s permission preset is `always-proceed`: under it every tool runs unasked, so the four allow rules are not what lets them through'
+  if (typeof v === 'string' && (AGY_PRESETS as readonly string[]).includes(v)) return `agy's permission preset is \`${v}\`: ${refusedOther}`
+  return `agy's permission preset reads ${JSON.stringify(v)}, a preset doctor does not know, so it does not say what it lets a headless worker do`
+}
+
 export function agyHeadlessClause(args: {
   mcpPath: string; entry: AgyEntryState; view: ClientView; settingsFile: string
   choice: ApprovalsChoice; unreadable: readonly string[]; unplaced: readonly string[]
@@ -830,6 +843,8 @@ export function agyHeadlessClause(args: {
   project?: { file: string; weak: boolean }
   /** A backup an earlier install made when it replaced an MCP configuration that did not parse. */
   replacedBackup?: string
+  /** agy's own permission preset (`toolPermission` in its settings, D414): its value, or absent. */
+  preset?: { value: unknown } | 'absent'
 }): ApprovalClause {
   const { mcpPath, entry, view, settingsFile, choice } = args
   const label = 'headless workers'
@@ -855,6 +870,8 @@ export function agyHeadlessClause(args: {
   const unreadable = args.unreadable.filter(f => !(args.settingsError !== undefined && f === settingsFile))
   if (unreadable.length > 0) notes.push(`${andList(unreadable)} could not be read as settings`)
   if (args.unplaced.length > 0) notes.push(`${andList(args.unplaced)} ${args.unplaced.length === 1 ? 'holds' : 'hold'} permission rules for a project doctor cannot place, which agy may apply here (agy's project-file format is undocumented)`)
+  // D414: what agy's own preset means for a headless worker, read, never guessed.
+  if (args.preset !== undefined && args.settingsError === undefined) notes.unshift(agyPresetWords(args.preset))
   const tail = `${notes.length > 0 ? `; ${notes.join('; ')}` : ''}${backup}`
   const w = viewWords(view)
   const uncertain = w.uncertain.length > 0 ? `; ${w.uncertain.join('; ')}` : ''
@@ -863,7 +880,7 @@ export function agyHeadlessClause(args: {
     // Install skips a file it cannot read, so naming install would loop.
     const remedy = `fix the JSON in ${settingsFile} by hand (${args.settingsError}); install skips a file it cannot read`
     const refused = w.refused.length > 0 ? `, so an \`agy -p\` worker would be refused ${andList(w.refused)}` : ''
-    return { text: `${label}: ${settingsFile} does not parse (${args.settingsError}), and install adds no rule to it${refused}${uncertain}${tail}`, warn: true, remedy, fix: remedy }
+    return { text: `${label}: ${settingsFile} does not parse (${args.settingsError}), and install adds no rule to it; doctor cannot read agy's permission preset from it, and does not guess it${refused}${uncertain}${tail}`, warn: true, remedy, fix: remedy }
   }
   if (choice.state === 'unknown') {
     return { text: `${label}: tool approvals are ${unknownWords(choice.backup)}${uncertain}${tail}`, warn: true, remedy: TOOL_APPROVALS_ON_COMMAND, fix: TOOL_APPROVALS_ON_COMMAND }

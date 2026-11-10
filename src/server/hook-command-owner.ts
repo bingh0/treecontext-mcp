@@ -13,7 +13,7 @@ export const TC_HOOK_PREFIX = 'tc-'
 export const CLAUDE_HOOK_SCRIPTS = [
   'session-reminder', 'session-start', 'pre-compact',
   'post-tool-use', 'user-prompt-submit', 'stop',
-  'subagent-start', 'subagent-stop',
+  'subagent-start', 'subagent-stop', 'agy',
 ] as const
 
 export const HOOK_SCRIPTS_DIR_NAME = 'hooks'

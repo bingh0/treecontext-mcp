@@ -401,7 +401,7 @@ describe('the registry around legs and workers', () => {
       for (const c of ['proc_start_token', 'client_sessions']) db.exec(`ALTER TABLE session_registry DROP COLUMN ${c}`)
       setPragma(db, 'user_version = 31')
       const report = runMigrations(openNodeSqlite(db), { migrate: true })
-      expect(report.applied.map((a) => [a.version, a.kind])).toEqual([[32, 'additive'], [33, 'additive'], [34, 'additive'], [35, 'additive'], [36, 'additive']])
+      expect(report.applied.map((a) => [a.version, a.kind])).toEqual([[32, 'additive'], [33, 'additive'], [34, 'additive'], [35, 'additive'], [36, 'additive'], [37, 'additive']])
       const cols = (db.prepare('PRAGMA table_info(session_registry)').all() as Array<{ name: string }>).map((c) => c.name)
       for (const [name] of LEG_REGISTRY_COLUMNS) expect(cols, name).toContain(name)
       // A second run of the reconcile adds nothing and fails on nothing.
@@ -431,7 +431,7 @@ describe('the registry around legs and workers', () => {
       expect(retirePhantoms(db, { noticedBy: 'session-start hook', probe: probe({}) }).retired).toEqual([])
       expect(retireAllSubagents(db, 's1', 3)).toBe(1)
       const report = runMigrations(openNodeSqlite(db), { migrate: true })
-      expect(report.applied.map((a) => [a.version, a.kind])).toEqual([[31, 'additive'], [32, 'additive'], [33, 'additive'], [34, 'additive'], [35, 'additive'], [36, 'additive']])
+      expect(report.applied.map((a) => [a.version, a.kind])).toEqual([[31, 'additive'], [32, 'additive'], [33, 'additive'], [34, 'additive'], [35, 'additive'], [36, 'additive'], [37, 'additive']])
       expect(hasLegColumns(db)).toBe(true)
     } finally { db.close() }
     expect(registration('s1', 'a1')).toMatchObject({ agent_type: 'tester', stopped_at: 3, run: null, send_backs: 0 })

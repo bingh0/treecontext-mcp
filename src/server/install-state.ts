@@ -50,6 +50,10 @@ export interface InstallState {
    *  directory Codex read it from (CODEX_HOME, or `~/.codex`): so an
    *  uninstall or a doctor run under one CODEX_HOME names another. */
   codexWired?: string[]
+  /** The named hook install wrote into Antigravity CLI's hooks file (D413,
+   *  D361): the file and each command, so uninstall and a tools-only install
+   *  take back that and never a hook of the developer's. */
+  agyHooks?: { file: string; commands: string[]; at: string }
 }
 
 /** The clients whose approvals a record that did not parse leaves unknown:

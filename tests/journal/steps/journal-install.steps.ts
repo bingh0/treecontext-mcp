@@ -1,7 +1,7 @@
 import { appendFileSync, chmodSync, copyFileSync, renameSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync, existsSync, statSync } from 'node:fs'
 import { spawn, spawnSync } from 'node:child_process'
 import { basename, delimiter, dirname, isAbsolute, join } from 'node:path'
-import { hostname, tmpdir } from 'node:os'
+import { homedir, hostname, tmpdir } from 'node:os'
 import { expect } from 'vitest'
 import { type Registry } from 'gherkin-node-test/vitest'
 import { spawnCli, spawnNodeTs } from '../../helpers/cli-spawn.js'
@@ -17,13 +17,16 @@ import { openNodeSqlite } from '../../../src/persistence/node-sqlite.js'
 import { FlatStore } from '../../../src/flat-store.js'
 import { LeaseClient, DRAIN_LEASE_TTL_SECS } from '../../../src/persistence/leases.js'
 import { MAX_INGEST_ATTEMPTS } from '../../../src/persistence/capture-constants.js'
-import { type InstallWorld, type CliRun, pathWithFakeClaude, setClaudeVersion, tcCli, agentCli, codexCli, codexConfigRead, setFakeCodex, openInstallWorld, treeOf, pathsMentioned, installedCommands, interpreterRunsPackage, isBatchBody, toPosix, mcpLauncherIn, agentConfigPath, fakeGlobalInstall, clientEntry, putAgyOnPath, putGeminiOnPath, markGeminiCliInstalled, layEarlierGeminiInstall, GEMINI_WRAPPER_STEMS, agyMcpList, type ClientEntry } from '../install-harness.js'
+import { type InstallWorld, type CliRun, pathWithFakeClaude, setClaudeVersion, tcCli, agentCli, codexCli, codexConfigRead, setFakeCodex, openInstallWorld, treeOf, pathsMentioned, installedCommands, interpreterRunsPackage, isBatchBody, toPosix, mcpLauncherIn, agentConfigPath, fakeGlobalInstall, clientEntry, putAgyOnPath, agyCli, realAgy, putGeminiOnPath, markGeminiCliInstalled, layEarlierGeminiInstall, GEMINI_WRAPPER_STEMS, agyMcpList, type ClientEntry } from '../install-harness.js'
 import { CODEX_APPROVALS_FLOOR } from '../../../src/server/codex-client.js'
-import { startEntryAsClient, developerTrustsCodexHooks, codexHooksSeen, recordedSession, replayRecordedSession } from '../standins.js'
+import { startEntryAsClient, developerTrustsCodexHooks, codexHooksSeen, recordedSession, replayRecordedSession, writeFakeAgy } from '../standins.js'
+import { agyHooksBlock, commandsIn, AGY_HOOK_NAME, AGY_CAPTURE_FLOOR } from '../../../src/server/agy-hooks.js'
+import { sandboxedSpawnEnv } from '../../helpers/cli-spawn.js'
+import { placeBuiltPackage } from '../../helpers/built-package.js'
 import { openCaptureWorld, drainStaging, type CaptureWorld } from '../capture-harness.js'
 import { parseCodexRollout, classify, storeViewOf, CODEX_INFER_WHY, type CensusRow } from '../../../scripts/capture-census.js'
 import { parse as parseToml, stringify as stringifyToml } from 'smol-toml'
-import { type EventList, readEventList, provenanceProblems, dispositionProblems, unlistedWiredProblems, recordingProblems, readClientEventList, recordedEventNames, CODEX_LIST, CLAUDE_CODE_LIST } from '../event-list.js'
+import { type EventList, readEventList, provenanceProblems, dispositionProblems, unlistedWiredProblems, recordingProblems, readClientEventList, recordedEventNames, CODEX_LIST, CLAUDE_CODE_LIST, AGY_LIST } from '../event-list.js'
 
 export const installDefiner = (reg: Registry<InstallWorld>): void => {
   // ── install wires only the agents that are present ──────────────────
@@ -667,7 +670,7 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
 
   // D402 for Claude Code, D409 for Codex CLI: the list's client decides
   // which block install writes and which recordings it is held against.
-  const listedClientOf = (list: EventList): typeof CODEX_LIST => (list.client === 'Codex CLI' ? CODEX_LIST : CLAUDE_CODE_LIST)
+  const listedClientOf = (list: EventList): typeof CODEX_LIST => (list.client === 'Codex CLI' ? CODEX_LIST : list.client === 'Antigravity CLI' ? AGY_LIST : CLAUDE_CODE_LIST)
   reg.define(/^every event on the list is either wired or named with what the journal does not capture because of it$/, (w: InstallWorld) => {
     const list = (w as InstallWorld & { iEventList?: EventList }).iEventList!
     const client = listedClientOf(list)
@@ -2146,10 +2149,13 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
     expect(w.irun!.status, w.irun!.out).toBe(0)
     expect(w.irun!.stdout).toMatch(/^Detected agents: .*Antigravity CLI/m)
     const seen = agyEntry(w)
-    // The server this build writes for a tools-only client: the launcher,
-    // `serve` over stdio, no capture (D386).
+    // The server this build writes for agy: the launcher, `serve` over
+    // stdio, in capture mode exactly where treecontext's named hook is in
+    // agy's hooks file (D386, D413).
     expect(seen.command).toBe(mcpLauncherIn(w.ihome!))
-    expect(seen.args.slice(0, 4)).toEqual(['serve', '--transport', 'stdio', '--no-capture'])
+    const hooks = join(w.ihome!, '.gemini', 'config', 'hooks.json')
+    const named = existsSync(hooks) && (JSON.parse(readFileSync(hooks, 'utf8')) as Record<string, unknown>)[AGY_HOOK_NAME] !== undefined
+    expect(seen.args.slice(0, 4)).toEqual(['serve', '--transport', 'stdio', named ? '--capture' : '--no-capture'])
   })
 
   reg.define(/^its permission settings allow status, query, export and insert of the treecontext server, and no other treecontext tool$/, (w: InstallWorld) => {
@@ -2820,4 +2826,328 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
     expect(lines[0]).toContain(`Stop group 1 hook 0 (${DEV_STOP.hooks[0]!.command}) to Stop group 0 hook 0`)
     expect(lines[0]).toMatch(/Codex will ask you to trust it again with \/hooks/)
   })
+
+// ── Antigravity CLI's named hook (D413, D417) ─────────────────────────
+  //
+  // A real install, uninstall and doctor under a redirected HOME. The agy a
+  // version check reads is the stand-in `agy` (writeFakeAgy), answering
+  // `--version` as agy 1.5.3 answers its own (the bare version); where a
+  // scenario reads agy's own listing of its MCP servers, `mcp list` is the
+  // real agy's (putAgyOnPath). The hooks file is read straight from disk:
+  // agy has no command that lists the hooks it loaded.
+  const agyHooksFile = (w: InstallWorld): string => join(w.ihome!, '.gemini', 'config', 'hooks.json')
+  const agyHooksOnDisk = (w: InstallWorld): Record<string, unknown> => JSON.parse(readFileSync(agyHooksFile(w), 'utf8')) as Record<string, unknown>
+  /** The developer's own named hook, in agy's shape (a PostToolUse group), and a number past 2^53. */
+  const DEVELOPER_AGY_HOOK = '{\n  "audit": {\n    "PostToolUse": [ { "matcher": "run_command", "hooks": [ { "type": "command", "command": "/usr/local/bin/audit {}", "budget": 9007199254740993 } ] } ]\n  }\n}\n'
+  /** The stand-in agy at `version` (null: unreadable), first on the CLI's PATH. */
+  const setFakeAgy = (w: InstallWorld, version: string | null): void => {
+    // Never write through a link to the real agy (putAgyOnPath's).
+    if (w.iAgyBin) rmSync(join(w.iAgyBin, 'agy'), { force: true })
+    if (!w.iAgyBin) {
+      w.iAgyBin = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-fake-agy-')))
+      w.defer(() => rmSync(w.iAgyBin!, { recursive: true, force: true }))
+    }
+    writeFakeAgy(w.iAgyBin, version)
+  }
+  const agyAt = async (w: InstallWorld, version: string | null, hooks?: string): Promise<void> => {
+    await openInstallWorld(w, [])
+    seedAgyHome(w)
+    setFakeAgy(w, version)
+    if (hooks !== undefined) writeFileSync(agyHooksFile(w), hooks)
+    if (existsSync(agyHooksFile(w))) w.iDeveloperBefore = readFileSync(agyHooksFile(w), 'utf8')
+    else delete w.iDeveloperBefore
+  }
+  const ourAgyHook = (data: Record<string, unknown>): Record<string, unknown> | undefined => data[AGY_HOOK_NAME] as Record<string, unknown> | undefined
+  /** The named hook install writes, as written under the world's home. */
+  const agyHooksBlockFor = (w: InstallWorld): Record<string, unknown> => JSON.parse(JSON.stringify(agyHooksBlock()).split(homedir()).join(w.ihome!)) as Record<string, unknown>
+  const agyEntryArgs = (w: InstallWorld): string[] => {
+    const cfg = JSON.parse(readFileSync(join(w.ihome!, '.gemini', 'config', 'mcp_config.json'), 'utf8')) as { mcpServers: Record<string, { args: string[] }> }
+    return cfg.mcpServers['treecontext']!.args
+  }
+
+  reg.define(/^a machine with Antigravity CLI installed, its version reading 1\.5\.3$/, async (w: InstallWorld) => {
+    await openInstallWorld(w, ['.claude'])
+    // agy's own version line and its own listing: the real agy.
+    putAgyOnPath(w)
+    seedAgyHome(w)
+    expect(agyCli(w, ['--version']).stdout.trim()).toBe(AGY_CAPTURE_FLOOR)
+    w.iproj = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-install-proj-')))
+    w.defer(() => rmSync(w.iproj!, { recursive: true, force: true }))
+  })
+  reg.define(/^no hook of Antigravity CLI's is written but treecontext's own named hook$/, (w: InstallWorld) => {
+    const data = agyHooksOnDisk(w)
+    expect(Object.keys(data)).toEqual([AGY_HOOK_NAME])
+    expect(ourAgyHook(data)).toEqual(agyHooksBlockFor(w))
+  })
+
+  // `install runs` and the listing: shared with D383's scenarios above.
+  reg.define(/^(Codex CLI|Antigravity CLI) whose version reads (\d+\.\d+\.\d+)$/, async (w: InstallWorld, client: unknown, version: unknown) => {
+    if (client === 'Antigravity CLI') { await agyAt(w, String(version)); return }
+    await openInstallWorld(w, ['.claude', '.codex'])
+    setFakeCodex(w, { version: String(version), sandbox: { exit: 0, stderr: '' } })
+  })
+  reg.define(/^(Codex CLI|Antigravity CLI) is wired for the MCP tools$/, (w: InstallWorld, client: unknown) => {
+    expect(w.irun!.status, w.irun!.out).toBe(0)
+    if (client === 'Antigravity CLI') {
+      expect(agyEntryArgs(w).slice(0, 4)).toEqual(['serve', '--transport', 'stdio', '--no-capture'])
+    } else {
+      const cfg = readFileSync(join(w.ihome!, '.codex', 'config.toml'), 'utf8')
+      expect(cfg).toMatch(/\[mcp_servers\.treecontext\]/)
+      expect(cfg).toContain('--no-capture')
+    }
+  })
+  reg.define(/^no capture hook of treecontext's is written for it$/, (w: InstallWorld) => {
+    const agy = existsSync(agyHooksFile(w)) ? readFileSync(agyHooksFile(w), 'utf8') : ''
+    const codex = existsSync(join(w.ihome!, '.codex', 'hooks.json')) ? readFileSync(join(w.ihome!, '.codex', 'hooks.json'), 'utf8') : ''
+    // The other client's file is checked too: neither holds a script of treecontext's.
+    // step-lint: allow unearned-absence -- the capture rows of the outline that follows find these script names in the files install writes at the floor
+    expect(`${agy}${codex}`).not.toMatch(/tc-(agy|post-tool-use|session-start|stop)/)
+  })
+  reg.define(/^the developer sees install say in one line that (Codex CLI|Antigravity CLI) stays tools-only until (\d+\.\d+\.\d+)$/, (w: InstallWorld, client: unknown, floor: unknown) => {
+    const lines = w.irun!.stdout.split('\n').filter((l) => l.includes(`${String(client)} stays tools-only`))
+    expect(lines, w.irun!.stdout).toHaveLength(1)
+    expect(lines[0]).toContain(String(floor))
+  })
+
+  reg.define(/^an Antigravity CLI whose version reads 1\.5\.3, whose hooks file holds the developer's own named hook for PostToolUse, and a workspace whose `\.agents\/hooks\.json` holds a hook of the developer's$/, async (w: InstallWorld) => {
+    await agyAt(w, AGY_CAPTURE_FLOOR, DEVELOPER_AGY_HOOK)
+    w.iproj = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-install-proj-')))
+    w.defer(() => rmSync(w.iproj!, { recursive: true, force: true }))
+    mkdirSync(join(w.iproj, '.agents'), { recursive: true })
+    writeFileSync(join(w.iproj, '.agents', 'hooks.json'), DEVELOPER_AGY_HOOK)
+  })
+
+  reg.define(/^an Antigravity CLI where (the version reads 1\.5\.2|the version cannot be read|the hooks file holds the developer's hook and does not parse|the hooks file holds a hook of the developer's named treecontext)$/, async (w: InstallWorld, which: unknown) => {
+    const c = String(which)
+    if (c === 'the version reads 1.5.2') await agyAt(w, '1.5.2', DEVELOPER_AGY_HOOK)
+    else if (c === 'the version cannot be read') await agyAt(w, null)
+    else if (c.includes('does not parse')) await agyAt(w, AGY_CAPTURE_FLOOR, DEVELOPER_AGY_HOOK.replace('"audit": {', '"audit": {,'))
+    else await agyAt(w, AGY_CAPTURE_FLOOR, '{\n  "treecontext": { "Stop": [ { "type": "command", "command": "/usr/local/bin/my-tree-tool" } ] }\n}\n')
+  })
+  reg.define(/^the hooks file is byte for byte as it was, or still absent$/, (w: InstallWorld) => {
+    if (w.iDeveloperBefore === undefined) expect(existsSync(agyHooksFile(w))).toBe(false)
+    else expect(readFileSync(agyHooksFile(w), 'utf8')).toBe(w.iDeveloperBefore)
+  })
+  reg.define(/^the server Antigravity CLI's entry starts runs without capture$/, (w: InstallWorld) => {
+    expect(agyEntryArgs(w)).toContain('--no-capture')
+  })
+  reg.define(/^the developer sees install say in one line that Antigravity CLI stays tools-only, (naming 1\.5\.2 and 1\.5\.3 as the first version whose hooks install writes|saying the version could not be read|quoting the parse error and saying agy runs none of the hooks in that file, the developer's included, until it is fixed|saying the name is taken by a hook install did not write|naming 1\.5\.2 and 1\.5\.3)$/, (w: InstallWorld, why: unknown) => {
+    const lines = w.irun!.stdout.split('\n').filter((l) => l.includes('Antigravity CLI stays tools-only'))
+    expect(lines, w.irun!.stdout).toHaveLength(1)
+    const l = lines[0]!
+    const y = String(why)
+    if (y.startsWith('naming 1.5.2')) expect(l).toMatch(/version reads 1\.5\.2, and 1\.5\.3 is the first version whose hooks install writes/)
+    else if (y.startsWith('saying the version')) expect(l).toMatch(/version could not be read/)
+    else if (y.startsWith('quoting')) {
+      let err = ''
+      try { JSON.parse(w.iDeveloperBefore!) } catch (e) { err = (e as Error).message.replace(/\s+/g, ' ').trim() }
+      expect(l).toContain(`does not parse (${err})`)
+      expect(l).toMatch(/agy runs none of the hooks in that file, yours included, until it is fixed/)
+    } else expect(l).toMatch(/the name "treecontext" in .* is taken by a hook install did not write/)
+  })
+
+  reg.define(/^an Antigravity CLI whose hooks file holds treecontext's named hook an earlier install wrote at 1\.5\.3, beside the developer's own named hook, and whose version now reads 1\.5\.2$/, async (w: InstallWorld) => {
+    await agyAt(w, AGY_CAPTURE_FLOOR, DEVELOPER_AGY_HOOK)
+    w.irun = tcCli(w, ['install', '--yes', '--agent', 'agy'])
+    expect(w.irun.status, w.irun.out).toBe(0)
+    expect(ourAgyHook(agyHooksOnDisk(w))).toBeDefined()
+    setFakeAgy(w, '1.5.2')
+  })
+  reg.define(/^the hooks file holds the developer's named hook as it was, and nothing of treecontext's$/, (w: InstallWorld) => {
+    expect(readFileSync(agyHooksFile(w), 'utf8')).toBe(DEVELOPER_AGY_HOOK)
+  })
+
+  reg.define(/^an Antigravity CLI at 1\.5\.3 whose hooks file install created, and another whose hooks file held the developer's own named hook before install$/, async (w: InstallWorld) => {
+    await agyAt(w, AGY_CAPTURE_FLOOR)
+    w.iAgyOther = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-install-home-')))
+    w.defer(() => rmSync(w.iAgyOther!, { recursive: true, force: true }))
+    mkdirSync(join(w.iAgyOther, '.gemini', 'config'), { recursive: true })
+    mkdirSync(join(w.iAgyOther, '.gemini', 'antigravity-cli'), { recursive: true })
+    mkdirSync(join(w.iAgyOther, '.claude'), { recursive: true })
+    writeFileSync(join(w.iAgyOther, '.gemini', 'config', 'hooks.json'), DEVELOPER_AGY_HOOK)
+  })
+  reg.define(/^install runs and then uninstall runs on each$/, (w: InstallWorld) => {
+    const homes = [w.ihome!, w.iAgyOther!]
+    for (const home of homes) {
+      const run = (args: string[]): CliRun => { const saved = w.ihome!; w.ihome = home; try { return tcCli(w, args) } finally { w.ihome = saved } }
+      const i = run(['install', '--yes', '--agent', 'agy'])
+      expect(i.status, i.out).toBe(0)
+      expect(readFileSync(join(home, '.gemini', 'config', 'hooks.json'), 'utf8')).toContain(`"${AGY_HOOK_NAME}"`)
+      const u = run(['uninstall', '--yes', '--agent', 'agy'])
+      expect(u.status, u.out).toBe(0)
+    }
+  })
+  reg.define(/^the hooks file install created is gone$/, (w: InstallWorld) => {
+    expect(existsSync(agyHooksFile(w))).toBe(false)
+  })
+  reg.define(/^the other hooks file holds the developer's named hook as it was, and nothing of treecontext's$/, (w: InstallWorld) => {
+    expect(readFileSync(join(w.iAgyOther!, '.gemini', 'config', 'hooks.json'), 'utf8')).toBe(DEVELOPER_AGY_HOOK)
+  })
+
+  reg.define(/^an Antigravity CLI at 1\.5\.3 whose hooks file install created and wrote its named hook into, and install's own record since lost$/, async (w: InstallWorld) => {
+    await agyAt(w, AGY_CAPTURE_FLOOR)
+    w.irun = tcCli(w, ['install', '--yes', '--agent', 'agy'])
+    expect(w.irun.status, w.irun.out).toBe(0)
+    const record = join(w.ihome!, '.treecontext', 'install-state.json')
+    expect(JSON.parse(readFileSync(record, 'utf8'))['agyHooks']).toBeDefined()
+    rmSync(record)
+  })
+  reg.define(/^the hooks file holds nothing of treecontext's$/, (w: InstallWorld) => {
+    const text = readFileSync(agyHooksFile(w), 'utf8')
+    expect(ourAgyHook(JSON.parse(text) as Record<string, unknown>)).toBeUndefined()
+    expect(w.irun!.stdout).toMatch(/known by its commands as treecontext's, no install record naming it/)
+  })
+  reg.define(/^the hooks file is still there, install's record no longer saying install created it$/, (w: InstallWorld) => {
+    expect(existsSync(agyHooksFile(w))).toBe(true)
+    const record = join(w.ihome!, '.treecontext', 'install-state.json')
+    const created = existsSync(record) ? (JSON.parse(readFileSync(record, 'utf8')) as { createdFiles?: Record<string, unknown> }).createdFiles ?? {} : {}
+    expect(Object.keys(created)).not.toContain(agyHooksFile(w))
+  })
+
+  reg.define(/^an Antigravity CLI at 1\.5\.3 whose hooks file holds treecontext's named hook, which the developer set to `enabled: false`$/, async (w: InstallWorld) => {
+    await agyAt(w, AGY_CAPTURE_FLOOR, DEVELOPER_AGY_HOOK)
+    w.irun = tcCli(w, ['install', '--yes', '--agent', 'agy'])
+    expect(w.irun.status, w.irun.out).toBe(0)
+    // The developer's off: one key, typed into treecontext's named hook.
+    const text = readFileSync(agyHooksFile(w), 'utf8')
+    writeFileSync(agyHooksFile(w), text.replace(`"${AGY_HOOK_NAME}": {`, `"${AGY_HOOK_NAME}": {\n    "enabled": false,`))
+    expect(ourAgyHook(agyHooksOnDisk(w))!['enabled']).toBe(false)
+    w.iDeveloperBefore = readFileSync(agyHooksFile(w), 'utf8')
+  })
+  reg.define(/^treecontext's named hook is still switched off$/, (w: InstallWorld) => {
+    expect(ourAgyHook(agyHooksOnDisk(w))!['enabled']).toBe(false)
+    expect(readFileSync(agyHooksFile(w), 'utf8')).toBe(w.iDeveloperBefore)
+  })
+  reg.define(/^the developer sees install say that capture on Antigravity CLI is switched off there by the developer$/, (w: InstallWorld) => {
+    expect(w.irun!.stdout).toMatch(/your "enabled": false on the named hook "treecontext" is kept: agy runs it only once you turn it on/)
+  })
+
+  reg.define(/^an Antigravity CLI at 1\.5\.3 whose hooks file holds a treecontext named hook an earlier build wrote, wired for fewer events, beside the developer's own named hook$/, async (w: InstallWorld) => {
+    await agyAt(w, AGY_CAPTURE_FLOOR)
+    // The draft before the gate's recording (D417's comment): every event
+    // this build wires but PostInvocation, with this build's commands.
+    const { PostInvocation: _pi, ...earlier } = agyHooksBlockFor(w)
+    const text = `{\n  "audit": { "Stop": [ { "type": "command", "command": "/usr/local/bin/audit {}", "budget": 9007199254740993 } ] },\n  "treecontext": ${JSON.stringify(earlier, null, 2).split('\n').join('\n  ')}\n}\n`
+    writeFileSync(agyHooksFile(w), text)
+    w.iDeveloperBefore = text
+  })
+  reg.define(/^treecontext's named hook is the one this build writes$/, (w: InstallWorld) => {
+    expect(ourAgyHook(agyHooksOnDisk(w))).toEqual(agyHooksBlockFor(w))
+  })
+  reg.define(/^the developer's named hook reads as it was$/, (w: InstallWorld) => {
+    const text = readFileSync(agyHooksFile(w), 'utf8')
+    expect(text).toContain('"audit": { "Stop": [ { "type": "command", "command": "/usr/local/bin/audit {}", "budget": 9007199254740993 } ] }')
+  })
+
+  reg.define(/^the list of Antigravity CLI's hook events, kept with the agy version it was read from$/, (w: InstallWorld) => {
+    const list = readClientEventList(AGY_LIST)
+    ;(w as InstallWorld & { iEventList?: EventList }).iEventList = list
+    expect(provenanceProblems(list, 'Antigravity CLI')).toEqual([])
+    expect(list.version).toBe(AGY_CAPTURE_FLOOR)
+  })
+  reg.define(/^it is compared with the named hook install writes for Antigravity CLI$/, () => { /* the Thens compare */ })
+  reg.define(/^every event install wires for Antigravity CLI is on the list$/, (w: InstallWorld) => {
+    expect(unlistedWiredProblems((w as InstallWorld & { iEventList?: EventList }).iEventList!, AGY_LIST.wired())).toEqual([])
+  })
+  reg.define(/^PreToolUse is on the list as not wired, because its hook must decide the call's permission$/, (w: InstallWorld) => {
+    const e = (w as InstallWorld & { iEventList?: EventList }).iEventList!.events.find((x) => x.event === 'PreToolUse')!
+    expect(e.disposition).toBe('not-captured')
+    expect(e.when).toMatch(/permission decision/)
+  })
+  reg.define(/^PostInvocation is on the list as wired, because a call's output is in agy's transcript only by the end of the model call that made it$/, (w: InstallWorld) => {
+    const e = (w as InstallWorld & { iEventList?: EventList }).iEventList!.events.find((x) => x.event === 'PostInvocation')!
+    expect(e.disposition).toBe('wired')
+    expect(e.when).toMatch(/result step is in agy's transcript by the PostInvocation that follows its PostToolUse/)
+    expect(AGY_LIST.wired()).toContain('PostInvocation')
+  })
+
+
+  // ── capture mode by the hooks (D386, D406, D413): the version rows ─────
+  reg.define(/^install runs (at version (\d+\.\d+\.\d+)|as usual, its version reading (\d+\.\d+\.\d+))$/, async (w: InstallWorld, _how: unknown, codexV: unknown, agyV: unknown) => {
+    if (w.iClient === 'Codex CLI') {
+      if (codexV === '0.167.0') realCodexAt(w, '0.167.0')
+      else setFakeCodex(w, { version: String(codexV), sandbox: { exit: 0, stderr: '' } })
+    } else if (agyV !== AGY_CAPTURE_FLOOR) {
+      // The stand-in agy's version, its `mcp list` handed to the real agy.
+      const real = realAgy()
+      rmSync(join(w.iAgyBin!, 'agy'), { force: true })
+      writeFakeAgy(w.iAgyBin!, String(agyV), real)
+    } else {
+      expect(agyCli(w, ['--version']).stdout.trim()).toBe(AGY_CAPTURE_FLOOR)
+    }
+    w.irun = tcCli(w, ['install', '--yes'])
+    expect(w.irun.status, w.irun.out).toBe(0)
+    if (w.iClient === 'Codex CLI' && codexV === '0.167.0') {
+      // The developer's /hooks: Codex runs its hooks only once trusted.
+      const trusted = await developerTrustsCodexHooks(w.ihome!, w.iproj ?? w.ihome!)
+      expect(trusted.length).toBeGreaterThan(0)
+    }
+  })
+
+  // ── the hook scripts every client's hooks run (D406, D413) ────────────
+  reg.define(/^a machine with Codex CLI 0\.167\.0 installed and no other client$/, async (w: InstallWorld) => {
+    await openInstallWorld(w, ['.codex'])
+    setFakeCodex(w, { version: '0.167.0', sandbox: { exit: 0, stderr: '' } })
+  })
+  reg.define(/^a machine with Antigravity CLI 1\.5\.3 installed and no other client$/, async (w: InstallWorld) => {
+    await agyAt(w, AGY_CAPTURE_FLOOR)
+  })
+  reg.define(/^a machine with Claude Code, Codex CLI 0\.167\.0 and Antigravity CLI 1\.5\.3 wired by install$/, async (w: InstallWorld) => {
+    await openInstallWorld(w, ['.claude', '.codex'])
+    setFakeCodex(w, { version: '0.167.0', sandbox: { exit: 0, stderr: '' } })
+    seedAgyHome(w)
+    setFakeAgy(w, AGY_CAPTURE_FLOOR)
+    const run = tcCli(w, ['install', '--yes'])
+    expect(run.status, run.out).toBe(0)
+  })
+  reg.define(/^uninstall runs naming Claude Code alone$/, (w: InstallWorld) => {
+    w.irun = tcCli(w, ['uninstall', '--yes', '--agent', 'claude'])
+  })
+  reg.define(/^every hook script (Codex CLI's hooks|Antigravity CLI's named hook|Codex CLI's hooks and Antigravity CLI's named hook) run is there and runs$/, (w: InstallWorld, which: unknown) => {
+    const files: string[] = []
+    if (String(which).includes('Codex')) files.push(join(w.ihome!, '.codex', 'hooks.json'))
+    if (String(which).includes('Antigravity')) files.push(agyHooksFile(w))
+    // The scripts run this build compiled, as a global install places it.
+    const unplace = placeBuiltPackage(w.ihome!)
+    w.defer(unplace)
+    for (const f of files) {
+      const commands = commandsIn(JSON.parse(readFileSync(f, 'utf8')))
+        .filter((c) => c.includes(join(w.ihome!, '.claude', 'hooks')))
+      expect(commands.length, `${f} names no hook script of treecontext's`).toBeGreaterThanOrEqual(5)
+      for (const c of commands) {
+        const script = /"([^"]+)"/.exec(c)![1]!
+        expect(existsSync(script), `${script}, named in ${f}, is not there`).toBe(true)
+        // Run as the client runs it: through sh, the payload on stdin.
+        const r = spawnSync('sh', ['-c', c], { input: '{}', env: sandboxedSpawnEnv(w.ihome!), encoding: 'utf8', timeout: 60_000 })
+        expect(r.status, `${c}: ${r.stderr}`).toBe(0)
+        if (f === agyHooksFile(w)) expect(r.stdout.trim()).toBe('{}')
+      }
+    }
+  })
+
+  // ── the Gemini CLI sweep leaves agy's hooks file (D399, D413) ─────────
+  reg.define(/^Antigravity CLI 1\.5\.3 wired by install, its hooks file holding treecontext's named hook beside a hook of the developer's, and Gemini CLI's settings holding what an earlier install wrote for it$/, async (w: InstallWorld) => {
+    await agyAt(w, AGY_CAPTURE_FLOOR, DEVELOPER_AGY_HOOK)
+    const run = tcCli(w, ['install', '--yes', '--agent', 'agy'])
+    expect(run.status, run.out).toBe(0)
+    expect(ourAgyHook(agyHooksOnDisk(w))).toBeDefined()
+    layEarlierGeminiInstall(w.ihome!, GEMINI_DEVELOPER, { wrappers: true })
+    // The needle the Then denies is there before the sweep.
+    expect(readFileSync(geminiSettingsFile(w), 'utf8')).toMatch(/treecontext|tc-/)
+    w.iDeveloperBefore = readFileSync(agyHooksFile(w), 'utf8')
+  })
+  reg.define(/^uninstall runs naming Gemini CLI$/, (w: InstallWorld) => {
+    w.irun = tcCli(w, ['uninstall', '--yes', '--agent', 'gemini'])
+    expect(w.irun.status, w.irun.out).toBe(0)
+  })
+  reg.define(/^Antigravity CLI's hooks file is byte for byte as it was$/, (w: InstallWorld) => {
+    expect(readFileSync(agyHooksFile(w), 'utf8')).toBe(w.iDeveloperBefore)
+  })
+  reg.define(/^Gemini CLI's settings hold nothing of treecontext's$/, (w: InstallWorld) => {
+    const text = existsSync(geminiSettingsFile(w)) ? readFileSync(geminiSettingsFile(w), 'utf8') : '{}'
+    // step-lint: allow unearned-absence -- the Given asserts this needle in the same file before the sweep
+    expect(text).not.toMatch(/treecontext|tc-/)
+    expect(geminiWrappers(w)).toEqual([])
+  })
+
 }

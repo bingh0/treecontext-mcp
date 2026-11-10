@@ -2846,4 +2846,75 @@ function sandboxSteps(define: (re: RegExp, fn: (w: WorkersWorld, ...caps: string
   define(/^the worker left no summary row$/, (w) => {
     expect(laneRows(w, w.legs!['worker']!.sessionId).filter((x) => x.kind === SUBAGENT_SUMMARY_KIND)).toEqual([])
   })
+
+  // ── D416's worker clause, D421: an `agy -p` worker with agy's named hook ──
+  // The worker is started by the real `treecontext run`; the process the
+  // door launches is the stand-in (no model), which writes its environment
+  // to a file, writes its note through a real `treecontext serve` started
+  // with that environment (agy's MCP server's place), and waits. While it
+  // runs, agy's named hook fires as the recorded ticketed worker's did on
+  // 2026-11-09 (tests/fixtures/agy-hooks, worker.ndjson), every event and
+  // its transcript as they stood, through the commands install writes for
+  // agy, with the two variables the recording shows every hook held (the
+  // ticket and the lane the door handed the worker). The worker's agy
+  // conversation is the recorded one.
+  define(/^an `agy -p` worker started by the wrapper with a ticket naming the parent "([^"]+)", the run "([^"]+)", the key "([^"]+)" and the role "([^"]+)", on an Antigravity CLI whose named hook install wrote$/, async (w, parent, run, key, role) => {
+    await openRunWorld(w)
+    const go = join(w.home!, `agy-worker-go-${randomUUID().slice(0, 8)}`)
+    const envFile = join(w.home!, `agy-worker-env-${randomUUID().slice(0, 8)}.json`)
+    w.facts!['go'] = go
+    w.facts!['env-file'] = envFile
+    w.facts!['spec'] = {
+      spawner: 'wrapper', prompt: 'wire the submit button',
+      ticket: ticketFields(w, { parent: { id: String(parent), cli: 'agy' }, run: String(run), key: String(key), role: String(role) }),
+      plan: { first: { envTo: envFile, waitFor: go, notes: 1, viaTools: true, label: 'agy worker' } },
+    } satisfies WorkerSpec
+  })
+  define(/^the worker's events, as Antigravity sends them, reach the hook install writes, the worker runs a shell command and inserts a note, and ingestion runs$/, async (w) => {
+    const events = recordedSession('1.5.3', 'worker.ndjson', 'agy')
+    w.facts!['agy-conversation'] = String(events[0]!['conversationId'])
+    w.facts!['agy-events'] = events
+    const go = w.facts!['go'] as string
+    await runWorker(w, specOf(w), 'worker', async () => {
+      await waitForFile(`${go}.ready`)
+      const env = JSON.parse(readFileSync(w.facts!['env-file'] as string, 'utf8')) as Record<string, string>
+      expect(env[TICKET_ENV], 'the door handed the worker no ticket').toBeTruthy()
+      expect(env[WORKER_SESSION_ENV], 'the door handed the worker no lane').toBeTruthy()
+      replayRecordedSession(w, events, { env: { [TICKET_ENV]: env[TICKET_ENV]!, [WORKER_SESSION_ENV]: env[WORKER_SESSION_ENV]! } })
+      writeFileSync(go, 'go')
+    })
+    expect(outOf(w).exitCode).toBe(0)
+    await drainStaging(w)
+  })
+  define(/^the store holds no self registration for the worker's conversation$/, (w) => {
+    const conv = w.facts!['agy-conversation'] as string
+    expect(rawAll(w, 'SELECT kind FROM session_registry WHERE session_id = ?', conv)).toEqual([])
+    // Its conversation is linked to the worker's lane, nobody's self.
+    const lane = outOf(w).sessionId!
+    expect(lane).not.toBe(conv)
+    expect(JSON.stringify(rawRegistration(w, { sessionId: lane, agentId: WORKER_AGENT_ID }))).toContain(conv)
+  })
+  define(/^the shell command's entry and the note sit in the worker's own lane, stamped with the writer "([^"]+)" and the parent session "([^"]+)"$/, (w, writer, parent) => {
+    const lane = outOf(w).sessionId!
+    const rows = laneRows(w, lane)
+    const shell = rows.filter((r) => r.m['tool_name'] === 'run_command' && r.content.includes('head -c 13 package.json'))
+    const note = rows.filter((r) => r.content.startsWith('agy worker note 1 of '))
+    expect(shell, 'the shell command\'s entry is not in the worker\'s lane').toHaveLength(1)
+    expect(note, 'the note is not in the worker\'s lane').toHaveLength(1)
+    expect(shell[0]!.content).toContain('\nOutput:\n')
+    for (const r of [...shell, ...note]) expect([r.m['_writer'], r.m['_writer_src'], r.m['_parent']]).toEqual([writer, 'declared', parent])
+    // The captured call keeps agy's conversation beside the lane.
+    expect(shell[0]!.m['_client_session_id']).toBe(w.facts!['agy-conversation'])
+  })
+  define(/^the main lane holds none of the worker's rows$/, (w) => {
+    const lane = outOf(w).sessionId!
+    const conv = w.facts!['agy-conversation'] as string
+    const outside = rawAll<{ session_key: string }>(w,
+      "SELECT session_key FROM nodes WHERE session_key <> ? AND (json_extract(metadata_json, '$.session_id') = ? OR json_extract(metadata_json, '$._client_session_id') = ? OR CAST(content AS TEXT) LIKE 'agy worker note %')",
+      lane, conv, conv)
+    expect(outside).toEqual([])
+    // Every captured call of the recording is in the lane.
+    const calls = (w.facts!['agy-events'] as Array<Record<string, unknown>>).filter((e) => e['toolCall'] !== undefined)
+    expect(laneRows(w, lane).filter((r) => typeof r.m['tool_name'] === 'string')).toHaveLength(calls.length)
+  })
 }

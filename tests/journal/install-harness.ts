@@ -79,6 +79,8 @@ export interface InstallWorld extends World {
   iClient?: 'Claude Code' | 'Codex CLI' | 'Antigravity CLI'
   /** D383 scenarios: a directory holding the real `agy`, first on the CLI's PATH. */
   iAgyBin?: string
+  /** A second home, for a scenario that installs on two machines (D413). */
+  iAgyOther?: string
   /** A directory holding the stand-in `gemini`, first on the CLI's PATH (Gemini CLI's command, which install no longer reads, D399). */
   iGeminiBin?: string
   /** D385 scenarios: the arguments the developer added to the entry, in their order. */

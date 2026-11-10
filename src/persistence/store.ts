@@ -8,7 +8,7 @@
  *  - Close cleanly
  */
 
-import { PRE_TOOL_USE_MARK, NO_TURN_END_MARK, NO_TURN_END_LINE, ownCallRowSql } from './capture-marks.js'
+import { PRE_TOOL_USE_MARK, NO_TURN_END_MARK, NO_TURN_END_LINE, ownCallRowSql, AGY_CALL_MARK, AGY_NO_END_LINE } from './capture-marks.js'
 import { ledgeredCallIds } from '../hooks/gap-ledger.js'
 import type { Database, Statement } from './database.js'
 import { encodeContent, decodeContent } from './content-codec.js'
@@ -90,6 +90,9 @@ export interface StagingEntry {
    *  call ended, on that client's success event. Never an `outcome`
    *  value: `outcome IS NULL` is read as a call's own successful event. */
   statedBy?: string | null
+  /** The client whose hooks register no self, named by the hook's command
+   *  (D421, migration 037): the drain stamps the row's writer unknown. */
+  client?: string | null
 }
 
 export interface StagingRow {
@@ -123,6 +126,8 @@ export interface StagingRow {
   capturedFrom: string | null
   /** See StagingEntry.statedBy (migration 036). */
   statedBy: string | null
+  /** See StagingEntry.client (migration 037). */
+  client: string | null
 }
 
 /** What the V2 echo heal did with one (echo, row) pair — every branch is
@@ -812,6 +817,7 @@ export class Persistence {
       entry.outcome ?? null,
       entry.capturedFrom ?? null,
       entry.statedBy ?? null,
+      entry.client ?? null,
     )
     const id = Number(result.lastInsertRowid)
     dbg('store', 'staging insert', { id, role: entry.role, toolName: entry.toolName, bytes: entry.content.length })
@@ -844,7 +850,7 @@ export class Persistence {
                       ORDER BY timestamp, id LIMIT ?)
         RETURNING id, session_id, role, content, tool_name, timestamp, priority, processed,
                   created_at, index_len, preview_len, attempts, namespace, agent_id, agent_type, kind,
-                  tool_use_id, outcome, captured_from, stated_by`,
+                  tool_use_id, outcome, captured_from, stated_by, client`,
     )
     const rows = this.sClaimStagingBatch.all(claimant, now, now - ttlSecs, limit)
     dbg('store', 'staging claim', { claimant, requested: limit, claimed: rows.length })
@@ -904,6 +910,7 @@ export class Persistence {
         outcome: r.outcome == null ? null : String(r.outcome),
         capturedFrom: r.captured_from == null ? null : String(r.captured_from),
         statedBy: r.stated_by == null ? null : String(r.stated_by),
+        client: r.client == null ? null : String(r.client),
       }
     })
   }
@@ -1042,7 +1049,23 @@ export class Persistence {
           AND (p.session_id || char(10) || p.tool_use_id) NOT IN (SELECT value FROM json_each(?))
         GROUP BY p.tool_use_id`,
     ).run(NO_TURN_END_LINE, now, NO_TURN_END_MARK, cutoff, PRE_TOOL_USE_MARK, JSON.stringify(ledgered))
-    return Number(r.changes)
+    // D415, D3: an agy call's account no PostInvocation or Stop settled (a
+    // worker killed mid-turn, a Stop the store refused): journaled once, at
+    // the call's moment, with no call id (agy gives none) and the client
+    // that files it as writer unknown or in its worker's lane. Taken out
+    // with the processed rows right after.
+    let agy = 0
+    if (cols.includes('client')) {
+      agy = Number(this.db.prepare(
+        `INSERT INTO staging (session_id, role, content, tool_name, timestamp, priority, processed, created_at,
+           index_len, preview_len, namespace, agent_id, agent_type, kind, tool_use_id, outcome, captured_from, client)
+         SELECT p.session_id, 'assistant', p.content || char(10) || ?, p.tool_name, p.timestamp, p.priority, 0, ?,
+                p.index_len, p.preview_len, p.namespace, NULL, NULL, NULL, NULL, NULL, ?, p.client
+           FROM staging p
+          WHERE p.processed = 1 AND p.timestamp < ? AND p.captured_from = ?`,
+      ).run(AGY_NO_END_LINE, now, NO_TURN_END_MARK, cutoff, AGY_CALL_MARK).changes)
+    }
+    return Number(r.changes) + agy
   }
 
   countUnprocessedStaging(): number {
@@ -1213,8 +1236,8 @@ export class Persistence {
   private getInsertStagingStmt(): Statement {
     if (!this.sInsertStaging) {
       this.sInsertStaging = this.db.prepare(
-        'INSERT INTO staging (session_id, role, content, tool_name, timestamp, priority, index_len, preview_len, namespace, agent_id, agent_type, kind, tool_use_id, outcome, captured_from, stated_by) ' +
-          'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO staging (session_id, role, content, tool_name, timestamp, priority, index_len, preview_len, namespace, agent_id, agent_type, kind, tool_use_id, outcome, captured_from, stated_by, client) ' +
+          'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       )
     }
     return this.sInsertStaging

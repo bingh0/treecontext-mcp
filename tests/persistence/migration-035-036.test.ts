@@ -45,7 +45,7 @@ describe('migrations 035 and 036: the numbering of a worker\'s process, and a st
     const stagingBefore = db.prepare('SELECT id, session_id, content, tool_use_id, outcome, captured_from FROM staging').all()
     try {
       const report = runMigrations(openNodeSqlite(db), { migrate: true })
-      expect(report.applied.map((a) => [a.version, a.kind])).toEqual([[35, 'additive'], [36, 'additive']])
+      expect(report.applied.map((a) => [a.version, a.kind])).toEqual([[35, 'additive'], [36, 'additive'], [37, 'additive']])
       expect(cols(db, 'session_registry')).toContain('proc_ns')
       expect(cols(db, 'staging')).toContain('stated_by')
       expect(db.prepare('SELECT session_id, agent_id, pid, proc_start, processes FROM session_registry').all()).toEqual(registryBefore)

@@ -16,7 +16,9 @@ import { maxSupportedVersion } from '../../../src/persistence/migrations/index.j
 import { T0 } from '../world.js'
 import { RECOVERY_SNAPSHOT_SOURCE, RECOVERY_QUERIES_KEY, RECOVERY_QUOTE_CAP, RECOVERY_PREVIEW_LEN, RECOVERY_INDEX_LEN } from '../../../src/persistence/recovery-snapshot.js'
 import { ftsNodeIds } from '../../helpers/echo-capture.js'
-import { recordedSession, replayRecordedSession, type ReplayedEvent } from '../standins.js'
+import { recordedSession, replayRecordedSession, agyEventOf, agyTranscriptOf, agyTranscriptLinesOf, type ReplayedEvent } from '../standins.js'
+import { placementsOf } from '../../../src/persistence/lane-scope.js'
+import { laneOfRow, UNKNOWN_LANE } from '../../../src/references.js'
 import { classifyExit, EXIT_BY_KEY } from '../../../src/server/event-processing.js'
 import { composeToolEntry } from '../../../src/hooks/post-tool-use.js'
 import { NO_RESULT_LINE, NO_TURN_END_LINE } from '../../../src/persistence/capture-marks.js'
@@ -119,6 +121,10 @@ type ReplayWorld = CaptureWorld & {
   codexTurn?: string
   /** The moment staging held for a call's PreToolUse account (D408). */
   accountAt?: number
+  /** agy (D415): how the replay hands the transcript; the two conversations of a subagent set. */
+  agyTranscript?: 'recorded' | 'unreadable'
+  agyParent?: string
+  agyChild?: string
 }
 
 /** A named call as the recorded files hold it: the payload of the event
@@ -1176,6 +1182,7 @@ export const captureDefiner = (reg: Registry<CaptureWorld>): void => {
 
   // A store one schema below this build's (036): the stated-success column
   // is not there, and the hook never migrates.
+  const SCHEMA_BEFORE_STATED_MARK = 35
   reg.define(/^a store at the schema before this build's, met by a hook of this build$/, async (w: ReplayWorld) => {
     await openCaptureWorld(w)
     // One journal row, so no hook takes it for a fresh store to bootstrap.
@@ -1183,7 +1190,10 @@ export const captureDefiner = (reg: Registry<CaptureWorld>): void => {
     await w.store!.close()
     const db = new DatabaseSync(w.dbPath!)
     try {
-      db.exec(`ALTER TABLE staging DROP COLUMN stated_by; PRAGMA user_version = ${maxSupportedVersion - 1}`)
+      // The schema that keeps no stated-success mark is 035: migration 036
+      // adds `stated_by`, and 037 `client` after it. Both columns go, so the
+      // store is a true 035 and not a later one with a column missing.
+      db.exec(`ALTER TABLE staging DROP COLUMN client; ALTER TABLE staging DROP COLUMN stated_by; PRAGMA user_version = ${SCHEMA_BEFORE_STATED_MARK}`)
     } finally { db.close() }
   })
   reg.define(/^the events Claude Code sent, as recorded, for a call that succeeded$/, (w: ReplayWorld) => {
@@ -1200,7 +1210,7 @@ export const captureDefiner = (reg: Registry<CaptureWorld>): void => {
     // hook did not migrate.
     const raw = new DatabaseSync(w.dbPath!, { readOnly: true })
     try {
-      expect((raw.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(maxSupportedVersion - 1)
+      expect((raw.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(SCHEMA_BEFORE_STATED_MARK)
       const rows = raw.prepare('SELECT * FROM staging').all() as Array<Record<string, unknown>>
       expect(rows.map((r) => r['tool_use_id'])).toEqual([w.calls![0]!.id])
       expect('stated_by' in rows[0]!).toBe(false)
@@ -1497,5 +1507,233 @@ export const captureDefiner = (reg: Registry<CaptureWorld>): void => {
     // theirs, so this turn holds no call with no result.)
     expect(noResult).toEqual(unresolved)
     for (const id of post) expect(onlyEntryOf(w, id).metadata['captured_from']).toBeUndefined()
+  })
+
+  // ── Antigravity CLI 1.5.3 captured through its named hook (D415, D421) ──
+  // Every event and transcript is agy's own, recorded on 2026-11-09
+  // (tests/fixtures/agy-hooks), replayed through the commands of the named
+  // hook install writes for agy (each naming agy, `--client agy`), the
+  // transcript as it stood when each event fired written where the event
+  // points, and read back from the store file.
+  const AGY = '1.5.3'
+  type AgyCall = { step: number; name: string; args: Record<string, unknown>; conversation: string; payload: Record<string, unknown> }
+  /** Every call the recording carries, from its PostToolUse events. */
+  const agyCallsOf = (w: ReplayWorld): AgyCall[] => w.recorded!.flatMap((r) => r.events)
+    .filter((e) => agyEventOf(e) === 'PostToolUse')
+    .map((e) => {
+      const call = e['toolCall'] as { name: string; args: Record<string, unknown> }
+      return { step: e['stepIdx'] as number, name: call.name, args: call.args, conversation: String(e['conversationId']), payload: e }
+    })
+  /** A call's result step as the recorded transcript holds it. */
+  const agyResultOf = (c: AgyCall): string => {
+    const steps = agyTranscriptOf(c.payload).map((l) => JSON.parse(l) as Record<string, unknown>)
+    const s = steps.find((x) => x['step_index'] === c.step)
+    expect(s, `the transcript holds no step ${c.step}`).toBeDefined()
+    return String(s!['content'] ?? s!['error'])
+  }
+  /** The entries of one call: its conversation's captured rows naming its tool and its arguments. */
+  const agyEntriesOf = (w: ReplayWorld, c: AgyCall): RawNode[] => rawJournal(w).filter((r) => r.metadata['tool_name'] === c.name
+    && (r.metadata['_client_session_id'] ?? r.metadata['session_id']) === c.conversation
+    && Object.values(c.args).every((v) => typeof v !== 'string' || r.content.includes(v)))
+  const replayAgy = async (w: ReplayWorld, opts: { transcript?: 'recorded' | 'unreadable' } = {}): Promise<void> => {
+    w.replays = w.recorded!.map((r) => replayRecordedSession(w, r.events, opts))
+    await drainStaging(w)
+  }
+
+  reg.define(/^the events and the transcript of an Antigravity session, as Antigravity sends them, that runs a shell command, reads a file, inserts a note through treecontext and replies$/, async (w: ReplayWorld) => {
+    await openCaptureWorld(w)
+    w.recorded = [{ events: recordedSession(AGY, 'headless-session.ndjson', 'agy') }]
+    const calls = agyCallsOf(w)
+    expect(calls.map((c) => c.name)).toEqual(expect.arrayContaining(['run_command', 'read_file', 'call_mcp_tool']))
+    expect(calls.some((c) => c.name === 'call_mcp_tool' && c.args['ToolName'] === 'treecontext_insert')).toBe(true)
+  })
+  reg.define(/^the journal holds the session's prompt once, with role "user"$/, (w: ReplayWorld) => {
+    const prompt = String(w.recorded![0]!.events[0]!['lastUserInput'])
+    // agy repeats it on every event of the turn.
+    expect(w.recorded![0]!.events.every((e) => e['lastUserInput'] === prompt)).toBe(true)
+    const users = rawJournal(w).filter((r) => r.metadata['role'] === 'user')
+    expect(users.map((r) => r.content)).toEqual([prompt])
+  })
+  reg.define(/^each tool call is in the journal with agy's tool name, its arguments and an Output section holding what the transcript records for it$/, (w: ReplayWorld) => {
+    const calls = agyCallsOf(w)
+    expect(calls.length).toBe(6)
+    for (const c of calls) {
+      const rows = agyEntriesOf(w, c)
+      expect(rows, `${c.name} step ${c.step}`).toHaveLength(1)
+      const row = rows[0]!
+      expect(row.content.startsWith(`Tool: ${c.name}\nInput:\n`)).toBe(true)
+      const out = row.content.slice(row.content.indexOf('\nOutput:\n') + '\nOutput:\n'.length)
+      expect(row.content.indexOf('\nOutput:\n'), row.content).toBeGreaterThan(0)
+      // The output as agy's transcript recorded it (a long one past its
+      // preview, behind the full tail; a repo read's preview alone).
+      const said = agyResultOf(c)
+      expect(out, `${c.name} step ${c.step}`).toContain(said.slice(0, 100))
+    }
+  })
+  reg.define(/^the reply is in the journal with role "assistant"$/, (w: ReplayWorld) => {
+    const steps = agyTranscriptOf(w.recorded![0]!.events[0]!).map((l) => JSON.parse(l) as Record<string, unknown>)
+    const reply = String([...steps].reverse().find((s) => s['type'] === 'PLANNER_RESPONSE' && typeof s['content'] === 'string')!['content'])
+    const rows = rawJournal(w).filter((r) => r.metadata['role'] === 'assistant' && r.metadata['tool_name'] === undefined)
+    expect(rows.map((r) => r.content)).toEqual([reply])
+  })
+  reg.define(/^every hook answered agy with a JSON object and decided no permission$/, (w: ReplayWorld) => {
+    const events = w.replays!.flat()
+    expect(events.length).toBe(w.recorded![0]!.events.length)
+    for (const ev of events) {
+      expect(ev.hooks, `${ev.event} at line ${ev.line} reached no hook`).toEqual(['agy'])
+      // A JSON object, and an empty one: no decision of any kind.
+      expect(JSON.parse(ev.stdout.join('')) as unknown, ev.stdout.join('')).toEqual({})
+    }
+  })
+
+  reg.define(/^the events of an Antigravity session, as Antigravity sends them, and its transcript as it stood when each event fired, the call's result missing at its PostToolUse and present at the PostInvocation that follows$/, async (w: ReplayWorld) => {
+    await openCaptureWorld(w)
+    w.recorded = [{ events: recordedSession(AGY, 'shell-nonzero-ls.ndjson', 'agy') }]
+    const events = w.recorded![0]!.events
+    const i = events.findIndex((e) => agyEventOf(e) === 'PostToolUse')
+    const step = events[i]!['stepIdx'] as number
+    const at = (e: Record<string, unknown>): Array<Record<string, unknown>> => agyTranscriptOf(e, agyTranscriptLinesOf(e) ?? 0).map((l) => JSON.parse(l) as Record<string, unknown>)
+    expect(at(events[i]!).some((s) => s['step_index'] === step), 'the result is already in the transcript at its PostToolUse').toBe(false)
+    expect(agyEventOf(events[i + 1]!)).toBe('PostInvocation')
+    expect(at(events[i + 1]!).some((s) => s['step_index'] === step), 'the result is not in the transcript at the PostInvocation that follows').toBe(true)
+  })
+  reg.define(/^the call is in the journal once, with an Output section holding the result the transcript recorded$/, (w: ReplayWorld) => {
+    const [c] = agyCallsOf(w)
+    const rows = agyEntriesOf(w, c!)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]!.content).toContain(`\nOutput:\n${agyResultOf(c!).trimEnd()}`)
+  })
+  reg.define(/^the entry's moment is when the call's PostToolUse arrived$/, (w: ReplayWorld) => {
+    const [c] = agyCallsOf(w)
+    const row = agyEntriesOf(w, c!)[0]!
+    const post = w.replays!.flat().find((e) => e.event === 'PostToolUse')!
+    const at = row.metadata['created_at'] as number
+    expect(at).toBeGreaterThanOrEqual(post.startedAt)
+    expect(at).toBeLessThanOrEqual(post.endedAt)
+  })
+
+  reg.define(/^the events of an Antigravity session of two turns, as Antigravity sends them, whose second prompt is the same text as its first$/, async (w: ReplayWorld) => {
+    await openCaptureWorld(w)
+    w.recorded = [{ events: recordedSession(AGY, 'two-turns.ndjson', 'agy') }]
+    const events = w.recorded![0]!.events
+    expect(events.filter((e) => agyEventOf(e) === 'SessionStart')).toHaveLength(1)
+    const openers = events.filter((e) => agyEventOf(e) === 'PreInvocation' && e['invocationNum'] === 0)
+    expect(openers).toHaveLength(2)
+    expect(openers[0]!['lastUserInput']).toBe(openers[1]!['lastUserInput'])
+  })
+  reg.define(/^the journal holds two prompt entries with role "user", one for each turn$/, (w: ReplayWorld) => {
+    const prompt = String(w.recorded![0]!.events[0]!['lastUserInput'])
+    const users = rawJournal(w).filter((r) => r.metadata['role'] === 'user')
+    expect(users.map((r) => r.content)).toEqual([prompt, prompt])
+    // Each at its turn's opening model call.
+    const openers = w.replays!.flat().filter((e) => e.event === 'PreInvocation' && e.payload['invocationNum'] === 0)
+    const ats = users.map((r) => r.metadata['created_at'] as number).sort()
+    ats.forEach((at, k) => { expect(at).toBeGreaterThanOrEqual(openers[k]!.startedAt); expect(at).toBeLessThanOrEqual(openers[k]!.endedAt) })
+  })
+
+  reg.define(/^the events of an Antigravity session, as Antigravity sends them, whose transcript cannot be read, or holds no result for a call by the conversation's Stop$/, async (w: ReplayWorld) => {
+    await openCaptureWorld(w)
+    w.recorded = [{ events: recordedSession(AGY, 'headless-session.ndjson', 'agy') }]
+    w.agyTranscript = 'unreadable'
+  })
+  reg.define(/^the hook install writes for Antigravity CLI receives those events and ingestion runs$/, async (w: ReplayWorld) => {
+    await replayAgy(w, w.agyTranscript ? { transcript: w.agyTranscript } : {})
+  })
+  reg.define(/^each tool call is in the journal with agy's tool name and its arguments, saying its output was not captured$/, (w: ReplayWorld) => {
+    for (const c of agyCallsOf(w)) {
+      const rows = agyEntriesOf(w, c)
+      expect(rows, `${c.name} step ${c.step}`).toHaveLength(1)
+      expect(rows[0]!.content).toContain(`Tool: ${c.name}\nInput:\n`)
+      // step-lint: allow unearned-absence -- the same row's Input header is asserted just above, and `\nOutput:` is the header every captured call of this set carries when its transcript is read (the first scenario of this block)
+      expect(rows[0]!.content).not.toContain('\nOutput:')
+      expect(rows[0]!.content).toMatch(/\n\[output not captured\] agy's transcript .* could not be read/)
+    }
+  })
+  reg.define(/^the journal holds a capture-gap entry naming the reply that could not be read$/, (w: ReplayWorld) => {
+    const gaps = rawJournal(w).filter((r) => r.metadata['source'] === 'capture-gap')
+    expect(gaps.map((g) => g.content)).toEqual([expect.stringMatching(/The reply of this agy turn was not captured/)])
+    expect(gaps[0]!.metadata['session_id']).toBe(w.recorded![0]!.events[0]!['conversationId'])
+  })
+  reg.define(/^no tool call of the session is missing from the journal$/, (w: ReplayWorld) => {
+    const calls = agyCallsOf(w)
+    const toolRows = rawJournal(w).filter((r) => typeof r.metadata['tool_name'] === 'string')
+    expect(toolRows).toHaveLength(calls.length)
+    for (const c of calls) expect(agyEntriesOf(w, c)).toHaveLength(1)
+  })
+
+  reg.define(/^the events and the transcript of a shell command that exits non-zero, as Antigravity sends them$/, async (w: ReplayWorld) => {
+    await openCaptureWorld(w)
+    w.recorded = [{ events: recordedSession(AGY, 'shell-nonzero-ls.ndjson', 'agy') }]
+    const [c] = agyCallsOf(w)
+    expect(c!.name).toBe('run_command')
+    // agy states nothing: its PostToolUse's error is empty.
+    expect(c!.payload['error']).toBe('')
+    expect(agyResultOf(c!)).toMatch(/Command exited with code [1-9]/)
+  })
+  reg.define(/^the call is in the journal with an Output section holding the exit code and what the command printed, as the transcript records them$/, (w: ReplayWorld) => {
+    const [c] = agyCallsOf(w)
+    const row = agyEntriesOf(w, c!)[0]!
+    const said = agyResultOf(c!)
+    expect(row.content).toContain(`\nOutput:\n${said.trimEnd()}`)
+    expect(said).toMatch(/Command exited with code 2\.[\s\S]*No such file or directory/)
+  })
+  reg.define(/^the entry carries no outcome mark of the client's, agy having stated none$/, (w: ReplayWorld) => {
+    const [c] = agyCallsOf(w)
+    const row = agyEntriesOf(w, c!)[0]!
+    expect(row.metadata['outcome']).toBeUndefined()
+    expect(row.metadata['stated_by']).toBeUndefined()
+    expect(row.metadata['tool_use_id']).toBeUndefined()
+    // Its ending read from its text (D404).
+    expect(row.metadata[EXIT_BY_KEY]).toBe('text')
+    expect(row.metadata['exit_type']).toBe(classifyExit(row.content))
+    expect(row.metadata['exit_type']).toBe('error')
+  })
+
+  reg.define(/^the events and transcripts of an Antigravity session that starts a subagent and of the subagent's own conversation, as Antigravity sends them$/, async (w: ReplayWorld) => {
+    await openCaptureWorld(w)
+    w.recorded = [{ events: recordedSession(AGY, 'subagent.ndjson', 'agy') }]
+    const ids = [...new Set(w.recorded![0]!.events.map((e) => String(e['conversationId'])))]
+    expect(ids).toHaveLength(2)
+    const invoke = agyCallsOf(w).find((c) => c.name === 'invoke_subagent')!
+    w.agyParent = invoke.conversation
+    w.agyChild = ids.find((i) => i !== invoke.conversation)!
+    // Nothing in the child's events names its parent but its message's recipient.
+    const child = w.recorded![0]!.events.filter((e) => e['conversationId'] === w.agyChild)
+    expect(child[0]!['lastUserInput']).toBe('')
+  })
+  reg.define(/^the parent's journal holds the subagent call with its prompt and role as input and an Output section naming the subagent's conversation$/, (w: ReplayWorld) => {
+    const invoke = agyCallsOf(w).find((c) => c.name === 'invoke_subagent')!
+    const row = agyEntriesOf(w, invoke)[0]!
+    expect(row.metadata['session_id']).toBe(w.agyParent)
+    const input = row.content.slice(0, row.content.indexOf('\nOutput:\n'))
+    expect(input).toContain(String(invoke.args['Prompt']))
+    expect(input).toContain(String(invoke.args['Role']))
+    expect(row.content.slice(row.content.indexOf('\nOutput:\n'))).toContain(w.agyChild!)
+  })
+  reg.define(/^the subagent's rows sit in their own session, in no checkout's lane, read as writer unknown, and none is stamped as the parent's$/, (w: ReplayWorld) => {
+    const childRows = rawJournal(w).filter((r) => r.metadata['session_id'] === w.agyChild)
+    expect(childRows.length).toBe(3)
+    const raw = new DatabaseSync(w.dbPath!, { readOnly: true })
+    let placements: Map<string, string | null>
+    try { placements = placementsOf(raw, [w.agyChild!, w.agyParent!]) } finally { raw.close() }
+    expect(placements.has(w.agyChild!), 'the registry holds the subagent\'s conversation').toBe(false)
+    for (const r of childRows) {
+      expect(r.metadata['_writer_src']).toBe('unregistered')
+      expect(laneOfRow(r.metadata, placements.get(w.agyChild!))).toBe(UNKNOWN_LANE)
+      expect(r.metadata['_writer']).toBeUndefined()
+    }
+    // The parent's rows are their own session's, never the child's.
+    for (const r of rawJournal(w).filter((x) => x.metadata['session_id'] === w.agyParent)) expect(r.metadata['_client_session_id']).toBeUndefined()
+  })
+  reg.define(/^no helper, key, first moment, send-back or pointer is recorded for the subagent$/, (w: ReplayWorld) => {
+    const raw = new DatabaseSync(w.dbPath!, { readOnly: true })
+    try {
+      const reg = raw.prepare('SELECT COUNT(*) AS n FROM session_registry').get() as { n: number }
+      expect(reg.n, 'the session registry holds a registration').toBe(0)
+    } finally { raw.close() }
+    for (const r of rawJournal(w)) {
+      expect(['first-moment', 'send-back', 'subagent-summary']).not.toContain(r.metadata['kind'])
+      expect(r.metadata['key']).toBeUndefined()
+    }
   })
 }

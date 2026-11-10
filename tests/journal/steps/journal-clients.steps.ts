@@ -13,7 +13,8 @@ import { launcherCliPath } from '../../../src/server/installer.js'
 import { agyHooksPath, getAgent, getHookSettingsPath } from '../../../src/server/agents.js'
 import { decodeContent } from '../../../src/persistence/content-codec.js'
 import { TS_ROOT } from '../proc.js'
-import { type InstallWorld, tcCli, openInstallWorld, agentConfigPath, mcpLauncherIn, setFakeCodex, pathWithoutCodex, putAgyOnPath, agyMcpList, layEarlierGeminiInstall } from '../install-harness.js'
+import { writeFakeAgy } from '../standins.js'
+import { type InstallWorld, tcCli, openInstallWorld, realAgy, agentConfigPath, mcpLauncherIn, setFakeCodex, pathWithoutCodex, putAgyOnPath, agyMcpList, layEarlierGeminiInstall } from '../install-harness.js'
 import { CODEX_APPROVALS_FLOOR } from '../../../src/server/codex-client.js'
 import { failedRunLine } from '../../../src/first-moment.js'
 import { developerTrustsCodexHooks } from '../standins.js'
@@ -303,7 +304,10 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
       expect(r.mode, `${r.client}: no mode`).toMatch(/reads the Claude settings file|copies the hooks into its own|no shell hooks|keeps its own hook configuration/)
       // One status: the cell is exactly one of the two, never both, never a
       // test result the row does not have.
-      expect(STATUSES, `${r.client}: status "${r.status}" is not one status`).toContain(r.status)
+      // A verified row names the recording it rests on in parentheses (D388).
+    const head = r.status.replace(/ \(.*\)$/s, '')
+    expect(STATUSES, `${r.client}: status "${r.status}" is not one status`).toContain(head)
+    expect(head === 'documented only' ? r.status : head).toBe(head)
     }
   })
 
@@ -361,7 +365,13 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
     // Antigravity CLI is there by its own directory under ~/.gemini (D383),
     // with the real `agy` on the CLI's PATH to read back what install wrote.
     await openInstallWorld(w, [join('.gemini', 'antigravity-cli')])
-    putAgyOnPath(w)
+    // An agy below the version whose hooks install writes (D413), so the
+    // teammate has the server and no hooks; its listing is the real agy's.
+    const real = realAgy()
+    const bin = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-fake-agy-')))
+    w.defer(() => rmSync(bin, { recursive: true, force: true }))
+    writeFakeAgy(bin, '1.5.2', real)
+    w.iAgyBin = bin
     w.iproj = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-clients-proj-')))
     w.defer(() => rmSync(w.iproj!, { recursive: true, force: true }))
     mkdirSync(w.iproj, { recursive: true })
@@ -442,7 +452,10 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
     // autocrlf (Windows) checkout.
     const readme = readFileSync(join(TS_ROOT, 'README.md'), 'utf8').replace(/\r\n/g, '\n')
     const agy = parseMatrix(readme).find(r => r.client === 'Antigravity CLI')
-    expect(agy?.status).toBe('documented only')
+    // The teammate's agy is below 1.5.3 (D413): the row promises capture
+    // from 1.5.3 only, and the README says an older agy gets the tools only.
+    expect(agy?.status).toMatch(/^verified live \(Antigravity CLI 1\.5\.3, .*from 1\.5\.3/)
+    expect(readme.replace(/\s+/g, ' ')).toContain('below 1.5.3 Antigravity CLI, get the tools only')
     const team = readme.slice(readme.indexOf('### Working as a team'))
     expect(readme.indexOf('### Working as a team'), 'README has no team section').toBeGreaterThanOrEqual(0)
     // D412: capture is verified live on Claude Code and on Codex CLI from
@@ -914,8 +927,19 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
       p['allow'] = (p['allow'] ?? []).filter(r => r !== AGY_INSERT)
     }),
     "the developer's ask rule stands over treecontext_insert": (w) => editAgySettings(w, (p) => { p['ask'] = [AGY_INSERT] }),
+    // D414: agy's own preset, `toolPermission` in the settings it reads.
+    "install has wired it and agy's permission preset is `always-proceed`": (w) => setAgyPreset(w, 'always-proceed'),
+    "install has wired it and agy's permission preset is `request-review`": (w) => setAgyPreset(w, 'request-review'),
+    "install has wired it and agy's settings set no permission preset": (w) => setAgyPreset(w, undefined),
+    "agy's permission preset is a value doctor does not know": (w) => setAgyPreset(w, 'yolo-mode'),
+    "agy's settings file does not parse": (w) => writeFileSync(agySettingsFile(w), readFileSync(agySettingsFile(w), 'utf8').replace('{', '{,')),
   }
-  reg.define(/^Antigravity CLI is installed and (install has wired it|its MCP configuration holds no treecontext server|the allow rule for treecontext_insert is missing|the developer's ask rule stands over treecontext_insert)$/, async (w: ClientsWorld, ...captures) => {
+  const setAgyPreset = (w: ClientsWorld, preset: string | undefined): void => {
+    const data = JSON.parse(readFileSync(agySettingsFile(w), 'utf8')) as Record<string, unknown>
+    if (preset === undefined) delete data['toolPermission']; else data['toolPermission'] = preset
+    writeFileSync(agySettingsFile(w), JSON.stringify(data, null, 2) + '\n')
+  }
+  reg.define(new RegExp(`^Antigravity CLI is installed and (${Object.keys(AGY_STATES).map((k) => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})$`), async (w: ClientsWorld, ...captures) => {
     const [state] = captures as string[]
     w.clientName = 'Antigravity CLI'
     await openInstallWorld(w, [])
@@ -925,33 +949,144 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
     expect(run.out).toMatch(/^Detected agents: .*Antigravity CLI/m)
     AGY_STATES[state!]!(w)
   })
-  reg.define(/^the developer sees doctor's row for Antigravity CLI (read that the tools are its whole surface and headless workers can use the four tools|warn that agy has no treecontext tools|warn that an `agy -p` worker would be refused treecontext_insert|warn that an `agy -p` worker would be refused treecontext_insert, naming the developer's rule and its file)$/, (w: ClientsWorld, ...captures) => {
-    const [say] = captures as string[]
-    // `the developer runs doctor` read the D161 halves; this reads the headless clause of the same report.
+  const AGY_SAYS: Record<string, (w: ClientsWorld) => void> = {
+    'read that headless workers can use the four tools, name the preset, and say that under it every tool runs unasked': (w) => {
+      const r = agyHeadless(w)
+      expect(r.clause).toMatch(/^an `agy -p` worker can use status, query, export and insert, allowed in .*; agy's permission preset is `always-proceed`: under it every tool runs unasked/)
+    },
+    'read that headless workers can use the four tools, name the preset, and say that a worker needing any other tool may be refused it and return nothing unless the developer allows that tool': (w) => {
+      const r = agyHeadless(w)
+      expect(r.clause).toMatch(/^an `agy -p` worker can use status, query, export and insert, allowed in .*; agy's permission preset is `request-review`: a worker needing any other tool, a shell command among them, may be refused it in a headless run and return nothing .* unless you allow that tool/)
+    },
+    'read that headless workers can use the four tools, say that no preset is set, and that a worker needing any other tool may be refused it and return nothing unless the developer allows that tool': (w) => {
+      const r = agyHeadless(w)
+      expect(r.clause).toMatch(/^an `agy -p` worker can use status, query, export and insert, allowed in .*; agy's permission preset is not set \(toolPermission is absent from its settings\): a worker needing any other tool, .* may be refused it in a headless run and return nothing .* unless you allow that tool/)
+    },
+    'say that it does not know that preset, naming it, never guessing what it lets a worker do': (w) => {
+      const r = agyHeadless(w)
+      expect(r.clause).toContain('agy\'s permission preset reads "yolo-mode", a preset doctor does not know, so it does not say what it lets a headless worker do')
+      // step-lint: allow unearned-absence -- the always-proceed and request-review rows of this outline find these very phrases in the same clause
+      expect(r.clause).not.toMatch(/runs unasked|may be refused it in a headless run/)
+    },
+    'say that it cannot read agy\'s permission preset, quoting the parse error, never guessing it': (w) => {
+      const r = agyHeadless(w, 'warn')
+      let err = ''
+      try { JSON.parse(readFileSync(agySettingsFile(w), 'utf8')) } catch (e) { err = (e as Error).message.replace(/\s+/g, ' ').trim() }
+      expect(r.clause).toContain(`does not parse (${err}), and install adds no rule to it; doctor cannot read agy's permission preset from it, and does not guess it`)
+      // step-lint: allow unearned-absence -- every preset row of this outline finds "permission preset is" in the same clause
+      expect(r.clause).not.toMatch(/permission preset is/)
+    },
+    'warn that agy has no treecontext tools': (w) => {
+      const r = agyHeadless(w, 'warn')
+      expect(r.clause).toBe(`agy has no treecontext tools — ${agentConfigPath('agy', w.ihome!)} holds no treecontext server`)
+    },
+    'warn that an `agy -p` worker would be refused treecontext_insert': (w) => {
+      const r = agyHeadless(w, 'warn')
+      expect(r.clause).toMatch(new RegExp(`^an \`agy -p\` worker would be refused treecontext_insert — insert is not allowed in ${esc(agySettingsFile(w))}(;|$)`))
+    },
+    "warn that an `agy -p` worker would be refused treecontext_insert, naming the developer's rule and its file": (w) => {
+      const r = agyHeadless(w, 'warn')
+      expect(r.clause).toMatch(new RegExp(`^an \`agy -p\` worker would be refused treecontext_insert — insert refused by your ask rule mcp\\(treecontext/treecontext_insert\\) in ${esc(agySettingsFile(w))}(;|$)`))
+    },
+    // D414: the hooks half of the same row (the D161 clause).
+    'read that treecontext\'s hooks are present and current, and the server\'s mode as correct': (w) => {
+      expect(w.clause!.status, w.clause!.row).toBe('ok')
+      expect(w.clause!.state).toMatch(/^treecontext's hooks are present in .*hooks\.json and current \(the named hook "treecontext"\)$/)
+      expect(w.clause!.row).toContain('server mode: capture (this client: its own hooks)')
+    },
+    'warn that nothing of agy\'s sessions is captured': (w) => {
+      expect(w.clause!.status).toBe('warn')
+      expect(w.clause!.state).toMatch(/^no treecontext hook is written in .*, so nothing of agy's sessions is captured$/)
+    },
+    'warn that the hook is an earlier build\'s, naming the events it lacks': (w) => {
+      expect(w.clause!.status).toBe('warn')
+      expect(w.clause!.state).toMatch(/is an earlier build's, differing on PostInvocation$/)
+    },
+    'read that agy is tools-only, naming 1.5.2 and 1.5.3 as the first version whose hooks install writes': (w) => {
+      expect(w.clause!.state).toBe('agy is tools-only: its version reads 1.5.2, and 1.5.3 is the first version whose hooks install writes')
+    },
+    'read that agy is tools-only, its version not read': (w) => {
+      expect(w.clause!.state).toBe('agy is tools-only: its version could not be read (agy --version)')
+    },
+    'say that capture is switched off there by the developer\'s choice, nothing of agy\'s sessions captured': (w) => {
+      expect(w.clause!.state).toMatch(/is switched off with "enabled": false, the developer's choice, so nothing of agy's sessions is captured$/)
+    },
+    'warn that the name is taken by a hook install did not write, so nothing of agy\'s sessions is captured': (w) => {
+      expect(w.clause!.status).toBe('warn')
+      expect(w.clause!.state).toMatch(/^the name "treecontext" in .* is taken by a hook install did not write, so nothing of agy's sessions is captured$/)
+    },
+    'read that treecontext\'s hooks are present, naming 1.6.0 beside 1.5.3, the version whose transcript capture reads': (w) => {
+      expect(w.clause!.state).toMatch(/present in .* and current \(the named hook "treecontext"\); agy's version reads 1\.6\.0, and capture reads agy's transcript in the layout recorded at 1\.5\.3$/)
+    },
+    'warn, quoting the parse error, that agy runs none of the hooks in that file, the developer\'s own included': (w) => {
+      expect(w.clause!.status).toBe('warn')
+      let err = ''
+      try { JSON.parse(readFileSync(agyHooksPath(w), 'utf8')) } catch (e) { err = (e as Error).message.replace(/\s+/g, ' ').trim() }
+      expect(w.clause!.state).toContain(`does not parse (${err}), so agy runs none of the hooks in that file, the developer's own included`)
+    },
+  }
+  const esc = (t: string): string => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const agyHeadless = (w: ClientsWorld, status?: 'ok' | 'warn'): ApprovalRowRead => {
     const r = approvalRow(w, 'Antigravity CLI', false)
     w.approval = r
-    const file = agySettingsFile(w).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    switch (say) {
-      case 'read that the tools are its whole surface and headless workers can use the four tools':
-        expect(r.status, r.row).toBe('ok')
-        expect(w.clause!.mode).toMatch(/so the tools are its whole surface/)
-        expect(r.clause).toMatch(new RegExp(`^an \`agy -p\` worker can use status, query, export and insert, allowed in ${file}$`))
-        break
-      case 'warn that agy has no treecontext tools':
-        expect(r.status, r.row).toBe('warn')
-        expect(r.clause).toBe(`agy has no treecontext tools — ${agentConfigPath('agy', w.ihome!)} holds no treecontext server`)
-        break
-      case 'warn that an `agy -p` worker would be refused treecontext_insert':
-        expect(r.status, r.row).toBe('warn')
-        expect(r.clause).toMatch(new RegExp(`^an \`agy -p\` worker would be refused treecontext_insert — insert is not allowed in ${file}$`))
-        break
-      default:
-        expect(r.status, r.row).toBe('warn')
-        expect(r.clause).toMatch(new RegExp(`^an \`agy -p\` worker would be refused treecontext_insert — insert refused by your ask rule mcp\\(treecontext/treecontext_insert\\) in ${file}$`))
+    if (status) expect(r.status, r.row).toBe(status)
+    return r
+  }
+  reg.define(new RegExp(`^the developer sees doctor's row for Antigravity CLI (${Object.keys(AGY_SAYS).map(esc).join('|')})$`), (w: ClientsWorld, say: unknown) => {
+    AGY_SAYS[String(say)]!(w)
+  })
+  const agyHooksPath = (w: ClientsWorld): string => join(w.ihome!, '.gemini', 'config', 'hooks.json')
+  const AGY_HOOK_STATES: Record<string, { version: string | null; hooks?: (w: ClientsWorld) => void }> = {
+    'its version reads 1.5.3 and its hooks file holds the named hook this build writes': { version: '1.5.3' },
+    'its version reads 1.5.3 and its hooks file holds no treecontext hook': { version: '1.5.3', hooks: (w) => writeFileSync(agyHooksPath(w), '{\n  "audit": { "Stop": [ { "type": "command", "command": "/usr/local/bin/audit" } ] }\n}\n') },
+    'its hooks file holds the named hook an earlier build wrote, wired for fewer events': { version: '1.5.3', hooks: (w) => {
+      const d = JSON.parse(readFileSync(agyHooksPath(w), 'utf8')) as Record<string, Record<string, unknown>>
+      delete d['treecontext']!['PostInvocation']
+      writeFileSync(agyHooksPath(w), JSON.stringify(d, null, 1) + '\n')
+    } },
+    'its version reads 1.5.2': { version: '1.5.2' },
+    'its version cannot be read': { version: null },
+    'its hooks file holds the named hook this build writes, switched off with `enabled: false`': { version: '1.5.3', hooks: (w) => {
+      writeFileSync(agyHooksPath(w), readFileSync(agyHooksPath(w), 'utf8').replace('"treecontext": {', '"treecontext": {\n  "enabled": false,'))
+    } },
+    'its hooks file holds a hook of the developer\'s named treecontext': { version: '1.5.3', hooks: (w) => writeFileSync(agyHooksPath(w), '{ "treecontext": { "Stop": [ { "type": "command", "command": "/usr/local/bin/my-tree-tool" } ] } }\n') },
+    'its version reads 1.6.0 and its hooks file holds the named hook this build writes': { version: '1.6.0' },
+    'its hooks file does not parse': { version: '1.5.3', hooks: (w) => writeFileSync(agyHooksPath(w), '{ "audit": { "Stop": [ ,] } }\n') },
+  }
+  reg.define(new RegExp(`^Antigravity CLI is installed and (${Object.keys(AGY_HOOK_STATES).map((k) => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})$`), async (w: ClientsWorld, state: unknown) => {
+    const st = AGY_HOOK_STATES[String(state)]!
+    w.clientName = 'Antigravity CLI'
+    await openInstallWorld(w, [])
+    mkdirSync(join(w.ihome!, '.gemini', 'antigravity-cli'), { recursive: true })
+    // The agy whose version install and doctor read: the stand-in.
+    const bin = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-fake-agy-')))
+    w.defer(() => rmSync(bin, { recursive: true, force: true }))
+    // Install ran at the version the row names, or at 1.5.3 before the
+    // row's change to the hooks file.
+    writeFakeAgy(bin, st.hooks ? '1.5.3' : st.version)
+    w.iAgyBin = bin
+    const run = tcCli(w, ['install', '--yes', '--agent', 'agy'])
+    expect(run.status, run.out).toBe(0)
+    st.hooks?.(w)
+    writeFakeAgy(bin, st.version)
+  })
+  reg.define(/^the row names (upgrading agy, then `treecontext install --agent agy`|turning it on, the developer's to do|renaming that hook, the developer's to do|fixing the file by hand) as the remedy$/, (w: ClientsWorld, remedy: unknown) => {
+    const r = String(remedy)
+    if (r === 'fixing the file by hand') {
+      // The headless clause's remedy: the settings file, by hand.
+      expect(w.approval!.remedy).toMatch(new RegExp(`^fix the JSON in ${agySettingsFile(w).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} by hand`))
+      return
     }
+    const want = r.replace(/`/g, '').replace('upgrading agy, then', 'upgrading agy to 1.5.3 or later, then')
+    expect(w.clause!.remedy).toBe(want)
   })
   reg.define(/^the row names (`treecontext install --agent agy`|that rule, the developer's to change) as the remedy$/, (w: ClientsWorld, ...captures) => {
     const [remedy] = captures as string[]
+    if (!w.approval) {
+      // The hooks half of the row (D414).
+      expect(w.clause!.remedy.startsWith('treecontext install --agent agy'), w.clause!.remedy).toBe(true)
+      return
+    }
     const r = w.approval!
     if (remedy === '`treecontext install --agent agy`') {
       expect(r.remedy).toBe('treecontext install --agent agy')
@@ -1391,7 +1526,7 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
   })
   reg.define(/^the row names (trusting them with `\/hooks` in Codex|looking in `\/hooks` in Codex|upgrading Codex CLI to 0\.167\.0 or later|`treecontext install --agent codex`, which takes them back|making `codex --version` answer, then `treecontext install --agent codex`|fixing the file by hand, never an install) as the remedy$/, (w: ClientsWorld, remedy: unknown) => {
     // "the file" is the hooks file, which the row names by its path.
-    const want = String(remedy).replace(/`/g, '').replace('fixing the file by hand', `fixing ${hooksFile(w)} by hand`)
+    const want = String(remedy).replace(/`/g, '').replace('fixing the file by hand', `fixing ${w.clientName === 'Antigravity CLI' ? join(w.ihome!, '.gemini', 'config', 'hooks.json') : hooksFile(w)} by hand`)
     expect(w.clause!.remedy.startsWith(want), w.clause!.remedy).toBe(true)
   })
   reg.define(/^Codex's configuration and its record of trusted hooks are as they were before doctor ran$/, (w: TrustWorld) => {
@@ -1413,6 +1548,65 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
     const end = rest.slice(3).search(/^##+ /m)
     codexParts.set(w, (end === -1 ? rest : rest.slice(0, end + 3)).replace(/\s+/g, ' '))
   })
+
+  // ── the matrix's verified rows (D388, D406, D413) ─────────────────────
+  reg.define(/^the developer sees exactly three rows reading "verified live", Claude Code, Codex CLI from 0\.167\.0 and Antigravity CLI from 1\.5\.3, the rows for Codex CLI and Antigravity CLI each naming the client version and date of the recording it rests on$/, (w: ClientsWorld) => {
+    const live = w.matrix!.filter((r) => r.status.startsWith('verified live'))
+    expect(live.map((r) => r.client)).toEqual(['Claude Code', 'Codex CLI', 'Antigravity CLI'])
+    const codex = live.find((r) => r.client === 'Codex CLI')!
+    const agy = live.find((r) => r.client === 'Antigravity CLI')!
+    expect(codex.status).toMatch(/Codex CLI 0\.167\.0, recorded 2026-11-09; from 0\.167\.0/)
+    expect(agy.status).toMatch(/Antigravity CLI 1\.5\.3, recorded 2026-11-09; from 1\.5\.3/)
+    // The recordings they rest on are named in the documentation cell.
+    expect(codex.docs).toMatch(/recorded on Codex CLI 0\.167\.0, 2026-11-09/)
+    expect(agy.docs).toMatch(/recorded on Antigravity CLI 1\.5\.3, 2026-11-09/)
+  })
+
+  // ── D423: support in tiers, and the workflow every client shares ──────
+  const supportParts = new WeakMap<ClientsWorld, { table: string; workflow: string }>()
+  const sectionOf = (readme: string, heading: string): string => {
+    const start = readme.indexOf(`\n### ${heading}`)
+    expect(start, `the README has no "${heading}" section`).toBeGreaterThan(-1)
+    const rest = readme.slice(start + 1)
+    const end = rest.slice(4).search(/^##+ /m)
+    return (end === -1 ? rest : rest.slice(0, end + 4)).replace(/\s+/g, ' ')
+  }
+  reg.define(/^a developer reads its support table$/, (w: ClientsWorld) => {
+    const readme = codexParts.get(w)!
+    supportParts.set(w, { table: sectionOf(readme, 'Support by client: main and worker'), workflow: sectionOf(readme, 'The basic workflow: a worker of any CLI, from a shell') })
+  })
+  const rowOf = (w: ClientsWorld, client: string): string => {
+    const line = codexParts.get(w)!.split('\n').find((l) => l.startsWith(`| ${client} | `) && /support/.test(l))
+    expect(line, `the support table has no row for ${client}`).toBeDefined()
+    return line!
+  }
+  reg.define(/^the developer reads Claude Code as the main supported in full, with workers of any CLI started through the doors, Codex CLI and Antigravity CLI among them$/, (w: ClientsWorld) => {
+    expect(rowOf(w, 'Claude Code')).toMatch(/full support.*workers of any CLI, Codex CLI and Antigravity CLI among them, started through the doors/)
+  })
+  reg.define(/^the developer reads Codex CLI and Antigravity CLI as mains with basic support, capture through their own hooks and the tools through MCP, with no promise of parity and each difference from a Claude Code main named$/, (w: ClientsWorld) => {
+    for (const c of ['Codex CLI', 'Antigravity CLI']) {
+      const r = rowOf(w, c)
+      expect(r).toMatch(/basic support.*capture through its (own hooks|named hook).*the tools through MCP, with no promise of parity with a Claude Code main\. Differences from a Claude Code main:/)
+    }
+    expect(rowOf(w, 'Codex CLI')).toMatch(/no bookmark ask and no send-back.*subagents are helpers, never legs/)
+    expect(rowOf(w, 'Antigravity CLI')).toMatch(/placed in no checkout's lane.*re-orientation packet.*a call agy refuses leaves no entry.*outcome is read from its text/)
+  })
+  reg.define(/^the developer reads that a Codex CLI or Antigravity CLI main starting workers through the doors is not guaranteed$/, (w: ClientsWorld) => {
+    expect(supportParts.get(w)!.table).toContain('A Codex CLI or Antigravity CLI main starting workers through the doors is not guaranteed')
+  })
+  reg.define(/^the developer reads that an Antigravity CLI main is captured but placed in no checkout's lane, and that its subagents are not linked to it$/, (w: ClientsWorld) => {
+    expect(rowOf(w, 'Antigravity CLI')).toMatch(/an agy main is captured but placed in no checkout's lane.*its subagents are captured as sessions of their own and not linked to it/)
+  })
+  reg.define(/^a developer reads the basic workflow$/, (w: ClientsWorld) => {
+    expect(supportParts.get(w)!.workflow.length).toBeGreaterThan(0)
+  })
+  reg.define(/^the developer reads how to start a worker of any CLI with `treecontext run` from a shell, whichever client is the main, and what the journal then holds with no hook at all: the worker's lane, its first message and its summary row$/, (w: ClientsWorld) => {
+    const t = supportParts.get(w)!.workflow
+    expect(t).toMatch(/Starting a worker with `treecontext run` from a shell is safe whichever client is the main, or with none at all/)
+    expect(t).toMatch(/treecontext run --run .* -- <the worker's command: claude -p, codex exec -, agy -p/)
+    expect(t).toMatch(/With no hook at all, the journal then holds: - \*\*the worker's lane\*\*.* - \*\*its first message\*\*.* - \*\*its summary row\*\*/)
+  })
+
   const says = (w: ClientsWorld, ...res: RegExp[]): void => {
     const text = codexParts.get(w)!
     for (const re of res) expect(text, String(re)).toMatch(re)

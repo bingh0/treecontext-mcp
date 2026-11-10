@@ -266,7 +266,7 @@ export interface ToolEntry {
 }
 
 /** The trail-class tools (repo readers): see composeToolEntry. */
-export const TRAIL_TOOLS: readonly string[] = ['Read', 'Glob', 'Grep', 'LS', 'View', 'ListDir']
+export const TRAIL_TOOLS: readonly string[] = ['Read', 'Glob', 'Grep', 'LS', 'View', 'ListDir', 'read_file']
 
 /**
  * One tool call as its journal entry, whichever event carried it: a
@@ -289,7 +289,7 @@ export function composeToolEntry(tool_name: string, tool_input: unknown, tool_ou
   let priority = 3
   if (['Edit', 'Write', 'NotebookEdit'].includes(tool_name)) {
     priority = 1
-  } else if (tool_name === 'Bash') {
+  } else if (tool_name === 'Bash' || tool_name === 'run_command') {
     priority = 2
   }
 

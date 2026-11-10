@@ -73,6 +73,11 @@ export interface HookGap {
    *  a call whose result was ledgered is never journaled as one the
    *  client reported no result for). */
   toolUseId?: string | null
+  /** The client a hook's command named, where its hooks register no self
+   *  (D421, hooks/hook-client.ts CLIENTS_REGISTERING_NO_SELF): the drain
+   *  files the gap row as it files that client's captured rows (a worker's
+   *  lane, else writer unknown). */
+  client?: string | null
 }
 
 /** The ledger paths for a store, in the order a hook tries them. */

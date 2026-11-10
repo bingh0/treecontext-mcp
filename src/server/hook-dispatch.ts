@@ -42,6 +42,14 @@ export async function dispatchHook(event: string): Promise<void> {
         await mod.main()
         break
       }
+      case 'agy': {
+        // D413: `hook agy <Event> --client agy`, the event named by the
+        // command install wrote, never by the payload.
+        const mod = await import('../hooks/agy.js')
+        const evt = process.argv[4]
+        mod.main(evt && !evt.startsWith('-') ? evt : '')
+        break
+      }
       case 'subagent-stop': {
         const mod = await import('../hooks/subagent-stop.js')
         await mod.main()

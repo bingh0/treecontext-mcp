@@ -63,7 +63,7 @@ export function classifyExit(toolContent: string): ExitType {
       lower.includes('panic:') || lower.includes('traceback') || lower.includes('exception') ||
       lower.includes('enoent') || lower.includes('eacces') || lower.includes('eperm') ||
       lower.includes('cannot find') || lower.includes('command not found') ||
-      /exit code [1-9]/.test(lower) || /exited with [1-9]/.test(lower)) {
+      /exit code [1-9]/.test(lower) || /exited with (?:code )?[1-9]/.test(lower)) {
     return 'error'
   }
 

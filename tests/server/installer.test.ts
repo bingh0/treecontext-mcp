@@ -1954,7 +1954,7 @@ function interpreterToken(command: string): string {
  * throughout the entire time the defect was shipping.
  */
 describe('hook script names: install and doctor agree (win32 .cmd)', () => {
-  const stems = ['session-reminder', 'session-start', 'pre-compact', 'post-tool-use', 'user-prompt-submit', 'stop', 'subagent-start', 'subagent-stop']
+  const stems = ['session-reminder', 'session-start', 'pre-compact', 'post-tool-use', 'user-prompt-submit', 'stop', 'subagent-start', 'subagent-stop', 'agy']
 
   it('win32 names carry .cmd, posix names carry no extension', () => {
     const win = claudeHookScriptPaths('win32').map(p => basename(p))

@@ -62,3 +62,24 @@ export const CODEX_CLIENT = 'codex'
 export function isCodexHook(argv: readonly string[] = process.argv): boolean {
   return hookClientFrom(argv) === CODEX_CLIENT
 }
+
+/** Antigravity CLI's name in its hook commands (D413): the named hook
+ *  install writes into `~/.gemini/config/hooks.json` names it on every
+ *  command. agy states no outcome for a call (D415: a shell command's
+ *  non-zero exit arrives by PostToolUse with an empty `error`), so it is not
+ *  in CLIENTS_STATING_OUTCOME. */
+export const AGY_CLIENT = 'agy'
+
+/** Whether the hook runs for Antigravity CLI, by the command install wrote. */
+export function isAgyHook(argv: readonly string[] = process.argv): boolean {
+  return hookClientFrom(argv) === AGY_CLIENT
+}
+
+/**
+ * The clients whose hooks register no self (D421): a session of theirs that
+ * the ticket door did not start is captured in its own session, in no
+ * checkout's lane, its captured rows read as writer unknown (the drain
+ * stamps them `unregistered`, staging's `client`, migration 037). Antigravity
+ * CLI: its main's self registration waits for beta.5 (D422).
+ */
+export const CLIENTS_REGISTERING_NO_SELF: ReadonlySet<string> = new Set([AGY_CLIENT])

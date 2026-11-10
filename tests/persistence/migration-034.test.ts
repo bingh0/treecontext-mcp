@@ -35,7 +35,7 @@ describe('migration 034: staging carries a tool call\'s id, outcome and source',
     const before = db.prepare('SELECT id, session_id, role, content, tool_name, timestamp FROM staging').all()
     try {
       const report = runMigrations(openNodeSqlite(db), { migrate: true })
-      expect(report.applied.map((a) => [a.version, a.kind])).toEqual([[34, 'additive'], [35, 'additive'], [36, 'additive']])
+      expect(report.applied.map((a) => [a.version, a.kind])).toEqual([[34, 'additive'], [35, 'additive'], [36, 'additive'], [37, 'additive']])
       expect(cols(db)).toEqual(expect.arrayContaining(['tool_use_id', 'outcome', 'captured_from']))
       expect(db.prepare('SELECT id, session_id, role, content, tool_name, timestamp FROM staging').all()).toEqual(before)
       expect(db.prepare('SELECT tool_use_id, outcome, captured_from FROM staging').all()).toEqual([{ tool_use_id: null, outcome: null, captured_from: null }])

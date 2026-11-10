@@ -1,3 +1,6 @@
+import { CLIENTS_REGISTERING_NO_SELF } from '../hooks/hook-client.js'
+import { UNREGISTERED_SRC } from '../references.js'
+import { AGY_CALL_MARK } from '../persistence/capture-marks.js'
 import { PRE_TOOL_USE_MARK, NO_RESULT_MARK, NO_TURN_END_MARK, TURN_INTERRUPTED_KIND, GAP_TOOL_USE_ID_KEY, ownLaneRowSql } from '../persistence/capture-marks.js'
 import { stampEchoBoundaries } from '../persistence/echo-index.js'
 import type { MemoryStore } from '../memory-store.js'
@@ -465,11 +468,26 @@ export class IngestionLoop {
         // which it drops from every caller's row (server.ts).
         const seen = db.prepare(`SELECT 1 FROM nodes n WHERE COALESCE(n.source_label, '') = 'capture-gap' AND json_extract(n.metadata_json, '$.source') = 'capture-gap' AND json_extract(n.metadata_json, '$.gap_id') = ? AND ${ownLaneRowSql('n')} LIMIT 1`).get(g.id ?? '')
         if (seen) continue
+        // D421: a gap of a client whose hooks register no self is filed as
+        // that client's captured rows are: in its worker's lane, else
+        // writer unknown, never main's by the pre-stamp rule.
+        const filed: Record<string, unknown> = {}
+        // A worker's gap, whatever its client (a `claude -p` child, a
+        // `codex exec` or an `agy -p` worker), is the worker's: left in the
+        // client's own session it would sit in a session the registry places
+        // nowhere and be read as main's too.
+        if (g.sessionId) {
+          const worker = workerLaneOf(db, g.sessionId)
+          if (worker) {
+            Object.assign(filed, { session_id: worker.sessionId, _writer: legWriterOf(worker), _writer_agent_id: worker.agentId, _writer_src: 'declared', ...legTraceOf(worker) })
+            if (worker.sessionId !== g.sessionId) filed['_client_session_id'] = g.sessionId
+          } else if (g.client && CLIENTS_REGISTERING_NO_SELF.has(g.client)) filed['_writer_src'] = UNREGISTERED_SRC
+        }
         const gap = await this.ctx.insert(hookGapText(g), {
           createdAt: g.at,
           metadata: {
             source: 'capture-gap', event: 'hook_dropped', hook: g.hook, gap_id: g.id,
-            session_id: g.sessionId || undefined,
+            session_id: g.sessionId || undefined, ...filed,
             ...(g.agentId ? { agent_id: g.agentId } : {}), ...(g.agentType ? { agent_type: g.agentType } : {}),
             ...(g.toolUseId ? { [GAP_TOOL_USE_ID_KEY]: g.toolUseId } : {}),
             error: g.error.slice(0, 500), created_at: g.at, ingested_at: Date.now() / 1000,
@@ -652,7 +670,7 @@ export class IngestionLoop {
         ).get(row.sessionId, row.toolUseId, PRE_TOOL_USE_MARK, NO_RESULT_MARK, NO_TURN_END_MARK)) {
           // D408: the call's own result arrived after its turn's end was
           // staged; the call is journaled once, from its result.
-        } else if (row.capturedFrom === PRE_TOOL_USE_MARK) {
+        } else if (row.capturedFrom === PRE_TOOL_USE_MARK || row.capturedFrom === AGY_CALL_MARK) {
           // D408: Codex's PreToolUse is the account of a call held until the
           // call's own PostToolUse or its turn's end; it is no entry itself.
           // The call is journaled once, from whichever of the two comes.
@@ -742,6 +760,13 @@ export class IngestionLoop {
             } catch (err) {
               dbg('ingest', 'worker lane read failed (the row lands in its own session)', { error: err instanceof Error ? err.message : String(err) })
             }
+          }
+          // D421: a row a client's hook staged whose hooks register no self
+          // (Antigravity CLI, staging's `client`), outside a worker's lane,
+          // is a writer no hook registered: writer unknown, in no checkout's
+          // lane, never main's by the pre-stamp rule.
+          if (workerLane === null && row.client != null && CLIENTS_REGISTERING_NO_SELF.has(row.client) && meta._writer === undefined) {
+            meta._writer_src = UNREGISTERED_SRC
           }
           // D147: the row's kind, as the hook staged it (the subagent's
           // summary).

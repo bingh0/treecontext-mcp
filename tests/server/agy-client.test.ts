@@ -179,7 +179,7 @@ describe("doctor's agy clause in the states the outline does not list", () => {
   test("settings agy's own file holds that do not parse: fixed by hand, never by an install that skips the file", () => {
     const c = agyHeadlessClause({ ...base, view: agyView([]), entry: { state: 'present', disabled: false }, unreadable: ['/s.json'], settingsError: 'Unexpected token } in JSON at position 9' })
     expect(c.warn).toBe(true)
-    expect(c.text).toMatch(/^headless workers: \/s\.json does not parse \(Unexpected token \} in JSON at position 9\), and install adds no rule to it, so an `agy -p` worker would be refused /)
+    expect(c.text).toMatch(/^headless workers: \/s\.json does not parse \(Unexpected token \} in JSON at position 9\), and install adds no rule to it; doctor cannot read agy's permission preset from it, and does not guess it, so an `agy -p` worker would be refused /)
     expect(c.fix).toBe('fix the JSON in /s.json by hand (Unexpected token } in JSON at position 9); install skips a file it cannot read')
     expect(c.fix).not.toMatch(/install --agent agy/)
   })

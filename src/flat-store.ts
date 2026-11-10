@@ -9,6 +9,7 @@
 import { randomUUID } from 'node:crypto'
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, writeSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { TURN_PROMPT_KIND } from './persistence/capture-marks.js'
 import type { Database } from './persistence/database.js'
 import type { MemoryStore, ImportResult } from './memory-store.js'
 import { handoffMetadata, claimedSender, exporterName, HANDOFF_LANE_PREFIX, SUBAGENT_SUMMARY_KIND, type HandoffSource } from './handoff.js'
@@ -1694,7 +1695,8 @@ export class FlatStore implements MemoryStore {
         meta = { ...meta, refs: [...new Set([...refIdsOf(meta), ...split.foreign])], _supersedes_referenced: split.foreign }
       }
       if (split.across.length > 0) meta = { ...meta, [SUPERSEDES_ACROSS_KEY]: split.across }
-      if (isAuto) {
+      // D415: a turn's opening prompt is never folded into an earlier turn's.
+      if (isAuto && meta?.['kind'] !== TURN_PROMPT_KIND) {
         const sessionKey = sessionOf(meta)
         const anchor = this.persistence.liveAnchor(this.treeId, sessionKey, fp, createdAt, DEDUP_WINDOW_SECS)
         if (anchor) {

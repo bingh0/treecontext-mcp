@@ -620,3 +620,83 @@ describe('a step that says an event is as Codex sends it replays a Codex recordi
     expect(unreplayed(claim, codex)).toEqual([])
   })
 })
+
+/** How many steps say an event is as Antigravity sends it (unit 11). */
+const AGY_CLAIMS_TODAY = 9
+/** Claims of a scenario still in the wip register, unbound (tests/journal/features.test.ts, unit 11): checked again when it is bound. */
+const AGY_HELD = ['an `agy -p` worker, as Antigravity sends its events, under agy\'s default with no permission preset set, that reaches for a shell command no rule of agy\'s allows']
+
+describe('a step that says an event is as Antigravity sends it replays an agy recording', () => {
+  // D417: the guard of D402 widened to Antigravity CLI, as D409 widened it
+  // to Codex CLI (the block above, read with agy's names). A step whose text says
+  // what Codex sends or sent must be bound by a definition that takes its
+  // events from Codex's own recordings (tests/fixtures/codex-hooks) through
+  // the stand-in helpers: its body calls `recordedSession(..., 'codex')` or
+  // `replayRecordedSession(` (which replays only events `recordedSession`
+  // branded, each through the block of the client it was recorded from),
+  // and its steps file reads Codex's directory (a `recordedSession` call
+  // naming 'codex'). A Then that compares the journal with what Codex sent
+  // may read the world's recorded events (`w.recorded`) instead, which only
+  // `recordedSession` fills. No literal payload field beside it.
+  // Not seen: what the guard of D402 does not see, and a body that hands a
+  // Claude Code recording to the replay under a Codex claim (the brand
+  // replays it through Claude Code's block, which a scenario's Then on
+  // Codex's hooks would have to miss).
+  const CODEX_CLAIM = /\bAntigravity\b[^.]*?\b(?:sends?|sent|fires?|fired)\b/
+  /** The steps the corpus holds today (D414, D415, D416, D417, D421; unit 11, 2026-11-10). */
+  const CODEX_CLAIMS_TODAY = AGY_CLAIMS_TODAY
+  const withoutComments = (src: string): string => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|\s)\/\/.*$/gm, '$1')
+  const LITERAL_PAYLOAD = /\b(?:tool_response|tool_input|tool_output|hook_event_name|last_assistant_message|prompt)\s*:/
+  const HELPER = /\brecordedSession\([^)]*'agy'\)|\breplayRecordedSession\(/
+  interface Definition { file: string; regex: RegExp; body: string; readsCodex: boolean }
+  const definitionsIn = (file: string, src: string): Definition[] => {
+    const starts = [...src.matchAll(/(?:reg\.)?define\((?:new RegExp\(`|\/)/g)]
+    const readsCodex = /\brecordedSession\([^)]*'agy'\)/.test(withoutComments(src))
+    return starts.flatMap((m, i) => {
+      const body = src.slice(m.index, starts[i + 1]?.index ?? src.length)
+      const lit = /^(?:reg\.)?define\(\/((?:\\.|[^/\n])+)\//.exec(body)
+      if (!lit) return []
+      try { return [{ file, regex: new RegExp(lit[1]!), body, readsCodex }] } catch { return [] }
+    })
+  }
+  const definitions = walkFrom(TESTS_DIR, 'tests/', '.steps.ts').flatMap((f) => definitionsIn(f, read(f)))
+  const claims = featureFiles.flatMap((f) => read(f).split('\n').map((line, n) => ({ f, n: n + 1, line: line.trim() }))
+    .filter((x) => /^(Given|When|Then|And|But)\s/.test(x.line) && CODEX_CLAIM.test(x.line))
+    .map((x) => ({ ...x, text: x.line.replace(/^(Given|When|Then|And|But)\s+/, ''), rows: exampleRows(read(x.f).split('\n'), x.n) })))
+  /** An outline step's Examples rows, as header-to-cell maps (none for a plain step). */
+  function exampleRows(lines: string[], from: number): Array<Record<string, string>> {
+    let i = from
+    while (i < lines.length && !/^\s*(Scenario|Examples:)/.test(lines[i]!)) i++
+    if (i >= lines.length || !/Examples:/.test(lines[i]!)) return []
+    const cells = (l: string): string[] => l.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => c.trim())
+    const table = lines.slice(i + 1).filter((l) => !/^\s*#/.test(l))
+    const rows: string[][] = []
+    for (const l of table) { if (!/^\s*\|/.test(l)) break; rows.push(cells(l)) }
+    const [head, ...body] = rows
+    return body.map((r) => Object.fromEntries(head!.map((h, k) => [h, r[k] ?? ''])))
+  }
+  const unreplayed = (cs: Array<{ text: string; rows?: Array<Record<string, string>> }>, defs: Definition[]): string[] => cs.flatMap(({ text, rows }) => {
+    const texts = /<[^>]+>/.test(text) && rows && rows.length > 0 ? rows.map((r) => text.replace(/<([^>]+)>/g, (_m, k: string) => r[k] ?? '')) : [text]
+    const bound = defs.filter((d) => texts.every((t) => d.regex.test(t)))
+    if (bound.length === 0) return [`${text}: no step definition matches`]
+    return bound.filter((d) => {
+      const body = withoutComments(d.body)
+      const takes = HELPER.test(body) || /\bw\.recorded\b/.test(body)
+      return !(takes && d.readsCodex && !LITERAL_PAYLOAD.test(body))
+    }).map((d) => `${text}: bound in ${d.file} without agy's recordings`)
+  })
+
+  test('every such step is bound by a definition that takes agy\'s recorded events', () => {
+    expect(claims.length, `the steps that say what Codex sends are not the ${CODEX_CLAIMS_TODAY} the guard was written against; found:\n${claims.map((c) => `${c.f}:${c.n} ${c.text}`).join('\n')}`).toBe(CODEX_CLAIMS_TODAY)
+    expect(unreplayed(claims.filter((c) => !AGY_HELD.includes(c.text)), definitions)).toEqual([])
+  })
+  test('the matcher is not vacuous', () => {
+    const claim = [{ text: 'a start as Antigravity sends it' }]
+    const literal = definitionsIn('x.steps.ts', "reg.define(/^a start as Antigravity sends it$/, (w) => {\n  w.payload = { hook_event_name: 'SessionStart' }\n})\n")
+    const claude = definitionsIn('c.steps.ts', "reg.define(/^a start as Antigravity sends it$/, (w) => {\n  w.payload = recordedSession('2.1.319', 'f.ndjson')[0]\n})\n")
+    const codex = definitionsIn('y.steps.ts', "reg.define(/^a start as Antigravity sends it$/, (w) => {\n  w.payload = recordedSession('1.5.3', 'f.ndjson', 'agy')[0]\n})\n")
+    expect(unreplayed(claim, literal)).toHaveLength(1)
+    expect(unreplayed(claim, claude)).toHaveLength(1)
+    expect(unreplayed(claim, codex)).toEqual([])
+  })
+})

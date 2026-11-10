@@ -188,7 +188,7 @@ describe('a store below schema 034: hooks never migrate', () => {
     expect(gapLedgerPaths(w.dbPath!).filter(existsSync).flatMap((p) => readFileSync(p, 'utf8').split('\n').filter(Boolean))).toEqual([])
     const check = new DatabaseSync(w.dbPath!, { readOnly: true })
     try { expect((check.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(33) } finally { check.close() }
-    expect(maxSupportedVersion).toBe(36)
+    expect(maxSupportedVersion).toBe(37)
   })
 })
 

@@ -700,9 +700,22 @@ treecontext run --run login --role parser-dev --key parser --parent build-script
   the value of `-p` itself.
 - Install writes the MCP entry in `~/.gemini/config/mcp_config.json` and
   the four allow rules, `mcp(treecontext/<tool>)`, in
-  `~/.gemini/antigravity-cli/settings.json`. Left to you: nothing.
+  `~/.gemini/antigravity-cli/settings.json`. Left to you: nothing, for the
+  four journal tools.
+- Any other tool depends on agy's own permission preset, `toolPermission`
+  in `~/.gemini/antigravity-cli/settings.json` (agy 1.5.3 names
+  `always-proceed`, `request-review` and `strict`). Under `always-proceed`
+  every tool runs unasked. Under any other preset, or with the key absent,
+  a tool no rule of agy's allows, a shell command among them, may be
+  refused in a headless run: agy then ends the turn with no reply, prints
+  nothing, exits 0 and writes one line on its error stream ("no output
+  produced — a tool required the ... permission"), and fires no further
+  hook, so the refused call leaves no journal entry. The worker's summary
+  row carries that line. Allow the tools the worker needs, or give that
+  one run the preset with agy's session-only `--settings`.
 - Doctor's Antigravity CLI row, in its "headless workers" clause, says
-  whether the entry and the rules are there.
+  whether the entry and the rules are there, and which permission preset
+  agy has and what it means for a worker.
 
 **What a worker may do.** A worker reads and writes the journal: status,
 query, export and insert. Clear, delete, import and merge still ask, so a
@@ -788,8 +801,53 @@ line above with `--message-arg`.
 Every agent that speaks MCP gets the eight tools, and through them the
 whole journal: search, notes, export and import. **Automatic capture is
 promised only where it has been verified live: Claude Code; Codex CLI
-from 0.167.0 with its hooks trusted (§6, "Codex CLI capture").** Below
-0.167.0 Codex CLI gets the tools only.
+from 0.167.0 with its hooks trusted (§6, "Codex CLI capture"); Antigravity
+CLI from 1.5.3 (§6, "Antigravity CLI capture").** Below 0.167.0 Codex CLI,
+and below 1.5.3 Antigravity CLI, get the tools only.
+
+### Support by client: main and worker
+
+What is promised for each client, as the main session of a checkout and as
+a worker. Claude Code is the main this project is built around; Codex CLI
+and Antigravity CLI are supported first as workers.
+
+| Client | As the main | As a worker (started with `treecontext run`) |
+| --- | --- | --- |
+| Claude Code | **full support**: capture through its hooks, the tools through MCP, the main placed in its checkout's lane, re-orientation after `/clear` and at a fresh start, bookmarks, subagents as legs, and workers of any CLI, Codex CLI and Antigravity CLI among them, started through the doors: the headless one, `treecontext run`, first; dynamic workflows and an external harness to follow | supported: `claude -p` |
+| Codex CLI | **basic support**: capture through its own hooks (from 0.167.0) and the tools through MCP, with no promise of parity with a Claude Code main. Differences from a Claude Code main: no bookmark ask and no send-back at a turn's end; subagents are helpers, never legs; a packet after Codex's own clear and an automatic compaction are unrecorded (§6, "Codex CLI as a main: best effort") | supported: `codex exec` |
+| Antigravity CLI | **basic support**: capture through its named hook (from 1.5.3) and the tools through MCP, with no promise of parity with a Claude Code main. Differences from a Claude Code main: an agy main is captured but placed in no checkout's lane (its rows read as writer unknown, found by a search of the whole store, and it registers no self); its subagents are captured as sessions of their own and not linked to it; it receives no re-orientation packet; a call agy refuses leaves no entry; a shell command's outcome is read from its text (§6, "Antigravity CLI capture") | supported: `agy -p` |
+
+A Codex CLI or Antigravity CLI main starting workers through the doors is
+not guaranteed, though the doors and lanes can carry it. What links
+sessions to one another beyond the basic workflow below (a main's
+identity, helpers linked to parents) is built no further for Codex CLI and
+Antigravity CLI than this release has it.
+
+### The basic workflow: a worker of any CLI, from a shell
+
+Starting a worker with `treecontext run` from a shell is safe whichever
+client is the main, or with none at all: it is no different from you
+calling it by hand, and it needs no client's hooks.
+
+```bash
+treecontext run --run login --role parser-dev --key parser --parent my-shell \
+  --prompt-file task.md -- <the worker's command: claude -p, codex exec -, agy -p (with --message-arg)>
+```
+
+With no hook at all, the journal then holds:
+
+- **the worker's lane**: a session of its own, registered under the run,
+  key and role its ticket names, never anyone's main;
+- **its first message**: the first row of that lane, the brief and the
+  checkpoint in effect composed by the ticket door, which is also the
+  prompt the worker receives;
+- **its summary row**: written when the worker exits, its last output (or,
+  where it printed nothing, the end of its error stream), which the door's
+  one line on stderr points at.
+
+Everything the worker writes through the tools lands in its lane, stamped
+with its role. Where the worker's client has its own hooks installed, its
+captured calls land in that lane too (§5, "Headless workers").
 
 ### Compatibility matrix
 
@@ -805,7 +863,7 @@ a test result.
 | VS Code (Copilot agent mode) | SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, PreCompact, SubagentStart, SubagentStop, Stop | code.visualstudio.com/docs/copilot/customization/hooks and /docs/agents/reference/hooks-reference (dated 2026-09-30) | reads the Claude settings file when its Claude-hooks setting is on (`chat.useClaudeHooks`, off by default; read as-is, matcher values ignored; also reads `.github/hooks/*.json`) | documented only |
 | Cursor | sessionStart, sessionEnd, beforeSubmitPrompt, preToolUse, postToolUse, stop, preCompact, subagentStart, subagentStop, and more | cursor.com/docs/agent/hooks and /docs/reference/third-party-hooks (no date shown), checked 2026-10-05 | reads the Claude settings file by default (as-is, through its Include Third-Party configs setting) | documented only |
 | OpenCode | none: JS/TS plugins only, no shell hooks | opencode.ai/docs/plugins (updated 2026-10-03) | offers no shell hooks, so the tools are its whole surface (the MCP tools; JS/TS plugins are not hooks) | documented only |
-| Antigravity CLI | SessionStart, PreToolUse, PostToolUse, PreInvocation, PostInvocation, Stop | antigravity.google/docs/hooks (no date shown), checked 2026-11-08 | keeps its own hook configuration, which install leaves alone, so the tools are its whole surface (`~/.gemini/config/hooks.json`, workspace `.agents/hooks.json`; no adapter, nothing is captured) | documented only |
+| Antigravity CLI | SessionStart, PreToolUse, PostToolUse, PreInvocation, PostInvocation, Stop (tests/fixtures/agy-hooks/events.json) | antigravity.google/docs/hooks (no date shown), checked 2026-11-08; sessions recorded on Antigravity CLI 1.5.3, 2026-11-09 (tests/fixtures/agy-hooks) | keeps its own hook configuration, where install writes a named hook of its own beside the developer's from 1.5.3 (~/.gemini/config/hooks.json, the named hook "treecontext") | verified live (Antigravity CLI 1.5.3, recorded 2026-11-09; from 1.5.3, its named hook written by install) |
 
 VS Code and Cursor read the Claude
 settings file, the two events included; how either treats
@@ -829,11 +887,13 @@ verified.** MCP tools are registered anywhere the agent speaks MCP —
 those work regardless — but a hook entry sitting in your settings reads
 as a promise that capture is running, and we won't make that promise on
 a client or a version nobody has run. Codex CLI's hooks are written from
-the version verified live, 0.167.0, and never below it.
+the version verified live, 0.167.0, and never below it; Antigravity CLI's
+named hook from 1.5.3, and never below it.
 `treecontext doctor` gives every documented client one row with three
 halves: its mode (from the matrix above), the state it found, and the
 remedy. Codex CLI's row reads Codex's own account of which of
-treecontext's hooks it trusts; VS Code's row reads `chat.useClaudeHooks`
+treecontext's hooks it trusts; Antigravity CLI's row reads agy's hooks
+file and its version; VS Code's row reads `chat.useClaudeHooks`
 from VS Code's own `settings.json`; Cursor's and OpenCode's remedy is
 nothing to do.
 
@@ -935,6 +995,64 @@ are deepened only if users ask.
   2026-11-10); that Codex reads its global `AGENTS.md` from there too is
   from Codex's documentation, not verified by a live session.
 
+### Antigravity CLI capture
+
+The first Antigravity CLI version whose hooks install writes is **1.5.3**,
+the version a live run recorded. Below it, or where `agy --version` cannot
+be read, agy stays tools-only, and install takes back the named hook it
+wrote. After upgrading agy, run install again:
+
+```bash
+treecontext install --agent agy
+```
+
+- **One named hook of its own.** agy's hooks file, `~/.gemini/config/hooks.json`,
+  is keyed by hook name. Install writes the name `treecontext` beside yours
+  and never writes, moves or removes another name; `enabled: false` set on it
+  is your off, kept by a reinstall. A workspace's `.agents/hooks.json` is
+  yours and never touched. A hook of yours already named `treecontext` is
+  left as it is, and install writes none and says so. A hooks file that does
+  not parse is left byte for byte (agy runs none of the hooks in it, yours
+  included, until it is fixed). agy has no command that lists the hooks it
+  loaded, so doctor reads the file.
+- **Events wired:** SessionStart, PreInvocation, PostToolUse, PostInvocation
+  and Stop. **PreToolUse is never wired:** its hook must answer with a
+  permission decision, so it would change what agy permits.
+- **What is captured:** each turn's prompt once (at its first model call,
+  though agy repeats it on every event), each tool call with agy's tool name,
+  its arguments and its output read from agy's transcript at the end of the
+  model call that made it, and the turn's reply. A call whose output the
+  transcript does not hold by the turn's end is kept and says its output was
+  not captured. agy states no outcome for a shell command, so a command's
+  ending is read from its text.
+- **What it leaves out:** a call agy refuses in a headless run, under any
+  permission preset but `always-proceed`, leaves no entry (no event fires for
+  it or for the rest of that turn); an interactive refusal is unrecorded.
+  agy has no subagent, compaction or failure event. A subagent's conversation
+  is captured as a session of its own, not linked to the session that
+  started it, and is never a leg; the parent keeps its `invoke_subagent` call
+  with the result naming the subagent's conversation.
+- **An agy main is best effort:** captured, but placed in no checkout's lane
+  and registering no self, its notes stamped as a client no hook registered;
+  it receives no re-orientation packet, and orients through the session-start
+  routine of its instruction block. A worker started with `treecontext run`
+  is never a self, and its captured calls land in its own lane.
+- **The transcript is agy's file**, read in the layout recorded at 1.5.3;
+  where agy's version is not 1.5.3, doctor names it beside 1.5.3.
+- **Known limits:**
+  - agy's own ERROR status on a transcript step is not read, so an MCP call
+    agy reports as failed is classed by its text.
+  - An identical second reply within five minutes in the same conversation
+    is folded into the first by the journal's ordinary dedup.
+  - A payload with no `workspacePaths` is journaled to a store bound to
+    agy's config directory, where agy runs its hooks.
+  - A hook of yours in the hooks file that is a plain string beside ours is
+    not validated: install keeps it as it is.
+  - A store another process holds locked costs each hook at most about six
+    seconds; what could not be written then is kept as a capture gap, and a
+    call agy reported but no later event of its turn settled is journaled
+    when staging is purged, saying its output never reached the journal.
+
 ### Orchestration matrix
 
 Orchestration (runs, legs and headless workers, beta.3) is a second
@@ -960,7 +1078,7 @@ proved the door and said nothing about permissions. The cells below are the
 | --- | --- | --- | --- | --- | --- | --- |
 | Claude Code | verified live (`claude -p --model sonnet` through `treecontext run` from inside a Claude Code session after the environment scrub, no `--allowedTools`, its checkpoint in its own lane, 2026-11-08) | install writes its MCP entry (verified live, 2026-11-01) | verified through a stand-in (its real hooks, 2026-11-01) | verified through a stand-in (its real SessionStart hook, 2026-11-01) | verified live (its real SubagentStart and SubagentStop hooks; on 2.1.271 and later in auto mode the report arrives through the `SubagentHandback` tool and is read from the subagent's transcript, 2.1.316, 2026-11-02) | verified through a stand-in (its real PostToolUse hook, 2026-11-01) |
 | Codex CLI | verified live (`codex exec` 0.167.0 through `treecontext run`, default approvals with install's per-tool approvals, read-only sandbox, 2026-11-08) | install writes its MCP entry with `env_vars` and the four approvals (a hand-written entry needs those too; verified live: a worker's insert in its own lane, 2026-11-07, and bypass-free, 2026-11-08) | verified through a stand-in (a ticketed `codex exec` 0.167.0's events recorded 2026-11-09, replayed through the hooks install writes for Codex; the build's own live run is the release gate's) | verified live (Codex CLI 0.167.0, its interactive interface at default approvals, with the hooks install writes, trusted with `/hooks`: its SessionStart recorded 2026-11-09 registers the main, replayed through those hooks) | not possible: no spawn message a hook can read (Codex's spawn tool carries an opaque blob), so a subagent's brief, key and first moment cannot be told (a Codex subagent is a registered helper with a summary, 2026-11-09) | not possible: no spawn message a hook can read, so no leg is named and the spawn's return carries no pointer (2026-11-09) |
-| Antigravity CLI | verified live (`agy -p` 1.5.1 in the default request-review preset, with install's persisted allow rules, no `--mode` or skip flag, 2026-11-08) | install writes its MCP entry and four allow rules (verified live: an insert in its own lane; a delete auto-denied as the negative control; with approvals off the insert is refused, 2026-11-08) | documented only: no adapter yet, and its PostToolUse payload carries no tool output (hooks docs read 2026-11-01) | documented only: no adapter yet (hooks docs read 2026-11-01) | not possible: no SubagentStart or SubagentStop event (hooks docs read 2026-11-01) | not possible: no event fires on a subagent's return (hooks docs read 2026-11-01) |
+| Antigravity CLI | verified live (`agy -p` 1.5.1 in the default request-review preset, with install's persisted allow rules, no `--mode` or skip flag, 2026-11-08) | install writes its MCP entry and four allow rules (verified live: an insert in its own lane; a delete auto-denied as the negative control; with approvals off the insert is refused, 2026-11-08) | verified through a stand-in (a ticketed `agy -p` 1.5.3's events and transcript recorded 2026-11-09, replayed through the named hook install writes for agy; the build's own live run is the release gate's) | not possible: no self registration of an agy main in beta.4 (deferred to beta.5; a worker names it as a parent no hook registered; agy 1.5.3, 2026-11-10) | not possible: no SubagentStart or SubagentStop event (agy 1.5.3, recorded 2026-11-09) | not possible: no event fires on a subagent's return (agy 1.5.3, recorded 2026-11-09) |
 
 ### Copilot capture (preview)
 

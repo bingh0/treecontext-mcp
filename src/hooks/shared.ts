@@ -1,3 +1,4 @@
+import { AGY_CALL_MARK } from '../persistence/capture-marks.js'
 import * as fs from 'fs'
 import { fileURLToPath } from 'node:url'
 import type { DatabaseSync as DatabaseType } from 'node:sqlite'
@@ -374,7 +375,21 @@ export function writeStaging(dbPath: string, entry: StagingEntry, andThen?: (db:
     const writerCols = entry.agentId != null || entry.agentType != null || entry.kind != null
     const callCols = entry.toolUseId != null || entry.outcome != null || entry.capturedFrom != null
     const statedCol = entry.statedBy != null
+    const clientCol = entry.client != null
     const tiers: Array<{ cols: string; vals: string; run: Record<string, unknown>; note: string | null }> = [
+      // v37+ (current): the client whose hooks register no self (D421). An
+      // older store drops it: the row drains unstamped, as before.
+      ...(clientCol ? [{
+        cols: ', index_len, preview_len, namespace, agent_id, agent_type, kind, tool_use_id, outcome, captured_from, stated_by, client',
+        vals: ', @indexLen, @previewLen, @namespace, @agentId, @agentType, @kind, @toolUseId, @outcome, @capturedFrom, @statedBy, @client',
+        run: {
+          ...params, indexLen: entry.indexLen ?? null, previewLen: entry.previewLen ?? null, namespace,
+          agentId: entry.agentId ?? null, agentType: entry.agentType ?? null, kind: entry.kind ?? null,
+          toolUseId: entry.toolUseId ?? null, outcome: entry.outcome ?? null, capturedFrom: entry.capturedFrom ?? null,
+          statedBy: entry.statedBy ?? null, client: entry.client,
+        },
+        note: null,
+      }] : []),
       ...(statedCol ? [{
         cols: ', index_len, preview_len, namespace, agent_id, agent_type, kind, tool_use_id, outcome, captured_from, stated_by',
         vals: ', @indexLen, @previewLen, @namespace, @agentId, @agentType, @kind, @toolUseId, @outcome, @capturedFrom, @statedBy',
@@ -386,7 +401,7 @@ export function writeStaging(dbPath: string, entry: StagingEntry, andThen?: (db:
         },
         note: null,
       }] : []),
-      ...(callCols ? [{
+      ...(callCols || clientCol ? [{
         cols: ', index_len, preview_len, namespace, agent_id, agent_type, kind, tool_use_id, outcome, captured_from',
         vals: ', @indexLen, @previewLen, @namespace, @agentId, @agentType, @kind, @toolUseId, @outcome, @capturedFrom',
         run: {
@@ -394,9 +409,9 @@ export function writeStaging(dbPath: string, entry: StagingEntry, andThen?: (db:
           agentId: entry.agentId ?? null, agentType: entry.agentType ?? null, kind: entry.kind ?? null,
           toolUseId: entry.toolUseId ?? null, outcome: entry.outcome ?? null, capturedFrom: entry.capturedFrom ?? null,
         },
-        note: statedCol ? 'pre-036 column fallback, the stated success dropped' : null,
+        note: statedCol ? 'pre-036 column fallback, the stated success dropped' : clientCol ? 'pre-037 column fallback, the client dropped' : null,
       }] : []),
-      ...(writerCols ? [{
+      ...(writerCols || clientCol ? [{
         cols: ', index_len, preview_len, namespace, agent_id, agent_type, kind',
         vals: ', @indexLen, @previewLen, @namespace, @agentId, @agentType, @kind',
         run: {
@@ -461,7 +476,8 @@ export function writeStaging(dbPath: string, entry: StagingEntry, andThen?: (db:
     recordHookGap(dbPath, {
       hook: stagingHookOf(entry), sessionId: entry.sessionId ?? null,
       ...(entry.agentId ? { agentId: entry.agentId } : {}), ...(entry.agentType ? { agentType: entry.agentType } : {}),
-      at: entry.timestamp, error: msg, ...(entry.toolUseId ? { toolUseId: entry.toolUseId } : {}),
+      at: entry.timestamp, error: msg, ...(entry.toolUseId && entry.capturedFrom !== AGY_CALL_MARK ? { toolUseId: entry.toolUseId } : {}),
+      ...(entry.client ? { client: entry.client } : {}),
       lost: `The ${entry.toolName ? `${entry.toolName} call` : entry.role === 'user' ? 'developer turn' : entry.role === 'snapshot' ? 'recovery snapshot claim' : 'assistant turn'} it captured was not staged.`,
       text: entry.content,
     })

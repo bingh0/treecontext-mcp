@@ -1,0 +1,85 @@
+{
+  "client": "Antigravity CLI",
+  "version": "1.5.3",
+  "read_at": "2026-11-09",
+  "sources": [
+    "Antigravity CLI's hooks guide, read on the far-side pass of 2026-11-08 and 2026-11-09; the page states no version or date, so its list is taken as agy 1.5.3's only where the recordings agree",
+    "three headless `agy -p` runs of 1.5.3 with a dump hook on every event name (the far-side pass of 2026-11-09, journal 5aa808d8): agy has six hook events and fires them as listed here",
+    "live runs of Antigravity CLI 1.5.3 recorded in 1.5.3/ (2026-11-09)"
+  ],
+  "provenance": "Event names come from agy's hooks guide and the recordings; `when`, `disposition` and `lost` are treecontext's own words. Nothing mechanical sees an event agy has that neither this list nor a recording names, so the hooks guide is re-read at every agy upgrade.",
+  "events": [
+    {
+      "event": "SessionStart",
+      "when": "a conversation's first turn starts (headless and interactive alike, carrying the first prompt in lastUserInput); a subagent's conversation fires its own; a second turn of the same conversation fires none",
+      "disposition": "wired",
+      "observed": true
+    },
+    {
+      "event": "PreInvocation",
+      "when": "before every model call, with invocationNum and initialNumSteps; the one numbered 0 opens a turn, and is where the turn's prompt (lastUserInput, repeated on every event of the turn) is journaled",
+      "disposition": "wired",
+      "observed": true
+    },
+    {
+      "event": "PostToolUse",
+      "when": "a tool call ended, with stepIdx, toolCall {name, args} and error; no output, no call id, and an empty error for a shell command that exits non-zero",
+      "disposition": "wired",
+      "observed": true
+    },
+    {
+      "event": "PostInvocation",
+      "when": "after every model call; a call's result step is in agy's transcript by the PostInvocation that follows its PostToolUse, so each call's output is read from the transcript here",
+      "disposition": "wired",
+      "observed": true
+    },
+    {
+      "event": "Stop",
+      "when": "a turn ends (terminationReason); the turn's reply is the transcript's last response, read here, and a call whose result the transcript still lacks is journaled here as one whose output was not captured",
+      "disposition": "wired",
+      "observed": true
+    },
+    {
+      "event": "PreToolUse",
+      "when": "before a tool call runs; its hook must answer with a permission decision",
+      "disposition": "not-captured",
+      "lost": "nothing of a call before it runs: a hook here would decide what agy permits, which treecontext never does, so a call agy refuses (headless, under any preset but always-proceed) leaves no entry, no other event firing for it",
+      "observed": false
+    },
+    {
+      "event": "UserPromptSubmit",
+      "when": "Claude Code's event for a prompt; Antigravity CLI 1.5.3 has no prompt event",
+      "disposition": "not-in-client",
+      "lost": "nothing the journal needs: the prompt rides on every event as lastUserInput and is journaled once per turn, at its PreInvocation numbered 0; a turn opened by a subagent's message, not a prompt, repeats the last prompt and is journaled as a turn of it",
+      "observed": false
+    },
+    {
+      "event": "SubagentStart",
+      "when": "Claude Code's event for a subagent's start; Antigravity CLI 1.5.3 has no subagent event",
+      "disposition": "not-in-client",
+      "lost": "the link between a subagent and the session that started it: nothing in the child's events names its parent, so the child's conversation is journaled as its own session, writer unknown, never linked (D421); the parent keeps its invoke_subagent call with the transcript's result naming the child",
+      "observed": false
+    },
+    {
+      "event": "SubagentStop",
+      "when": "Claude Code's event for a subagent's end; Antigravity CLI 1.5.3 has no subagent event",
+      "disposition": "not-in-client",
+      "lost": "a subagent's report as a summary of its parent: the child's send_message is journaled as a call of the child's own session",
+      "observed": false
+    },
+    {
+      "event": "PreCompact",
+      "when": "Claude Code's event before a compaction; Antigravity CLI 1.5.3 has no compaction event",
+      "disposition": "not-in-client",
+      "lost": "the recovery snapshot of a compaction: agy compacts with no event the journal hears",
+      "observed": false
+    },
+    {
+      "event": "PostToolUseFailure",
+      "when": "Claude Code's event for a failed call; Antigravity CLI 1.5.3 has no failure event",
+      "disposition": "not-in-client",
+      "lost": "the client's word on how a call ended: agy states no outcome for a shell command, so a call's class is read from its text (D404)",
+      "observed": false
+    }
+  ]
+}

@@ -9,6 +9,31 @@
  * settle, the staged cap-refusal read) skips a row that carries one.
  */
 
+/**
+ * D415: the staged kind of a prompt that opens a turn of a client with no
+ * prompt event (Antigravity CLI: `lastUserInput` at the PreInvocation
+ * numbered 0). Each is a turn of its own, so the drain's auto-capture dedup
+ * (the same text in the same session within DEDUP_WINDOW_SECS) never folds
+ * one into an earlier turn's: a prompt typed twice is two turns.
+ */
+export const TURN_PROMPT_KIND = 'turn-prompt'
+
+/**
+ * D415: Antigravity CLI's PostToolUse, staged as the account of a call held
+ * until its result is read from agy's transcript (hooks/agy.ts). The drain
+ * writes no entry from it: the hook journals the call at the PostInvocation
+ * or Stop that reads its result, taking the account out in the same
+ * transaction, and an account no event settles is journaled by the purge of
+ * processed staging (store.ts resolveAbandonedAccounts) as AGY_NO_END_LINE
+ * says. Its `tool_use_id` is a staging-only key (AGY_STEP_KEY_PREFIX and
+ * agy's step), never copied to an entry: agy gives no call id.
+ */
+export const AGY_CALL_MARK = 'agy-call'
+export const AGY_STEP_KEY_PREFIX = 'agy-step:'
+
+/** The line an agy call's entry carries when no event of its turn settled it. */
+export const AGY_NO_END_LINE = '[output not captured] agy reported this call (its PostToolUse); its output, read from agy\'s transcript at the end of the model call or of the turn, never reached the journal: no later event of the conversation settled it.'
+
 /** D401: the client's account of a batch (Claude Code's PostToolBatch). */
 export const BATCH_MARK = 'batch'
 

@@ -27,6 +27,9 @@ import {
 } from './journal-reorientation.steps.js'
 import { type RunWorld } from '../run-world.js'
 import { runWorker, preCompact, recordedSession, replayRecordedSession, type ReplayedEvent } from '../standins.js'
+import { placementsOf } from '../../../src/persistence/lane-scope.js'
+import { laneOfRow, UNKNOWN_LANE } from '../../../src/references.js'
+import { TICKET_ENV } from '../../../src/ticket.js'
 
 // ── journal-orchestration ───────────────────────────────────────────────
 //
@@ -69,6 +72,8 @@ export interface OrchestrationWorld extends RunWorld {
   /** D410, D409: a Codex set's events, the directory its session starts
    *  in, the context its start printed and the replay's account. */
   codexEvents?: Array<Record<string, unknown>>
+  /** D421: an agy set's events. */
+  agyEvents?: Array<Record<string, unknown>>
   codexCwd?: string
   codexContext?: string
   codexReplay?: ReplayedEvent[]
@@ -2191,6 +2196,50 @@ export const orchestrationDefiner = (reg: Registry<OrchestrationWorld>): void =>
     // Not vacuous: Claude Code's stop hook, given the same turn's end, asks.
     const claude = runHook(w, 'stop', { hook_event_name: 'Stop', stop_hook_active: false, last_assistant_message: 'another turn', cwd: w.repo })
     expectBookmarkAsked(claude.stdout)
+  })
+
+
+  // ── D421: an Antigravity CLI session the ticket door did not start ──────
+  // agy's own events and transcript, recorded 2026-11-09 (tests/fixtures/
+  // agy-hooks, headless-session.ndjson), replayed through the commands of the
+  // named hook install writes for agy, its workspace the world's checkout.
+  // The chapter summary goes through the tools as agy's MCP server writes
+  // it: a server no hook told who its session is (no beacon, no session
+  // variable it reads), as before beta.4.
+  reg.define(/^an Antigravity session starting in its checkout, not started through `treecontext run`, its events as Antigravity sends them$/, async (w) => {
+    await openGitWorld(w, { mainStart: false })
+    w.agyEvents = recordedSession('1.5.3', 'headless-session.ndjson', 'agy')
+    expect(process.env[TICKET_ENV]).toBeUndefined()
+  })
+  reg.define(/^the hook install writes for Antigravity CLI receives them and ingestion runs, and the session writes a chapter summary through the tools$/, async (w) => {
+    const replayed = replayRecordedSession(w, w.agyEvents!, { cwd: w.repo! })
+    expect(replayed.every((r) => r.hooks.length === 1 && r.stdout.join('').trim() === '{}')).toBe(true)
+    await drainStaging(w)
+    await mcpOver(w)
+    const reply = await insert(w, 'plan: the agy main\'s chapter; next: its tests', { next_session: true })
+    w.noteId = reply['node_id'] as string
+  })
+  reg.define(/^the session's captured rows are kept in its own session, in no checkout's lane, read as writer unknown$/, (w) => {
+    const conv = String(w.agyEvents![0]!['conversationId'])
+    const rows = rawAll<{ m: string }>(w, "SELECT metadata_json AS m FROM nodes WHERE source_label = 'auto-capture'").map((r) => JSON.parse(r.m) as Record<string, unknown>)
+    expect(rows.length).toBe(8)
+    const raw = new DatabaseSync(w.dbPath!, { readOnly: true })
+    let placements: Map<string, string | null>
+    try { placements = placementsOf(raw, [conv]) } finally { raw.close() }
+    expect(placements.has(conv)).toBe(false)
+    for (const m of rows) {
+      expect(m['session_id']).toBe(conv)
+      expect(m['_writer_src']).toBe('unregistered')
+      expect(laneOfRow(m, placements.get(conv))).toBe(UNKNOWN_LANE)
+    }
+  })
+  reg.define(/^the store holds no self registration for the session$/, (w) => {
+    expect(rawAll(w, 'SELECT session_id, kind FROM session_registry')).toEqual([])
+  })
+  reg.define(/^the chapter summary is stamped as a client's that no hook registered, as an Antigravity main's was before beta\.4$/, (w) => {
+    const m = rawMeta(w, w.noteId!)
+    expect(m).toMatchObject({ _writer_src: 'unregistered', next_session: true })
+    expect(m['_writer']).toBeUndefined()
   })
 
 }

@@ -35,9 +35,10 @@ import m033 from './033_worker_lane_dedup.js'
 import m034 from './034_staging_tool_call.js'
 import m035 from './035_worker_pid_namespace.js'
 import m036 from './036_staging_stated_by.js'
+import m037 from './037_staging_client.js'
 
 /** All known migrations, ordered by version ascending. */
-export const migrations: Migration[] = [m001, m002, m003, m004, m005, m006, m007, m008, m009, m010, m011, m012, m013, m014, m015, m016, m017, m018, m019, m020, m021, m022, m023, m024, m025, m026, m027, m028, m029, m030, m031, m032, m033, m034, m035, m036]
+export const migrations: Migration[] = [m001, m002, m003, m004, m005, m006, m007, m008, m009, m010, m011, m012, m013, m014, m015, m016, m017, m018, m019, m020, m021, m022, m023, m024, m025, m026, m027, m028, m029, m030, m031, m032, m033, m034, m035, m036, m037]
 
 /** The highest schema version this build understands. */
 export const maxSupportedVersion = migrations.at(-1)!.version

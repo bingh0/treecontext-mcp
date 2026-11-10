@@ -39,6 +39,7 @@ import {
 import {
   CODEX_APPROVALS_FLOOR, codexApprovalSupport, codexOriginFile, readCodexConfig, readCodexVersion, runCodexSandboxCheck, sandboxRow, readCodexHooksTrust,
 } from './codex-client.js'
+import { readAgyVersion, agyCaptureOf, agyToolsOnlyLine, installAgyHooks, takeBackAgyHooks, agyHooksPresent, agyHookReport, type AgyHooksOutcome } from './agy-hooks.js'
 import {
   codexCaptureOf, installCodexHooks, takeBackCodexHooksFile, readCodexHooksFile,
   codexToolsOnlyLine, codexHooksPath, codexHookReport, codexHooksPresent, writeTarget, unwritableFile, otherWiredCodexLine, CODEX_INSTALL_PROBE_TIMEOUT_MS, type CodexHooksOutcome,
@@ -1238,9 +1239,16 @@ export const COPYING_CLIENTS = new Set(['codex'])
  */
 export function captureHooksInstalled(
   agent: AgentDefinition, platform: Platform,
-  opts: { codexCapture?: boolean; claudeBlockPlanned?: boolean } = {},
+  opts: { codexCapture?: boolean; claudeBlockPlanned?: boolean; agyCapture?: boolean } = {},
 ): boolean {
   if (CAPTURE_PLATFORMS.has(agent.slug)) return true
+  if (agent.slug === 'agy') {
+    // D386, D413: treecontext's named hook in agy's hooks file
+    // (agyHooksPresent), the one reading install, uninstall and doctor
+    // share; or what this run's hooks step leaves there.
+    if (opts.agyCapture !== undefined) return opts.agyCapture
+    return agyHooksPresent()
+  }
   if (!agent.hooks) return false
   if (agent.slug === 'codex') {
     // D386, D406: treecontext's hooks in Codex's hooks file, whichever
@@ -1330,7 +1338,7 @@ export function hookScriptContent(event: string, debug = false): string {
     // already an ordinary child and the script's own status is the last word:
     // one line covers a missing module, a missing interpreter and anything
     // else, where the POSIX branch needs a pre-exec guard.
-    return `@echo off\r\nREM treecontext: ${event} hook\r\nREM Installed by: treecontext install\r\nsetlocal\r\n${dbgLine}${windowsNodeResolveSnippet(verifiedNode())}${windowsCliResolveSnippet(cliPath)}"%TC_NODE%" "%TC_CLI%" hook ${event} %* 2>nul\r\nexit /b 0\r\n`
+    return `@echo off\r\nREM treecontext: ${event} hook\r\nREM Installed by: treecontext install\r\nsetlocal\r\n${dbgLine}${windowsNodeResolveSnippet(verifiedNode())}${windowsCliResolveSnippet(cliPath)}"%TC_NODE%" "%TC_CLI%" hook ${event} %* ${event === 'agy' ? '>nul 2>nul\r\necho {}' : '2>nul'}\r\nexit /b 0\r\n`
   }
   const prefix = debug ? 'TREECONTEXT_DEBUG=1 ' : ''
   // Resolve node at runtime via the shared snippet (PATH → nvm/fnm glob →
@@ -1361,6 +1369,23 @@ export function hookScriptContent(event: string, debug = false): string {
   // between and the beacon is keyed on a shell pid that dies immediately and
   // is recycled — the agent wrappers can drop exec because they carry no such
   // key, these cannot.
+  // Antigravity CLI reads a hook's stdout and wants one JSON object (D413):
+  // its script runs node as a child, never through exec (agy's hooks carry
+  // no pid-keyed identity), lets nothing node prints through, and answers
+  // `{}` and exit 0 whatever node does: missing, too old, a CLI that throws.
+  if (event === 'agy') {
+    return `#!/bin/bash
+# treecontext: ${event} hook
+# Installed by: treecontext install
+${posixNodeResolveSnippet(verifiedNode())}
+${posixCliResolveSnippet(cliPath)}
+if [ -x "$TC_NODE" ] && [ -f "$TC_CLI" ]; then
+  ${prefix}"$TC_NODE" "$TC_CLI" hook ${event} "$@" >/dev/null 2>&1
+fi
+printf '{}\\n'
+exit 0
+`
+  }
   return `#!/bin/bash
 # treecontext: ${event} hook
 # Installed by: treecontext install
@@ -1417,6 +1442,8 @@ export function installClaudeHookScripts(dryRun: boolean, debug = false): Action
     'stop': hookScriptContent('stop', debug),
     'subagent-start': hookScriptContent('subagent-start', debug),
     'subagent-stop': hookScriptContent('subagent-stop', debug),
+    // D413: Antigravity CLI's named hook, the event after the script's path.
+    'agy': hookScriptContent('agy', debug),
   }
   const scripts: Array<[string, string]> = claudeHookScriptPaths().map((p) => {
     const stem = basename(p).slice(TC_HOOK_PREFIX.length).replace(/\.cmd$/, '')
@@ -3552,6 +3579,10 @@ export async function install(opts: InstallOptions): Promise<AgentInstallResult[
     ? codexApprovalSupport(codexVersion)
     : null
   const codexCapture = codexWanted ? codexCaptureOf(codexVersion) : null
+  // D413: the agy on PATH, read once: at 1.5.3 or later install writes its
+  // named hook; below, or unread, it takes back what install wrote and agy
+  // stays tools-only.
+  const agyCapture = agents.some(a => a.slug === 'agy') ? agyCaptureOf(await readAgyVersion()) : null
   const approvalSummaries: ApprovalSummary[] = []
   let approvalsRecorded = opts.noToolApprovals === true && approvalScope.length > 0
   const dryNote = (added: string[]): { note: string } | Record<string, never> => opts.dryRun && added.length > 0 ? { note: `dry run: would approve ${andList(added)}` } : {}
@@ -3650,6 +3681,20 @@ export async function install(opts: InstallOptions): Promise<AgentInstallResult[
       codexTakeBack = await takeBackCodexHooksFile(opts.dryRun, { ask: (cwd) => readCodexHooksTrust(cwd, CODEX_INSTALL_PROBE_TIMEOUT_MS), onWait: (line) => console.log(line) })
     }
     const codexStep = codexHooks ?? codexTakeBack
+    let agyStep: AgyHooksOutcome | null = null
+    const agyScriptLines: string[] = []
+    if (agent.slug === 'agy' && agyCapture) {
+      agyStep = agyCapture.state === 'capture'
+        ? installAgyHooks(opts.dryRun, () => {
+          // The scripts the named hook runs, written first (D406, D413).
+          const scriptResults = installClaudeHookScripts(opts.dryRun, opts.debug)
+          agentResult.actions.push(...scriptResults)
+          for (const s of scriptResults) agyScriptLines.push(`  hooks: ${s.path} [${s.status}${s.detail ? ` — ${s.detail}` : ''}]`)
+        })
+        : takeBackAgyHooks(opts.dryRun)
+      if (agyStep.action) agentResult.actions.push(agyStep.action)
+      if (agyStep.refused) failed.push({ agent: agent.name, message: agyStep.refused })
+    }
 
     // MCP config
     const configPath = getConfigPath(agent, platform)
@@ -3657,6 +3702,7 @@ export async function install(opts: InstallOptions): Promise<AgentInstallResult[
       // Capture mode wherever a capture hooks block runs for the agent (D386).
       const entry = buildMcpEntry(agent, opts.useNpx, opts.lexical, captureHooksInstalled(agent, platform, {
         ...(codexStep ? { codexCapture: codexStep.present } : {}),
+        ...(agyStep ? { agyCapture: agyStep.present } : {}),
         claudeBlockPlanned: opts.dryRun && agents.some(a => a.slug === 'claude'),
       }))
 
@@ -3838,9 +3884,15 @@ export async function install(opts: InstallOptions): Promise<AgentInstallResult[
       // doctor's OpenCode row says too.
       console.log(`  hooks: none — OpenCode offers no shell hooks; the MCP tools are its whole surface`)
     } else if (agent.slug === 'agy') {
-      // Its hooks stay its own (D383, fenced): no adapter has earned a
-      // live-payload pass, so install writes none, and says so.
-      console.log(`  hooks: none — Antigravity CLI keeps its own hook configuration (${agyHooksPath()}), which install leaves alone; the MCP tools are its whole surface`)
+      // D413: its own named hook from 1.5.3, beside the developer's; below
+      // the floor, or unread, tools-only, what install wrote taken back.
+      for (const l of agyScriptLines) console.log(l)
+      if (agyCapture && agyCapture.state !== 'capture') {
+        for (const l of agyStep?.lines ?? []) console.log(l)
+        console.log(`  hooks: none written — ${agyToolsOnlyLine(agyCapture)}`)
+      } else {
+        for (const l of agyStep?.lines ?? []) console.log(l)
+      }
     } else {
       console.log(`  hooks: not supported by ${agent.name}`)
       console.log(`         conversation indexer unavailable — agent uses standard mode (manual treecontext_insert/query)`)
@@ -4088,8 +4140,12 @@ export async function uninstall(opts: {
   // Hooks left written in a file that does not parse run again once the
   // developer repairs it: kept, as hooks a read-only file keeps.
   const codexKept = codexOut?.present === true || codexOut?.leftInText === true || (codexRefusal !== null && codexHooksPresent())
+  // D413: agy's named hook, taken back first, by the same rule: where it
+  // remains (a file that refuses the write), agy's entry stays draining.
+  const agyOut = agents.some(a => a.slug === 'agy') ? takeBackAgyHooks(opts.dryRun) : null
+  const agyKept = agyOut?.present === true
   // The agents whose hooks this run takes away: Codex not, where its hooks remain.
-  const leaving = new Set(agents.filter(a => !(a.hooks?.format === 'codex-hooks' && codexKept)).map(a => a.slug))
+  const leaving = new Set(agents.filter(a => !(a.hooks?.format === 'codex-hooks' && codexKept) && !(a.slug === 'agy' && agyKept)).map(a => a.slug))
 
   for (const agent of agents) {
     const agentResult: AgentInstallResult = { agent: agent.name, slug: agent.slug, actions: [] }
@@ -4102,7 +4158,16 @@ export async function uninstall(opts: {
       continue
     }
 
-    if (configPath && !opts.hooksOnly && agent.hooks?.format === 'codex-hooks' && codexKept) {
+    if (agent.slug === 'agy' && agyOut) {
+      if (agyOut.action) agentResult.actions.push(agyOut.action)
+      for (const l of agyOut.lines) console.log(`${agent.name}:${l.replace(/^ {2}hooks:/, ' hooks:')}`)
+      if (agyOut.refused) agentResult.refused = agyOut.refused
+    }
+    if (configPath && !opts.hooksOnly && agent.slug === 'agy' && agyKept) {
+      const mode = setEntryCapture(agent, configPath, true, opts.dryRun)
+      if (mode) agentResult.actions.push(mode)
+      console.log(`${agent.name}: mcp entry kept in ${configPath}, in capture mode — treecontext's named hook remains in ${agyHooksPath()} and agy still runs it, so the server stays to drain what it stages; take it out and run uninstall again${mode && mode.status !== 'skipped' ? ` [${mode.status}]` : ''}`)
+    } else if (configPath && !opts.hooksOnly && agent.hooks?.format === 'codex-hooks' && codexKept) {
       const mode = setEntryCapture(agent, configPath, true, opts.dryRun)
       if (mode) agentResult.actions.push(mode)
       console.log(`${agent.name}: mcp entry kept in ${configPath}, in capture mode — treecontext's hooks remain in ${codexHooksPath()} and still run once trusted, so the server stays to drain what they stage; take them out (below) and run uninstall again${mode && mode.status !== 'skipped' ? ` [${mode.status}]` : ''}`)
@@ -5129,9 +5194,11 @@ function copiedHookSources(agent: AgentDefinition, platform: Platform): Array<{ 
  * Uninstalling Claude Code alone must not delete scripts these copies run.
  */
 export function copiesRunningClaudeScripts(platform: Platform, except: ReadonlySet<string>): AgentDefinition[] {
-  return AGENTS.filter(a => COPYING_CLIENTS.has(a.slug) && !except.has(a.slug)
+  // D413: Antigravity CLI's named hook runs the same scripts.
+  const agy = AGENTS.filter(a => a.slug === 'agy' && !except.has('agy') && agyHooksPresent())
+  return [...AGENTS.filter(a => COPYING_CLIENTS.has(a.slug) && !except.has(a.slug)
     && copiedHookSources(a, platform).some(src => !src.unreadable
-      && collectCommandStrings(src.hooks).some(c => runsOwnHookScript(c, CLAUDE_SCRIPT_NAMES))))
+      && collectCommandStrings(src.hooks).some(c => runsOwnHookScript(c, CLAUDE_SCRIPT_NAMES)))), ...agy]
 }
 
 /**
@@ -6774,6 +6841,8 @@ export async function doctor(): Promise<DiagnosticResult[]> {
         // Asked from the project doctor runs in: the report is on this
         // project, whose own settings Codex reads (codexHookReport).
         ? await codexHookReport(process.cwd(), { version: () => readCodexVersion(), trust: (cwd) => readCodexHooksTrust(cwd), config: (cwd) => readCodexConfig(cwd) })
+        // D414: agy's named hook, read from agy's own files and its version.
+        : agent.slug === 'agy' ? agyHookReport(await readAgyVersion())
         : clientHookReport(agent, platform)
 
     // Mode detection from MCP args. On a client other than Claude Code this
@@ -6795,7 +6864,7 @@ export async function doctor(): Promise<DiagnosticResult[]> {
       const hasNoDebug = mcpArgs.includes('--no-debug')
       const label = client ? 'server mode' : 'mode'
       const thisClient = client
-        ? ` (this client: ${captureExpected ? (agent.slug === 'codex' ? 'its own hooks' : 'reads the Claude Code hooks block') : 'tools only'})`
+        ? ` (this client: ${captureExpected ? (agent.slug === 'codex' || agent.slug === 'agy' ? 'its own hooks' : 'reads the Claude Code hooks block') : 'tools only'})`
         : ''
       hasModeProblem = hasCapture !== captureExpected
       // A Codex hooks file that does not parse is the client row's to name,
@@ -7111,8 +7180,10 @@ export async function doctor(): Promise<DiagnosticResult[]> {
       // of the developer's over one of them, named with its file.
       const read = agySettingsSources(process.cwd())
       const backup = agyReplacedBackup(configPath)
+      const settings = read.sources.find(s => s.file === read.settingsFile)?.data
+      const preset = settings && Object.hasOwn(settings, 'toolPermission') ? { value: settings['toolPermission'] } : 'absent' as const
       approval = agyHeadlessClause({
-        mcpPath: configPath, entry: agyEntryState(configPath), view: agyView(read.sources), settingsFile: read.settingsFile,
+        mcpPath: configPath, entry: agyEntryState(configPath), view: agyView(read.sources), settingsFile: read.settingsFile, preset,
         choice: approvalsChoice('agy'), unreadable: read.unreadable, unplaced: read.unplaced,
         ...(read.project ? { project: read.project } : {}),
         ...(read.settingsError !== undefined ? { settingsError: read.settingsError } : {}),

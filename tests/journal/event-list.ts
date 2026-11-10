@@ -12,7 +12,8 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { claudeHooksBlock } from '../../src/server/installer.js'
 import { codexHooksBlock } from '../../src/server/codex-hooks.js'
-import { RECORDED_HOOK_EVENTS, RECORDED_CODEX_EVENTS } from './standins.js'
+import { agyHooksBlock } from '../../src/server/agy-hooks.js'
+import { RECORDED_HOOK_EVENTS, RECORDED_CODEX_EVENTS, RECORDED_AGY_EVENTS } from './standins.js'
 
 export interface ListedEvent { event: string; when: string; disposition: string; lost?: string; observed: boolean }
 export interface EventList { client: string; version: string; read_at: string; sources: string[]; provenance: string; events: ListedEvent[] }
@@ -28,6 +29,8 @@ export const EVENT_LIST_PATH = join(RECORDED_HOOK_EVENTS, 'events.json')
 export interface ListedClient { name: string; dir: string; wired: () => string[] }
 export const CLAUDE_CODE_LIST: ListedClient = { name: 'Claude Code', dir: RECORDED_HOOK_EVENTS, wired: () => Object.keys(claudeHooksBlock()) }
 export const CODEX_LIST: ListedClient = { name: 'Codex CLI', dir: RECORDED_CODEX_EVENTS, wired: () => Object.keys(codexHooksBlock()) }
+/** D417: Antigravity CLI's list, held against the named hook install writes. */
+export const AGY_LIST: ListedClient = { name: 'Antigravity CLI', dir: RECORDED_AGY_EVENTS, wired: () => Object.keys(agyHooksBlock()) }
 
 /** A client's list (events.json in its fixture directory). */
 export function readClientEventList(client: ListedClient): EventList {
@@ -47,7 +50,10 @@ export function recordedEventNames(root = RECORDED_HOOK_EVENTS): Set<string> {
       if (!e.name.endsWith('.ndjson')) continue
       for (const line of readFileSync(join(dir, e.name), 'utf8').split('\n')) {
         if (line.trim() === '') continue
-        const name = (JSON.parse(line) as Record<string, unknown>)['hook_event_name']
+        // agy's payloads name no event: its recordings wrap each with the
+        // event the hook ran for (tests/fixtures/agy-hooks/README.md).
+        const rec = JSON.parse(line) as Record<string, unknown>
+        const name = rec['hook_event_name'] ?? rec['event']
         if (typeof name === 'string') seen.add(name)
       }
     }

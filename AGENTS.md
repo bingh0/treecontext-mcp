@@ -133,6 +133,22 @@ hand-written models, never the client's word.
   `hooks/list`; whether Codex loads the file is Codex's verdict
   (`codexVerdictOf`), install's own check only what it steps around
   (`codexPlacementError`), the path resolved hop by hop (`codexHooksTarget`)
+- `src/server/agy-hooks.ts` — Antigravity CLI's named hook from 1.5.3
+  (D413, D414): the block (`agyHooksBlock`, five events, never PreToolUse),
+  the version read (`agy --version`), the file read and changed by text edits
+  (`agyHooksTextFor`), install, the take-back below the floor and at
+  uninstall, install's record (`agyHooks`), and doctor's hooks clause
+  (`agyHookReport`). agy has no command that lists the hooks it loaded, so
+  install relies on the shape recorded working and doctor reads the file;
+  agy honours no home variable we found (`agy --help`, its binary's strings)
+- `src/hooks/agy.ts` — what one agy event stages (D415, D421): the turn's
+  prompt at the PreInvocation numbered 0 (`turn-prompt`, never folded by the
+  drain's dedup), a call's account staged at PostToolUse (`agy-call`,
+  capture-marks.ts) and journaled, its account taken out in the same
+  transaction, at the PostInvocation whose transcript holds its result, the
+  rest and the reply at Stop; one deadline for every write of a hook
+  (`AGY_HOOK_BUDGET_MS` from its start), the rest to the gap ledger; a
+  ticketed worker's conversation linked to its lane at SessionStart
 - `src/server/codex-home.ts` — Codex's own directory: `$CODEX_HOME` (resolved
   and canonical, as Codex names it) or `~/.codex`; a value Codex refuses to
   start with refuses Codex's step at install, uninstall and doctor; every
@@ -296,9 +312,10 @@ hand-written models, never the client's word.
 - `src/server/config.ts` — the TOML config loader (project
   `treecontext.toml` over `~/.treecontext/config.toml`)
 - `src/server/agents.ts` — the agent registry install reads (detection,
-  config paths and formats, hooks); Antigravity CLI (`agy`, D383) is a
-  tools-only entry, detected by its command or `~/.gemini/antigravity-cli`,
-  and `~/.gemini/GEMINI.md` is its instruction block alone (D399)
+  config paths and formats, hooks); Antigravity CLI (`agy`, D383), detected
+  by its command or `~/.gemini/antigravity-cli`, gets its named hook from
+  agy-hooks.ts (D413), and `~/.gemini/GEMINI.md` is its instruction block
+  alone (D399)
 - `src/server/shielding.ts` — output shielding (`--shield-threshold`)
 
 ## Design decisions worth not re-litigating
@@ -538,6 +555,27 @@ node dist/server/cli.js doctor      # after a build
   first by rule. A worker of the ticket door, a caller that cannot be told
   apart (D240) and an unplaced caller search the whole store, the reply's
   `scope` saying which
+- Antigravity CLI's hook commands are `tc-agy <Event> --client agy`: the
+  event comes from the command, since agy's PreInvocation and PostInvocation
+  payloads carry the same keys, and every answer is `{}`: `tc-agy` runs node
+  as a child, never through exec, lets nothing it prints through, and prints
+  `{}` and exits 0 whatever node does (missing, too old, a CLI that throws).
+  An agy call's account (`agy-call`) carries its step under a staging-only
+  `tool_use_id` (`agy-step:<n>`), never copied to an entry; one no event
+  settles is journaled by the purge (`resolveAbandonedAccounts`,
+  `AGY_NO_END_LINE`). A gap-ledger record carries the client its hook named,
+  and the drain files an agy gap row as it files agy's captured rows (a
+  worker's lane, else `unregistered`). One invariant, read in one place
+  (`agyHooksPresent`): treecontext's named hook is in agy's hooks file if and
+  only if agy's entry serves in capture mode; `enabled: false` is present
+  (the developer's off). Install never re-serialises agy's hooks file (text
+  edits, json-text-edit.ts) and never writes or reads a workspace's
+  `.agents/hooks.json`. Staging's `client` (migration 037) is set only by a
+  hook whose command names a client in `CLIENTS_REGISTERING_NO_SELF`, and the
+  drain stamps such a row outside a worker's lane `_writer_src`
+  `unregistered` (writer unknown, D421); never read it off a node. A call's
+  output is read from agy's transcript at the PostInvocation after its
+  PostToolUse (D415), its moment the PostToolUse's; never at the PostToolUse
 - A hook takes its client from the command install wrote (`--client
   claude-code`, `--client codex`; hooks/hook-client.ts), never from the
   payload: Codex's payloads are Claude-shaped. Only a client whose events

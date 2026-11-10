@@ -92,6 +92,23 @@
  *  |                                        | (`codexHooksBlock`); `env` may hand every hook the         |
  *  |                                        | variables the client's own environment held (a ticketed    |
  *  |                                        | worker's ticket and lane, as recorded), never more         |
+ *  | `replayRecordedSession` with an agy    | Antigravity CLI firing a recorded set's hook events (D417): |
+ *  |   set (`recordedSession(..., 'agy')`)  | each event of tests/fixtures/agy-hooks, in agy's order, to  |
+ *  |                                        | the commands of the named hook install writes for agy       |
+ *  |                                        | (`agyHooksBlock`) for the event the recording names, each   |
+ *  |                                        | run as the installed script runs it; before each event the  |
+ *  |                                        | conversation's transcript as it stood then (the recording's |
+ *  |                                        | prefix) is written where `transcriptPath` points. It may    |
+ *  |                                        | rewrite only `transcriptPath` and `workspacePaths`, and with|
+ *  |                                        | `transcript: 'unreadable'` point `transcriptPath` at a path |
+ *  |                                        | that cannot be read (a transcript agy did not leave         |
+ *  |                                        | readable); never a payload's shape, a call, an argument, an |
+ *  |                                        | error or an id                                              |
+ *  | `writeFakeAgy`                         | the `agy` on PATH whose `--version` install and doctor read |
+ *  |                                        | (journal-install, journal-clients, D413, D414): it answers  |
+ *  |                                        | `--version` with the plan's version and nothing else; every |
+ *  |                                        | other subcommand exits 2 saying it is not stood in for      |
+ *  |                                        | (`agyMcpListPassThrough` hands `mcp list` to the real agy)  |
  *  | `developerTrustsCodexHooks`,           | the developer trusting hooks in Codex's `/hooks`: a trust  |
  *  |   `staleCodexTrustRecord`              | record per hook in Codex's config.toml with the hash Codex |
  *  |                                        | itself reports (`hooks/list`); it computes no hash, trusts |
@@ -229,7 +246,7 @@
  * message), `exit`.
  */
 import { spawn, spawnSync } from 'node:child_process'
-import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { WORKER_AGENT_ID, type LegRef, type LegRegistration } from '../../src/persistence/leg-registry.js'
 import { mintTicket, TICKET_ENV, type TicketFields } from '../../src/ticket.js'
@@ -243,6 +260,7 @@ import { type RunWorld, briefFor, subagentStartHook, liveProcess } from './run-w
 import { type CaptureWorld, runHook, hookJson } from './capture-harness.js'
 import { claudeHooksBlock, hookScriptContent } from '../../src/server/installer.js'
 import { codexHooksBlock } from '../../src/server/codex-hooks.js'
+import { agyHooksBlock } from '../../src/server/agy-hooks.js'
 import { readCodexHooksTrust, type CodexListedHook } from '../../src/server/codex-client.js'
 
 /** The registry and door acts a binding may make only through this
@@ -751,6 +769,29 @@ export function writeFakeGemini(dir: string): void {
   }
 }
 
+/**
+ * An `agy` in `dir` whose `--version` prints the plan's version as agy 1.5.3
+ * prints its own (the bare x.y.z, recorded 2026-11-09), and null a client
+ * whose version cannot be read (it prints nothing with a version and exits
+ * 1). With `realForMcpList`, `mcp list` is handed to the real agy at that
+ * absolute path, so the listing a scenario reads is agy's own; every other
+ * subcommand exits 2 saying it is not stood in for. POSIX only.
+ */
+export function writeFakeAgy(dir: string, version: string | null, realForMcpList?: string): void {
+  // A link to the real agy is replaced, never written through.
+  rmSync(join(dir, 'agy'), { force: true })
+  const q = (t: string): string => `'${t.replace(/'/g, `'\\''`)}'`
+  writeFileSync(join(dir, 'agy'), [
+    '#!/bin/sh',
+    'case "$1" in',
+    version === null ? '  --version) echo "agy: cannot report a version" >&2; exit 1 ;;' : `  --version) echo ${q(version)}; exit 0 ;;`,
+    ...(realForMcpList ? [`  mcp) [ "$2" = "list" ] && exec ${q(realForMcpList)} "$@"; echo "stand-in agy: mcp $2 is not stood in for" >&2; exit 2 ;;`] : []),
+    '  *) echo "stand-in agy: $1 is not stood in for" >&2; exit 2 ;;',
+    'esac',
+    '',
+  ].join('\n'), { mode: 0o755 })
+}
+
 /** What the stand-in `codex` answers: its version, and its sandbox check's result. */
 export interface FakeCodexPlan {
   /** `codex --version` prints `codex-cli <version>`; null prints nothing with a version and exits 1. */
@@ -917,16 +958,47 @@ export const RECORDED_HOOK_EVENTS = join(TS_ROOT, 'tests', 'fixtures', 'claude-c
  *  in order, as it wrote it (tests/fixtures/codex-hooks). */
 export const RECORDED_CODEX_EVENTS = join(TS_ROOT, 'tests', 'fixtures', 'codex-hooks')
 
+/** Antigravity CLI's recorded sets (D417): every hook event a real agy
+ *  fired, in order, wrapped with the event it ran the hook for and its
+ *  transcript's length then (tests/fixtures/agy-hooks/README.md). */
+export const RECORDED_AGY_EVENTS = join(TS_ROOT, 'tests', 'fixtures', 'agy-hooks')
+
 /** The clients whose events are recorded, each with its fixture directory. */
-export type RecordedClient = 'claude-code' | 'codex'
-const RECORDED_DIRS: Readonly<Record<RecordedClient, string>> = { 'claude-code': RECORDED_HOOK_EVENTS, codex: RECORDED_CODEX_EVENTS }
+export type RecordedClient = 'claude-code' | 'codex' | 'agy'
+const RECORDED_DIRS: Readonly<Record<RecordedClient, string>> = { 'claude-code': RECORDED_HOOK_EVENTS, codex: RECORDED_CODEX_EVENTS, agy: RECORDED_AGY_EVENTS }
+
+/** What an agy recording says beside each payload: the event the hook ran
+ *  for, the transcript's length then, and where its transcripts are. */
+interface AgyMeta { event: string; transcriptLines: number | null; dir: string }
+const AGY_META = new WeakMap<object, AgyMeta>()
+/** The event agy ran the hook for, as recorded beside a payload. */
+export function agyEventOf(e: object): string | null { return AGY_META.get(e)?.event ?? null }
+/** The conversation's transcript as recorded, every line, or its first `lines`. */
+export function agyTranscriptOf(e: object, lines?: number): string[] {
+  const m = AGY_META.get(e)
+  if (!m) throw new Error('agyTranscriptOf was handed an event that did not come from an agy recording')
+  const p = e as Record<string, unknown>
+  const all = readFileSync(join(m.dir, 'transcripts', `${String(p['conversationId'])}.jsonl`), 'utf8').split('\n').filter((l) => l !== '')
+  return lines === undefined ? all : all.slice(0, lines)
+}
+/** The transcript's length when the event fired (null: not yet written). */
+export function agyTranscriptLinesOf(e: object): number | null { return AGY_META.get(e)?.transcriptLines ?? null }
 
 /** One recorded session, line by line, each payload exactly as the client
  *  wrote it: Claude Code's by default, Codex CLI's with `'codex'`, each read
  *  from that client's own fixture directory and branded with its client. */
 export function recordedSession(version: string, file: string, client: RecordedClient = 'claude-code'): Array<Record<string, unknown>> {
-  return readFileSync(join(RECORDED_DIRS[client], version, file), 'utf8').split('\n').filter((l) => l.trim() !== '')
-    .map((l) => { const e = JSON.parse(l) as Record<string, unknown>; RECORDED.set(e, client); return e })
+  const dir = join(RECORDED_DIRS[client], version)
+  return readFileSync(join(dir, file), 'utf8').split('\n').filter((l) => l.trim() !== '')
+    .map((l) => {
+      const raw = JSON.parse(l) as Record<string, unknown>
+      if (client !== 'agy') { RECORDED.set(raw, client); return raw }
+      // agy's payloads name no event: the line wraps the payload (README).
+      const e = raw['payload'] as Record<string, unknown>
+      AGY_META.set(e, { event: String(raw['event']), transcriptLines: (raw['transcript_lines'] as number | null) ?? null, dir })
+      RECORDED.set(e, client)
+      return e
+    })
 }
 
 /** The events `recordedSession` returned, by identity (module-private),
@@ -963,6 +1035,13 @@ function matcherSubject(payload: Record<string, unknown>): string | null {
  * event the block does not name has none.
  */
 export function installedCommandsFor(payload: Record<string, unknown>, client: RecordedClient = 'claude-code'): string[] {
+  if (client === 'agy') {
+    // agy's named hook: the event the recording names; PostToolUse's one
+    // group matches every tool (`*`).
+    const event = agyEventOf(payload) ?? ''
+    return ((agyHooksBlock()[event] ?? []) as Array<{ command?: string; hooks?: Array<{ command: string }> }>)
+      .flatMap((h) => h.hooks ? h.hooks.map((x) => x.command) : h.command ? [h.command] : [])
+  }
   const block = client === 'codex' ? codexHooksBlock() : claudeHooksBlock()
   const event = String(payload['hook_event_name'] ?? '')
   const subject = matcherSubject(payload)
@@ -1038,6 +1117,9 @@ export function replayRecordedSession(
     env?: Record<string, string>
     /** A directory for `cwd` other than the world's project (a worktree). */
     cwd?: string
+    /** agy only: `unreadable` points every transcriptPath at a path that
+     *  cannot be read; by default the recorded transcript as it stood. */
+    transcript?: 'recorded' | 'unreadable'
   } = {},
 ): ReplayedEvent[] {
   for (const e of events) {
@@ -1047,7 +1129,23 @@ export function replayRecordedSession(
   const out: ReplayedEvent[] = []
   events.forEach((recorded, line) => {
     if (opts.lines && !opts.lines(line, recorded)) return
-    const payload: Record<string, unknown> = { ...recorded, cwd: opts.cwd ?? w.proj }
+    const client = RECORDED.get(recorded)!
+    const payload: Record<string, unknown> = client === 'agy' ? { ...recorded } : { ...recorded, cwd: opts.cwd ?? w.proj }
+    if (client === 'agy') {
+      // The workspace is the world's project; the transcript, as it stood
+      // when agy fired the event, where transcriptPath points.
+      payload['workspacePaths'] = [opts.cwd ?? w.proj]
+      const dir = join(w.home!, 'agy-transcripts')
+      mkdirSync(dir, { recursive: true })
+      const file = join(dir, `${String(recorded['conversationId'])}.jsonl`)
+      const n = agyTranscriptLinesOf(recorded)
+      if (opts.transcript === 'unreadable') payload['transcriptPath'] = join(dir, 'unreadable', `${String(recorded['conversationId'])}.jsonl`)
+      else {
+        if (n === null) rmSync(file, { force: true })
+        else writeFileSync(file, agyTranscriptOf(recorded, n).map((l) => `${l}\n`).join(''))
+        payload['transcriptPath'] = file
+      }
+    }
     for (const k of ['transcript_path', 'agent_transcript_path']) {
       if (typeof recorded[k] === 'string') payload[k] = join(w.proj!, basename(String(recorded[k])))
     }
@@ -1055,7 +1153,7 @@ export function replayRecordedSession(
     const hooks: string[] = []
     const stdout: string[] = []
     const startedAt = Date.now() / 1000
-    for (const command of installedCommandsFor(payload, RECORDED.get(recorded)!)) {
+    for (const command of installedCommandsFor(client === 'agy' ? recorded : payload, client)) {
       const dispatch = hookDispatchOf(command)
       if (dispatch === null) continue
       const r = spawnSync(process.execPath, nodeTsArgs(CLI_TS, ['hook', dispatch, ...hookArgsOf(command)]), {
@@ -1065,7 +1163,7 @@ export function replayRecordedSession(
       hooks.push(dispatch)
       stdout.push(r.stdout ?? '')
     }
-    out.push({ line, event: String(payload['hook_event_name']), payload, hooks, startedAt, endedAt: Date.now() / 1000, stdout })
+    out.push({ line, event: client === 'agy' ? agyEventOf(recorded)! : String(payload['hook_event_name']), payload, hooks, startedAt, endedAt: Date.now() / 1000, stdout })
   })
   return out
 }
