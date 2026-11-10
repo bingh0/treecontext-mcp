@@ -311,6 +311,7 @@ Feature: Workers — a headless worker on any CLI, through the ticket door
       | the worker inside a sandbox | inside a sandbox on this host that numbers its own processes | on this host, outside the sandbox,                           |
       | the reader inside a sandbox | on this host, outside any sandbox,                           | inside a sandbox on this host that numbers its own processes |
       | the worker registered by an earlier build, the reader inside a sandbox | on this host, outside any sandbox, by a build that recorded no numbering, | inside a sandbox on this host that numbers its own processes |
+      | the worker inside a sandbox that shows the machine's processes as its own | inside a sandbox on this host that numbers its own processes and still shows the machine's list of processes | on this host, outside the sandbox,                           |
     # Found live, 2026-11-09, on Linux: a `treecontext run` inside Codex
     # CLI's sandbox registered its worker with the number the sandbox gave
     # it (13) and the machine's real name; the next `treecontext run` from
@@ -323,6 +324,14 @@ Feature: Workers — a headless worker on any CLI, through the ticket door
     # scenario is Linux's, and on a host that cannot make one (CI runners
     # that restrict unprivileged user namespaces) it shows as skipped or
     # wip, never green.
+    # The fourth row, found by the review of 2026-11-09 and ruled in on
+    # 2026-11-10: a sandbox can number its own processes and still show
+    # the machine's list of them (bwrap without a process list of its
+    # own, `unshare --pid` without `--mount-proc`). The door inside read
+    # the start moment of whatever the machine had under the worker's
+    # sandbox number, an unrelated process, and a reader outside then
+    # retired the running worker as a phantom. A door that cannot read
+    # its worker's start moment in its own numbering records none.
 
   @D403
   Scenario: a reader inside a sandbox says a worker outside it cannot be checked from there
@@ -343,8 +352,8 @@ Feature: Workers — a headless worker on any CLI, through the ticket door
 
   @D403
   Scenario Outline: a worker taken for a phantom while it ran is set right by its door when it <ends>
-    Given a worker under the key "login-form", still running, registered from inside a sandbox on this host by a build that recorded no numbering
-    And a reader on this host, outside the sandbox, has retired it as a phantom
+    Given a worker under the key "login-form", still running, started through the `treecontext run` wrapper of this build
+    And a reader on this host has wrongly taken it for gone and retired it as a phantom
     When the worker <ends>
     Then the worker's registration reads <ending> at the moment it ended, no longer a phantom
     And it still shows when it was taken for a phantom and what took it for one
@@ -358,6 +367,36 @@ Feature: Workers — a headless worker on any CLI, through the ticket door
     # wrote the summary row and then found the registration already ended,
     # so the store held a phantom with a summary row, a leg that both left
     # no trace and returned. The door saw the end; the pass guessed it.
+    # Ruled 2026-11-10: the promise is this build's door's. A door of an
+    # earlier build never corrects (run for real against the beta.3.1
+    # and beta.4 doors, 2026-11-09), so a worker one of them started and
+    # a reader took for gone, possible only while a sandboxed worker runs
+    # across the upgrade, can stay a phantom beside its summary row. No
+    # reader infers an ending from that row (D297).
+
+  @D403 @D291
+  Scenario: a worker taken for a phantom while it ran and then sent back reads live through its re-run
+    Given a worker under the key "login-form", still running, started through the `treecontext run` wrapper of this build, that will exit without its checkpoint
+    And a reader on this host has wrongly taken it for gone and retired it as a phantom
+    When the worker exits and its door sends it back
+    Then while the re-run runs, the worker's registration reads live
+    And it still shows when it was taken for a phantom and what took it for one
+    # Found by the review of 2026-11-09 and ruled in on 2026-11-10: the
+    # send-back wrote its row and started the re-run while the
+    # registration went on reading phantom, so a lookup called a running
+    # worker gone until its final exit.
+
+  @D403 @D342
+  Scenario: a worker with a damaged ticket taken for a phantom while it ran is set right when its one row lands
+    Given a worker whose ticket the door of this build could not read whole, still running
+    And a reader on this host has wrongly taken it for gone and retired it as a phantom
+    When the worker's one row lands
+    Then the store records the leg as having ended with no valid instructions at the moment the row landed, no longer a phantom
+    And it still shows when it was taken for a phantom and what took it for one
+    # Ruled in on 2026-11-10: D403 names invalid among the endings a
+    # phantom is set right to, and the outline above reaches only retired
+    # and cut. An invalid ending is the worker's own row landing, not its
+    # exit, so the correction comes at that row's moment.
 
   @D342 @D303
   Scenario Outline: a worker whose ticket is <damage> is registered with what was read, told its instructions were invalid, and ends visibly through the <door>

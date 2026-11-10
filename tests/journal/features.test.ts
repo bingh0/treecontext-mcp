@@ -297,6 +297,8 @@ runFeatures(join(HERE, '../../features'), {
         "a reader inside a sandbox says a worker outside it cannot be checked from there",
         "a worker whose sandbox has ended is retired as a phantom by a reader that can see the sandbox is gone",
         "a worker taken for a phantom while it ran is set right by its door when it <ends>",
+        "a worker taken for a phantom while it ran and then sent back reads live through its re-run",
+        "a worker with a damaged ticket taken for a phantom while it ran is set right when its one row lands",
         // Unit 10: unit 10 (D406-D412, Codex CLI 0.167.0 captured through its own hooks, doctor reading Codex's trust, the experimental capture flag removed).
         "a `codex exec` worker with Codex's hooks is never registered as a self, its hooks print it nothing, and what it does lands in its own lane",
         "the first-moment row is the first row of the worker's lane through the <door>",
