@@ -55,6 +55,14 @@
  *  |                                        | changing the file system between install's two reads        |
  *  |                                        | (codex-install-shapes, a put-back that fails), never an act |
  *  |                                        | of Codex's own                                              |
+ *  | `writeCodexVersionLine`                | the `codex` on PATH where the host's Codex has moved past   |
+ *  |                                        | the version a Given names (no client is pinned; Codex ships |
+ *  |                                        | weekly): it answers `--version` with the Given's line and   |
+ *  |                                        | hands every other invocation, arguments untouched, to the   |
+ *  |                                        | real Codex, so its account of its hooks, its configuration  |
+ *  |                                        | and its sandbox check stay Codex's own. It stands in for    |
+ *  |                                        | the version line alone, and must never be given a version   |
+ *  |                                        | NEWER than the real Codex (the harness refuses that)        |
  *  | `writeCodexPassThrough`                | nothing: a `codex` on PATH that hands `--version` and       |
  *  |                                        | `app-server` to the real Codex further along PATH, so the   |
  *  |                                        | answers are Codex's own, and refuses everything else (exit  |
@@ -848,6 +856,27 @@ export function writeFakeCodex(dir: string, plan: FakeCodexPlan): void {
     ...appServerCase(dir, plan.hooksList, plan.lockBefore),
     '  *) echo "stand-in codex: $1 is not stood in for" >&2; exit 2 ;;',
     'esac',
+    '',
+  ].join('\n'), { mode: 0o755 })
+}
+
+/**
+ * A `codex` in `dir` whose `--version` prints `codex-cli <version>` and
+ * whose every other invocation is the real Codex at `real` (an absolute
+ * path), arguments untouched: the version line alone is stood in for, for
+ * a host whose Codex has moved past the version a Given names.
+ */
+export function writeCodexVersionLine(dir: string, version: string, real: string): void {
+  if (process.platform === 'win32') {
+    // npm's Codex is a .cmd on Windows, so it is called, not started.
+    writeFileSync(join(dir, 'codex.cmd'), `@echo off\r\nif "%~1"=="--version" (\r\necho codex-cli ${version}\r\nexit /b 0\r\n)\r\ncall "${real}" %*\r\nexit /b %ERRORLEVEL%\r\n`)
+    return
+  }
+  const q = (t: string): string => `'${t.replace(/'/g, `'\\''`)}'`
+  writeFileSync(join(dir, 'codex'), [
+    '#!/bin/sh',
+    `[ "$1" = "--version" ] && { echo ${q(`codex-cli ${version}`)}; exit 0; }`,
+    `exec ${q(real)} "$@"`,
     '',
   ].join('\n'), { mode: 0o755 })
 }

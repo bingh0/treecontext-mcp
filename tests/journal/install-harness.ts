@@ -12,7 +12,7 @@ import { markClaudeCodeInstalled } from '../helpers/home.js'
 export { markClaudeCodeInstalled }
 import type { World } from './world.js'
 import { TS_ROOT } from './proc.js'
-import { writeFakeClaude, writeFakeCodex, writeFakeGemini, writeFakeAgy, type FakeCodexPlan } from './standins.js'
+import { writeFakeClaude, writeFakeCodex, writeFakeGemini, writeFakeAgy, writeCodexVersionLine, type FakeCodexPlan } from './standins.js'
 
 // ── Install-wave harness: the real CLI, a redirected HOME, and the ─────
 //    other side of every boundary it claims to cross.
@@ -278,6 +278,41 @@ export function setFakeCodex(w: InstallWorld, plan: FakeCodexPlan): void {
     w.defer(() => rmSync(w.iCodexBin!, { recursive: true, force: true }))
   }
   writeFakeCodex(w.iCodexBin, plan)
+}
+
+/** `a.b.c` against `a.b.c`, by number: negative when `a` is the older. */
+function compareVersions(a: string, b: string): number {
+  const pa = a.split('.').map(Number), pb = b.split('.').map(Number)
+  for (let i = 0; i < 3; i++) if ((pa[i] ?? 0) !== (pb[i] ?? 0)) return (pa[i] ?? 0) - (pb[i] ?? 0)
+  return 0
+}
+
+/**
+ * The Codex on the world's PATH reading the version a Given names. The real
+ * Codex where its own `--version` says that version; where the host's Codex
+ * has moved on (no client is pinned, and Codex ships weekly), a stand-in for
+ * the version line alone, everything else handed to the real Codex, so its
+ * account of its hooks and configuration is still Codex's own. A host whose
+ * Codex is OLDER than the Given's fails loudly: an older Codex cannot answer
+ * for a newer one. Returns what the real Codex says its version is.
+ */
+export function codexReading(w: InstallWorld, version: string): string {
+  const real = process.platform === 'win32' ? resolveOnPath('codex') : resolveOnPosixPath('codex')
+  if (real === null) throw new Error('Codex CLI (`codex`) is not on PATH — the scenarios that ask Codex itself cannot be verified without it.')
+  const win = process.platform === 'win32'
+  const said = spawnSync(win ? `"${real}"` : real, ['--version'], { encoding: 'utf8', shell: win, timeout: 60_000 }).stdout.trim()
+  const m = /^codex-cli (\d+\.\d+\.\d+)/.exec(said)
+  if (!m) throw new Error(`the Codex on PATH (${real}) printed no version line: ${JSON.stringify(said)}`)
+  const has = m[1]!
+  if (compareVersions(has, version) < 0) throw new Error(`the Codex on PATH is ${has}, older than the ${version} the Given names: upgrade Codex CLI`)
+  if (has !== version) {
+    if (!w.iCodexBin) {
+      w.iCodexBin = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-codex-line-')))
+      w.defer(() => rmSync(w.iCodexBin!, { recursive: true, force: true }))
+    }
+    writeCodexVersionLine(w.iCodexBin, version, real)
+  }
+  return has
 }
 
 /**

@@ -14,14 +14,13 @@ import { agyHooksPath, getAgent, getHookSettingsPath } from '../../../src/server
 import { decodeContent } from '../../../src/persistence/content-codec.js'
 import { TS_ROOT } from '../proc.js'
 import { writeFakeAgy } from '../standins.js'
-import { type InstallWorld, tcCli, openInstallWorld, realAgy, agentConfigPath, mcpLauncherIn, setFakeCodex, pathWithoutCodex, putAgyOnPath, agyMcpList, layEarlierGeminiInstall } from '../install-harness.js'
+import { type InstallWorld, codexReading, tcCli, openInstallWorld, realAgy, agentConfigPath, mcpLauncherIn, setFakeCodex, pathWithoutCodex, putAgyOnPath, agyMcpList, layEarlierGeminiInstall } from '../install-harness.js'
 import { CODEX_APPROVALS_FLOOR } from '../../../src/server/codex-client.js'
 import { failedRunLine } from '../../../src/first-moment.js'
 import { developerTrustsCodexHooks } from '../standins.js'
 import { upsertCodexHooks } from '../../helpers/earlier-build-writers.js'
 import { codexHooksBlock } from '../../../src/server/codex-hooks.js'
 import { type CodexListedHook } from '../../../src/server/codex-client.js'
-import { spawnSync } from 'node:child_process'
 import { documentedCommands, runLineRefusal } from '../../helpers/readme-commands.js'
 import { parse as parseToml, stringify as stringifyToml } from 'smol-toml'
 
@@ -1495,7 +1494,9 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
   reg.define(new RegExp(`^Codex CLI is installed and (${stateRe})$`), async (w: TrustWorld, state: unknown) => {
     w.clientName = 'Codex CLI'
     await openInstallWorld(w, ['.claude', '.codex'])
-    if (!w.iCodexBin) expect(spawnSync('codex', ['--version'], { encoding: 'utf8' }).stdout.trim()).toBe('codex-cli 0.167.0')
+    // The host's Codex at the floor or newer (no client is pinned); a newer
+    // one reads the floor's version line through the harness's stand-in.
+    if (!w.iCodexBin) codexReading(w, '0.167.0')
     await STATES[String(state)]!(w)
     w.cxFilesBefore = codexFiles(w)
   })

@@ -17,7 +17,7 @@ import { openNodeSqlite } from '../../../src/persistence/node-sqlite.js'
 import { FlatStore } from '../../../src/flat-store.js'
 import { LeaseClient, DRAIN_LEASE_TTL_SECS } from '../../../src/persistence/leases.js'
 import { MAX_INGEST_ATTEMPTS } from '../../../src/persistence/capture-constants.js'
-import { type InstallWorld, type CliRun, pathWithFakeClaude, setClaudeVersion, tcCli, agentCli, codexCli, codexConfigRead, setFakeCodex, openInstallWorld, treeOf, pathsMentioned, installedCommands, interpreterRunsPackage, isBatchBody, toPosix, mcpLauncherIn, agentConfigPath, fakeGlobalInstall, clientEntry, putAgyOnPath, agyReading, realAgy, putGeminiOnPath, markGeminiCliInstalled, layEarlierGeminiInstall, GEMINI_WRAPPER_STEMS, agyMcpList, type ClientEntry } from '../install-harness.js'
+import { type InstallWorld, type CliRun, codexReading, pathWithFakeClaude, setClaudeVersion, tcCli, agentCli, codexCli, codexConfigRead, setFakeCodex, openInstallWorld, treeOf, pathsMentioned, installedCommands, interpreterRunsPackage, isBatchBody, toPosix, mcpLauncherIn, agentConfigPath, fakeGlobalInstall, clientEntry, putAgyOnPath, agyReading, realAgy, putGeminiOnPath, markGeminiCliInstalled, layEarlierGeminiInstall, GEMINI_WRAPPER_STEMS, agyMcpList, type ClientEntry } from '../install-harness.js'
 import { CODEX_APPROVALS_FLOOR } from '../../../src/server/codex-client.js'
 import { startEntryAsClient, developerTrustsCodexHooks, codexHooksSeen, recordedSession, replayRecordedSession, writeFakeAgy } from '../standins.js'
 import { agyHooksBlock, commandsIn, AGY_HOOK_NAME, AGY_CAPTURE_FLOOR } from '../../../src/server/agy-hooks.js'
@@ -2454,9 +2454,11 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
     return JSON.stringify(((toml['hooks'] as Record<string, unknown> | undefined)?.['state']) ?? {})
   }
   const DEV_STOP = { hooks: [{ type: 'command', command: 'notify-send "codex turn ended"' }] }
+  // No client is pinned: the host's Codex is the Given's version or a newer
+  // one, and where it is newer the world's PATH carries a stand-in for the
+  // version line alone (install-harness codexReading), the rest Codex's own.
   const realCodexAt = (w: InstallWorld, version: string): void => {
-    const v = codexCli(w, ['--version'])
-    expect(v.stdout.trim(), 'the Codex on PATH is not the version the Given names').toBe(`codex-cli ${version}`)
+    codexReading(w, version)
   }
   const devTrusted = async (w: CodexWorld): Promise<void> => {
     const trusted = await developerTrustsCodexHooks(w.ihome!, w.iproj ?? w.ihome!, (h) => h.command === DEV_STOP.hooks[0]!.command)
