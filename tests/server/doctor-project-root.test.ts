@@ -13,7 +13,8 @@
  */
 import { describe, it, expect } from 'vitest'
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { sandboxedSpawnEnv, spawnCli } from '../helpers/cli-spawn.js'
@@ -68,6 +69,37 @@ describe('doctor names an earlier binding to a stub .git\'s directory (D419; rev
       rmSync(base, { recursive: true, force: true })
     }
   }, 120_000)
+
+  // A binding minted while the realpath ladder was degraded is keyed by the
+  // spelling the directory was reached by (docs/project-identity.md §3.5),
+  // here a symlinked ancestor. A child process's cwd is always the
+  // physical path, so this case reads the report through the library with
+  // the lexical directory, as a hook's payload cwd carries it; the binding
+  // is written in the file's own format under that spelling, which the
+  // resolver itself no longer mints.
+  it.skipIf(process.platform === 'win32')('finds an earlier binding keyed by another spelling of the stub\'s directory, through a symlink (F4)', async () => {
+    const base = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-doctor-root-')))
+    const prior = process.env['TREECONTEXT_BINDINGS_FILE']
+    try {
+      const realHolder = join(base, 'real-holder')
+      mkdirSync(join(realHolder, '.git'), { recursive: true })
+      mkdirSync(join(realHolder, 'project'))
+      const link = join(base, 'link-holder')
+      symlinkSync(realHolder, link)
+      const file = join(base, 'bindings.json')
+      const fp = createHash('sha256').update(`path:${link}`).digest('hex').slice(0, 16)
+      writeFileSync(file, JSON.stringify({ version: 1, projects: { [fp]: { store: 'holder-legacy', updatedAt: Date.now(), source: 'path' } } }))
+      process.env['TREECONTEXT_BINDINGS_FILE'] = file
+      const { projectRootReport } = await import('../../src/server/bindings.js')
+      const report = projectRootReport(join(link, 'project'))
+      expect(report.passedOver).toEqual([join(realHolder, '.git')])
+      expect(report.priorBindings).toEqual([{ dir: realHolder, store: 'holder-legacy' }])
+    } finally {
+      if (prior === undefined) delete process.env['TREECONTEXT_BINDINGS_FILE']
+      else process.env['TREECONTEXT_BINDINGS_FILE'] = prior
+      rmSync(base, { recursive: true, force: true })
+    }
+  })
 
   it('says nothing of an earlier binding where none was made', () => {
     const base = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-doctor-root-')))

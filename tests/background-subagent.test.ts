@@ -202,41 +202,126 @@ describe('a background subagent beside its orchestrator (F1, D240)', () => {
     } finally { await done(w) }
   }, 120_000)
 
+  // ── D241 with D420: one live bookmark per session per lane, whichever
+  // echo drains first (review F1 of c3c81aa, F2 of c88424d). Each insert
+  // goes through the real tool; its PostToolUse echo is staged by the real
+  // hook in the order the case names, then the production drain runs.
+  // A bookmark settles D241 in its lane when its own echo makes its stamp
+  // exact, never in favour of one whose stamp is not exact yet.
+  type Call = { who: { id: string; type: string } | null; input: Record<string, unknown>; res: unknown; id: string; reply: Record<string, unknown> }
+  async function call(w: W, who: Call['who'], content: string, supersedes?: string[]): Promise<Call> {
+    const input = { content, metadata: { kind: 'bookmark' }, ...(supersedes ? { supersedes } : {}) }
+    const res = await w.client!.callTool({ name: 'treecontext_insert', arguments: input })
+    const reply = parseTool(res)
+    return { who, input, res: (res as { content: unknown }).content, id: reply['node_id'] as string, reply }
+  }
+  function stageEcho(w: W, c: Call): void {
+    runHook(w, 'post-tool-use', {
+      transcript_path: join(w.proj!, 'transcript.jsonl'), hook_event_name: 'PostToolUse', permission_mode: 'default',
+      tool_name: 'mcp__treecontext__treecontext_insert', tool_input: c.input, tool_response: c.res,
+      ...(c.who ? { agent_id: c.who.id, agent_type: c.who.type } : {}),
+    })
+  }
+  /** The live bookmarks of the session, by the lane every reader reads
+   *  (status with every lane listed). */
+  async function liveBookmarksByLane(w: W): Promise<Record<string, string[]>> {
+    const st = parseTool(await w.client!.callTool({ name: 'treecontext_status', arguments: { scope: 'all' } }))
+    const out: Record<string, string[]> = {}
+    for (const p of (st['resume_pointers'] as Array<{ node_id: string; kind: string; lane: string }> | undefined) ?? []) {
+      if (p.kind !== 'bookmark') continue
+      ;(out[p.lane] ??= []).push(p.node_id)
+    }
+    return out
+  }
+
   it.each([
-    ['naming A in supersedes', true],
-    ['naming nothing, its retirement of A held', false],
-  ])('a held bookmark (%s) whose echo drains after a newer bookmark of its lane landed ends retired, pointing at the newer one, and touches neither (D241, D420; review F1)', async (_how, named) => {
+    ['B\'s echo drains first', 'B-first'],
+    ['C\'s echo drains first', 'C-first'],
+  ])('a held bookmark B and the orchestrator\'s later bookmark C leave C the one live bookmark of main\'s lane when %s (D241, D420)', async (_how, order) => {
     const w = mkWorld()
     try {
       await openWorld(w); sessionStart(w); await client(w)
-      const a = (await insert(w, null, 'bookmark: A, the form half wired', { kind: 'bookmark' }))['node_id'] as string
+      const a = await call(w, null, 'bookmark: A, the form half wired')
+      stageEcho(w, a)
       await drainStaging(w)
-      subagentStart(w, 'agent-f1', 'tester')
-      // B: the orchestrator, silent since the tester started, so stamped
-      // provisionally as the tester's; its supersession of A is held. Its
-      // echo is staged at once but not yet drained.
-      const br = await insert(w, null, 'bookmark: B, the form wired', { kind: 'bookmark' }, named ? [a] : undefined)
-      expect(br).toMatchObject({ writer: 'tester', writer_src: 'provisional' })
-      expect((br['supersession_pending'] as Array<{ node_id: string }>).map((p) => p.node_id)).toEqual([a])
-      const b = br['node_id'] as string
-      // C: B's staged echo shows the orchestrator active, so C is stamped
-      // the orchestrator's (concurrent) and retires A at once.
-      const cr = await insert(w, null, 'bookmark: C, the form tested', { kind: 'bookmark' })
-      expect(cr).toMatchObject({ writer: 'main', writer_src: 'concurrent' })
-      const c = cr['node_id'] as string
-      expect(meta(w, a)['superseded_by']).toBe(c)
+      subagentStart(w, 'agent-abc', 'tester')
+      // B: the orchestrator, silent since the tester started: provisional,
+      // its supersession of A held.
+      const b = await call(w, null, 'bookmark: B, the form wired', [a.id])
+      expect(b.reply).toMatchObject({ writer: 'tester', writer_src: 'provisional' })
+      // The orchestrator's own Agent call returns: it is active beside the
+      // tester, so C is stamped the orchestrator's (concurrent) and retires A.
+      backgroundSpawnReturns(w, 'tester')
+      const c = await call(w, null, 'bookmark: C, the form tested')
+      expect(c.reply).toMatchObject({ writer: 'main', writer_src: 'concurrent' })
+      expect(meta(w, a.id)['superseded_by']).toBe(c.id)
+      for (const x of order === 'B-first' ? [b, c] : [c, b]) stageEcho(w, x)
       await drainStaging(w)
-      // One live bookmark in main's lane: C. B ended retired, pointing at C.
-      const live = rawAll<{ node_id: string }>(w,
-        "SELECT node_id FROM nodes WHERE json_extract(metadata_json, '$.kind') = 'bookmark' AND json_extract(metadata_json, '$.next_session') = 1")
-      expect(live.map((r) => r.node_id)).toEqual([c])
-      expect(meta(w, b)).toMatchObject({ _writer: 'main', _writer_src: 'echo', superseded_by: c, _superseded_prior: { next_session: true }, _writer_heal_superseded_by_newer: c })
-      expect(meta(w, b)['next_session']).toBeUndefined()
-      // C, the newer one, untouched by B's heal; A keeps the retirement C made.
-      expect(meta(w, c)['next_session']).toBe(true)
-      expect(meta(w, c)['superseded_by']).toBeUndefined()
-      expect(meta(w, a)['superseded_by']).toBe(c)
-      expect((await defaultStatus(w)).ids.filter((id) => [a, b, c].includes(id))).toEqual([c])
+      expect(await liveBookmarksByLane(w)).toEqual({ main: [c.id] })
+      expect(meta(w, b.id)).toMatchObject({ _writer: 'main', _writer_src: 'echo', superseded_by: c.id, _superseded_prior: { next_session: true } })
+      expect(meta(w, c.id)).toMatchObject({ _writer: 'main', _writer_src: 'echo', next_session: true })
+      expect(meta(w, c.id)['superseded_by']).toBeUndefined()
+      // A keeps the retirement C made; nothing re-retired it.
+      expect(meta(w, a.id)['superseded_by']).toBe(c.id)
+    } finally { await done(w) }
+  }, 120_000)
+
+  it('a subagent\'s bookmark stamped the orchestrator\'s own (no subagent registered) gives back main\'s bookmark it retired when its echo moves it out (D240, D241)', async () => {
+    const w = mkWorld()
+    try {
+      await openWorld(w); sessionStart(w); await client(w)
+      const a = await call(w, null, 'bookmark: A, the form half wired')
+      stageEcho(w, a)
+      await drainStaging(w)
+      // An install predating the subagent hooks: no SubagentStart, so the
+      // tester's call is stamped the session's own (self, exact at insert)
+      // and retires A in main's lane.
+      const tester = { id: 'agent-u', type: 'tester' }
+      const t = await call(w, tester, 'bookmark: T, the tester at case 3')
+      expect(t.reply).toMatchObject({ writer: 'main', writer_src: 'self' })
+      expect(meta(w, a.id)['superseded_by']).toBe(t.id)
+      stageEcho(w, t)
+      await drainStaging(w)
+      // T's echo moves it to the tester; A, main's only bookmark, is live
+      // again: T itself is never the newer bookmark A stays retired for.
+      expect(await liveBookmarksByLane(w)).toEqual({ main: [a.id], tester: [t.id] })
+      expect(meta(w, a.id)['superseded_by']).toBeUndefined()
+      expect(meta(w, t.id)).toMatchObject({ _writer: 'tester', _writer_src: 'echo', _writer_heal_reverted: [a.id] })
+    } finally { await done(w) }
+  }, 120_000)
+
+  it.each([
+    ['B\'s echo drains first', 'B-first'],
+    ['T\'s echo drains first', 'T-first'],
+  ])('the orchestrator\'s held bookmark B is never retired in favour of the tester\'s bookmark T stamped as the orchestrator\'s, when %s (D241, D420, D169)', async (_how, order) => {
+    const w = mkWorld()
+    try {
+      await openWorld(w); sessionStart(w); await client(w)
+      const a = await call(w, null, 'bookmark: A, the form half wired')
+      stageEcho(w, a)
+      await drainStaging(w)
+      const tester = { id: 'agent-t', type: 'tester' }
+      subagentStart(w, tester.id, tester.type)
+      const b = await call(w, null, 'bookmark: B, the form wired')
+      expect(b.reply).toMatchObject({ writer: 'tester', writer_src: 'provisional' })
+      backgroundSpawnReturns(w, 'tester')
+      // T: the tester's own bookmark, read at insert as the orchestrator's
+      // (concurrent); under that wrong stamp it retires A.
+      const t = await call(w, tester, 'bookmark: T, the tester at case 3')
+      expect(t.reply).toMatchObject({ writer: 'main', writer_src: 'concurrent' })
+      expect(meta(w, a.id)['superseded_by']).toBe(t.id)
+      for (const x of order === 'B-first' ? [b, t] : [t, b]) stageEcho(w, x)
+      await drainStaging(w)
+      // Main's lane keeps exactly one live bookmark, B; the tester's, T.
+      expect(await liveBookmarksByLane(w)).toEqual({ main: [b.id], tester: [t.id] })
+      expect(meta(w, b.id)).toMatchObject({ _writer: 'main', _writer_src: 'echo', next_session: true })
+      expect(meta(w, b.id)['superseded_by']).toBeUndefined()
+      expect(meta(w, t.id)).toMatchObject({ _writer: 'tester', _writer_src: 'echo', next_session: true })
+      // What T's wrong stamp did in main's lane is undone: A no longer
+      // points at T; with B live and newer, A stays retired, pointing at B.
+      expect(meta(w, a.id)['superseded_by']).toBe(b.id)
+      expect(meta(w, a.id)['next_session']).toBeUndefined()
+      expect((await defaultStatus(w)).ids.filter((id) => [a.id, b.id, t.id].includes(id))).toEqual([b.id])
     } finally { await done(w) }
   }, 120_000)
 

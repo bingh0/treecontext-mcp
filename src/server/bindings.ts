@@ -168,9 +168,18 @@ export function projectRootReport(cwd: string): {
   const { projects } = readBindingsFile().bindings
   const boundStore = projects[fingerprint(identity)]?.store ?? null
   const priorBindings: Array<{ dir: string; store: string }> = []
+  // The spellings a binding of a stub's directory may be keyed under: its
+  // real path, and every rung of the realpath ladder (§3.5) of each spelling
+  // `cwd` reached it by, a symlinked ancestor's among them.
+  const lexical: string[] = []
+  for (let cur = resolvePath(cwd); ; cur = dirname(cur)) {
+    lexical.push(cur)
+    if (dirname(cur) === cur) break
+  }
   for (const entry of passedOver) {
     const dir = dirname(entry)
-    const store = [realpathOr(dir), ...pathSpellingVariants(dir)]
+    const spellings = lexical.filter((l) => samePath(realpathOr(l), dir))
+    const store = [realpathOr(dir), ...pathSpellingVariants(dir), ...spellings.flatMap((l) => pathSpellingVariants(l))]
       .map((p) => projects[fingerprint(`path:${p}`)]?.store)
       .find((s): s is string => typeof s === 'string')
     if (store !== undefined && store !== boundStore) priorBindings.push({ dir, store })

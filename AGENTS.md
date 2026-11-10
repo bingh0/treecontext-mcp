@@ -465,9 +465,12 @@ node dist/server/cli.js doctor      # after a build
   deletes both keys; a row whose echo never drains keeps them, and status
   lists it under `pending_supersessions` (D420), in the lane of the
   entry, of its session's placement or of a target, another checkout's
-  row named by its lane alone. Step 5: a bookmark the heal lands in a lane
-  beside a newer live one of its session ends retired, pointing at it
-  (D241). `concurrent` still applies at once. Never fill the pending
+  row named by its lane alone. Step 5: when its echo settles a live
+  bookmark's stamp it applies D241 in its lane against the session's live
+  bookmarks whose stamps are exact (retiring earlier ones, or retired by a
+  newer one); a bookmark whose stamp is not exact yet is never acted for or
+  against, so the result does not depend on which echo drains first.
+  `concurrent` still applies at once. Never fill the pending
   targets from the insert-time stamp's lane
 - A curated dedup hit arms the insert's pointer tags on the survivor only
   in the survivor's own lane (`laneOfRow`), and its echo heals the survivor

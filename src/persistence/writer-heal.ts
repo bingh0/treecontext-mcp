@@ -32,8 +32,13 @@
  *     lane's targets retired, its lane's earlier live bookmark of the
  *     session retired, a truly foreign target recorded as referenced.
  * A restored bookmark never makes two live in one session's lane (D241):
- * when a newer one is live there, the restored one stays retired, pointing
- * at it. Only a creating call of the same session heals; a deduplicated
+ * when a newer one whose stamp is exact is live there, the restored one
+ * stays retired, pointing at it, never at the row being healed.
+ *  5. D241 at settle: when its echo settles a live bookmark's stamp, it
+ *     retires its lane's earlier live bookmarks of the session whose stamps
+ *     are exact, or is retired by a newer exact one. A stamp not exact yet
+ *     is never acted for or against: it settles at its own echo, so the
+ *     outcome is the same whichever echo drains first. Only a creating call of the same session heals; a deduplicated
  * call names a row someone else wrote. A second heal of the same echo
  * finds the lane unchanged and changes nothing.
  */
@@ -172,27 +177,51 @@ export function retireMeta(meta: Record<string, unknown>, by: string, now: numbe
   return meta
 }
 
-/** The newest live bookmark of `meta`'s session in `lane`, newer than
- *  `after`, other than `self`. */
-function newerLiveBookmark(db: Database, treeId: number, meta: Record<string, unknown>, after: number, self: string, lane: string, laneOf: LaneOf): string | null {
-  const session = sessionOf(meta)
-  if (session === NO_SESSION) return null
+/** The writer stamps that are not exact yet (D240): each waits for its
+ *  call's echo, which may move the row to another lane. */
+const NOT_EXACT_SRC: ReadonlySet<string> = new Set(['provisional', 'concurrent', 'ambiguous'])
+/** Whether a row's lane is settled: its writer stamp is not one an echo
+ *  may still move (D420). A bookmark is retired in favour of another only
+ *  when that other's lane is settled, so the outcome never depends on which
+ *  echo drains first: the later-settling side finishes the job. */
+const isExactStamp = (m: Record<string, unknown> | null): boolean => !NOT_EXACT_SRC.has(String(m?.['_writer_src'] ?? ''))
+
+/** The live bookmarks of `meta`'s session (its /clear chain, D216) in
+ *  `lane` whose stamps are exact, other than those in `exclude`, newest
+ *  first, with their moments. */
+function exactLiveBookmarks(db: Database, treeId: number, meta: Record<string, unknown>, lane: string, exclude: string[], laneOf: LaneOf): Array<{ id: string; createdAt: number; readOnly: boolean; meta: Record<string, unknown> }> {
+  const chain = sessionChainOf(db, meta)
   const rows = db.prepare(
-    `SELECT node_id, metadata_json FROM nodes WHERE tree_id = ? AND session_key = ? AND node_id != ? AND created_at > ?
+    `SELECT node_id, created_at, read_only, metadata_json FROM nodes WHERE tree_id = ? AND session_key IN (${chain.map(() => '?').join(',')})
         AND json_extract(metadata_json, '$.kind') = '${BOOKMARK}' AND json_extract(metadata_json, '$.next_session') = 1
       ORDER BY created_at DESC, rowid DESC`,
-  ).all(treeId, session, self, after) as Array<{ node_id: string; metadata_json: string | null }>
-  return rows.find((r) => laneOf(parse(r.metadata_json)) === lane)?.node_id ?? null
+  ).all(treeId, ...chain) as Array<{ node_id: string; created_at: number; read_only: number; metadata_json: string | null }>
+  const out: Array<{ id: string; createdAt: number; readOnly: boolean; meta: Record<string, unknown> }> = []
+  for (const r of rows) {
+    if (exclude.includes(r.node_id)) continue
+    const m = parse(r.metadata_json)
+    if (!m || !isExactStamp(m) || laneOf(m) !== lane) continue
+    out.push({ id: r.node_id, createdAt: r.created_at, readOnly: r.read_only !== 0, meta: m })
+  }
+  return out
+}
+
+/** The newest live bookmark of `meta`'s session in `lane`, newer than
+ *  `after`, whose stamp is exact, other than those in `exclude`. */
+function newerLiveBookmark(db: Database, treeId: number, meta: Record<string, unknown>, after: number, exclude: string[], lane: string, laneOf: LaneOf): string | null {
+  if (sessionOf(meta) === NO_SESSION) return null
+  return exactLiveBookmarks(db, treeId, meta, lane, exclude, laneOf).find((b) => b.createdAt > after)?.id ?? null
 }
 
 /**
  * Undo the retirement `meta` carries, in place. Back to the earlier
  * retirement it carried before, when there was one (its history kept);
  * else back to its flags — except a bookmark whose lane already has a
- * newer live bookmark of its session, which stays retired, pointing at
- * that one (D241).
+ * newer live bookmark of its session with an exact stamp, which stays
+ * retired, pointing at that one (D241); `healing` is the row whose heal is
+ * undoing this, never a reason to stay retired.
  */
-function unretire(db: Database, treeId: number, id: string, createdAt: number, meta: Record<string, unknown>, now: number, laneOf: LaneOf): void {
+function unretire(db: Database, treeId: number, id: string, createdAt: number, meta: Record<string, unknown>, now: number, laneOf: LaneOf, healing: string): void {
   const prior = (meta['_superseded_prior'] ?? { next_session: true }) as Record<string, unknown>
   // D378: a retirement across the pre-stamp boundary undone takes its
   // record with it, so a live chapter never carries one.
@@ -208,7 +237,7 @@ function unretire(db: Database, treeId: number, id: string, createdAt: number, m
     return
   }
   if (prior['next_session'] === true && meta['kind'] === BOOKMARK) {
-    const newer = newerLiveBookmark(db, treeId, meta, createdAt, id, laneOf(meta), laneOf)
+    const newer = newerLiveBookmark(db, treeId, meta, createdAt, [id, healing], laneOf(meta), laneOf)
     if (newer) {
       meta['superseded_by'] = newer
       meta['superseded_at'] = now
@@ -288,7 +317,7 @@ export function healWriterFromEcho(db: Database, opts: {
       for (const t of targets) {
         const tm = parse(t.metadata_json)
         if (!tm || laneOf(tm) === newLane) continue
-        unretire(db, row.tree_id, t.node_id, t.created_at, tm, now, laneOf)
+        unretire(db, row.tree_id, t.node_id, t.created_at, tm, now, laneOf, opts.nodeId)
         upd.run(JSON.stringify(tm), now, t.node_id)
         reverted.push(t.node_id)
       }
@@ -315,7 +344,7 @@ export function healWriterFromEcho(db: Database, opts: {
         const r = sel.get(by, row.tree_id) as { metadata_json: string | null } | undefined
         const rm = r ? parse(r.metadata_json) : null
         if (rm && laneOf(rm) !== newLane) {
-          unretire(db, row.tree_id, opts.nodeId, row.created_at, next, now, laneOf)
+          unretire(db, row.tree_id, opts.nodeId, row.created_at, next, now, laneOf, opts.nodeId)
           rm['refs'] = [...new Set([...refsOf(rm), opts.nodeId])]
           upd.run(JSON.stringify(rm), now, by)
           next['_writer_heal_unretired'] = by
@@ -367,20 +396,7 @@ export function healWriterFromEcho(db: Database, opts: {
         upd.run(JSON.stringify(retireMeta(tm, opts.nodeId, now)), now, id)
         applied.push(id)
       }
-      if (heldBookmarks && next['kind'] === BOOKMARK && next['next_session'] === true) {
-        const chain = sessionChainOf(db, next)
-        const prior = db.prepare(
-          `SELECT node_id, read_only, metadata_json FROM nodes WHERE tree_id = ? AND session_key IN (${chain.map(() => '?').join(',')})
-             AND node_id != ? AND created_at <= ?
-             AND json_extract(metadata_json, '$.kind') = '${BOOKMARK}' AND json_extract(metadata_json, '$.next_session') = 1`,
-        ).all(row.tree_id, ...chain, opts.nodeId, row.created_at) as Array<{ node_id: string; read_only: number; metadata_json: string | null }>
-        for (const p of prior) {
-          const pm = parse(p.metadata_json)
-          if (!pm || p.read_only || laneOf(pm) !== newLane || applied.includes(p.node_id)) continue
-          upd.run(JSON.stringify(retireMeta(pm, opts.nodeId, now)), now, p.node_id)
-          applied.push(p.node_id)
-        }
-      }
+      // A held bookmark's own retirement of its lane's earlier one is step 5's.
       delete next['_supersedes_pending']
       delete next['_bookmark_retire_pending']
       if (applied.length > 0) {
@@ -396,24 +412,36 @@ export function healWriterFromEcho(db: Database, opts: {
         + (referenced.length > 0 ? `; ${referenced.join(', ')} another writer's, left live and recorded as referenced` : '')
         + '.'
     }
-    // 5. D241 read with D420: a live bookmark the heal lands in a lane
-    // (held, or moved there) never makes two live in that lane of its
-    // session. Where a newer live bookmark of the session is already there
-    // (written while this one waited for its echo), this one ends retired,
-    // pointing at it, as a restored bookmark does.
-    if (next['kind'] === BOOKMARK && next['next_session'] === true && (newLane !== oldLane || heldTargets.length > 0 || heldBookmarks)) {
-      const chain = sessionChainOf(db, next)
-      const newer = (db.prepare(
-        `SELECT node_id, metadata_json FROM nodes WHERE tree_id = ? AND session_key IN (${chain.map(() => '?').join(',')})
-           AND node_id != ? AND created_at > ?
-           AND json_extract(metadata_json, '$.kind') = '${BOOKMARK}' AND json_extract(metadata_json, '$.next_session') = 1
-         ORDER BY created_at DESC, rowid DESC`,
-      ).all(row.tree_id, ...chain, opts.nodeId, row.created_at) as Array<{ node_id: string; metadata_json: string | null }>)
-        .find((r) => laneOf(parse(r.metadata_json)) === newLane)?.node_id
+    // 5. D241 read with D420: when its own echo settles a live bookmark's
+    // stamp (confirmed in its lane or moved into one), D241 is applied for
+    // it in that lane now, against the lane's live bookmarks of the session
+    // whose stamps are already exact: the earlier ones it retires, and a
+    // newer one, if there is one, retires it. A bookmark whose stamp is not
+    // exact yet is never retired for, nor retired in favour of: it settles
+    // at its own echo, so whichever echo drains first, the later-settling
+    // side finishes the job and the lane is left with exactly one.
+    if (next['kind'] === BOOKMARK && next['next_session'] === true) {
+      const settled = exactLiveBookmarks(db, row.tree_id, next, newLane, [opts.nodeId], laneOf)
+      const newer = settled.find((b) => b.createdAt > row.created_at)
       if (newer) {
-        retireMeta(next, newer, now)
-        next['_writer_heal_superseded_by_newer'] = newer
-        result.supersededByNewer = newer
+        retireMeta(next, newer.id, now)
+        next['_writer_heal_superseded_by_newer'] = newer.id
+        result.supersededByNewer = newer.id
+      } else {
+        const upd = db.prepare('UPDATE nodes SET metadata_json = ?, updated_at = ? WHERE node_id = ?')
+        const earlier: string[] = []
+        for (const e of settled) {
+          if (e.readOnly || e.createdAt > row.created_at) continue
+          upd.run(JSON.stringify(retireMeta(e.meta, opts.nodeId, now)), now, e.id)
+          earlier.push(e.id)
+        }
+        if (earlier.length > 0) {
+          next['_writer_heal_retired'] = [...new Set([...idsOf(next['_writer_heal_retired']), ...earlier])]
+          result.retired = [...new Set([...(result.retired ?? []), ...earlier])]
+          if (typeof next['_supersedes_pending_note'] === 'string') {
+            next['_supersedes_pending_note'] = `${next['_supersedes_pending_note'].replace(/\.$/, '')}; its lane's earlier bookmark ${earlier.join(', ')} retired (D241).`
+          }
+        }
       }
     }
     // D331 (read with its sib clause), D320, D326: the leg the echo names
