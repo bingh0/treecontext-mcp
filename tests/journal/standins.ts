@@ -60,7 +60,8 @@
  *  |                                        | in the client's order, handed to exactly the commands the   |
  *  |                                        | block install writes registers for its `hook_event_name`    |
  *  |                                        | (its matcher read as the client reads it), each run as the  |
- *  |                                        | installed script runs it (`treecontext hook <event>`); an   |
+ *  |                                        | installed script runs it (`treecontext hook <event>` with   |
+ *  |                                        | the arguments the command hands the script, D404); an       |
  *  |                                        | event the block does not register reaches no hook. It may   |
  *  |                                        | rewrite only `cwd`, `transcript_path`,                      |
  *  |                                        | `agent_transcript_path` and, when asked, `session_id`; it   |
@@ -68,6 +69,36 @@
  *  |                                        | field, an input, a response, an error or an id, or run a    |
  *  |                                        | hook the block does not name. The session reminder script   |
  *  |                                        | only prints and writes nothing, so it is not run            |
+ *  | `PID_SANDBOX` (a spec's `sandbox`,     | Codex CLI's sandbox on Linux (bwrap, a pid namespace of its |
+ *  |   `lookupInSandbox`)                   | own, D403): a REAL pid namespace `unshare` makes, the      |
+ *  |                                        | wrapper or the harness's lookup run inside it; it numbers  |
+ *  |                                        | the processes in it apart and does nothing else (the same  |
+ *  |                                        | user, host name, files and store); ended, it ends every    |
+ *  |                                        | process in it. `PID_SANDBOX_MACHINE_PROC` is the same      |
+ *  |                                        | sandbox keeping the machine's /proc (bwrap without         |
+ *  |                                        | `--proc`)                                                   |
+ *  | a spec's `earlierBuild`                | the `treecontext run` wrapper of a build before D403       |
+ *  |   (tests/helpers/earlier-build-run.ts) | (D403's correction outline): this build's wrapper with its |
+ *  |                                        | probe's numbering reading taken off, so it records no      |
+ *  |                                        | numbering and its own pass judges by its own process table;|
+ *  |                                        | the rest of the door, its retirement included, is this     |
+ *  |                                        | build's                                                     |
+ *  | `osAnsweringGone`                      | the operating system's answer about one process, as a      |
+ *  |                                        | reader's probe reads it (the far side of process-probe.ts, |
+ *  |                                        | D403's correction outline): it answers, for the one        |
+ *  |                                        | process named by its id and numbering, that no such        |
+ *  |                                        | process exists and its numbering holds none, the wrong     |
+ *  |                                        | answer that makes a reader take a running worker for gone; |
+ *  |                                        | every other question it hands to the host's own probe. It  |
+ *  |                                        | is given to a reader's lookup only, never to a door, and   |
+ *  |                                        | never writes the store. Why a stand-in: every route by     |
+ *  |                                        | which this build's reader was found to take this build's   |
+ *  |                                        | running worker for gone (a /proc not of the door's or the  |
+ *  |                                        | reader's numbering, a door or reader with no /proc, a      |
+ *  |                                        | start read in another time namespace, a process the reader |
+ *  |                                        | may not read or a /proc that hides it) now leaves the      |
+ *  |                                        | worker live, and no other is known on Linux; the wrong     |
+ *  |                                        | "gone" the outline needs has no real source left to run    |
  *
  * ── What a stand-in may do ────────────────────────────────────────────
  *
@@ -132,7 +163,9 @@
  * worker's or a client's server that inherited the lane with a ticket of
  * its own, or with no worker variables, would be started; it calls no
  * tool), `at` (the rows' moment),
- * `waitFor` (a file it waits for after writing `<file>.ready`), `envTo`
+ * `waitFor` (a file it waits for after writing `<file>.ready`),
+ * `waitBeforeWrites` (the same wait, before it writes anything: it runs
+ * with nothing of its own in the store until let go), `envTo`
  * (D389: a file it writes its whole environment to, as JSON, once it
  * has claimed its leg and before it writes anything; never printed, so no
  * variable of it can reach a summary row), `stderr` (D384: text written to its error stream, before `print`),
@@ -162,6 +195,7 @@ import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { WORKER_AGENT_ID, type LegRef, type LegRegistration } from '../../src/persistence/leg-registry.js'
 import { mintTicket, TICKET_ENV, type TicketFields } from '../../src/ticket.js'
+import { hostProbe, type ProcessProbe } from '../../src/persistence/process-probe.js'
 import { spawnWorker, DOOR_LINE_PREFIX, type WorkerRunResult } from '../../src/ticket-door.js'
 import type { FlatStore } from '../../src/flat-store.js'
 import { sandboxedSpawnEnv, nodeTsArgs, CLI_TS } from '../helpers/cli-spawn.js'
@@ -319,6 +353,9 @@ export const STANDIN_CLAUDE_P = join(TS_ROOT, 'tests', 'helpers', 'standin-claud
 export interface WorkerStep {
   notes?: number; label?: string; texts?: string[]; checkpoint?: string; checkpoints?: string[]; invalidRow?: boolean; print?: string
   exit?: number | 'hang'; waitFor?: string; at?: number; viaTools?: boolean
+  /** D403: a file it waits for, after writing `<file>.ready`, before it
+   *  writes anything. */
+  waitBeforeWrites?: string
   /** D384: text written to its error stream before `print`. */
   stderr?: string
   /** D389: a file its whole environment is written to, as JSON. */
@@ -413,6 +450,15 @@ export interface WorkerSpec {
    *  sandbox's (a client session's, say): the wrapper's process
    *  environment, or the environment the library call is given. */
   spawnerEnv?: Record<string, string>
+  /** D403: the wrapper runs inside a sandbox on this host that numbers
+   *  its own processes (PID_SANDBOX); the sandbox's own process is kept as
+   *  `sandbox:<name>` in the world's facts, for a binding that ends it.
+   *  `keeps-machine-proc`: the sandbox numbers its own processes and still
+   *  shows the machine's list of them (PID_SANDBOX_MACHINE_PROC). */
+  sandbox?: boolean | 'keeps-machine-proc'
+  /** D403: the wrapper as an earlier build ran it, recording no numbering
+   *  of processes (tests/helpers/earlier-build-run.ts). */
+  earlierBuild?: boolean
   /** D389: the library call given no environment, so the worker inherits
    *  this process's own; the spawner's environment (the sandbox's and
    *  `spawnerEnv`) is put in this process's for the call and restored
@@ -506,14 +552,18 @@ export async function runWorker(w: RunWorld, spec: WorkerSpec, name = 'worker', 
       // sits in the wrapper's environment, where its spawner put it.
       const ticketArgs = typeof spec.ticket === 'string' ? [] : ticketFlags(spec.ticket)
       if (typeof spec.ticket === 'string') env = { ...spawnerEnv, [TICKET_ENV]: spec.ticket }
-      args = nodeTsArgs(CLI_TS, [
-        'run', ...ticketArgs, '--prompt-file', promptFile,
+      args = nodeTsArgs(spec.earlierBuild ? EARLIER_BUILD_RUN : CLI_TS, [
+        ...(spec.earlierBuild ? [] : ['run']), ...ticketArgs, '--prompt-file', promptFile,
         ...(spec.timeoutSecs ? ['--timeout', String(spec.timeoutSecs)] : []),
         ...(spec.checkTicket ? ['--check-ticket'] : []),
         '--', process.execPath, ...nodeTsArgs(script),
       ])
     }
-    const child = spawn(process.execPath, args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] })
+    const box = spec.sandbox === 'keeps-machine-proc' ? PID_SANDBOX_MACHINE_PROC : PID_SANDBOX
+    const child = spec.sandbox
+      ? spawn(box[0]!, [...box.slice(1), process.execPath, ...args], { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] })
+      : spawn(process.execPath, args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] })
+    if (spec.sandbox && child.pid !== undefined) w.facts![`sandbox:${name}`] = child.pid
     w.defer(() => { try { child.kill('SIGKILL') } catch { /* gone */ } })
     // The wrapper's own bytes, decoded once whole, so a character split
     // across two chunks is read as the spawner's terminal would show it.
@@ -557,6 +607,72 @@ function swapProcessEnv(env: NodeJS.ProcessEnv): () => void {
   return () => {
     for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k]
     for (const [k, v] of Object.entries(saved)) if (v !== undefined) process.env[k] = v
+  }
+}
+
+// ── A sandbox that numbers its own processes (D403) ────────────────────
+
+/** A sandbox on this host that numbers its own processes, as Codex CLI's
+ *  does on Linux: a user and pid namespace of its own, /proc mounted for
+ *  it, and every process in it ended when its own process is
+ *  (`--kill-child`). The command to run follows. */
+export const PID_SANDBOX: readonly string[] = ['unshare', '--user', '--map-current-user', '--pid', '--fork', '--mount-proc', '--kill-child']
+
+/** A sandbox that numbers its own processes and still shows the machine's
+ *  list of them, as bwrap without `--proc` does: PID_SANDBOX without
+ *  `--mount-proc`. */
+export const PID_SANDBOX_MACHINE_PROC: readonly string[] = ['unshare', '--user', '--map-current-user', '--pid', '--fork', '--kill-child']
+
+/** The `treecontext run` wrapper of a build before D403 (a spec's
+ *  `earlierBuild`). */
+export const EARLIER_BUILD_RUN = join(TS_ROOT, 'tests', 'helpers', 'earlier-build-run.ts')
+
+let sandboxAnswer: boolean | null = null
+/** Whether this host can make PID_SANDBOX (Linux, with unprivileged user
+ *  namespaces allowed): asked of the host once, by making one. */
+export function canMakePidSandbox(): boolean {
+  if (sandboxAnswer !== null) return sandboxAnswer
+  if (process.platform !== 'linux') return (sandboxAnswer = false)
+  const r = spawnSync(PID_SANDBOX[0]!, [...PID_SANDBOX.slice(1), 'sh', '-c', 'echo $$'], { encoding: 'utf8', timeout: 10_000 })
+  return (sandboxAnswer = r.status === 0 && r.stdout.trim() === '1')
+}
+
+/** What the harness's lookup returned, made from inside a sandbox. */
+export interface SandboxedLookup {
+  legs: Array<{ sessionId: string; state: string; noticedAt: number | null; noticedBy: string | null }>
+  notes: string[]
+  unchecked: Array<{ sessionId: string; reason: string }>
+  retired: string[]
+}
+
+/** The harness looking up a run's key from inside a sandbox on this host
+ *  that numbers its own processes (D403): the library's lookupKey, the
+ *  same call the harness makes, in a process of its own in PID_SANDBOX
+ *  (tests/helpers/lookup-driver.ts). */
+export function lookupInSandbox(w: RunWorld, run: string, key: string): SandboxedLookup {
+  const r = spawnSync(PID_SANDBOX[0]!, [...PID_SANDBOX.slice(1), process.execPath, ...nodeTsArgs(join(TS_ROOT, 'tests', 'helpers', 'lookup-driver.ts'), [w.dbPath!, run, key])], {
+    env: sandboxedSpawnEnv(w.home!), cwd: TS_ROOT, encoding: 'utf8', timeout: 60_000,
+  })
+  if (r.status !== 0) throw new Error(`the lookup inside the sandbox exited ${r.status}: ${r.stderr}`)
+  return JSON.parse(r.stdout) as SandboxedLookup
+}
+
+/** The operating system answering a reader, for the one process named by
+ *  its id (and its numbering, where the registration records one), that it
+ *  does not exist (`osAnsweringGone`, see the table above). Every other
+ *  question goes to the host's own probe. For a reader's lookup only. */
+export function osAnsweringGone(pid: number, ns: string | null): ProcessProbe {
+  const named = (p: number): boolean => p === pid
+  return {
+    host: () => hostProbe.host(),
+    exists: (p) => (named(p) ? false : hostProbe.exists(p)),
+    startMoment: (p) => (named(p) ? null : hostProbe.startMoment(p)),
+    startToken: (p) => (named(p) ? null : hostProbe.startToken!(p)),
+    pidNamespace: (p) => hostProbe.pidNamespace!(p),
+    lookInNamespace: (n, p, registered) => (n === ns && named(p)
+      ? { seen: true, hostPid: null, unreadable: false }
+      : hostProbe.lookInNamespace!(n, p, registered)),
+    seesEveryNumbering: () => hostProbe.seesEveryNumbering!(),
   }
 }
 
@@ -768,6 +884,19 @@ export function hookDispatchOf(command: string): string | null {
   return /(?:"\$TC_CLI"|"%TC_CLI%") hook (\S+)/.exec(hookScriptContent(stem))?.[1] ?? null
 }
 
+/** The arguments an installed command hands its script, which the script
+ *  hands on to `treecontext hook <event>` where its body forwards them
+ *  (`"$@"`, `%*`; D404: the client the command names): the words after the
+ *  script's quoted path, read from the command install wrote. */
+export function hookArgsOf(command: string): string[] {
+  const stem = /tc-([a-z-]+?)(?:\.cmd)?(?=["'\s]|$)/.exec(command)?.[1]
+  if (!stem) return []
+  const body = hookScriptContent(stem)
+  if (!body.includes('"$@"') && !body.includes('%*')) return []
+  const rest = command.replace(/^\s*exec\s+/, '').replace(/^\s*(?:&\s*)?(?:"[^"]*"|\S+)/, '').trim()
+  return rest === '' ? [] : rest.split(/\s+/)
+}
+
 /** One recorded event as the replay delivered it. */
 export interface ReplayedEvent {
   /** Its line in the recorded file, from 0. */
@@ -819,7 +948,7 @@ export function replayRecordedSession(
     for (const command of installedCommandsFor(payload)) {
       const dispatch = hookDispatchOf(command)
       if (dispatch === null) continue
-      const r = spawnSync(process.execPath, nodeTsArgs(CLI_TS, ['hook', dispatch]), {
+      const r = spawnSync(process.execPath, nodeTsArgs(CLI_TS, ['hook', dispatch, ...hookArgsOf(command)]), {
         input: JSON.stringify(payload), env, cwd: TS_ROOT, encoding: 'utf8', timeout: 60_000,
       })
       if (r.status !== 0) throw new Error(`hook ${dispatch} for line ${line} (${String(payload['hook_event_name'])}) exited ${r.status}${r.error ? `: ${r.error.message}` : ''}\n${r.stderr ?? ''}`)

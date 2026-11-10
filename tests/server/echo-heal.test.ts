@@ -358,7 +358,10 @@ describe('healCuratedSessionIdentity: precedence, window, idempotency', () => {
 })
 
 describe('drain gate: a staged insert echo heals through ingestBatch', () => {
-  it('an echo staged by the hook pipeline heals its row during the drain tick', async () => {
+  // D404: Claude Code's own echo stages its client's stated success
+  // (`stated_by`); it is the call's own echo as much as one stating nothing.
+  for (const [named, own] of [['', {}], [', its success stated by its client (D404)', { statedBy: 'claude-code' }]] as const) {
+  it(`an echo staged by the hook pipeline heals its row during the drain tick${named}`, async () => {
     const store = await freshStore()
     const now = Date.now() / 1000
     const r = await store.insert('drain-gated note', { createdAt: now, metadata: {} })
@@ -369,6 +372,7 @@ describe('drain gate: a staged insert echo heals through ingestBatch', () => {
       toolName: 'mcp__treecontext__treecontext_insert',
       timestamp: now + 0.1,
       priority: 3,
+      ...own,
     })
     const loop = new IngestionLoop(store, { batchSize: 10 })
     await loop.ingestBatch()
@@ -381,6 +385,7 @@ describe('drain gate: a staged insert echo heals through ingestBatch', () => {
     expect(rows.n).toBe(1)
     await store.close()
   })
+  }
 
   it('an echo with no session id heals nothing — never an invented attribution', async () => {
     const store = await freshStore()

@@ -13,7 +13,7 @@ import { hookStoreOn, hookTreeOf } from './hook-store.js'
 import { recordHookGap } from './gap-ledger.js'
 import { ticketTextIn, readTicket, trustedWorkerLane } from '../ticket.js'
 import { hasLegColumns, legOf, linkClientSession, workerOfSession, recordWorkerProcess, WORKER_AGENT_ID, LINKED_BY_SESSION_START, type LegRegistration } from '../persistence/leg-registry.js'
-import { hostProbe } from '../persistence/process-probe.js'
+import { hostProbe, processReadings } from '../persistence/process-probe.js'
 import { composeFirstMessage, fitHookCap, invalidInstructionsMessage, firstMomentFactsOf } from '../first-moment.js'
 
 /** The packet when the session before this clear cannot be identified. */
@@ -109,7 +109,7 @@ async function workerStart(db: DatabaseType, dbPath: string, sessionId: string, 
       // The client process this child runs as: the hook's parent (the
       // wrapper execs into node, as for the session beacon).
       const pid = process.ppid
-      recordWorkerProcess(db, ref, { pid, start: hostProbe.startMoment(pid), token: hostProbe.startToken?.(pid) ?? null, host: hostProbe.host(), at })
+      recordWorkerProcess(db, ref, { pid, ...processReadings(hostProbe, pid), host: hostProbe.host(), at })
     } else if (reading.valid && existing.run !== null) {
       // A resumed worker session: told again, from the store as it
       // stands, under the client's cap like any first moment (D325).

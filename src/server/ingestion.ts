@@ -3,7 +3,8 @@ import type { MemoryStore } from '../memory-store.js'
 import type { Persistence } from '../persistence/store.js'
 import {
   classifyIntent,
-  classifyExit,
+  exitClassOf,
+  EXIT_BY_KEY,
   ErrorTracker,
   LoopDetector,
   attributeProject,
@@ -741,9 +742,15 @@ export class IngestionLoop {
           // text heuristic: it is an error. D401: the batch's account of a
           // call does not classify why the call did not run, so its row has
           // no class at all, and neither opens nor resolves an error below.
+          // D404: where the client's own event stated how the call ended,
+          // the class is the client's word and the text decides nothing: a
+          // stated success (staging's `stated_by`, migration 036) is a
+          // success, never a soft fail. Otherwise the text decides, as
+          // before. The entry says which decided (`exit_by`).
           if ((row.role === 'assistant' || row.role === 'tool_result') && row.toolName && row.capturedFrom == null) {
-            const exitType: ExitType = row.outcome === 'failed' || row.outcome === 'interrupted' ? 'error' : classifyExit(row.content)
-            meta.exit_type = exitType
+            const decided = exitClassOf(row)
+            meta.exit_type = decided.exitType
+            meta[EXIT_BY_KEY] = decided.by
 
             // Loop detection
             const loopWarning = this.loopDetector.record(row.toolName, row.content)

@@ -109,6 +109,27 @@ describe('composition: a failure and the batch\'s account are composed as a succ
   })
 })
 
+describe('a failure and the batch\'s account state no success (D404), through the hooks install wires', () => {
+  it('only a call\'s own PostToolUse stages the client\'s word; a PostToolUseFailure and a PostToolBatch row never do (recorded payloads)', async () => {
+    const w = world()
+    await openCaptureWorld(w)
+    replayRecordedSession(w, SERIAL)
+    replayRecordedSession(w, PARALLEL)
+    const staged = stagingRows(w.dbPath!).filter((r) => r['tool_use_id'] !== null)
+    const failures = staged.filter((r) => r['outcome'] !== null)
+    const batch = staged.filter((r) => r['captured_from'] === 'batch')
+    expect(failures.length).toBeGreaterThan(0)
+    expect(batch.length).toBeGreaterThan(0)
+    for (const r of [...failures, ...batch]) expect(r['stated_by'], String(r['tool_use_id'])).toBeNull()
+    // Every other staged call is a PostToolUse of the recordings, and each
+    // carries the client install's command names.
+    const posted = new Set([...SERIAL, ...PARALLEL].filter((e) => e['hook_event_name'] === 'PostToolUse').map((e) => String(e['tool_use_id'])))
+    const stated = staged.filter((r) => r['stated_by'] !== null)
+    expect(new Set(stated.map((r) => String(r['tool_use_id'])))).toEqual(posted)
+    for (const r of stated) expect(r['stated_by']).toBe('claude-code')
+  }, 120_000)
+})
+
 describe('the batch reconcile, through the real hook', () => {
   it('a call already staged is not added again, drained or not; one with no event of its own is (recorded payloads)', async () => {
     const w = world()
@@ -167,7 +188,7 @@ describe('a store below schema 034: hooks never migrate', () => {
     expect(gapLedgerPaths(w.dbPath!).filter(existsSync).flatMap((p) => readFileSync(p, 'utf8').split('\n').filter(Boolean))).toEqual([])
     const check = new DatabaseSync(w.dbPath!, { readOnly: true })
     try { expect((check.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(33) } finally { check.close() }
-    expect(maxSupportedVersion).toBe(34)
+    expect(maxSupportedVersion).toBe(36)
   })
 })
 

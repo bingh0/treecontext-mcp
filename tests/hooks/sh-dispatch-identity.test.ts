@@ -98,7 +98,9 @@ describe.skipIf(!POSIX)('hook dispatch through /bin/sh -c keeps the claude pid (
       for (const f of [settings, codex]) {
         const commands = [...readFileSync(f, 'utf8').matchAll(/"command": "((?:[^"\\]|\\.)*)"/g)].map((m) => JSON.parse(`"${m[1]}"`) as string)
         expect(commands.length, f).toBeGreaterThanOrEqual(7)
-        for (const c of commands) expect(c, `${f}: ${c}`).toMatch(/^exec "[^"]+\/\.claude\/hooks\/tc-[a-z-]+"$/)
+        // D404: Claude Code's commands name Claude Code; the Codex copy's name no client.
+        const named = f === settings ? ' --client claude-code' : ''
+        for (const c of commands) expect(c, `${f}: ${c}`).toMatch(new RegExp(`^exec "[^"]+\\/\\.claude\\/hooks\\/tc-[a-z-]+"${named}$`))
       }
       const data = JSON.parse(readFileSync(settings, 'utf8')) as Record<string, unknown>
       expect(claudeHookCommandsWithoutExec(data)).toEqual([])

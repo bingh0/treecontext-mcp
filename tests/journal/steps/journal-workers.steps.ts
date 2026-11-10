@@ -29,7 +29,7 @@ import { FIRST_MOMENT_KIND, SEND_BACK_KIND, CHECKPOINT_KIND } from '../../../src
 import { keyLookupReply, type KeyLookup } from '../../../src/key-lookup.js'
 import { storesDirIn } from '../../helpers/store-fixtures.js'
 import {
-  runWorker, registerThroughLibrary, STANDIN_WORKER, type Spawner, type WorkerPlan, type WorkerSpec, type Outcome, type StandinRecord,
+  runWorker, registerThroughLibrary, lookupInSandbox, osAnsweringGone, STANDIN_WORKER, type Spawner, type WorkerPlan, type WorkerSpec, type Outcome, type StandinRecord,
 } from '../standins.js'
 import {
   type RunWorld, openRunWorld, sessionStartHook, sleeper, killAndReap, localMoment, rawOne, rawRegistration, stringSteps, liveProcess,
@@ -137,6 +137,7 @@ export const workersDefiner = (reg: Registry<WorkersWorld>): void => {
   failedRunSteps(define)
   sessionVariableSteps(define)
   groupAndStreamSteps(define)
+  sandboxSteps(define)
 
   // ── D294: the parent as declared, or as a hook registered it ──
   //
@@ -2498,5 +2499,252 @@ export function groupAndStreamSteps(define: (re: RegExp, fn: (w: WorkersWorld, .
     const row = summaryRowOf(w, o)
     expect([row.content, row.kind, row.writer, row.session]).toEqual([text, SUBAGENT_SUMMARY_KIND, 'builder', o.sessionId])
     expect(o.stdout).toBe(text)
+  })
+}
+
+/** The one row a worker with invalid instructions writes (D303, D342). */
+const INVALID_ROW = 'my instructions were invalid; I did no work and stop here'
+
+// ── D403: a worker and a reader whose processes are numbered apart ──
+//
+// The sandbox is real: a user and pid namespace of its own on this host
+// (the stand-in harness's PID_SANDBOX, as Codex CLI's bwrap sandbox is on
+// Linux), so a process in it holds one id there and another outside. The
+// worker is the hook-less stand-in run through the real `treecontext run`
+// wrapper, inside the sandbox or outside it; the harness's lookup is the
+// library's, made in this process (outside any sandbox) or in a process of
+// its own inside one (lookupInSandbox). A registration "by a build that
+// recorded no numbering" is the stand-in harness's `earlierBuild` wrapper.
+// The worker runs until the binding lets it go (`waitFor`) or a signal ends
+// it. Every Then reads the store file. A host that cannot make the sandbox
+// shows these scenarios skipped (features.test.ts HOST_SKIPS).
+
+/** A worker of the run started through the wrapper and left running: its
+ *  registration is read once the worker says it is running. */
+async function runningWorker(w: WorkersWorld, o: { sandbox: boolean | 'keeps-machine-proc'; earlierBuild: boolean; after?: 'print'; sendBack?: boolean }): Promise<void> {
+  const go = join(w.home!, `go-${randomUUID().slice(0, 8)}`)
+  w.facts!['go'] = go
+  // A worker that will exit without its checkpoint is its own checkpointer
+  // (D281), so its door sends it back once; its re-run waits on `go2`.
+  const go2 = `${go}-rerun`
+  w.facts!['go2'] = go2
+  const spec: WorkerSpec = {
+    spawner: 'wrapper', prompt: 'wire the submit button', ticket: ticketFields(w, { checkpointer: o.sendBack ? 'builder' : 'reviewer' }),
+    plan: { first: { waitFor: go, ...(o.after === 'print' ? { print: 'done' } : {}) }, ...(o.sendBack ? { rerun: { waitFor: go2 } } : {}) },
+    ...(o.sandbox ? { sandbox: o.sandbox } : {}), ...(o.earlierBuild ? { earlierBuild: true } : {}),
+  }
+  const done = runWorker(w, spec, 'worker')
+  w.facts!['running'] = done
+  w.defer(async () => { for (const f of [go, go2]) if (!existsSync(f)) writeFileSync(f, 'go'); await done.catch(() => undefined) })
+  await waitForFile(`${go}.ready`, 60_000)
+  const reg = rawAll<{ session_id: string }>(w, "SELECT session_id FROM session_registry WHERE kind = 'worker' AND agent_type = 'builder'")
+  expect(reg, 'the running worker is registered once').toHaveLength(1)
+  w.legs!['worker'] = { sessionId: reg[0]!.session_id, agentId: WORKER_AGENT_ID }
+  const r = rawRegistration(w, w.legs!['worker']!)
+  expect([r['ended'], r['stopped_at']], 'the worker is live').toEqual([null, null])
+  // What the door recorded of its numbering: the sandbox's own, or none.
+  const own = hostProbe.pidNamespace?.('self') ?? null
+  if (o.earlierBuild) expect(r['proc_ns'], 'an earlier build records no numbering').toBeNull()
+  else if (o.sandbox) expect([r['proc_ns'] !== null, r['proc_ns'] !== own], 'the sandbox numbers its processes apart').toEqual([true, true])
+  else expect(r['proc_ns']).toBe(own)
+  w.facts!['ready-pid'] = Number(readFileSync(`${go}.ready`, 'utf8'))
+  if (o.sandbox) {
+    // The id the door recorded is the one the sandbox gave its worker.
+    expect(r['pid'], 'the door recorded the id the sandbox gave its worker').toBe(w.facts!['ready-pid'])
+  }
+  if (o.sandbox === 'keeps-machine-proc') {
+    // The start the door recorded is its own worker's, found in the
+    // sandbox's numbering, not the machine's process of the same number.
+    const found = hostProbe.lookInNamespace!(String(r['proc_ns']), r['pid'] as number).hostPid
+    expect(found, 'the worker is found in its sandbox').not.toBeNull()
+    expect(r['proc_start_token'], 'the door recorded its own worker\'s start').toBe(hostProbe.startToken!(found!))
+  }
+}
+
+/** The numbering of processes of the sandbox a worker was started in, read
+ *  from the sandbox's own first process. */
+function sandboxNamespaceOf(w: WorkersWorld): string {
+  const unshare = w.facts!['sandbox:worker'] as number
+  const children = readFileSync(`/proc/${unshare}/task/${unshare}/children`, 'utf8').trim().split(/\s+/).map(Number)
+  const ns = hostProbe.pidNamespace?.(children[0]!) ?? null
+  expect(ns, 'the sandbox numbers its processes apart').not.toBeNull()
+  expect(ns).not.toBe(hostProbe.pidNamespace?.('self') ?? null)
+  return ns!
+}
+
+function sandboxSteps(define: (re: RegExp, fn: (w: WorkersWorld, ...caps: string[]) => void | Promise<void>) => void): void {
+  define(/^a worker under the key "([^"]+)", still running, started through the `treecontext run` wrapper (inside a sandbox on this host that numbers its own processes and still shows the machine's list of processes|inside a sandbox on this host that numbers its own processes|on this host, outside any sandbox,(?: by a build that recorded no numbering,)?)$/, async (w, key, where) => {
+    expect(key).toBe('login-form')
+    await openRunWorld(w)
+    const sandbox = where.includes("machine's list") ? 'keeps-machine-proc' as const : where.startsWith('inside')
+    await runningWorker(w, { sandbox, earlierBuild: where.includes('recorded no numbering') })
+  })
+
+  define(/^a worker under the key "([^"]+)", still running, registered on this host outside any sandbox$/, async (w, key) => {
+    expect(key).toBe('login-form')
+    await openRunWorld(w)
+    await runningWorker(w, { sandbox: false, earlierBuild: false })
+  })
+
+  define(/^the harness (on this host, outside the sandbox,|inside a sandbox on this host that numbers its own processes) looks up the key "([^"]+)"$/, (w, where, key) => {
+    expect(key).toBe('login-form')
+    w.moments!['before-read'] = Date.now() / 1000
+    if (where.startsWith('inside')) w.lookups![RUN] = lookupInSandbox(w, RUN, key) as unknown as KeyLookup
+    else lookup(w)
+    w.moments!['after-read'] = Date.now() / 1000
+  })
+
+  define(/^the reply says the worker runs where this reader cannot see its process, so it cannot be checked from here$/, (w) => {
+    const sid = w.legs!['worker']!.sessionId
+    const said = w.lookups![RUN]!.notes.filter((n) => n.includes(sid))
+    expect(said, 'the reply says nothing of the worker').toHaveLength(1)
+    expect(said[0]).toContain('runs where this reader cannot see its process')
+    expect(said[0]).toContain('cannot be checked from here')
+  })
+
+  define(/^a worker under the key "([^"]+)" registered from inside a sandbox on this host that numbers its own processes$/, async (w, key) => {
+    expect(key).toBe('login-form')
+    await openRunWorld(w)
+    await runningWorker(w, { sandbox: true, earlierBuild: false })
+  })
+
+  define(/^the sandbox has since ended with every process in it, nothing having retired the worker$/, async (w) => {
+    const ns = sandboxNamespaceOf(w)
+    // The sandbox's own process ended: it takes every process in it along.
+    process.kill(w.facts!['sandbox:worker'] as number, 'SIGKILL')
+    await (w.facts!['running'] as Promise<Outcome>)
+    const deadline = Date.now() + 10_000
+    while (hostProbe.lookInNamespace!(ns, 1).seen && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50))
+    expect(hostProbe.lookInNamespace!(ns, 1).seen, 'a process of the sandbox is left').toBe(false)
+    const r = rawRegistration(w, w.legs!['worker']!)
+    expect([r['ended'], r['stopped_at'], r['noticed_at']], 'nothing retired it').toEqual([null, null, null])
+  })
+
+  // D403's correction outline. The worker waits to be let go and then
+  // prints "done" and exits; a signal sent while it waits ends it before it
+  // prints anything.
+  define(/^a worker under the key "([^"]+)", still running, started through the `treecontext run` wrapper of this build(, that will exit without its checkpoint)?$/, async (w, key, sendBack) => {
+    expect(key).toBe('login-form')
+    await openRunWorld(w)
+    await runningWorker(w, { sandbox: false, earlierBuild: false, after: 'print', sendBack: sendBack !== undefined && sendBack !== '' })
+  })
+
+  define(/^a reader on this host has wrongly taken it for gone and retired it as a phantom$/, (w) => {
+    // No reader of this build takes this build's running worker for gone
+    // (every route found is closed): the wrong answer comes from the
+    // stand-in for the operating system's answer about the worker's one
+    // process (standins.ts `osAnsweringGone`), handed to the harness's
+    // own lookup.
+    const reg = rawRegistration(w, w.legs!['worker']!)
+    expect(reg['proc_ns'], 'this build\'s door recorded its numbering').not.toBeNull()
+    w.moments!['before-read'] = Date.now() / 1000
+    const l = w.store!.lookupKey({ run: RUN, key: 'login-form', probe: osAnsweringGone(reg['pid'] as number, reg['proc_ns'] as string) })
+    w.lookups![RUN] = l
+    w.moments!['after-read'] = Date.now() / 1000
+    const taken = rawRegistration(w, w.legs!['worker']!)
+    expect([taken['ended'], taken['noticed_by'], taken['stopped_at']], 'the reader took the running worker for a phantom').toEqual(['phantom', NOTICED_BY_LOOKUP, null])
+    expect(l.legs.find((g) => g.sessionId === w.legs!['worker']!.sessionId)?.state).toBe('phantom')
+    w.facts!['noticed_at'] = taken['noticed_at']
+  })
+
+  define(/^the worker exits and its door sends it back$/, async (w) => {
+    expect(rawRegistration(w, w.legs!['worker']!)['ended'], 'the worker was taken for a phantom first').toBe('phantom')
+    writeFileSync(w.facts!['go'] as string, 'go')
+    // The re-run is running once it says so.
+    await waitForFile(`${w.facts!['go2'] as string}.ready`, 60_000)
+  })
+
+  define(/^while the re-run runs, the worker's registration reads live$/, (w) => {
+    const r = rawRegistration(w, w.legs!['worker']!)
+    expect([r['ended'], r['stopped_at'], r['send_backs']]).toEqual([null, null, 1])
+    expect(JSON.parse(String(r['processes']))).toHaveLength(2)
+    // The harness's lookup, its own pass over a running re-run included.
+    expect(harnessLookup(w).legs.find((g) => g.sessionId === w.legs!['worker']!.sessionId)?.state).toBe('live')
+    expect(existsSync(w.facts!['go2'] as string), 'the re-run is still running').toBe(false)
+  })
+
+  define(/^a worker whose ticket the door of this build could not read whole, still running$/, async (w) => {
+    await openRunWorld(w)
+    const t = mintTicket({ run: RUN, key: 'login-form', role: 'builder', checkpointer: 'builder', parent: { id: 'p1' } })
+    const raw = t.slice(0, t.indexOf('"role":"builder"') + '"role":"builder"'.length)
+    w.facts!['raw'] = raw
+    const go = join(w.home!, `go-${randomUUID().slice(0, 8)}`)
+    const held = `${go}-held`
+    Object.assign(w.facts!, { go, go2: held })
+    // It runs with nothing of its own in the store until let go, then
+    // writes its one row through its own tools, and keeps running.
+    const done = runWorker(w, {
+      spawner: 'wrapper', prompt: 'wire the submit button', ticket: raw,
+      plan: { first: { waitBeforeWrites: go, viaTools: true, texts: [INVALID_ROW], waitFor: held } },
+    }, 'worker')
+    w.facts!['running'] = done
+    w.defer(async () => { for (const f of [go, held]) if (!existsSync(f)) writeFileSync(f, 'go'); await done.catch(() => undefined) })
+    await waitForFile(`${go}.ready`, 60_000)
+    const reg = rawAll<{ session_id: string; ticket_absent: string }>(w, "SELECT session_id, ticket_absent FROM session_registry WHERE kind = 'worker'")
+    expect(reg).toHaveLength(1)
+    expect(JSON.parse(reg[0]!.ticket_absent).length, 'the door could not read the ticket whole').toBeGreaterThan(0)
+    w.legs!['worker'] = { sessionId: reg[0]!.session_id, agentId: WORKER_AGENT_ID }
+    expect(rawRegistration(w, w.legs!['worker']!)).toMatchObject({ ended: null, stopped_at: null })
+  })
+
+  define(/^the worker's one row lands$/, async (w) => {
+    expect(rawRegistration(w, w.legs!['worker']!)['ended'], 'the worker was taken for a phantom first').toBe('phantom')
+    writeFileSync(w.facts!['go'] as string, 'go')
+    // Its row has landed once it waits again; it is still running.
+    await waitForFile(`${w.facts!['go2'] as string}.ready`, 60_000)
+  })
+
+  define(/^the store records the leg as having ended with no valid instructions at the moment the row landed, no longer a phantom$/, (w) => {
+    const rows = laneRows(w, w.legs!['worker']!.sessionId).filter((r) => r.content === INVALID_ROW)
+    expect(rows, 'the worker\'s one row, written through its own tools').toHaveLength(1)
+    expect(rows[0]!.m['_writer_agent_id']).toBe(WORKER_AGENT_ID)
+    const reg = rawRegistration(w, w.legs!['worker']!)
+    expect(reg['ended']).toBe('invalid')
+    expect(reg['stopped_at']).toBe(rows[0]!.created_at)
+    expect(existsSync(w.facts!['go2'] as string), 'the worker is still running').toBe(false)
+  })
+
+  define(/^the worker (exits on its own after printing "done"|is ended by a signal)$/, async (w, ends) => {
+    const exits = ends.startsWith('exits')
+    expect(rawRegistration(w, w.legs!['worker']!)['ended'], 'the worker was taken for a phantom first').toBe('phantom')
+    w.moments!['end-from'] = Date.now() / 1000
+    if (exits) {
+      writeFileSync(w.facts!['go'] as string, 'go')
+    } else {
+      const host = w.facts!['sandbox:worker'] === undefined
+        ? w.facts!['ready-pid'] as number
+        : hostProbe.lookInNamespace!(sandboxNamespaceOf(w), w.facts!['ready-pid'] as number).hostPid
+      expect(host, 'the worker is found').not.toBeNull()
+      process.kill(host!, 'SIGTERM')
+    }
+    const o = await (w.facts!['running'] as Promise<Outcome>)
+    w.moments!['end-to'] = Date.now() / 1000
+    expect(o.line, o.stderr).toContain(exits ? 'is retired' : 'cut')
+  })
+
+  define(/^the worker's registration reads (retired|cut) at the moment it ended, no longer a phantom$/, (w, ending) => {
+    const r = rawRegistration(w, w.legs!['worker']!)
+    expect(r['ended']).toBe(ending)
+    expect(r['stopped_at'] as number).toBeGreaterThanOrEqual(w.moments!['end-from']! - 0.001)
+    expect(r['stopped_at'] as number).toBeLessThanOrEqual(w.moments!['end-to']! + 0.001)
+    expect(harnessLookup(w).legs.find((g) => g.sessionId === w.legs!['worker']!.sessionId)?.state).toBe(ending)
+  })
+
+  define(/^it still shows when it was taken for a phantom and what took it for one$/, (w) => {
+    const r = rawRegistration(w, w.legs!['worker']!)
+    expect([r['noticed_at'], r['noticed_by']]).toEqual([w.facts!['noticed_at'], NOTICED_BY_LOOKUP])
+    expect(r['noticed_at'] as number).toBeGreaterThanOrEqual(w.moments!['before-read']! - 0.001)
+    expect(r['noticed_at'] as number).toBeLessThanOrEqual(w.moments!['after-read']! + 0.001)
+  })
+
+  define(/^the worker's summary row holds "([^"]+)"$/, (w, text) => {
+    const rows = laneRows(w, w.legs!['worker']!.sessionId).filter((x) => x.kind === SUBAGENT_SUMMARY_KIND)
+    expect(rows.map((x) => x.content)).toEqual([text])
+    // A registration that reads phantom never stands beside it.
+    expect(rawRegistration(w, w.legs!['worker']!)['ended']).not.toBe('phantom')
+  })
+
+  define(/^the worker left no summary row$/, (w) => {
+    expect(laneRows(w, w.legs!['worker']!.sessionId).filter((x) => x.kind === SUBAGENT_SUMMARY_KIND)).toEqual([])
   })
 }

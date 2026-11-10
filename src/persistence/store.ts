@@ -83,6 +83,11 @@ export interface StagingEntry {
   /** Where the row came from when it was not the call's own event:
    *  `batch`, the client's account of the batch (D401). */
   capturedFrom?: string | null
+  /** The client whose own event stated the call succeeded (D404): set
+   *  only where the hook's command named a client whose events state how a
+   *  call ended, on that client's success event. Never an `outcome`
+   *  value: `outcome IS NULL` is read as a call's own successful event. */
+  statedBy?: string | null
 }
 
 export interface StagingRow {
@@ -114,6 +119,8 @@ export interface StagingRow {
   outcome: string | null
   /** See StagingEntry.capturedFrom. */
   capturedFrom: string | null
+  /** See StagingEntry.statedBy (migration 036). */
+  statedBy: string | null
 }
 
 /** What the V2 echo heal did with one (echo, row) pair — every branch is
@@ -802,6 +809,7 @@ export class Persistence {
       entry.toolUseId ?? null,
       entry.outcome ?? null,
       entry.capturedFrom ?? null,
+      entry.statedBy ?? null,
     )
     const id = Number(result.lastInsertRowid)
     dbg('store', 'staging insert', { id, role: entry.role, toolName: entry.toolName, bytes: entry.content.length })
@@ -834,7 +842,7 @@ export class Persistence {
                       ORDER BY timestamp, id LIMIT ?)
         RETURNING id, session_id, role, content, tool_name, timestamp, priority, processed,
                   created_at, index_len, preview_len, attempts, namespace, agent_id, agent_type, kind,
-                  tool_use_id, outcome, captured_from`,
+                  tool_use_id, outcome, captured_from, stated_by`,
     )
     const rows = this.sClaimStagingBatch.all(claimant, now, now - ttlSecs, limit)
     dbg('store', 'staging claim', { claimant, requested: limit, claimed: rows.length })
@@ -893,6 +901,7 @@ export class Persistence {
         toolUseId: r.tool_use_id == null ? null : String(r.tool_use_id),
         outcome: r.outcome == null ? null : String(r.outcome),
         capturedFrom: r.captured_from == null ? null : String(r.captured_from),
+        statedBy: r.stated_by == null ? null : String(r.stated_by),
       }
     })
   }
@@ -1168,8 +1177,8 @@ export class Persistence {
   private getInsertStagingStmt(): Statement {
     if (!this.sInsertStaging) {
       this.sInsertStaging = this.db.prepare(
-        'INSERT INTO staging (session_id, role, content, tool_name, timestamp, priority, index_len, preview_len, namespace, agent_id, agent_type, kind, tool_use_id, outcome, captured_from) ' +
-          'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO staging (session_id, role, content, tool_name, timestamp, priority, index_len, preview_len, namespace, agent_id, agent_type, kind, tool_use_id, outcome, captured_from, stated_by) ' +
+          'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       )
     }
     return this.sInsertStaging

@@ -234,6 +234,10 @@ export interface JournalVitals {
     /** Tool events by `metadata.exit_type` (a row with none, the batch's
      *  account of a call, D401, is not counted). */
     exits: Record<string, number>
+    /** D404: each exit class's count split by what decided it, the
+     *  client's word or the output's text. Optional: a producer of these
+     *  vitals that predates the split leaves it out. */
+    exitsBy?: Record<string, { client: number; text: number }>
     /** User turns by `metadata.intent`. */
     intents: Record<string, number>
     /** Entries stored as a bounded index preview with full text behind it. */

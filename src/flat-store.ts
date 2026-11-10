@@ -1750,7 +1750,11 @@ export class FlatStore implements MemoryStore {
       const handedPrompt = meta?.['source'] === 'auto-capture' && meta['role'] === 'user'
       if (meta && typeof meta['_writer_agent_id'] === 'string' && !DOOR_ROW_KINDS.has(String(meta['kind'] ?? '')) && !handedPrompt) {
         const leg = this.writingLegOf(meta)
-        if (leg && leg.kind === 'worker' && leg.ticketAbsent.length > 0 && isLiveLeg(leg)) retireLeg(this.db, leg, 'invalid', createdAt)
+        // D403: a leg taken for a phantom while it ran is set right by its
+        // own row as by its door's word: the row proves it ran.
+        if (leg && leg.kind === 'worker' && leg.ticketAbsent.length > 0 && (isLiveLeg(leg) || (leg.ended === 'phantom' && leg.stoppedAt === null))) {
+          retireLeg(this.db, leg, 'invalid', createdAt)
+        }
       }
       const sup = this.applySupersedes(withPriorBookmarks(nodeId), nodeId)
       const across = split.across.length > 0 ? this.retireAcross(split.across, nodeId, meta) : []
@@ -2665,6 +2669,25 @@ export class FlatStore implements MemoryStore {
       for (const r of rows) out[String(r.k)] = r.n
       return out
     }
+    // D404: each class's count split by what decided it: the client's word
+    // (`exit_by` client; or, drained before this build, a failure the
+    // client's own event reported, D400) or the text (every other). Both
+    // marks are capture marks, read only on a captured tool row
+    // (`auto-capture` with a `tool_name`), never off a caller's note.
+    const exitsBy: Record<string, { client: number; text: number }> = {}
+    for (const r of this.db.prepare(
+      `SELECT json_extract(metadata_json, '$.exit_type') AS k,
+              CASE WHEN json_extract(metadata_json, '$.source') = 'auto-capture'
+                     AND json_extract(metadata_json, '$.tool_name') IS NOT NULL
+                     AND (json_extract(metadata_json, '$.exit_by') = 'client'
+                       OR (json_extract(metadata_json, '$.exit_by') IS NULL
+                           AND json_extract(metadata_json, '$.outcome') IN ('failed', 'interrupted'))) THEN 'client' ELSE 'text' END AS by,
+              COUNT(*) AS n
+         FROM nodes WHERE tree_id = ? AND json_extract(metadata_json, '$.exit_type') IS NOT NULL GROUP BY k, by`,
+    ).all(this.treeId) as Array<{ k: string; by: 'client' | 'text'; n: number }>) {
+      const e = (exitsBy[String(r.k)] ??= { client: 0, text: 0 })
+      e[r.by] += r.n
+    }
 
     const shape = this.db
       .prepare(
@@ -2701,6 +2724,7 @@ export class FlatStore implements MemoryStore {
       capturePerMinute: buckets,
       trail: {
         exits: tally('$.exit_type'),
+        exitsBy,
         intents: tally('$.intent'),
         previewed: shape.previewed,
         sessions: shape.sessions,

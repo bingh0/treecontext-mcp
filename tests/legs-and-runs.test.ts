@@ -26,7 +26,7 @@ import {
 import {
   retirePhantoms, hasLegColumns, legOf, WORKER_AGENT_ID, registerWorkerLeg, recordWorkerProcess, settleLegKey, registerSubagentLeg, LEG_REGISTRY_COLUMNS,
 } from '../src/persistence/leg-registry.js'
-import type { ProcessProbe } from '../src/persistence/process-probe.js'
+import { MACHINE_PID_NAMESPACE, type ProcessProbe, type NamespaceLook } from '../src/persistence/process-probe.js'
 import { RUN_ROWS_SQL, briefsInEffect, inEffectLine } from '../src/runs.js'
 import { parseToolResult } from './helpers/mcp-result.js'
 import { TS_ROOT, tsxArgv } from './journal/proc.js'
@@ -254,6 +254,78 @@ describe('the phantom pass (D297, D317)', () => {
     expect([registration('a', WORKER_AGENT_ID)['noticed_by'], registration('b', WORKER_AGENT_ID)['noticed_by']]).toEqual(['lookup', 'status call'])
   })
 
+  // D403: a probe that reads numberings of processes. The machine's own is
+  // MACHINE_PID_NAMESPACE; 'pid:[7]' stands for a sandbox's.
+  const SANDBOX = 'pid:[7]'
+  const numbered = (o: { self: string; look?: NamespaceLook | null; procs?: Record<number, number | null> }): ProcessProbe => ({
+    ...probe({ procs: o.procs ?? {} }),
+    pidNamespace: (pid) => (pid === 'self' ? o.self : null),
+    ...(o.look === null ? {} : { lookInNamespace: () => o.look ?? { seen: false, hostPid: null, unreadable: false } }),
+  })
+  const inSandbox = (session: string, pid: number, start: number) => ({ ...worker(session, { pid, start }), process: { pid, start, host: 'laptop', ns: SANDBOX } })
+
+  it('a worker numbered apart is judged from outside by its id in its own numbering, never by the reader\'s table (D403)', async () => {
+    const s = await open()
+    await s.registerWorker(inSandbox('running', 13, 1000))
+    await s.registerWorker(inSandbox('reused', 14, 1000))
+    // The reader's table has an unrelated process 13 and 14; the sandbox
+    // holds 13 as host process 9001 with the worker's start, and 14 as 9002
+    // with another start.
+    const looks: Record<number, NamespaceLook> = { 13: { seen: true, hostPid: 9001, unreadable: false }, 14: { seen: true, hostPid: 9002, unreadable: false } }
+    const p: ProcessProbe = { ...numbered({ self: MACHINE_PID_NAMESPACE, procs: { 13: 5, 14: 5, 9001: 1000, 9002: 3000 } }), lookInNamespace: (_ns, pid) => looks[pid]! }
+    const pass = s.retirePhantoms({ noticedBy: 'lookup', probe: p, at: 9 })
+    expect(pass.retired.map((r) => r.ref.sessionId)).toEqual(['reused'])
+    await s.close()
+    expect(registration('running', WORKER_AGENT_ID)['ended']).toBeNull()
+    expect(registration('running', WORKER_AGENT_ID)['proc_ns']).toBe(SANDBOX)
+  })
+
+  it('a sandbox the machine\'s reader sees nothing of is gone; one it may not read, or a reader inside a sandbox, leaves the worker live and says so (D403)', async () => {
+    for (const [self, look, ended] of [
+      [MACHINE_PID_NAMESPACE, { seen: false, hostPid: null, unreadable: false }, 'phantom'],
+      [MACHINE_PID_NAMESPACE, { seen: false, hostPid: null, unreadable: true }, null],
+      ['pid:[8]', { seen: false, hostPid: null, unreadable: false }, null],
+      [MACHINE_PID_NAMESPACE, null, null],
+    ] as Array<[string, NamespaceLook | null, string | null]>) {
+      rmSync(path(), { force: true })
+      const s = await open()
+      await s.registerWorker(inSandbox('w', 13, 1000))
+      const pass = s.retirePhantoms({ noticedBy: 'lookup', probe: numbered({ self, look }), at: 9 })
+      await s.close()
+      expect(registration('w', WORKER_AGENT_ID)['ended'], `${self} ${JSON.stringify(look)}`).toBe(ended)
+      if (ended === null) {
+        expect(pass.unchecked.map((u) => u.reason)).toEqual(['other-numbering'])
+        expect(pass.notes[0]).toContain('runs where this reader cannot see its process')
+      }
+    }
+  })
+
+  it('a registration an earlier build wrote is judged as before in the machine\'s numbering alone, and a reader numbered with the worker judges it by its own table (D403)', async () => {
+    const s = await open()
+    await s.registerWorker(worker('old', { pid: 301, start: 1000 }))
+    await s.registerWorker(inSandbox('same', 302, 1000))
+    // Inside the sandbox: the earlier build's worker is not judged; the
+    // worker numbered as this reader is, by this reader's table (gone).
+    const inside = s.retirePhantoms({ noticedBy: 'lookup', probe: numbered({ self: SANDBOX }), at: 1 })
+    expect(inside.retired.map((r) => r.ref.sessionId)).toEqual(['same'])
+    expect(inside.unchecked.map((u) => [u.ref.sessionId, u.reason])).toEqual([['old', 'other-numbering']])
+    expect(inside.notes[0]).toContain('earlier build that recorded no numbering')
+    // In the machine's numbering it is judged as before: gone.
+    expect(s.retirePhantoms({ noticedBy: 'lookup', probe: numbered({ self: MACHINE_PID_NAMESPACE }), at: 2 }).retired.map((r) => r.ref.sessionId)).toEqual(['old'])
+    await s.close()
+  })
+
+  it('a phantom its door later reports ended is set right at the door\'s moment, its phantom notice kept; an ended leg is never ended again (D403)', async () => {
+    const s = await open()
+    await s.registerWorker(worker('w', { pid: 401, start: 1000 }))
+    const ref = { sessionId: 'w', agentId: WORKER_AGENT_ID }
+    s.retirePhantoms({ noticedBy: 'lookup', probe: probe({}), at: 5 })
+    expect(s.retireLeg(ref, 'cut', 7)).toBe(true)
+    expect(s.retireLeg(ref, 'retired', 8)).toBe(false)
+    await s.close()
+    expect(registration('w', WORKER_AGENT_ID)).toMatchObject({ ended: 'cut', stopped_at: 7, noticed_at: 5, noticed_by: 'lookup' })
+  })
+
   it('a re-run records the second process beside the first, and liveness reads the newest (D335)', async () => {
     const s = await open()
     await s.registerWorker(worker('w', { pid: 4242, start: 1000 }))
@@ -318,7 +390,7 @@ describe('the registry around legs and workers', () => {
     expect(registration('w', WORKER_AGENT_ID)['run_key']).toBe('k')
   })
 
-  it('a store a pre-release build took to 31 without the later leg columns gains them all at 32 (the reconcile) and climbs on to the head (34), its rows intact', async () => {
+  it('a store a pre-release build took to 31 without the later leg columns gains them all at 32 (the reconcile) and climbs on to the head, its rows intact', async () => {
     const s = await open()
     await s.registerWorker({ sessionId: 'w', door: 'library', ticket: { parent: { id: 'p1' }, run: 'r1', key: 'k', role: 'builder' }, process: { pid: 4242, start: 1000, host: 'laptop' }, at: 1 })
     await s.close()
@@ -329,7 +401,7 @@ describe('the registry around legs and workers', () => {
       for (const c of ['proc_start_token', 'client_sessions']) db.exec(`ALTER TABLE session_registry DROP COLUMN ${c}`)
       setPragma(db, 'user_version = 31')
       const report = runMigrations(openNodeSqlite(db), { migrate: true })
-      expect(report.applied.map((a) => [a.version, a.kind])).toEqual([[32, 'additive'], [33, 'additive'], [34, 'additive']])
+      expect(report.applied.map((a) => [a.version, a.kind])).toEqual([[32, 'additive'], [33, 'additive'], [34, 'additive'], [35, 'additive'], [36, 'additive']])
       const cols = (db.prepare('PRAGMA table_info(session_registry)').all() as Array<{ name: string }>).map((c) => c.name)
       for (const [name] of LEG_REGISTRY_COLUMNS) expect(cols, name).toContain(name)
       // A second run of the reconcile adds nothing and fails on nothing.
@@ -359,7 +431,7 @@ describe('the registry around legs and workers', () => {
       expect(retirePhantoms(db, { noticedBy: 'session-start hook', probe: probe({}) }).retired).toEqual([])
       expect(retireAllSubagents(db, 's1', 3)).toBe(1)
       const report = runMigrations(openNodeSqlite(db), { migrate: true })
-      expect(report.applied.map((a) => [a.version, a.kind])).toEqual([[31, 'additive'], [32, 'additive'], [33, 'additive'], [34, 'additive']])
+      expect(report.applied.map((a) => [a.version, a.kind])).toEqual([[31, 'additive'], [32, 'additive'], [33, 'additive'], [34, 'additive'], [35, 'additive'], [36, 'additive']])
       expect(hasLegColumns(db)).toBe(true)
     } finally { db.close() }
     expect(registration('s1', 'a1')).toMatchObject({ agent_type: 'tester', stopped_at: 3, run: null, send_backs: 0 })

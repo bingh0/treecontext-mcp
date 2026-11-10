@@ -79,3 +79,26 @@ What these sessions do not hold: a developer's interrupt (`is_interrupt`
 true), an interactive denial, an auto-mode classifier denial
 (`PermissionDenied`), and a compaction the client starts by itself
 (`trigger` auto).
+
+## 2.1.321 (recorded 2026-11-09, Linux)
+
+`success-reading-like-trouble.ndjson` (model: haiku), one call per turn,
+for D404: calls that succeeded whose output reads like trouble. The run
+loaded only the probe's own settings (`--setting-sources project` with the
+dump hooks in `--settings`) and only the probe's MCP server
+(`--strict-mcp-config`), a stdio server whose one tool, `seen`, succeeds
+answering the text `failed call seen`; the tools were allowed with
+`--allowedTools`, so no call waited on a permission.
+
+| Call | Events the client fired for it |
+| --- | --- |
+| Bash `printf "error: 0 found, 0 failed\n"` (succeeds) | PreToolUse, PostToolUse, PostToolBatch |
+| Bash `echo "warning: deprecated"` (succeeds) | PreToolUse, PostToolUse, PostToolBatch |
+| ToolSearch for the probe's tool (succeeds) | PreToolUse, PostToolUse, PostToolBatch |
+| MCP tool `mcp__probe__seen` answering `failed call seen` (succeeds) | PreToolUse, PostToolUse, PostToolBatch |
+| Read `traceback.txt`, a file holding a Python traceback (succeeds) | PreToolUse, PostToolUse, PostToolBatch |
+
+Each arrived by `PostToolUse`, never `PostToolUseFailure`, whatever its
+output says. The session also fired `MessageDisplay` once, for its final
+message (`done`), before `Stop` and `SessionEnd`. The traceback file was
+written for the probe; its paths read `/probe/work` like the rest.

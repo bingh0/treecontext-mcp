@@ -29,7 +29,7 @@
 import { randomUUID } from 'node:crypto'
 import type { RegistryHandle, GitSelf } from './session-registry.js'
 import { hasRegistry, selfOf, agentWriterOf } from './session-registry.js'
-import { hostProbe, sameProcessStart, type ProcessProbe } from './process-probe.js'
+import { hostProbe, sameProcessStart, MACHINE_PID_NAMESPACE, UNREAD_PID_NAMESPACE, UNREAD_TIME_NAMESPACE, type ProcessProbe } from './process-probe.js'
 import { RUN_META_KEY, KEY_META_KEY } from '../run-kinds.js'
 
 // ── Names ──────────────────────────────────────────────────────────
@@ -128,6 +128,10 @@ export const LEG_REGISTRY_COLUMNS: Array<[name: string, decl: string]> = [
   ['client_sessions', 'TEXT'],
 ]
 
+/** D403: the numbering of processes the first process's id belongs to
+ *  (migration 035; later processes carry theirs in `processes`). */
+export const PROC_NS_COLUMN: [name: string, decl: string] = ['proc_ns', 'TEXT']
+
 export const LEG_REGISTRY_INDEX_DDL =
   'CREATE INDEX IF NOT EXISTS idx_session_registry_run ON session_registry (run, run_key);'
 
@@ -154,6 +158,13 @@ export interface WorkerProcess {
   start: number | null
   /** The OS's exact start token, where the host has one (process-probe). */
   token?: string | null
+  /** D403: the numbering of processes (pid namespace) `pid` belongs to,
+   *  where the host has one (Linux: `pid:[<inode>]`). Absent on a process
+   *  an earlier build recorded, or a host with no such numbering. */
+  ns?: string | null
+  /** D403: the time namespace the start was read in (Linux:
+   *  `time:[<inode>]`); absent on a process an earlier build recorded. */
+  tns?: string | null
   host: string
   /** When the door recorded it. */
   at: number
@@ -201,6 +212,8 @@ export interface LegRegistration {
   pid: number | null
   procStart: number | null
   procStartToken: string | null
+  /** D403: the first process's numbering of processes (migration 035). */
+  procNs: string | null
   processes: WorkerProcess[]
   sendBacks: number
   ended: LegEnding | null
@@ -233,7 +246,7 @@ interface RawLeg {
   ticket_absent: string | null; can_write: number | null; host: string | null; pid: number | null
   proc_start: number | null; proc_start_token: string | null; processes: string | null; send_backs: number | null; ended: string | null
   noticed_at: number | null; noticed_by: string | null; opened_runs: string | null; cap_refused: string | null
-  key_settled_from: string | null; client_sessions?: string | null
+  key_settled_from: string | null; client_sessions?: string | null; proc_ns?: string | null
 }
 
 function json<T>(text: string | null, fallback: T): T {
@@ -282,7 +295,7 @@ function toLeg(r: RawLeg): LegRegistration {
     parentDeclared: json<DeclaredParent | null>(r.parent_declared, null),
     ticketMintedAt: r.ticket_minted_at, ticketRaw: r.ticket_raw, ticketAbsent: json<string[]>(r.ticket_absent, []),
     canWrite: r.can_write === null ? null : r.can_write !== 0,
-    host: r.host, pid: r.pid, procStart: r.proc_start, procStartToken: r.proc_start_token, processes: json<WorkerProcess[]>(r.processes, []),
+    host: r.host, pid: r.pid, procStart: r.proc_start, procStartToken: r.proc_start_token, procNs: r.proc_ns ?? null, processes: json<WorkerProcess[]>(r.processes, []),
     sendBacks: r.send_backs ?? 0, ended: r.ended as LegEnding | null, noticedAt: r.noticed_at, noticedBy: r.noticed_by,
     openedRuns: json<string[]>(r.opened_runs, []),
     capRefused: capRefusalsIn(r.cap_refused),
@@ -290,6 +303,17 @@ function toLeg(r: RawLeg): LegRegistration {
     clientSessions: json<Array<{ id: string; linked_by: string; at: number }>>(r.client_sessions ?? null, [])
       .map((c) => ({ id: c.id, linkedBy: c.linked_by, at: c.at })),
     worktree: r.worktree, branch: r.branch, cwd: r.cwd, startedAt: r.started_at, stoppedAt: r.stopped_at,
+  }
+}
+
+/** Whether the registry carries the numbering column (migration 035). A
+ *  store below it records the numbering in `processes` alone. */
+export function hasProcNsColumn(db: RegistryHandle): boolean {
+  if (!hasRegistry(db)) return false
+  try {
+    return (db.prepare('PRAGMA table_info(session_registry)').all() as Array<{ name: string }>).some((c) => c.name === PROC_NS_COLUMN[0])
+  } catch {
+    return false
   }
 }
 
@@ -477,7 +501,7 @@ export interface WorkerStart {
   where?: Partial<GitSelf>
   /** The process the worker runs as (D297, D317): its id, the start
    *  moment and, where the host has one, the exact start token. */
-  process: { pid: number | null; start: number | null; host: string; token?: string | null }
+  process: { pid: number | null; start: number | null; host: string; token?: string | null; ns?: string | null; tns?: string | null }
   briefId?: string | null
   startCheckpoints?: string[]
   at: number
@@ -504,7 +528,10 @@ export function registerWorkerLeg(db: RegistryHandle, start: WorkerStart): LegRe
     worktree: t.parent.worktree ?? null, branch: t.parent.branch ?? null,
   }
   const proc: WorkerProcess | null = start.process.pid === null ? null
-    : { pid: start.process.pid, start: start.process.start, token: start.process.token ?? null, host: start.process.host, at: start.at }
+    : {
+      pid: start.process.pid, start: start.process.start, token: start.process.token ?? null,
+      ...(start.process.ns ? { ns: start.process.ns } : {}), ...(start.process.tns ? { tns: start.process.tns } : {}), host: start.process.host, at: start.at,
+    }
   const keySrc: KeySource | null = t.key ? 'declared' : (t.noKey ? 'declared' : null)
   db.prepare(
     `INSERT INTO session_registry (session_id, agent_id, agent_type, worktree, branch, cwd, toplevel, common_dir, started_at, stopped_at,
@@ -523,6 +550,9 @@ export function registerWorkerLeg(db: RegistryHandle, start: WorkerStart): LegRe
     t.canWrite === undefined || t.canWrite === null ? null : (t.canWrite ? 1 : 0),
     start.process.host, start.process.pid, start.process.start, start.process.token ?? null, asJson(proc ? [proc] : []),
   )
+  if (start.process.ns && hasProcNsColumn(db)) {
+    db.prepare('UPDATE session_registry SET proc_ns = ? WHERE session_id = ? AND agent_id = ?').run(start.process.ns, ref.sessionId, ref.agentId)
+  }
   return legOf(db, ref)!
 }
 
@@ -532,10 +562,11 @@ export function registerWorkerLeg(db: RegistryHandle, start: WorkerStart): LegRe
  *  reads the newest. Recording the first process after its spawn changes
  *  nothing about how the leg ended: a damaged ticket's worker whose one
  *  row landed first stays `invalid`. A re-run (`rerun`) for the leg's
- *  missing checkpoint makes the leg live again only when it was retired
- *  as finished (the other door may have retired it before this door saw
- *  the exit); a leg cut, found gone, or ended with no valid instructions
- *  is never undone. */
+ *  missing checkpoint makes the leg live again when it was retired as
+ *  finished (the other door may have retired it before this door saw the
+ *  exit) or taken for a phantom while it ran (D403: the door saw the exit
+ *  the pass guessed, its phantom notice kept); a leg cut or ended with no
+ *  valid instructions is never undone. */
 export function recordWorkerProcess(db: RegistryHandle, ref: LegRef, proc: WorkerProcess, opts: { rerun?: boolean } = {}): LegRegistration {
   const leg = legOf(db, ref)
   if (!leg) throw new Error(`No leg registered for ${ref.sessionId}/${ref.agentId}`)
@@ -545,22 +576,35 @@ export function recordWorkerProcess(db: RegistryHandle, ref: LegRef, proc: Worke
        proc_start_token = COALESCE(proc_start_token, ?)
      WHERE session_id = ? AND agent_id = ?`,
   ).run(JSON.stringify(processes), proc.host, proc.pid, proc.start, proc.token ?? null, ref.sessionId, ref.agentId)
+  // D403: the first process's numbering beside its id, as its start is.
+  if (proc.ns && leg.processes.length === 0 && hasProcNsColumn(db)) {
+    db.prepare('UPDATE session_registry SET proc_ns = COALESCE(proc_ns, ?) WHERE session_id = ? AND agent_id = ?').run(proc.ns, ref.sessionId, ref.agentId)
+  }
   if (opts.rerun) {
+    // D403: a leg a reader took for a phantom while it ran is live again
+    // too: its door saw it exit and sent it back, so the re-run is running.
+    // The phantom notice is kept (what a reader in between was told).
     db.prepare(
-      `UPDATE session_registry SET stopped_at = NULL, ended = NULL, noticed_at = NULL, noticed_by = NULL
-        WHERE session_id = ? AND agent_id = ? AND ended = 'retired'`,
+      `UPDATE session_registry SET stopped_at = NULL, ended = NULL
+        WHERE session_id = ? AND agent_id = ? AND ended IN ('retired', 'phantom')`,
     ).run(ref.sessionId, ref.agentId)
   }
   return legOf(db, ref)!
 }
 
 /** Record how a leg ended, at the moment its door saw it end (D279, D291,
- *  D292, D303). Only a live leg is retired; returns whether it was. */
+ *  D292, D303). A live leg is retired; so is a leg a reader took for a
+ *  phantom (D403): the door saw the end the phantom pass could only guess,
+ *  so its word sets the leg right, at the door's moment, the moment it was
+ *  taken for a phantom and what took it for one kept (`noticed_at`,
+ *  `noticed_by`), since a reader in between was told so. A leg its door
+ *  already ended is never ended again. Returns whether it was retired. */
 export function retireLeg(db: RegistryHandle, ref: LegRef, how: Exclude<LegEnding, 'phantom'>, at: number): boolean {
   if (!hasLegColumns(db)) return false
   const r = db.prepare(
     // D396: never a self (agent id ''), whose stop the store does not record.
-    "UPDATE session_registry SET stopped_at = ?, ended = ? WHERE session_id = ? AND agent_id = ? AND agent_id != '' AND stopped_at IS NULL AND ended IS NULL",
+    `UPDATE session_registry SET stopped_at = ?, ended = ? WHERE session_id = ? AND agent_id = ? AND agent_id != '' AND stopped_at IS NULL
+        AND (ended IS NULL OR ended = 'phantom')`,
   ).run(at, how, ref.sessionId, ref.agentId) as { changes?: number }
   return (r.changes ?? 0) > 0
 }
@@ -715,7 +759,7 @@ export interface PhantomPass {
   /** Workers retired as phantoms by this pass. */
   retired: PhantomCheck[]
   /** Workers left live that this host could not check, and why. */
-  unchecked: Array<PhantomCheck & { reason: 'other-host' | 'no-start-moment' | 'start-unreadable' | 'unknown' }>
+  unchecked: Array<PhantomCheck & { reason: 'other-host' | 'other-numbering' | 'no-start-moment' | 'start-unreadable' | 'unknown' }>
   /** One sentence per unchecked worker, for the reply that read them. */
   notes: string[]
 }
@@ -730,6 +774,21 @@ export interface PhantomPass {
  * read, or whose host cannot read one now, is left live with its number
  * alone and said to be indistinguishable from a successor (D317's
  * stressing case). Optionally scoped to one run.
+ *
+ * D403: an id means something only in the numbering of processes it was
+ * given in. A worker numbered as this reader is judged by this reader's
+ * process table; one numbered apart (a sandbox's pid namespace) is never
+ * looked up there: where this reader can see that numbering from outside,
+ * the worker is judged there (its process found by its id in it, its start
+ * compared), and a numbering this reader, in the machine's own, sees no
+ * process of has ended with every process in it, so the worker is retired;
+ * where it cannot see it (a reader inside a sandbox, the machine's
+ * processes out of its sight), the worker is left live and the reply says
+ * so. A registration an earlier build wrote records no numbering: a reader
+ * in the machine's own numbering judges it as before, and any other reader
+ * leaves it live, saying it cannot be checked from here. A probe with no
+ * numbering reading (a host that has none, macOS and Windows) judges every
+ * worker as before.
  */
 export function retirePhantoms(db: RegistryHandle, opts: {
   noticedBy: string
@@ -750,9 +809,24 @@ export function retirePhantoms(db: RegistryHandle, opts: {
     `UPDATE session_registry SET ended = 'phantom', noticed_at = ?, noticed_by = ?
       WHERE session_id = ? AND agent_id = ? AND ended IS NULL AND stopped_at IS NULL`,
   )
+  // D403: this reader's own numbering, read once per pass; null where the
+  // probe reads none (every worker is judged as before).
+  // On Linux a reader that cannot read its own numbering (no /proc) is
+  // UNREAD_PID_NAMESPACE and judges no worker (D403).
+  const readerNs = probe.pidNamespace ? (probe.pidNamespace('self') ?? (process.platform === 'linux' ? UNREAD_PID_NAMESPACE : null)) : null
+  // The time namespace this reader reads start times in (D403); null where
+  // the probe reads none.
+  const readerTns = probe.timeNamespace ? probe.timeNamespace('self') : null
+  /** Whether a registered start compares with one this reader reads: an
+   *  earlier build's registration (no time namespace recorded) as before;
+   *  this build's only where both were read in one time namespace. */
+  const comparable = (w: WorkerProcess): boolean =>
+    w.tns === undefined || w.tns === null || (w.tns !== UNREAD_TIME_NAMESPACE && readerTns !== null && w.tns === readerTns)
+  const clockNote = (name: string, w: WorkerProcess): string =>
+    `${name}: the start of its process ${w.pid} was read in another time namespace (${w.tns}) than this reader's (${readerTns ?? 'unread'}), whose clock since boot may be shifted, so it cannot be told from a successor that took its number; it is left live.`
   for (const leg of rows) {
     const newest: WorkerProcess | null = leg.processes.at(-1)
-      ?? (leg.pid !== null ? { pid: leg.pid, start: leg.procStart, token: leg.procStartToken, host: leg.host ?? '', at: leg.startedAt } : null)
+      ?? (leg.pid !== null ? { pid: leg.pid, start: leg.procStart, token: leg.procStartToken, ns: leg.procNs, host: leg.host ?? '', at: leg.startedAt } : null)
     const check: PhantomCheck = {
       ref: { sessionId: leg.sessionId, agentId: leg.agentId }, role: leg.role, run: leg.run, key: leg.key,
       host: newest?.host ?? leg.host, pid: newest?.pid ?? null,
@@ -764,7 +838,80 @@ export function retirePhantoms(db: RegistryHandle, opts: {
       pass.notes.push(`${name} runs on "${newest.host}" and cannot be checked from here ("${here}"); it is left live.`)
       continue
     }
-    const exists = probe.exists(newest.pid)
+    // D403: which process table judges the worker, and its id there.
+    const pid = newest.pid
+    const workerNs = newest.ns ?? null
+    if (readerNs === UNREAD_PID_NAMESPACE) {
+      // This reader cannot read its own numbering (no /proc where it
+      // runs): no id it looks up is known to be in its table.
+      pass.unchecked.push({ ...check, reason: 'other-numbering' })
+      pass.notes.push(`${name} runs where this reader cannot see its process: this reader cannot read which numbering of processes it runs in (no /proc where it runs), so it cannot check process ${newest.pid} from here; it is left live.`)
+      continue
+    }
+    if (readerNs !== null && workerNs === null && readerNs !== MACHINE_PID_NAMESPACE) {
+      pass.unchecked.push({ ...check, reason: 'other-numbering' })
+      pass.notes.push(`${name} was registered by an earlier build that recorded no numbering of processes for its process ${newest.pid}, and this reader's processes are numbered apart from the machine's (${readerNs}, not the machine's own ${MACHINE_PID_NAMESPACE}), so it cannot be checked from here; it is left live.`)
+      continue
+    }
+    if (workerNs === UNREAD_PID_NAMESPACE) {
+      // Its door could not read its own numbering: its id may be a
+      // sandbox's, and no reader's table is known to be the one it is in.
+      pass.unchecked.push({ ...check, reason: 'other-numbering' })
+      pass.notes.push(`${name} runs where this reader cannot see its process: its door could not read which numbering of processes its process ${newest.pid} belongs to (no /proc where it ran), so it cannot be checked from here; it is left live.`)
+      continue
+    }
+    if (readerNs !== null && workerNs !== null && workerNs !== readerNs) {
+      const registered = { start: newest.start, token: newest.token ?? null }
+      const look = probe.lookInNamespace ? probe.lookInNamespace(workerNs, newest.pid, registered) : null
+      if (look !== null && look.hostPid !== null) {
+        // Found in its own numbering: judged there, by D317, with the
+        // readings taken where it was found (its id there is in the
+        // numbering this reader's /proc lists, not always this reader's).
+        const now = 'start' in look
+          ? { start: look.start ?? null, token: look.token ?? null }
+          : { start: probe.startMoment(look.hostPid), token: probe.startToken?.(look.hostPid) ?? null }
+        if (newest.start === null && !newest.token) {
+          pass.unchecked.push({ ...check, reason: 'no-start-moment' })
+          pass.notes.push(`${name} was registered with process ${newest.pid} and no start moment, so it cannot be told from a successor that took its number; it is left live.`)
+          continue
+        }
+        if (!comparable(newest)) {
+          pass.unchecked.push({ ...check, reason: 'start-unreadable' })
+          pass.notes.push(clockNote(name, newest))
+          continue
+        }
+        const same = sameProcessStart(registered, now)
+        if (same === null) {
+          pass.unchecked.push({ ...check, reason: 'start-unreadable' })
+          pass.notes.push(`${name}: this host cannot read the start moment of process ${newest.pid}, so it cannot be told from a successor that took its number; it is left live.`)
+        } else if (!same) {
+          // D317 within its numbering: another process took the id (one
+          // process holds an id in a numbering, so no unreadable one can
+          // be the worker beside it).
+          retire.run(at, opts.noticedBy, leg.sessionId, leg.agentId)
+          pass.retired.push(check)
+        }
+        continue
+      }
+      const seesAll = probe.seesEveryNumbering ? probe.seesEveryNumbering() : readerNs === MACHINE_PID_NAMESPACE
+      if (look !== null && !look.unreadable && (look.seen || seesAll)) {
+        // Its numbering is there with no process numbered so, or this
+        // reader, which sees every numbering on the machine, sees no
+        // process in it: the sandbox has ended with every process in it.
+        retire.run(at, opts.noticedBy, leg.sessionId, leg.agentId)
+        pass.retired.push(check)
+        continue
+      }
+      pass.unchecked.push({ ...check, reason: 'other-numbering' })
+      const where = look !== null && look.unreadable
+        ? `a process this reader may not read could be its process ${newest.pid}, numbered in ${workerNs}`
+        : workerNs === MACHINE_PID_NAMESPACE
+          ? `its process ${newest.pid} is numbered in the machine's own numbering of processes (${workerNs}), and this reader's are numbered apart in ${readerNs}, from where the machine's are out of sight`
+          : `its process ${newest.pid} is numbered in another numbering of processes (${workerNs}) than this reader's (${readerNs}), one this reader cannot see from where it runs`
+      pass.notes.push(`${name} runs where this reader cannot see its process: ${where}, so it cannot be checked from here; it is left live.`)
+      continue
+    }
+    const exists = probe.exists(pid)
     if (exists === false) {
       retire.run(at, opts.noticedBy, leg.sessionId, leg.agentId)
       pass.retired.push(check)
@@ -780,9 +927,14 @@ export function retirePhantoms(db: RegistryHandle, opts: {
       pass.notes.push(`${name} was registered with process ${newest.pid} and no start moment, so it cannot be told from a successor that took its number; it is left live.`)
       continue
     }
+    if (!comparable(newest)) {
+      pass.unchecked.push({ ...check, reason: 'start-unreadable' })
+      pass.notes.push(clockNote(name, newest))
+      continue
+    }
     const same = sameProcessStart(
       { start: newest.start, token: newest.token ?? null },
-      { start: probe.startMoment(newest.pid), token: probe.startToken?.(newest.pid) ?? null },
+      { start: probe.startMoment(pid), token: probe.startToken?.(pid) ?? null },
     )
     if (same === null) {
       pass.unchecked.push({ ...check, reason: 'start-unreadable' })

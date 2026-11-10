@@ -364,13 +364,28 @@ export function writeStaging(dbPath: string, entry: StagingEntry, andThen?: (db:
     //    the row kind (D190, D147). An older store drops them: the row
     //    drains as the main agent's, which is the unstamped shape every
     //    row had before.
-    //  - v34+ (current): a tool call's id, its outcome and where it was
+    //  - v34+: a tool call's id, its outcome and where it was
     //    captured from (D400, D401). An older store drops them: the call
     //    stages exactly as it did before this build (a failed call's row
     //    still lands, unmarked), and the batch hook adds nothing there.
+    //  - v36+ (current): the client whose own event stated the call
+    //    succeeded (D404). An older store drops it: the call drains
+    //    classed by its text, as before.
     const writerCols = entry.agentId != null || entry.agentType != null || entry.kind != null
     const callCols = entry.toolUseId != null || entry.outcome != null || entry.capturedFrom != null
+    const statedCol = entry.statedBy != null
     const tiers: Array<{ cols: string; vals: string; run: Record<string, unknown>; note: string | null }> = [
+      ...(statedCol ? [{
+        cols: ', index_len, preview_len, namespace, agent_id, agent_type, kind, tool_use_id, outcome, captured_from, stated_by',
+        vals: ', @indexLen, @previewLen, @namespace, @agentId, @agentType, @kind, @toolUseId, @outcome, @capturedFrom, @statedBy',
+        run: {
+          ...params, indexLen: entry.indexLen ?? null, previewLen: entry.previewLen ?? null, namespace,
+          agentId: entry.agentId ?? null, agentType: entry.agentType ?? null, kind: entry.kind ?? null,
+          toolUseId: entry.toolUseId ?? null, outcome: entry.outcome ?? null, capturedFrom: entry.capturedFrom ?? null,
+          statedBy: entry.statedBy ?? null,
+        },
+        note: null,
+      }] : []),
       ...(callCols ? [{
         cols: ', index_len, preview_len, namespace, agent_id, agent_type, kind, tool_use_id, outcome, captured_from',
         vals: ', @indexLen, @previewLen, @namespace, @agentId, @agentType, @kind, @toolUseId, @outcome, @capturedFrom',
@@ -379,7 +394,7 @@ export function writeStaging(dbPath: string, entry: StagingEntry, andThen?: (db:
           agentId: entry.agentId ?? null, agentType: entry.agentType ?? null, kind: entry.kind ?? null,
           toolUseId: entry.toolUseId ?? null, outcome: entry.outcome ?? null, capturedFrom: entry.capturedFrom ?? null,
         },
-        note: null,
+        note: statedCol ? 'pre-036 column fallback, the stated success dropped' : null,
       }] : []),
       ...(writerCols ? [{
         cols: ', index_len, preview_len, namespace, agent_id, agent_type, kind',

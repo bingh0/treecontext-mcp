@@ -36,6 +36,27 @@ export function classifyIntent(content: string): IntentType {
 
 export type ExitType = 'success' | 'soft_fail' | 'error'
 
+/** D404: the metadata key an entry says what decided its class under:
+ *  `client` (the client's own event said how the call ended) or `text`
+ *  (classifyExit read its output). An entry drained before this build has
+ *  none and keeps the class it was given. */
+export const EXIT_BY_KEY = 'exit_by'
+export type ExitBy = 'client' | 'text'
+
+/**
+ * D400, D404: a captured call's class and what decided it. A call the
+ * client's own failure event reported (`outcome` failed or interrupted) is
+ * an error, and a call the client's own success event stated succeeded
+ * (`statedBy`, a client named by the hook's command whose events state how
+ * a call ended) is a success: the client's word, the text deciding nothing.
+ * Every other call is classed by its text (classifyExit), as before.
+ */
+export function exitClassOf(row: { outcome: string | null; statedBy?: string | null; content: string }): { exitType: ExitType; by: ExitBy } {
+  if (row.outcome === 'failed' || row.outcome === 'interrupted') return { exitType: 'error', by: 'client' }
+  if (row.statedBy != null && row.outcome == null) return { exitType: 'success', by: 'client' }
+  return { exitType: classifyExit(row.content), by: 'text' }
+}
+
 export function classifyExit(toolContent: string): ExitType {
   const lower = toolContent.toLowerCase()
   if (lower.includes('error:') || lower.includes('failed') || lower.includes('fatal:') ||

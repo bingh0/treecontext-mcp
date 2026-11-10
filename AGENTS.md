@@ -110,7 +110,7 @@ hand-written models, never the client's word.
   (`trustedWorkerLane`), which tells it to begin from its first message
 - `src/server/installer.ts` — agent detection, config writing, AGENTS.md
   block, doctor (one row per documented client: mode, state, remedy); the
-  Claude Code hooks block, and its verbatim (Codex) copy behind
+  Claude Code hooks block (each command naming Claude Code, D404), and its (Codex) copy, naming no client, behind
   `--experimental-capture`; Gemini CLI is an archived platform (D399):
   install never wires it, uninstall's archived sweep removes what an
   earlier build wrote for it, and doctor names the leftovers
@@ -162,7 +162,9 @@ hand-written models, never the client's word.
   a leg ended; the phantom pass any reader of the registry runs; the run
   and key a leg's summary row is stamped with
 - `src/persistence/process-probe.ts` — what this host's OS says about a
-  process (exists, start moment) for the phantom pass
+  process (exists, start moment) for the phantom pass, and on Linux which
+  numbering of processes (pid namespace) an id belongs to and what a reader
+  sees of another numbering from outside (D403)
 - `src/run-kinds.ts` — the row kinds a run is made of (checkpoint, brief,
   run-open, run-close, first-moment, the leg's summary) and the rows the
   ticket door writes in a worker's lane (send-back) or the spawner's
@@ -226,6 +228,10 @@ hand-written models, never the client's word.
   ticket a worker, never a self; `stop` sends that worker back once;
   `git-self.ts` reads where a session runs (worktree, branch) for its
   registration
+- `src/hooks/hook-client.ts` — the client a hook runs for (D404): named
+  by the command install wrote (`--client <name>`, handed on by the hook
+  script), never read from the payload; the clients whose own events state
+  how a call ended
 - `src/hooks/hook-store.ts` — a FlatStore over a hook's own connection
   (`migrate: false`, at this build's schema only), so the hooks door writes its rows
   with the ticket door's code
@@ -365,6 +371,48 @@ node dist/server/cli.js doctor      # after a build
   `tool_name`). A failed call's drained row is the `error` exit class
   whatever its text; a batch row has no class and opens or resolves no
   error
+- A call's exit class is the client's word where the client's own event
+  stated how it ended (D404): `outcome` (a failure, D400) or staging's
+  `stated_by` (a success, migration 036), and the text (`classifyExit`)
+  otherwise; the entry says which (`exit_by`). `stated_by` is set only by
+  a hook whose command names a client in `CLIENTS_STATING_OUTCOME`
+  (hooks/hook-client.ts), never from the payload: Codex's payloads are
+  Claude-shaped. It is never an `outcome` value, since `outcome IS NULL`
+  is what the own-echo gate, the stop hook's settle and the staged
+  cap-refusal read take for a call's own successful event. A client joins
+  that set only on a recording showing its failed calls arrive by an event
+  of their own. Every hook command install writes for Claude Code ends in
+  `--client claude-code`; a reader that grades a command's path strips it
+  (`withoutClientArg`)
+- A process id means something only in its numbering of processes (D403):
+  a worker's registration records its pid namespace (`proc_ns`, and `ns` on
+  each of `processes`), read by the door from its own
+  (`numberingToRecord`: `pid:[unread]` where a Linux door has no /proc),
+  the id being the one its spawn returned there. /proc need not be the
+  reader's numbering's (a sandbox that keeps the machine's /proc): the
+  probe reads an id's start through the /proc entry in its own numbering
+  (`procEntryOf`), never `/proc/<id>` blindly. The phantom pass judges a
+  worker by the reader's own table only where the two numberings match;
+  never "fix" a cross-numbering read by probing the reader's table. Only a
+  reader that sees every numbering (`seesEveryNumbering`: the machine's
+  own, with its /proc) takes "not seen" for a sandbox's end; a process it
+  may not read keeps the worker live when its `NSpid` id and its start
+  match the worker's. Any error leaves a gone worker live, never retires a
+  live one. A registration with no numbering is an earlier build's, judged
+  as before only by a reader in the machine's own numbering
+  (`MACHINE_PID_NAMESPACE`). `retireLeg` sets a phantom right at its
+  door's moment and keeps `noticed_at`/`noticed_by`; it never ends an
+  ended leg again; a re-run makes a phantom live again, and a damaged
+  ticket's phantom is set to invalid by its first own row. A Linux reader
+  that cannot read its own numbering judges no worker. Each process records
+  the time namespace its start was read in (`tns` on `processes`): starts
+  compare only within one (/proc shifts a start by the READER's time
+  namespace); otherwise existence alone judges. `seesEveryNumbering` is
+  also "no" under a `hidepid` /proc. `exit_by` is the drain's mark: the
+  insert tool drops a caller's copy, and on a row a caller labels
+  `auto-capture` it drops the capture marks too (`outcome`,
+  `captured_from`, `tool_use_id`, `exit_type`, `stated_by`); the trail pane
+  counts the client's word only on a captured tool row
 - Platform events still stage (hook → staging → drain). The hooks door
   is the one place a hook writes journal rows directly: a leg's own rows
   (registration, the run's open, first moment, send-back, summary),

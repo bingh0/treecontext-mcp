@@ -1,10 +1,10 @@
 {
   "client": "Claude Code",
-  "version": "2.1.319",
-  "read_at": "2026-11-09",
+  "version": "2.1.322",
+  "read_at": "2026-11-10",
   "sources": [
-    "hooks reference, code.claude.com/docs/en/hooks, read 2026-11-09",
-    "live headless runs recorded in 2.1.319/"
+    "hooks reference, code.claude.com/docs/en/hooks, read 2026-11-09 at Claude Code 2.1.319 and re-read 2026-11-10 at Claude Code 2.1.322 (the client installed on the reading host); the reference's lifecycle table names the same 33 events both times",
+    "live headless runs recorded in 2.1.319/ and 2.1.321/"
   ],
   "provenance": "Event names come from the client's hooks reference and the recordings; `when`, `disposition` and `lost` are treecontext's own words. Nothing mechanical sees an event the client has that neither this list nor a recording names, so the hooks reference is re-read at every client upgrade (the census's version line is the reminder).",
   "events": [
@@ -109,7 +109,7 @@
       "when": "assistant text is displayed",
       "disposition": "not-captured",
       "lost": "assistant text while it is displayed; the turn's text is captured at its end (Stop)",
-      "observed": false
+      "observed": true
     },
     {
       "event": "TaskCreated",

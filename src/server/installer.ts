@@ -6,6 +6,7 @@
  */
 
 import { TICKET_ENV, WORKER_SESSION_ENV } from '../ticket.js'
+import { HOOK_CLIENT_FLAG, CLAUDE_CODE_CLIENT } from '../hooks/hook-client.js'
 import {
   existsSync, readFileSync, writeFileSync, renameSync, mkdirSync,
   unlinkSync, readdirSync, lstatSync, statSync, rmSync,  realpathSync, readlinkSync, chmodSync,
@@ -1319,7 +1320,7 @@ export function hookScriptContent(event: string, debug = false): string {
     // already an ordinary child and the script's own status is the last word:
     // one line covers a missing module, a missing interpreter and anything
     // else, where the POSIX branch needs a pre-exec guard.
-    return `@echo off\r\nREM treecontext: ${event} hook\r\nREM Installed by: treecontext install\r\nsetlocal\r\n${dbgLine}${windowsNodeResolveSnippet(verifiedNode())}${windowsCliResolveSnippet(cliPath)}"%TC_NODE%" "%TC_CLI%" hook ${event} 2>nul\r\nexit /b 0\r\n`
+    return `@echo off\r\nREM treecontext: ${event} hook\r\nREM Installed by: treecontext install\r\nsetlocal\r\n${dbgLine}${windowsNodeResolveSnippet(verifiedNode())}${windowsCliResolveSnippet(cliPath)}"%TC_NODE%" "%TC_CLI%" hook ${event} %* 2>nul\r\nexit /b 0\r\n`
   }
   const prefix = debug ? 'TREECONTEXT_DEBUG=1 ' : ''
   // Resolve node at runtime via the shared snippet (PATH → nvm/fnm glob →
@@ -1356,7 +1357,7 @@ export function hookScriptContent(event: string, debug = false): string {
 ${posixNodeResolveSnippet(verifiedNode())}
 ${posixCliResolveSnippet(cliPath)}
 [ -x "$TC_NODE" ] && [ -f "$TC_CLI" ] || exit 0
-${prefix}exec "$TC_NODE" "$TC_CLI" hook ${event} 2>/dev/null
+${prefix}exec "$TC_NODE" "$TC_CLI" hook ${event} "$@" 2>/dev/null
 exit 0
 `
 }
@@ -1740,11 +1741,17 @@ export function claudeHookCommand(scriptPath: string, shell: HookShell = hookShe
  * of D216, the hook's namespace annotation — misses (live probe,
  * 2026-10-08). Windows keeps the plain forms: its `.cmd` wrappers cannot
  * exec, and the session-keyed channels carry identity there.
+ *
+ * D404: `client`, when given, is the client the command is written for,
+ * named after the script as `--client <name>`; the script hands its
+ * arguments on to `treecontext hook <event>`, and the hook takes its client
+ * from there (hooks/hook-client.ts), never from the payload.
  */
 export function claudeHookDispatch(
   scriptPath: string, shell: HookShell = hookShellFor(), platform: NodeJS.Platform = process.platform,
+  client: string | null = null,
 ): string {
-  const cmd = claudeHookCommand(scriptPath, shell)
+  const cmd = `${claudeHookCommand(scriptPath, shell)}${client ? ` ${HOOK_CLIENT_FLAG} ${client}` : ''}`
   return platform === 'win32' ? cmd : `exec ${cmd}`
 }
 
@@ -1752,6 +1759,13 @@ export function claudeHookDispatch(
  *  one place every reader of a written command strips it. */
 export function withoutExec(command: string): string {
   return command.replace(/^\s*exec\s+/, '')
+}
+
+/** A hook command with the client it names (`--client <name>`, D404)
+ *  taken off its end: the script path and the shell's own words alone, for
+ *  a reader that grades the path. */
+export function withoutClientArg(command: string): string {
+  return command.replace(new RegExp(`\\s+${HOOK_CLIENT_FLAG}\\s+\\S+\\s*$`), '')
 }
 
 /** The treecontext hook commands of a Claude-format settings object that
@@ -1970,7 +1984,7 @@ export function unrunnableHookCommands(
           continue
         }
 
-        const body = shell === 'powershell' ? command.slice(2) : withoutExec(command)
+        const body = withoutClientArg(shell === 'powershell' ? command.slice(2) : withoutExec(command))
         const quoted = /^"(.*)"$/.exec(body)
         const target = quoted?.[1] ?? body
         if (!quoted && /\s/.test(body)) {
@@ -1980,6 +1994,26 @@ export function unrunnableHookCommands(
         if (!existsSync(target)) {
           out.push({ command, reason: 'names a script that is not there' })
         }
+      }
+    }
+  }
+  return out
+}
+
+/** D404: the treecontext hook commands of a Claude-format settings object
+ *  that do not name Claude Code as their client (a block an earlier build
+ *  wrote): their hooks state nothing about how a call ended. */
+export function claudeHookCommandsNamingNoClient(settings: Record<string, unknown>): string[] {
+  const hooks = (settings['hooks'] ?? {}) as Record<string, Array<{ hooks?: Array<{ command?: unknown }> }> | undefined>
+  const named = new RegExp(`\\s${HOOK_CLIENT_FLAG}\\s+${CLAUDE_CODE_CLIENT}(?:\\s|$)`)
+  const out: string[] = []
+  for (const matchers of Object.values(hooks)) {
+    if (!Array.isArray(matchers)) continue
+    for (const m of matchers) {
+      for (const h of m?.hooks ?? []) {
+        const c = h?.command
+        if (typeof c !== 'string' || !runsOwnHookScript(c, CLAUDE_SCRIPT_NAMES)) continue
+        if (!named.test(c)) out.push(c)
       }
     }
   }
@@ -2036,14 +2070,19 @@ export function claudeUnwiredEventsDetail(events: string[]): string {
  * copy is graded against is the one install would write today, never a
  * stored snapshot of it.
  */
-function applyClaudeHookBlock(hooks: Record<string, ClaudeHookMatcher[]>): Record<string, ClaudeHookMatcher[]> {
+function applyClaudeHookBlock(
+  hooks: Record<string, ClaudeHookMatcher[]>,
+  // D404: the client each command names, from which the hook takes its
+  // client; null writes commands that name none (a copy for another client).
+  client: string | null = CLAUDE_CODE_CLIENT,
+): Record<string, ClaudeHookMatcher[]> {
   const hooksDir = join(homedir(), '.claude', HOOK_SCRIPTS_DIR_NAME)
   const ext = process.platform === 'win32' ? '.cmd' : ''
   // One detection per install, shared by every hook entry and by the `shell`
   // field written beside it, so the whole file cannot end up half-bash.
   const hookShell = hookShellFor()
   const hookCmd = (name: string): string =>
-    claudeHookDispatch(join(hooksDir, `${TC_HOOK_PREFIX}${name}${ext}`), hookShell)
+    claudeHookDispatch(join(hooksDir, `${TC_HOOK_PREFIX}${name}${ext}`), hookShell, process.platform, client)
   const reminderCmd = hookCmd('session-reminder')
   const sessionStartCmd = hookCmd('session-start')
   const preCompactCmd = hookCmd('pre-compact')
@@ -2371,9 +2410,12 @@ export function hookViewDifferences(actual: Record<string, string[]>, expected: 
   return events.filter(e => JSON.stringify(actual[e] ?? []) !== JSON.stringify(expected[e] ?? []))
 }
 
-/** The block a copying client's configuration should hold today: the Claude Code block, verbatim. */
+/** The block a copying client's configuration should hold today: the Claude Code block's events and scripts, its commands naming no client (D404). */
 export function expectedHookCopy(): Record<string, ClaudeHookMatcher[]> {
-  return claudeHooksBlock()
+  // D404: the copy names no client. Its commands run for a client whose
+  // payloads only look like Claude Code's, so they must never say Claude
+  // Code stated how a call ended; a command naming no client states nothing.
+  return applyClaudeHookBlock({}, null)
 }
 
 /**
@@ -6842,6 +6884,19 @@ export async function doctor(): Promise<DiagnosticResult[]> {
             results.push({
               check: `${agent.name}: capture events`, status: 'warn',
               detail: `not wired: ${claudeUnwiredEventsDetail(missing)}`,
+              fix: `treecontext install --force --agent ${agent.slug}`,
+            })
+          }
+        }
+        if (settingsPath && existsSync(settingsPath)) {
+          // D404: a block an earlier build wrote names no client in its
+          // commands, so its hooks state nothing about how a call ended and
+          // a call Claude Code said succeeded is classed by its text.
+          const unnamed = claudeHookCommandsNamingNoClient(readJsonSafe(settingsPath))
+          if (unnamed.length > 0) {
+            results.push({
+              check: `${agent.name}: exit classes`, status: 'warn',
+              detail: `${unnamed.length} hook command${unnamed.length === 1 ? '' : 's'} written by an earlier build name${unnamed.length === 1 ? 's' : ''} no client, so a call ${agent.name} says succeeded is classed by its output's text (a status call whose reply says "error" is filed as an error); install rewrites the commands to name ${agent.name}`,
               fix: `treecontext install --force --agent ${agent.slug}`,
             })
           }

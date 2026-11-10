@@ -153,11 +153,14 @@ re-run it, Claude Code keeps summarising idle sessions.
 **Upgrading to `0.1.0-beta.4`.** Re-run `treecontext install`. What an
 upgrade changes:
 
-- The store's schema moves from v32 to v34 (migration 033: a headless
+- The store's schema moves from v32 to v36 (migration 033: a headless
   worker's notes dedup within its own lane; migration 034: a staged tool
-  call carries the client's id for it and how it ended) the first time a
-  beta.4 server opens it, after the automatic copy of the store as it was,
-  `treecontext.db.pre-migration-v32.bak` beside it. Both migrations are
+  call carries the client's id for it and how it ended; migration 035: a
+  worker's registration records which numbering of processes its process
+  id belongs to; migration 036: a staged tool call carries the client that
+  stated it succeeded) the first time a beta.4 server opens it, after the
+  automatic copy of the store as it was,
+  `treecontext.db.pre-migration-v32.bak` beside it. All four migrations are
   additive and change no existing row. `0.1.0-beta.3.1` then refuses the
   store (`SchemaVersionError`: the store is newer than the build), so going
   back to beta.3.1 means restoring that copy, without what was written
@@ -170,6 +173,55 @@ upgrade changes:
   first time a beta.4 server opens the store, a failed call is journaled
   without its `outcome` and `tool_use_id` marks, and a call the client
   resolved without running it is not journaled.
+- Claude Code's hook commands now name their client (`--client
+  claude-code`), and a call Claude Code says succeeded is classed a success
+  whatever its output says ("error: 0 found, 0 failed", a traceback in a
+  file it read, an MCP reply saying "failed"); each classified entry says
+  what decided its class (`exit_by` `client` or `text`), and the trail
+  pane's exit rows say how many of their events each decided. A command
+  that names no client states nothing, and its calls are classed by their
+  text as before: until you re-run install, doctor's "exit classes" row
+  names the commands an earlier build wrote. Entries drained before the
+  upgrade keep their class.
+- A headless worker run inside a sandbox that numbers its own processes
+  (Codex CLI's on Linux, bwrap, `unshare --pid`) is no longer taken for
+  gone by a reader outside it, nor a worker outside by a reader inside
+  one: a reader that cannot see the worker's process leaves it live and
+  the key lookup says so. That holds whether or not the sandbox mounts a
+  /proc of its own, and a door in a sandbox with no /proc at all records
+  that it could not read its numbering, so no reader judges its worker; a
+  reader with no /proc judges no worker at all. A start moment read in a
+  time namespace whose clock since boot is shifted (`unshare --time`) is
+  never compared with one read outside it: such a worker is judged only
+  by whether its process exists. A
+  worker registered by beta.3.1 or an earlier beta.4 records no numbering
+  and is judged only by a reader in the machine's own numbering. A worker
+  this build's door started that a reader took for gone is set right when
+  the door reports how it ended (or when it is sent back, or when a
+  damaged ticket's worker writes its one row), keeping when and by what it
+  was taken for gone. A worker an earlier build's door started is not: if
+  a sandboxed worker of beta.3.1 or an earlier beta.4 is still running
+  when you upgrade, a beta.4 reader outside its sandbox can take it for
+  gone, and its own door, which never sets a phantom right, then writes
+  its summary row beside a registration that keeps reading `phantom`.
+  Let such workers finish before upgrading.
+- Known limit: a reader decides that a sandbox has ended (and retires its
+  worker as a phantom) only when its own numbering of processes is the
+  machine's and its /proc is that numbering's. A reader whose processes
+  are numbered apart from the machine's (WSL2, whose distributions run in
+  a numbering of their own, or any container that does not share the
+  host's) never sees a sandbox end, so a worker whose sandbox was killed
+  together with its door stays live there until a reader in the machine's
+  own numbering looks. A reader whose /proc hides other users' processes
+  (mounted `hidepid`, and the reader not root) is treated the same way:
+  it reads the mount's options and takes no sandbox's end from what it
+  does not see (read from the mount table; a machine /proc mounted
+  `hidepid` was not tried, as that needs root). A worker whose start was
+  read in another time namespace, or on a kernel with no time namespaces
+  (before 5.6), is never told from a successor that took its process id
+  while that id is held, so it stays live until the id is free. It errs
+  toward leaving a gone worker live, never toward retiring a running one.
+  Reused namespace numbers err the same way.
 - It writes tool approvals into Claude Code, Codex CLI and Antigravity CLI
   (§3), so a headless worker can read and write the journal. The way back:
   `treecontext config tool-approvals off|on [--agent claude|codex|agy]`, or
@@ -728,15 +780,21 @@ a test result.
 | OpenCode | none: JS/TS plugins only, no shell hooks | opencode.ai/docs/plugins (updated 2026-10-03) | offers no shell hooks, so the tools are its whole surface (the MCP tools; JS/TS plugins are not hooks) | documented only |
 | Antigravity CLI | SessionStart, PreToolUse, PostToolUse, PreInvocation, PostInvocation, Stop | antigravity.google/docs/hooks (no date shown), checked 2026-11-08 | keeps its own hook configuration, which install leaves alone, so the tools are its whole surface (`~/.gemini/config/hooks.json`, workspace `.agents/hooks.json`; no adapter, nothing is captured) | documented only |
 
-Codex CLI's copy is the Claude Code block verbatim, `PostToolUseFailure`
-and `PostToolBatch` included. Codex CLI 0.167.0 does not have those two
+Codex CLI's copy is the Claude Code block, `PostToolUseFailure` and
+`PostToolBatch` included, its commands naming no client: Codex's payloads
+are shaped like Claude Code's, so the copy never claims that Codex stated
+how a call ended, and a Codex call is classed by its output's text. Codex CLI 0.167.0 does not have those two
 events and skips them without a warning (checked 2026-11-09 through its
 app server's `hooks/list`), so a failed call, or one Codex refused before
 running it, is not captured there. VS Code and Cursor read the Claude
 settings file, the two events included; how either treats
 `PostToolUseFailure` and `PostToolBatch` (whether it fires them, and with
 what payload) has not been checked, so their capture of a failed or refused
-call is unknown.
+call is unknown. Because they run the block written for Claude Code, whose
+commands name Claude Code, their tool events reach the hook as Claude
+Code's, and a call either reports by `PostToolUse` is classed a success
+(D404); whether either sends a failed call by an event of its own, as
+Claude Code does, is unchecked.
 
 Gemini CLI left the matrix on 2026-11-09, archived: Google deprecated it
 for Antigravity CLI, and treecontext no longer wires it.

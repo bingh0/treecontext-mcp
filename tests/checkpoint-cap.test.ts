@@ -652,7 +652,11 @@ describe('the staged-echo readers read only a call\'s own successful echo (D400,
     })
   }
 
-  it('the cap refusal\'s staged read (cap-refusals.ts) resolves nothing from them, and resolves from the own echo', async () => {
+  // D404: a call's own echo from a client that states its success (Claude
+  // Code, `stated_by`) is as much the call's own as one that states nothing.
+  const owns: Array<[string, Record<string, unknown>]> = [['stating nothing', {}], ['stated a success by its client (D404)', { statedBy: 'claude-code' }]]
+  for (const [ownName, own] of owns) {
+  it(`the cap refusal's staged read (cap-refusals.ts) resolves nothing from them, and resolves from the own echo ${ownName}`, async () => {
     const { s } = await withLegs(['builder', 'reviewer'])
     const { c, close } = await connect(s)
     const a = await put(c, text(20_000, 'A'))
@@ -665,12 +669,12 @@ describe('the staged-echo readers read only a call\'s own successful echo (D400,
     }
     expect(read()).toBe(0)
     expect(refusedOf('s1', '')).toEqual([expect.objectContaining({ src: 'pending' })])
-    stage(s, 'a-builder', replyText(a.r), {})
+    stage(s, 'a-builder', replyText(a.r), own)
     expect(read()).toBe(1)
     await s.close()
   })
 
-  it('the stop hook\'s settle from staged echoes (subagent-stop.ts) settles no key from them, and settles from the own echo', async () => {
+  it(`the stop hook's settle from staged echoes (subagent-stop.ts) settles no key from them, and settles from the own echo ${ownName}`, async () => {
     const { s, legs } = await withLegs(['builder'])
     const target = await s.insert('a note under the run\'s key', { metadata: { run: 'r1', key: 'login-form' } })
     const reply = JSON.stringify([{ type: 'text', text: JSON.stringify({ node_id: target.nodeId, deduplicated: false }, null, 2) }])
@@ -681,9 +685,10 @@ describe('the staged-echo readers read only a call\'s own successful echo (D400,
     }
     expect(settle()).toBe(0)
     expect(regLeg(legs['builder']!)!.keySrc).toBe('inferred')
-    stage(s, 'a-builder', reply, {})
+    stage(s, 'a-builder', reply, own)
     expect(settle()).toBe(1)
     expect(regLeg(legs['builder']!)!.keySrc).toBe('own')
     await s.close()
   })
+  }
 })

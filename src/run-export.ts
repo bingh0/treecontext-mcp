@@ -192,7 +192,7 @@ export function legFromFacts(facts: unknown): LegRegistration | null {
     parentDeclared: parentDeclared !== null && typeof parentDeclared === 'object' && !Array.isArray(parentDeclared)
       ? parentDeclared as LegRegistration['parentDeclared'] : null,
     ticketMintedAt: null, ticketRaw: null, ticketAbsent: [], canWrite: null,
-    host: textOrNull(f['host']), pid: null, procStart: null, procStartToken: null, processes: [],
+    host: textOrNull(f['host']), pid: null, procStart: null, procStartToken: null, procNs: null, processes: [],
     sendBacks: numOrNull(f['send_backs']) ?? 0, ended: textOrNull(f['ended']) as LegEnding | null,
     noticedAt: numOrNull(f['noticed_at']), noticedBy: textOrNull(f['noticed_by']), openedRuns: list(f['opened_runs']),
     keySettledFrom: null, capRefused: [], clientSessions: [],

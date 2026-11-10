@@ -36,6 +36,11 @@ import { resolveCcSessionId, writeNamespaceAnnotation, type CcSessionResolution 
 import { dbg, warn } from '../debug.js'
 import type { FlatStore } from '../flat-store.js'
 import { MAIN_WRITER, stampMetadata, WRITER_STAMP_KEYS, type WriterStamp } from '../persistence/session-registry.js'
+import { EXIT_BY_KEY } from './event-processing.js'
+
+/** The marks the drain writes on a captured call from staging, never a
+ *  caller's to claim (D400, D401, D404). */
+const CAPTURE_MARK_KEYS = ['outcome', 'captured_from', 'tool_use_id', 'exit_type', 'stated_by'] as const
 import { ageText, pointerKindWords, OTHER_LANES_NAMED } from '../references.js'
 import { NOTICED_BY_STATUS, WORKER_AGENT_ID } from '../persistence/leg-registry.js'
 import {
@@ -477,6 +482,19 @@ export function createServer(
           // `_writer`, `_worktree` and kin are a claim, dropped like the
           // importer's marks, and the stamp below replaces them.
           for (const k of WRITER_STAMP_KEYS) delete metadataCopy[k]
+          // D404: what decided a captured call's class is the drain's mark
+          // (`exit_by`), never a caller's: a note claiming `exit_by` client
+          // would be counted as the client's word.
+          delete metadataCopy[EXIT_BY_KEY]
+          // D400, D401, D404: a caller may label its row a capture (a client
+          // with no hooks inserts its own), but what a client's own event
+          // said about a call is the drain's to write from staging: the
+          // capture marks, and the class decided from them, are dropped
+          // from a row that claims to be a capture. On any other row they
+          // are ordinary words (an `outcome` of a decision) and stay.
+          if (metadataCopy['source'] === 'auto-capture') {
+            for (const k of CAPTURE_MARK_KEYS) delete metadataCopy[k]
+          }
         }
         if (supersedesList.length > 0) opts.supersedes = supersedesList
         // Merge namespace/session tags onto user-provided metadata.

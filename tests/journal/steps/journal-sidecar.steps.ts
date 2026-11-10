@@ -573,16 +573,19 @@ export const sidecarDefiner = (reg: Registry<SidecarWorld>): void => {
     const store = await openSidecarStore(w)
     // The mix a real session produces, including the classifier's own false
     // positives — a grep whose OUTPUT merely contains the word "failed".
-    const mix: Array<[string, string]> = [
-      ['success', 'ls: three files, nothing unusual'],
-      ['success', 'the edit applied'],
-      ['success', 'tests green'],
-      ['soft_fail', 'warning: deprecated flag'],
-      ['error', 'Error: ENOENT no such file'],
-      ['error', 'grep results: 4 matches for "failed" in the test suite'],
+    // D404: what decided each class, as the drain says it (`exit_by`): the
+    // client's word or the text. One error drained before that mark existed
+    // carries the client's failure outcome (D400) and no `exit_by`.
+    const mix: Array<[string, string, Record<string, unknown>]> = [
+      ['success', 'ls: three files, nothing unusual', { exit_by: 'client' }],
+      ['success', 'the edit applied', { exit_by: 'client' }],
+      ['success', 'tests green', { exit_by: 'text' }],
+      ['soft_fail', 'warning: deprecated flag', { exit_by: 'text' }],
+      ['error', 'Error: ENOENT no such file', { outcome: 'failed' }],
+      ['error', 'grep results: 4 matches for "failed" in the test suite', { exit_by: 'text' }],
     ]
-    for (const [exit, content] of mix) {
-      await store.insert(content, { metadata: { source: 'auto-capture', exit_type: exit } })
+    for (const [exit, content, by] of mix) {
+      await store.insert(content, { metadata: { source: 'auto-capture', tool_name: 'Bash', exit_type: exit, ...by } })
     }
     // Entries carrying NO exit type, and enough of them to move a share.
     // Without these the two candidate denominators are the same number and
@@ -630,6 +633,14 @@ export const sidecarDefiner = (reg: Registry<SidecarWorld>): void => {
     const errors = paneRows(w.sPanes!.trail).find((r) => r['label'] === 'errors')!
     expect(String(errors['detail']), 'the errors row does not disclose that it is text-matched')
       .toMatch(/output text/)
+  })
+
+  reg.define(/^each exit row says how many of its events took their class from the client's word and how many from their text$/, (w: SidecarWorld) => {
+    const rows = paneRows(w.sPanes!.trail)
+    const detail = (label: string): string => String(rows.find((r) => r['label'] === label)!['detail'])
+    expect(detail('clean')).toContain("2 by the client's word, 1 by their text")
+    expect(detail('soft fails')).toContain("0 by the client's word, 1 by their text")
+    expect(detail('errors')).toContain("1 by the client's word, 1 by their text")
   })
 
   reg.define(/^a journal whose stored bytes exceed the retention budget$/, async (w: SidecarWorld) => {

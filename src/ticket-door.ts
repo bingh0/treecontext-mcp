@@ -48,7 +48,7 @@ import { dirname } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
 import { FlatStore } from './flat-store.js'
 import { openNodeSqlite, DEFAULT_RAW_TIMEOUT_MS } from './persistence/node-sqlite.js'
-import { hostProbe, type ProcessProbe } from './persistence/process-probe.js'
+import { hostProbe, processReadings, type ProcessProbe } from './persistence/process-probe.js'
 import { WORKER_AGENT_ID, legWriterOf, legOwnsKey, capRefusalOf, type LegRef, type LegRegistration, type WorkerProcess } from './persistence/leg-registry.js'
 import { gitSelfOf } from './hooks/git-self.js'
 import { composeSendBackMessage, owesCheckpoint, failedRunLine, ERROR_STREAM_TAIL_CHARS } from './first-moment.js'
@@ -567,7 +567,7 @@ export async function spawnWorker(o: SpawnWorkerOptions): Promise<WorkerRunResul
     })
     const notes: string[] = []
     const recordProcess = (pid: number): void => {
-      const proc: WorkerProcess = { pid, start: probe.startMoment(pid), token: probe.startToken?.(pid) ?? null, host: probe.host(), at: clock() }
+      const proc: WorkerProcess = { pid, ...processReadings(probe, pid), host: probe.host(), at: clock() }
       const rec = result.runs.at(-1)
       if (rec) { rec.start = proc.start; rec.token = proc.token ?? null }
       try { store.recordWorkerRerun(ref, proc, { rerun: result.runs.length > 1 }) } catch (err) { notes.push(`its process ${pid} could not be recorded (${errText(err)})`) }
@@ -785,6 +785,6 @@ export async function claimTicket(o: {
   })
   const ref = { sessionId: started.leg.sessionId, agentId: WORKER_AGENT_ID }
   const pid = o.pid ?? process.pid
-  const registration = o.store.recordWorkerRerun(ref, { pid, start: probe.startMoment(pid), token: probe.startToken?.(pid) ?? null, host: probe.host(), at })
+  const registration = o.store.recordWorkerRerun(ref, { pid, ...processReadings(probe, pid), host: probe.host(), at })
   return { claimed: true, reading, leg: { ...ref, door: 'ticket' }, registration, firstMessage: started.firstMessage, firstMomentId: started.firstMomentId }
 }

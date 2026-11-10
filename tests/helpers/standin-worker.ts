@@ -83,6 +83,11 @@ const inserts: Array<Record<string, unknown>> = []
 const handshakes: string[] = []
 const ownEnv = (): Record<string, string> =>
   Object.fromEntries(Object.entries(process.env).filter((e): e is [string, string] => e[1] !== undefined))
+if (step.waitBeforeWrites !== undefined) {
+  writeFileSync(`${step.waitBeforeWrites}.ready`, String(process.pid))
+  const deadline = Date.now() + 120_000
+  while (!existsSync(step.waitBeforeWrites) && Date.now() < deadline) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20)
+}
 for (const h of step.handshakes ?? []) {
   // A handshake read (D382): the client starting its treecontext server
   // over stdio, as a worker's CLI does before its first model call, and

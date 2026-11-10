@@ -335,6 +335,11 @@ describe('the honest nothing and the leg\'s return (D289, D336)', () => {
     await s.writeCheckpoint('state b', { run: 'r1', key: 'b', leg: { sessionId: gone.sessionId, agentId: WORKER_AGENT_ID } })
     expect(s.retireLeg({ sessionId: gone.sessionId, agentId: WORKER_AGENT_ID }, 'invalid')).toBe(true)
     await s.writeCheckpoint('state c', { run: 'r1', key: 'c', declared: { role: 'harness' } })
+    // A leg whose process no longer exists (an id past any pid_max): the
+    // lookup's own pass takes it for a phantom.
+    const ph = await s.registerWorker({ sessionId: 'w-ph', door: 'library', ticket: ticket({ key: 'd', role: 'tester' }), process: here(4_194_305), at: 12 })
+    await s.writeCheckpoint('state d', { run: 'r1', key: 'd', leg: { sessionId: ph.sessionId, agentId: WORKER_AGENT_ID } })
+    const d = s.lookupKey({ run: 'r1', key: 'd' }).checkpoints[0]!.legReturn
     const a = s.lookupKey({ run: 'r1', key: 'a' }).checkpoints[0]!.legReturn
     const b = s.lookupKey({ run: 'r1', key: 'b' }).checkpoints[0]!.legReturn
     const c = s.lookupKey({ run: 'r1', key: 'c' }).checkpoints[0]!.legReturn
@@ -342,6 +347,7 @@ describe('the honest nothing and the leg\'s return (D289, D336)', () => {
     expect([a.line, a.leg?.state]).toEqual(['The builder leg that wrote checkpoint number 1 left no return yet: it is live.', 'live'])
     expect([b.line, b.leg?.state]).toEqual(['The reviewer leg that wrote checkpoint number 1 left no return: it ended with no valid instructions, with no summary row.', 'invalid'])
     expect([c.line, c.leg]).toEqual(['Checkpoint number 1 was written by "harness", not by a registered leg, so there is no leg return to point to.', null])
+    expect([d.line, d.leg?.state]).toEqual(['The tester leg that wrote checkpoint number 1 left no return: it ended as a phantom, with no summary row.', 'phantom'])
   })
 })
 

@@ -68,6 +68,8 @@ import { test, expect } from 'vitest'
 import gnt from 'gherkin-node-test'
 import { type Definer, type Registry } from 'gherkin-node-test/vitest'
 import { wholeFeatureWip } from './wip-register.js'
+import { canMakePidSandbox } from './standins.js'
+import { hostProbe, MACHINE_PID_NAMESPACE } from '../../src/persistence/process-probe.js'
 import { type SidecarWorld } from './sidecar-world.js'
 import { type InstallWorld } from './install-harness.js'
 import { type CaptureWorld } from './capture-harness.js'
@@ -112,6 +114,27 @@ const HOST_SKIPS: Record<string, string> = process.platform === 'win32' ? {
   "a worker ended by the wrapper's timeout leaves no process of its group running [1]": 'win32: no process groups; only the direct child is ended (D393)',
   "a worker ended by a kill the door did not send, sent to the worker's process leaves no process of its group running [2]": 'win32: no process groups; only the direct child is ended (D393)',
 } : {}
+// D403: the sandbox that numbers its own processes is Linux's, and these
+// scenarios need a real one (the stand-in harness's PID_SANDBOX, a user and
+// pid namespace `unshare` makes) and a suite run in the machine's own
+// numbering, which the readers "outside the sandbox" are. A host that
+// cannot make one (CI runners that restrict unprivileged user namespaces,
+// macOS, Windows), or a suite run inside a container's numbering, shows
+// them skipped with the reason, never green.
+const D403_SANDBOX_SCENARIOS = [
+  'a live worker is never retired as a phantom by a reader whose processes are numbered apart from its own, the worker inside a sandbox [1]',
+  'a live worker is never retired as a phantom by a reader whose processes are numbered apart from its own, the reader inside a sandbox [2]',
+  'a live worker is never retired as a phantom by a reader whose processes are numbered apart from its own, the worker registered by an earlier build, the reader inside a sandbox [3]',
+  'a reader inside a sandbox says a worker outside it cannot be checked from there',
+  'a worker whose sandbox has ended is retired as a phantom by a reader that can see the sandbox is gone',
+  'a live worker is never retired as a phantom by a reader whose processes are numbered apart from its own, the worker inside a sandbox that shows the machine\'s processes as its own [4]',
+]
+const sandboxUnavailable = !canMakePidSandbox()
+  ? `${process.platform}: this host cannot make a sandbox that numbers its own processes (an unprivileged user and pid namespace, D403)`
+  : hostProbe.pidNamespace?.('self') !== MACHINE_PID_NAMESPACE
+    ? 'this suite runs in a numbering of processes other than the machine\'s own (a container), where the readers outside the sandbox are not (D403)'
+    : null
+if (sandboxUnavailable !== null) for (const sc of D403_SANDBOX_SCENARIOS) HOST_SKIPS[sc] = sandboxUnavailable
 const hostSkipped = new Set<string>()
 type TestFn = (name: string, fn: () => unknown) => unknown
 const hostTest = Object.assign((name: string, fn: () => unknown): unknown => {
@@ -261,10 +284,6 @@ runFeatures(join(HERE, '../../features'), {
     {
       feature: 'journal-capture',
       scenarios: [
-        // Unit 9: unit 9 (D403 a sandboxed worker is never a phantom and a phantom is set right by its door; D404 a call's class is the client's word where the client states it).
-        "a call the client says succeeded is classed a success, whatever its output says",
-        "a call whose client says nothing of how it ended is still classed by its output",
-        "on a store whose schema keeps no stated-success mark, a call that succeeded is classed by its text",
         // Unit 10: unit 10 (D406-D412, Codex CLI 0.167.0 captured through its own hooks, doctor reading Codex's trust, the experimental capture flag removed).
         "a Codex session's prompt, tool calls and last reply are journaled",
         "a Codex shell command that fails is journaled with what Codex said, and no outcome the client never gave",
@@ -283,22 +302,8 @@ runFeatures(join(HERE, '../../features'), {
       ],
     },
     {
-      feature: 'journal-sidecar',
-      scenarios: [
-        // Unit 9: unit 9 (D403 a sandboxed worker is never a phantom and a phantom is set right by its door; D404 a call's class is the client's word where the client states it).
-        "the trail pane reports what the journal is made of without grading it",
-      ],
-    },
-    {
       feature: 'journal-workers',
       scenarios: [
-        // Unit 9: unit 9 (D403 a sandboxed worker is never a phantom and a phantom is set right by its door; D404 a call's class is the client's word where the client states it).
-        "a live worker is never retired as a phantom by a reader whose processes are numbered apart from its own, <case>",
-        "a reader inside a sandbox says a worker outside it cannot be checked from there",
-        "a worker whose sandbox has ended is retired as a phantom by a reader that can see the sandbox is gone",
-        "a worker taken for a phantom while it ran is set right by its door when it <ends>",
-        "a worker taken for a phantom while it ran and then sent back reads live through its re-run",
-        "a worker with a damaged ticket taken for a phantom while it ran is set right when its one row lands",
         // Unit 10: unit 10 (D406-D412, Codex CLI 0.167.0 captured through its own hooks, doctor reading Codex's trust, the experimental capture flag removed).
         "a `codex exec` worker with Codex's hooks is never registered as a self, its hooks print it nothing, and what it does lands in its own lane",
         "the first-moment row is the first row of the worker's lane through the <door>",

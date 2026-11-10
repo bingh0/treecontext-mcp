@@ -324,7 +324,8 @@ function threadsPane(v: JournalVitals, storeName: string): PaneBlob {
  *
  * COMPOSITION, NOT HEALTH — and the distinction is the reason this pane is
  * almost entirely dim. `exit_type` is `error` for a call the client said
- * failed (D400), absent for a call only the batch's account names (D401,
+ * failed (D400), `success` for a call the client said succeeded (D404),
+ * absent for a call only the batch's account names (D401,
  * so it is not counted here), and otherwise comes from `classifyExit`,
  * which matches substrings in tool OUTPUT: "failed", "exception", "enoent", "cannot
  * find". A grep whose results mention an error is filed as an error; so is
@@ -350,19 +351,26 @@ function trailPane(v: JournalVitals, storeName: string): PaneBlob {
   const intents = Object.entries(v.trail.intents).sort((a, b) => b[1] - a[1])
   const intentTotal = intents.reduce((a, [, n]) => a + n, 0)
 
+  // D404: each exit row says how many of its events took their class from
+  // the client's word and how many from their text.
+  const decidedBy = (k: string): string => {
+    const by = v.trail.exitsBy?.[k] ?? { client: 0, text: known(k) }
+    return `${by.client.toLocaleString('en-US')} by the client's word, ${by.text.toLocaleString('en-US')} by their text`
+  }
   const rows: PaneRow[] = [
     {
       label: 'clean',
       value: classified === 0 ? 'nothing classified yet' : withShare(known('success')),
       status: 'off',
       spark: [known('success'), known('soft_fail'), known('error')],
+      detail: decidedBy('success'),
     },
-    { label: 'soft fails', value: withShare(known('soft_fail')), status: 'off' },
+    { label: 'soft fails', value: withShare(known('soft_fail')), status: 'off', detail: `${decidedBy('soft_fail')} (a soft fail is only ever read from text)` },
     {
       label: 'errors',
       value: withShare(known('error')),
       status: 'off',
-      detail: 'matched from output text — a mention counts, so this is a census, not a defect rate',
+      detail: `${decidedBy('error')}; where the client did not say, matched from output text — a mention counts, so this is a census, not a defect rate`,
     },
     {
       label: 'user turns',

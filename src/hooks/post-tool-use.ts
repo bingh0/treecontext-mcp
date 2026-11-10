@@ -11,6 +11,7 @@ import {
   activeIndexCap,
 } from '../persistence/capture-constants.js'
 import { dbg } from '../debug.js'
+import { hookClientFrom, clientStatesOutcome } from './hook-client.js'
 import { ECHO_LABEL_PREFIX, echoToolOf } from '../persistence/echo-index.js'
 
 /** Separator between the indexed preview and the full tail (C4).
@@ -384,8 +385,18 @@ function callIdOf(v: unknown): string | undefined {
  *  that succeeded, a call that failed (D400), and the batch's account of
  *  every call it resolved (D401). Any other name (an adapter's normalized
  *  payload, a payload with none) is a call that succeeded, as before. */
+export const POST_TOOL_USE = 'PostToolUse'
 export const POST_TOOL_USE_FAILURE = 'PostToolUseFailure'
 export const POST_TOOL_BATCH = 'PostToolBatch'
+
+/** D404: the client whose own event states that a call succeeded: the
+ *  client the hook's command names, when that client's events state how a
+ *  call ended (hook-client.ts) and the event is its success event,
+ *  PostToolUse. Null for any other event, a client naming none, or a client
+ *  whose events state nothing (the text then decides the class). */
+export function statedSuccessBy(event: unknown, client: string | null): string | null {
+  return event === POST_TOOL_USE && clientStatesOutcome(client) ? client : null
+}
 
 /** D400: how a failed call ended, as the client said it. */
 export function failureOutcome(input: Record<string, unknown>): 'failed' | 'interrupted' {
@@ -466,6 +477,7 @@ export function main(preParsed?: Record<string, unknown>) {
     const { content, indexLen, previewLen, priority } = composeToolEntry(tool_name, tool_input, tool_output)
     const dbPath = resolveDbPath(cwd)
     const toolUseId = callIdOf(input.tool_use_id)
+    const stated = statedSuccessBy(event, hookClientFrom())
 
     writeStaging(dbPath, {
       sessionId: session_id,
@@ -484,6 +496,10 @@ export function main(preParsed?: Record<string, unknown>) {
       // failed call's outcome.
       ...(toolUseId ? { toolUseId } : {}),
       ...(failed ? { outcome: failureOutcome(input) } : {}),
+      // D404: the client this hook's command names (never the payload),
+      // when its events state how a call ended, stated by its success
+      // event that this call succeeded.
+      ...(stated !== null ? { statedBy: stated } : {}),
     })
 
     // D330: the pointer to a leg's return rides on the Agent tool's result.

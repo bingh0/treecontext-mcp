@@ -152,7 +152,7 @@ const STOPPED_AT_ALLOWED: Array<{ file: string; line: string; reason: string }> 
   { file: 'src/persistence/leg-registry.ts', line: 'worktree: r.worktree, branch: r.branch, cwd: r.cwd, startedAt', reason: 'the row read into the leg' },
   { file: 'src/persistence/leg-registry.ts', line: '`INSERT INTO session_registry (session_id, agent_id, agent_type, worktree', reason: 'a leg\'s registration inserts the column as NULL (a worker\'s agent id is never the self\'s)' },
   { file: 'src/persistence/leg-registry.ts', line: '`UPDATE session_registry SET stopped_at = NULL', reason: 'the resume clear of a leg' },
-  { file: 'src/persistence/leg-registry.ts', line: '"UPDATE session_registry SET stopped_at = ?, ended = ? WHERE session_id = ? AND agent_id = ? AND agent_id != \'\'', reason: 'the leg retirement; excludes the self\'s agent id' },
+  { file: 'src/persistence/leg-registry.ts', line: '`UPDATE session_registry SET stopped_at = ?, ended = ? WHERE session_id = ? AND agent_id = ? AND agent_id != \'\'', reason: 'the leg retirement (a live leg, or one taken for a phantom that its door sets right, D403); excludes the self\'s agent id' },
   { file: 'src/persistence/leg-registry.ts', line: '`SELECT * FROM session_registry WHERE kind = \'worker\'', reason: 'a registry read of live workers' },
   { file: 'src/persistence/leg-registry.ts', line: 'WHERE session_id = ? AND agent_id = ? AND ended IS NULL AND stopped_at IS NULL', reason: 'a registry read of a live leg' },
   { file: 'src/run-export.ts', line: 'worktree: leg.worktree, branch: leg.branch', reason: 'the leg\'s fact written to the export file' },

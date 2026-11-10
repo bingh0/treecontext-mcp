@@ -224,7 +224,7 @@ const legWith = (o: Partial<LegRegistration>): LegRegistration => ({
   sessionId: 's1', agentId: 'a1', role: 'builder', kind: 'subagent', door: 'hooks', identity: 'hook', run: 'r1', key: 'k', keySrc: 'own',
   keyCandidates: [], briefId: null, checkpointer: 'builder', checkpointedBy: null, startCheckpoints: [], parentSession: 's1', parentSrc: 'hook',
   parentDeclared: null, ticketMintedAt: null, ticketRaw: null, ticketAbsent: [], canWrite: null, host: null, pid: null, procStart: null,
-  procStartToken: null, processes: [], sendBacks: 0, ended: null, noticedAt: null, noticedBy: null, openedRuns: [], keySettledFrom: null,
+  procStartToken: null, procNs: null, processes: [], sendBacks: 0, ended: null, noticedAt: null, noticedBy: null, openedRuns: [], keySettledFrom: null,
   capRefused: [], clientSessions: [], worktree: null, branch: null, cwd: null, startedAt: 1, stoppedAt: null, ...o,
 })
 

@@ -17,7 +17,8 @@ import { T0 } from '../world.js'
 import { RECOVERY_SNAPSHOT_SOURCE, RECOVERY_QUERIES_KEY, RECOVERY_QUOTE_CAP, RECOVERY_PREVIEW_LEN, RECOVERY_INDEX_LEN } from '../../../src/persistence/recovery-snapshot.js'
 import { ftsNodeIds } from '../../helpers/echo-capture.js'
 import { recordedSession, replayRecordedSession, type ReplayedEvent } from '../standins.js'
-import { type CaptureWorld, openCaptureSandbox, adoptCaptureStore, openCaptureWorld, spawnHook, spawnHooksAtOnce, spawnServeChild, waitForServeLog, drainStaging, type RawNode, rawJournal, bashPayload, writeTranscript, seedCheckpointAge, expectBookmarkAsked } from '../capture-harness.js'
+import { classifyExit, EXIT_BY_KEY } from '../../../src/server/event-processing.js'
+import { type CaptureWorld, openCaptureSandbox, adoptCaptureStore, openCaptureWorld, runHook, spawnHook, spawnHooksAtOnce, spawnServeChild, waitForServeLog, drainStaging, type RawNode, rawJournal, bashPayload, writeTranscript, seedCheckpointAge, expectBookmarkAsked } from '../capture-harness.js'
 
 /** What the transcript still ends at when Stop fires: the turn before. */
 const PREVIOUS_TURN = 'Reading the valve code first; the archive step runs before any row moves.'
@@ -76,6 +77,16 @@ const PARALLEL_REJECTED = 'toolu_01GNi6XzvVa1DEG9jzB5ePuH'
 const PARALLEL_TOOLSEARCH = 'toolu_01JgTCyS5FH3JHaaVBfwvfFH'
 
 interface NamedCall { id: string; tool: string; what: string }
+/** D404's recording: Claude Code 2.1.321, four calls that succeeded with
+ *  output that reads like trouble (the fixture README's table). */
+const TROUBLE_VERSION = '2.1.321'
+const TROUBLE = 'success-reading-like-trouble.ndjson'
+const TROUBLE_CALLS: NamedCall[] = [
+  { id: 'toolu_01GDmjXWabPpieoJbbUASiPG', tool: 'Bash', what: 'a shell command printing "error: 0 found, 0 failed"' },
+  { id: 'toolu_01DdMYpiSoMgssKrFRavkBQB', tool: 'Bash', what: 'a shell command printing "warning: deprecated"' },
+  { id: 'toolu_01MPYedMaj7A1poAntXnC4N7', tool: 'mcp__probe__seen', what: 'an MCP tool answering "failed call seen"' },
+  { id: 'toolu_018hPJpgR4WUwxgBNvTDw4eH', tool: 'Read', what: 'a file read of a file that holds a Python traceback' },
+]
 /** D400's failures, by the client's id (the fixture README's table). */
 const FAILED_CALLS: NamedCall[] = [
   { id: 'toolu_01FvqNcZYBnuCsHBiwp6o3Mj', tool: 'Bash', what: 'a shell command that exits non-zero (ls, exit 2)' },
@@ -106,7 +117,7 @@ type ReplayWorld = CaptureWorld & {
 
 /** A named call as the recorded files hold it: the payload of the event
  *  of `kind` carrying it (the call itself, from a batch's account). */
-function recordedCall(w: ReplayWorld, id: string, kind: 'PostToolUseFailure' | 'PostToolBatch'): { payload: Record<string, unknown> } {
+function recordedCall(w: ReplayWorld, id: string, kind: 'PostToolUse' | 'PostToolUseFailure' | 'PostToolBatch'): { payload: Record<string, unknown> } {
   for (const e of w.recorded!.flatMap((r) => r.events)) {
     if (e['hook_event_name'] !== kind) continue
     if (kind === 'PostToolBatch') {
@@ -1078,5 +1089,103 @@ export const captureDefiner = (reg: Registry<CaptureWorld>): void => {
     })
   })
 
-}
 
+  // ── D404: a call's class is the client's word where the client states it ──
+  // The calls are named by the client's id, each checked against the
+  // recorded file (Claude Code 2.1.321, recorded for this ruling: four calls
+  // that succeeded with output that reads like trouble, the README's table).
+  reg.define(/^the events Claude Code sent for calls that succeeded with output that reads like trouble: a shell command printing "error: 0 found, 0 failed", a shell command printing "warning: deprecated", an MCP tool answering "failed call seen" and a file read of a file that holds a Python traceback$/, async (w: ReplayWorld) => {
+    await openCaptureWorld(w)
+    w.recorded = [{ events: recordedSession(TROUBLE_VERSION, TROUBLE) }]
+    w.calls = TROUBLE_CALLS.map((c) => ({ ...c, ...recordedCall(w, c.id, 'PostToolUse') }))
+    // Each arrived by the client's success event, and its output reads as
+    // the Given says: the text alone would class it otherwise.
+    const said = w.calls.map((c) => JSON.stringify(c.payload['tool_response']))
+    for (const [i, needle] of ['error: 0 found, 0 failed', 'warning: deprecated', 'failed call seen', 'Traceback (most recent call last)'].entries()) {
+      expect(said[i], w.calls[i]!.what).toContain(needle)
+    }
+    for (const c of w.calls) {
+      const own = w.recorded[0]!.events.filter((e) => e['tool_use_id'] === c.id && (e['hook_event_name'] === 'PostToolUse' || e['hook_event_name'] === 'PostToolUseFailure'))
+      expect(own.map((e) => e['hook_event_name']), c.what).toEqual(['PostToolUse'])
+    }
+  })
+  reg.define(/^each call's entry is classed a success, never an error or a soft fail$/, (w: ReplayWorld) => {
+    for (const c of w.calls!) {
+      const row = onlyEntryOf(w, c.id)
+      expect(row.metadata['exit_type'], c.what).toBe('success')
+      // Not vacuous: its text alone reads as trouble.
+      expect(classifyExit(row.content), `${c.what}: the text would not have said otherwise`).not.toBe('success')
+    }
+  })
+  reg.define(/^each says its class is the client's word$/, (w: ReplayWorld) => {
+    for (const c of w.calls!) {
+      const row = onlyEntryOf(w, c.id)
+      expect(row.metadata[EXIT_BY_KEY], c.what).toBe('client')
+      // The mark is the class's, never an outcome: a success carries none.
+      expect(row.metadata['outcome'], c.what).toBeUndefined()
+    }
+  })
+
+  // A client whose events state nothing: the hook's command names no
+  // client (as a command an earlier build wrote, or a copy written for
+  // another client, does), so the hook runs for no named client.
+  reg.define(/^a tool event from a client whose events do not say whether a call succeeded, its output reading "([^"]+)"$/, async (w: ReplayWorld, out) => {
+    await openCaptureWorld(w)
+    w.sessionId = 'silent-client-session'
+    const payload = { ...bashPayload(w, 'sqlite3 app.db "select * from users"', String(out)), tool_use_id: 'call_silent_1' }
+    const r = runHook(w, 'post-tool-use', payload)
+    expect(r.status, r.stderr).toBe(0)
+    w.calls = [{ id: 'call_silent_1', tool: 'Bash', what: 'a call from a client that states nothing', payload }]
+  })
+  reg.define(/^ingestion runs$/, async (w: ReplayWorld) => {
+    await drainStaging(w)
+  })
+  reg.define(/^the call's entry is classed an error$/, (w: ReplayWorld) => {
+    expect(onlyEntryOf(w, w.calls![0]!.id).metadata['exit_type']).toBe('error')
+  })
+  reg.define(/^it says its class was read from its output$/, (w: ReplayWorld) => {
+    const row = onlyEntryOf(w, w.calls![0]!.id)
+    expect(row.metadata[EXIT_BY_KEY]).toBe('text')
+    expect(row.metadata['exit_type']).toBe(classifyExit(row.content))
+  })
+
+  // A store one schema below this build's (036): the stated-success column
+  // is not there, and the hook never migrates.
+  reg.define(/^a store at the schema before this build's, met by a hook of this build$/, async (w: ReplayWorld) => {
+    await openCaptureWorld(w)
+    // One journal row, so no hook takes it for a fresh store to bootstrap.
+    await w.store!.insert('a row from before', { metadata: {} })
+    await w.store!.close()
+    const db = new DatabaseSync(w.dbPath!)
+    try {
+      db.exec(`ALTER TABLE staging DROP COLUMN stated_by; PRAGMA user_version = ${maxSupportedVersion - 1}`)
+    } finally { db.close() }
+  })
+  reg.define(/^the events Claude Code sent, as recorded, for a call that succeeded$/, (w: ReplayWorld) => {
+    const events = recordedSession(TROUBLE_VERSION, TROUBLE)
+    const call = TROUBLE_CALLS[0]!
+    w.recorded = [{ events: events.filter((e) => e['tool_use_id'] === call.id && e['hook_event_name'] === 'PostToolUse') }]
+    expect(w.recorded[0]!.events, 'the recorded success').toHaveLength(1)
+    w.calls = [{ ...call, payload: w.recorded[0]!.events[0]! }]
+  })
+  reg.define(/^the hook receives those events and ingestion runs once the server has opened the store$/, async (w: ReplayWorld) => {
+    const replayed = replayRecordedSession(w, w.recorded![0]!.events)
+    expect(replayed.map((r) => r.hooks)).toEqual([['post-tool-use']])
+    // Staged at the store's own schema: no stated-success column, and the
+    // hook did not migrate.
+    const raw = new DatabaseSync(w.dbPath!, { readOnly: true })
+    try {
+      expect((raw.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(maxSupportedVersion - 1)
+      const rows = raw.prepare('SELECT * FROM staging').all() as Array<Record<string, unknown>>
+      expect(rows.map((r) => r['tool_use_id'])).toEqual([w.calls![0]!.id])
+      expect('stated_by' in rows[0]!).toBe(false)
+    } finally { raw.close() }
+    await adoptCaptureStore(w)
+    await drainStaging(w)
+  })
+  reg.define(/^the call's entry takes the class its text decides$/, (w: ReplayWorld) => {
+    const row = onlyEntryOf(w, w.calls![0]!.id)
+    expect(row.metadata['exit_type']).toBe(classifyExit(row.content))
+  })
+
+}

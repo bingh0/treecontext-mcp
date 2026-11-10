@@ -486,8 +486,8 @@ describe('a step that says an event is as Claude Code sends it replays a recordi
   // by a grep of features/: "as Claude Code sends it", "the events Claude
   // Code sent for ...").
   const CLAIM = /\bClaude Code\b[^.]*?\b(?:sends?|sent|fires?|fired)\b/i
-  /** The five steps the corpus holds today; a new one is a deliberate change here. */
-  const CLAIMS_TODAY = 5
+  /** The seven steps the corpus holds today (D404 added two); a new one is a deliberate change here. */
+  const CLAIMS_TODAY = 7
   const withoutComments = (src: string): string => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|\s)\/\/.*$/gm, '$1')
   /** A payload field written as an object key: a literal payload in the body. */
   const LITERAL_PAYLOAD = /\b(?:tool_response|tool_input|tool_output|hook_event_name|last_assistant_message|prompt)\s*:/

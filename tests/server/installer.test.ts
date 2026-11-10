@@ -15,7 +15,7 @@ import {
   upsertInstructions, removeInstructions,
   upsertClaudeSettingsHooks, removeClaudeSettingsHooks, unrunnableHookCommands,
   installClaudeHookScripts,
-  claudeHookCommand, claudeHookDispatch, claudeHookCommandsWithoutExec, withoutExec, hookShellFor,
+  claudeHookCommand, claudeHookDispatch, claudeHookCommandsWithoutExec, withoutExec, withoutClientArg, expectedHookCopy, hookShellFor,
   removeGeminiHooks,
   claudeHooksBlock, claudeHookSummaryLines, claudeCaptureEventsUnwired, claudeUnwiredEventsDetail, removeCodexHooks, parseJsonc,
   upsertVscodeHooks, upsertCodexHooks, upsertCursorHooks,
@@ -911,7 +911,9 @@ describe('upsertClaudeSettingsHooks', () => {
     // D251: on POSIX the shell is told to exec the wrapper; the path that
     // follows is what this test is about.
     if (process.platform !== 'win32') expect(written.startsWith('exec "'), written).toBe(true)
-    const command = withoutExec(written)
+    // D404: the command names its client after the script's path.
+    expect(written.endsWith(' --client claude-code'), written).toBe(true)
+    const command = withoutClientArg(withoutExec(written))
 
     // `set --` performs exactly the word-splitting and quote-removal the
     // shell would do before exec: one word out means one argument in.
@@ -1543,7 +1545,8 @@ describe('the hook copy writer (upsertCodexHooks)', () => {
     const commands = hooks.SessionStart!.flatMap(m => m.hooks.map(h => h.command))
     // Both legacy spellings gone, and exactly the block's own entries left:
     // one session-start per matcher, never two.
-    const block = claudeHooksBlock()
+    // The copy is the Claude Code block naming no client (D404).
+    const block = expectedHookCopy()
     expect(commands).toEqual(block['SessionStart']!.flatMap(m => m.hooks.map(h => h.command)))
     expect(commands.filter(c => c.includes('tc-session-start'))).toHaveLength(block['SessionStart']!.length)
   })
@@ -1599,7 +1602,7 @@ describe('Codex CLI copy of the Claude Code block (D154, D208)', () => {
     expect(after.SomethingElse).toEqual({ keep: true })
     expect(after.SessionStart, 'the earlier top-level copy survived').toBeUndefined()
     expect(after.PreToolUse).toEqual([{ matcher: 'Bash', hooks: [{ type: 'command', command: 'my-guard' }] }])
-    const block = claudeHooksBlock()
+    const block = expectedHookCopy()
     for (const [event, matchers] of Object.entries(block)) {
       expect(after.hooks[event], event).toEqual(expect.arrayContaining(matchers))
     }
