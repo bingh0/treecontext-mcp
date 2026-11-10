@@ -6,7 +6,11 @@ concurrency model, and the assumptions that are load-bearing. The
 this document owns the **interactions** — the cross-cutting properties
 no single subsystem document is responsible for, which is where late
 surprises hide. Written 2026-08-15, at the v0.1 release candidate, and brought up to
-the code as built at 0.1.0-beta.1 (2026-10-08);
+the code as built at 0.1.0-beta.1 (2026-10-08); the install, capture and
+migration parts were brought up to 0.1.0-beta.4 (2026-11-10), and the
+module-by-module map of what beta.3 and beta.4 added (legs, workers and
+runs, the ticket door, Codex CLI and Antigravity CLI capture) is
+[AGENTS.md](AGENTS.md)'s "Architecture" section;
 subsystem deep-dives are linked where they exist and this file defers
 to them for their internals.*
 
@@ -65,6 +69,13 @@ library consumers ─ FlatStore.open()  (no server, no hooks, same store)
   earlier build wrote behind the removed `--experimental-capture` is
   converged or taken back (Gemini CLI's translated copy went with its retirement, D399; uninstall
   sweeps one an earlier install left).
+  From Antigravity CLI 1.5.3 install writes one named hook,
+  `treecontext`, into `~/.gemini/config/hooks.json`
+  (src/server/agy-hooks.ts, D413): five events, never PreToolUse, each
+  command `tc-agy <Event> --client agy`. Both clients' hooks files are
+  changed by text edits (src/server/json-text-edit.ts), and one
+  invariant holds for each: treecontext's hooks are in the client's
+  hooks file if and only if its entry serves in capture mode (D386).
   VS Code and Cursor read the Claude settings file as-is and get
   nothing written; doctor gives each documented client a row naming its
   mode, the state found and the remedy. Installs from before
@@ -326,11 +337,17 @@ failing mid-write). Highlights:
   what it cannot archive**, never touches the newest session, and
   never fragments a session. `journal-storage.feature`,
   `retention-demotion.feature`.
-- **Migrations**: a versioned ladder (currently v27: 025 makes the
+- **Migrations**: a versioned ladder (currently v37: 025 makes the
   curated unique index partial over handoff lanes, 026 adds the
   `node_refs` reverse index with its triggers and backfill, 027 adds
-  `session_registry` and staging's `agent_id`/`agent_type`/`kind`; all
-  three additive). Any pending
+  `session_registry` and staging's `agent_id`/`agent_type`/`kind`; 028
+  re-indexes treecontext's own echoes by their arguments; 029 re-marks
+  the client's internal agents' reports as `internal-summary`; 030
+  bounds the recovery snapshot rows a store already holds; 031 and 032
+  add legs, workers and runs to the registry; 033 a worker lane's own
+  curated index; 034 staging's `tool_use_id`, `outcome` and
+  `captured_from`; 035 a worker's pid namespace; 036 staging's
+  `stated_by`; 037 staging's `client`; all additive). Any pending
   migration, additive or destructive (D59, D256), copies the store
   aside first (`VACUUM INTO`) and records a **verdict** at
   completion while backup and store are still twins; doctor lists

@@ -14,7 +14,7 @@ the hook sources in `src/hooks/`.
 | Hook | Event (Claude Code) | Captures |
 |---|---|---|
 | `user-prompt-submit` | `UserPromptSubmit` | User message text, in full → staging (priority 1). Also refreshes the pid-keyed session beacon. |
-| `post-tool-use` | `PostToolUse` | Every tool call: name + input + output → staging (priority 1–3), with the payload's `agent_id`/`agent_type` when a subagent made the call |
+| `post-tool-use` | `PostToolUse`, `PostToolUseFailure`, `PostToolBatch` | Every tool call, a failed one (D400) and one the client resolved without running it (D401, from the batch's account) included: name + input + output → staging (priority 1–3), with the payload's `agent_id`/`agent_type` when a subagent made the call |
 | `stop` | `Stop` | The assistant's final response of the turn (`last_assistant_message`; only a payload without it falls back to the last assistant text of `transcript_path`, which at Stop time still ends at the previous turn) → staging (priority 2). May then ask once for a bookmark (see [claude-code.md](claude-code.md)) |
 | `subagent-stop` | `SubagentStop` | The subagent's report (the `message` of the newest `SubagentHandback` call in `agent_transcript_path` when it made one, D371; else `last_assistant_message`; else the last assistant text of that transcript) → staging (priority 1) as kind `subagent-summary`, stamped with the subagent's agent fields. A leg's report is instead written directly as its summary row (the hooks door, below) |
 
@@ -94,11 +94,24 @@ Duplicate captures (e.g. a re-fired Stop) are absorbed by the store's
 content-fingerprint dedup within a 300 s window plus the Stop hook's
 stale-recapture guard (`src/hooks/stop.ts`).
 
+## Other clients
+
+The same scripts serve Codex CLI from 0.167.0, through a block of its own
+in `~/.codex/hooks.json` (D406): its `PreToolUse` is held in staging as a
+call's account, and a call a turn ended without a result for is journaled
+as an entry saying so (`src/hooks/codex-calls.ts`, D408). Antigravity CLI
+from 1.5.3 is served by one named hook and `src/hooks/agy.ts`: a call's
+output is read from agy's transcript, not from the event (D415). A hook
+takes its client from the command install wrote (`--client <name>`),
+never from the payload, and only Claude Code's events state how a call
+ended; a Codex or agy call is classed by its text (D404).
+
 ## Registration
 
-Run `treecontext install`. It writes the wrapper scripts and hook
-configuration for the verified platform (Claude Code) — see
-[claude-code.md](claude-code.md). An install from before 0.1.0-beta.1
+Run `treecontext install`. It writes the wrapper scripts and the hook
+configuration for Claude Code (see [claude-code.md](claude-code.md)),
+and for Codex CLI and Antigravity CLI where they are detected at or above
+their version floors (README §6). An install from before 0.1.0-beta.1
 lacks `SubagentStart`, `SubagentStop` and the `clear`/`resume` wiring of
 `session-start`: re-run `treecontext install` to receive them. Do not hand-edit hook config unless
 you are developing; the installer is idempotent and merges with existing
@@ -108,6 +121,6 @@ settings.
 
 User and tool capture stand alone: a platform with no turn-end signal
 still journals user messages and tool events — its journal simply
-carries no assistant-prose entries (`src/hooks/README.md`). Platform
-adapter status (verified vs. unverified scaffolding) is tracked in
-`src/hooks/README.md` and README §6.
+carries no assistant-prose entries (`src/hooks/README.md`). Each
+client's state (verified live, basic, documented only, tools only) is
+tracked in `src/hooks/README.md` and README §6.

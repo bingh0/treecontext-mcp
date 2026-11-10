@@ -1128,6 +1128,33 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
     w.orchRows = m.rows.filter(r => r.client === 'Codex CLI' || r.client === 'Antigravity CLI')
     expect(w.orchRows.map(r => r.client)).toEqual(['Codex CLI', 'Antigravity CLI'])
   })
+  // ── the Codex CLI row, cell by cell (D412) ─────────────────────────────
+  // Columns after the client's: worker, pen, tool calls captured, main,
+  // subagent legs, pointer (the header is checked by the table's own step).
+  const codexCell = (w: ClientsWorld, role: string): string => {
+    const m = parseOrchestrationMatrix(w.readme!)
+    const col = m.header.findIndex(h => h.toLowerCase().includes(role))
+    expect(col, `no column for the role "${role}"`).toBeGreaterThanOrEqual(0)
+    return w.orchRows!.find(r => r.client === 'Codex CLI')!.cells[col]!
+  }
+  reg.define(/^a developer reads the row for Codex CLI$/, (w: ClientsWorld) => {
+    w.orchRows = parseOrchestrationMatrix(w.readme!).rows.filter(r => r.client === 'Codex CLI')
+    expect(w.orchRows).toHaveLength(1)
+  })
+  reg.define(/^the developer sees the cell for a main that registers itself read "verified live" with the Codex version and date of the run$/, (w: ClientsWorld) => {
+    expect(codexCell(w, 'main that registers itself')).toMatch(/^verified live \(Codex CLI \d+\.\d+\.\d+,.*\b20\d\d-\d\d-\d\d\b/)
+  })
+  reg.define(/^the developer sees the cell for a worker's own tool calls read "verified live" with the date of the live run of a ticketed Codex worker it rests on$/, (w: ClientsWorld) => {
+    const cell = codexCell(w, 'tool calls captured')
+    // A live run of a ticketed worker: `codex exec` through the ticket door,
+    // dated, and resting on the census of that run's calls.
+    expect(cell).toMatch(/^verified live \(codex exec \d+\.\d+\.\d+ through treecontext run,.*\b20\d\d-\d\d-\d\d\b.*census/)
+  })
+  reg.define(/^the developer sees the cells for subagent legs and for the pointer read "not possible", naming the spawn message a hook cannot read$/, (w: ClientsWorld) => {
+    for (const role of ['subagent legs', 'pointer']) {
+      expect(codexCell(w, role), `the ${role} cell`).toMatch(/^not possible: no spawn message a hook can read/)
+    }
+  })
   reg.define(/^the developer sees every "verified live" cell name the permission mode its run was made in$/, (w: ClientsWorld) => {
     const live = w.orchRows!.flatMap(r => r.cells.filter(c => c.includes('verified live')).map(c => `${r.client}: ${c}`))
     // The needle fires: both clients have verified-live cells.

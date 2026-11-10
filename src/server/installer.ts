@@ -1198,27 +1198,27 @@ export function claudeHookScriptPaths(platform: Platform = process.platform as P
 const LEGACY_HOOK_PREFIXES = ['cbm-']
 
 /**
- * Agent slugs whose capture adapter has earned a live-payload
- * verification pass, and for which `install` will therefore write hook
- * configuration.
+ * Agent slugs whose entry always serves in capture mode: Claude Code, the
+ * reference platform, whose hooks block install always writes.
  *
- * Every other agent still gets its MCP registration — the tools work
- * anywhere the agent speaks MCP — but no hooks, because a hook config
- * that a user can see in their settings reads as a promise that capture
- * is running. An adapter joins this set when someone has run it against
- * the real platform and inspected the resulting rows, never because its
- * source looks right (`src/hooks/README.md`).
+ * Codex CLI and Antigravity CLI are captured too, from their version
+ * floors, but not through this set: their entries serve in capture mode
+ * exactly while treecontext's hooks are in their own hooks files
+ * (`captureHooksInstalled`, D386, D406, D413). Every other agent gets its
+ * MCP registration alone, because a hook config a user can see in their
+ * settings reads as a promise that capture is running
+ * (`src/hooks/README.md`).
  */
 export const CAPTURE_PLATFORMS = new Set(['claude'])
 
 /**
  * Clients that keep their own hook configuration rather than reading the
- * Claude settings file, so capture can reach them only through a copy of
- * the hooks: Codex CLI, verbatim (survey of official documentation,
- * 2026-10-05; D154). Outside CAPTURE_PLATFORMS the copy is written only
- * behind --experimental-capture, and doctor names that command as the way
- * to copy (D208). Gemini CLI, the other copying client, is retired (D399):
- * its translated copy is only ever removed, by uninstall's archived sweep.
+ * Claude settings file, so capture reaches them only through hooks written
+ * there: Codex CLI (D154), whose own block install writes from 0.167.0
+ * with no flag (D406, codex-hooks.ts; the --experimental-capture copy of
+ * earlier builds is gone, and install still knows it by its commands).
+ * Gemini CLI, the other copying client, is retired (D399): its translated
+ * copy is only ever removed, by uninstall's archived sweep.
  */
 export const COPYING_CLIENTS = new Set(['codex'])
 
@@ -1293,10 +1293,10 @@ function globalConfigCapture(): boolean {
 
 /**
  * Clients that read the Claude settings file as-is (D154): the installer
- * writes nothing for them, with or without --experimental-capture (D208,
- * D226). Their old adapters (src/hooks/vscode, src/hooks/cursor) stay in
- * source, unwired; uninstall still removes what earlier builds wrote, and
- * doctor flags such a copy as a second route.
+ * writes nothing for them (D208, D226). Their old adapters
+ * (src/hooks/vscode, src/hooks/cursor) left the build with the
+ * experimental flag (D406); uninstall still removes what earlier builds
+ * wrote, and doctor flags such a copy as a second route.
  */
 export const AS_IS_CLIENTS = new Set(['vscode', 'cursor'])
 

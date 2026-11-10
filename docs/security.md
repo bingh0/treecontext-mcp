@@ -33,7 +33,7 @@ Data on disk, per store (`src/server/cli.ts`, `src/session-beacon.ts`,
 | `~/.treecontext/stores/<name>/sidecar.json`, `sidecar-threads.json`, `sidecar-trail.json` | the sidecar panes, rewritten on each drain unless `serve --no-sidecar` (`src/server/sidecar-blob.ts`, [ccr-pane.md](ccr-pane.md)) |
 | `~/.treecontext/bindings.json` | project-directory → store-name bindings |
 | `~/.treecontext/config.toml` | configuration written by `treecontext install` |
-| `~/.treecontext/install-state.json` | which Claude Code settings file install wrote `idleCompaction` into, so uninstall removes only its own key (`src/server/idle-compaction.ts`) |
+| `~/.treecontext/install-state.json` | install's own record of what it wrote: the Claude Code settings file it wrote `idleCompaction` into, the tool approvals it wrote for each client, and the hooks it wrote into Codex's and Antigravity CLI's hooks files, so uninstall takes back that and nothing else (`src/server/install-state.ts`) |
 | `~/.treecontext/shield/` | shielded oversize tool responses — **only if** shielding is enabled, see §3 |
 | `~/.treecontext/logs/` | debug logs (paths and event names, never message bodies), `0o700` |
 
@@ -100,6 +100,30 @@ journal:
   written. A prompt can carry whatever was pasted into it, secrets
   included, and a run's export carries the first moments whole and says
   so (D318).
+
+A call that failed, and one Claude Code refused before running it, are
+captured as well, with the client's error text or what it told the model
+(D400, D401).
+
+**Other clients.** From Codex CLI 0.167.0 the same scripts run from
+Codex's own hooks file and capture a Codex session the same way; Codex
+runs a hook only once you have trusted it with `/hooks`. From Antigravity
+CLI 1.5.3 one named hook captures an agy session, and to do so it
+**reads agy's own transcript file**, the one the event's payload names
+(`src/hooks/agy.ts`, D415): each call's output and the turn's reply are
+taken from there. It reads no other file of agy's and writes nothing to
+agy's transcripts.
+
+**What install writes outside `~/.treecontext`.** The client's own
+configuration, and only treecontext's part of it: the MCP entry, the
+hooks, the instruction block and the tool approvals (status, query,
+export and insert; clear, delete, import and merge keep asking), in
+`~/.claude`, in Codex's directory (`$CODEX_HOME` or `~/.codex`) and in
+`~/.gemini` for Antigravity CLI (README §3 lists every file). A
+developer's own hooks and rules are never rewritten: Codex's and agy's
+hooks files are edited as text, and a change that cannot be made without
+touching a value of yours is refused. Install never writes Codex's
+record of trusted hooks.
 
 **Treat the journal as being as sensitive as the terminal it watched.**
 If a command printed a secret, a token, or customer data, that text is
@@ -221,6 +245,16 @@ not reached, and on Windows only the direct child is ended. The worker's stdout 
 byte for byte and is not captured as journal rows; at its exit the door
 writes the worker's output as its summary row.
 
+A worker's client starts its own treecontext server in the worker's
+directory, which may be bound to another store than the door's. That
+server holds the ticket and no registration, so it stamps the worker's
+rows with the ticket's claim: the session the door named, the ticket's
+role as writer, marked `ticket-claim` (D424). It writes no registration
+there, and never files the row as the main session's. The ticket is
+whatever the spawner's environment says: it names a writer, it is not a
+credential, and anything that can set the variable for a process it
+starts can already write the store's file directly.
+
 ## 5. Tool-access policies
 
 `serve --policy <name>` controls which MCP tools are even registered
@@ -309,8 +343,12 @@ Recommendations for consuming agents:
 
 ## 8. Uninstall and deletion
 
-`treecontext uninstall` removes MCP registrations, hook scripts, and
-the installed skill, but **never touches your journals**. Deletion is
+`treecontext uninstall` removes MCP registrations, hook scripts, the
+installed skill, and what install's record says it wrote into each
+client's files (hooks and tool approvals), but **never touches your
+journals**. Where a client's file refuses the take-back, uninstall says
+what is left and fails rather than leave hooks running with nothing
+draining them. Deletion is
 always explicit and yours:
 
 ```bash

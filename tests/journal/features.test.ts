@@ -290,10 +290,6 @@ runFeatures(join(HERE, '../../features'), {
       feature: 'journal-clients',
       scenarios: [
         // Unit 10: unit 10 (D406-D412, Codex CLI 0.167.0 captured through its own hooks, doctor reading Codex's trust, the experimental capture flag removed).
-        // Held for the release gate: the cell for a ticketed Codex worker's own tool calls may read "verified live" only with the date of the build's own live run, which no build test makes (no live `codex exec`). The other three Codex cells read as this scenario asks (README: main "verified live" with 0.167.0 and 2026-11-09 at default approvals; subagent legs and the pointer "not possible: no spawn message a hook can read"). Gate: in a throwaway project with this build installed and Codex's hooks trusted, run
-        //   treecontext run --run gate --role checker --key gate-check --parent release-gate --prompt-file task.md -- codex exec -s read-only -
-        // with task.md asking for one shell command (`ls`) and one treecontext_insert, then the census over that worker's rollout (npm run dogfood:census -- --codex <rollout.jsonl> --store <store.db>); when every call is found by Codex's id in the worker's lane, set the cell to "verified live (codex exec 0.167.0 through treecontext run, default approvals, <date>)" and drop this entry.
-        "the orchestration matrix's Codex CLI cells say what a Codex hook can and cannot do",
         // Unit 11: unit 11 (D413-D418, Antigravity CLI 1.5.3 captured through a named hook, its output read from agy's transcript).
         // Not bound in unit 11's budget: README and doctor say it (README §5 `agy -p`, doctor's preset clause, bound by the D414 outline); the worker run through `treecontext run` replaying the recorded refusal (tests/fixtures/agy-hooks/1.5.3/headless-refusal.*) needs the run world in this wave.
         "the README and doctor say when a headless agy worker returns nothing because agy refused it a tool",

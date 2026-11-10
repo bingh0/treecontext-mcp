@@ -118,6 +118,16 @@ ladder below is kept as shipped history, not the live mechanism.*
    `X-Treecontext-CC-Session` per connection (the header mechanism the
    server already uses for `X-Treecontext-Namespace`). Not applicable
    to any current deployment.
+   *Since 0.1.0-beta.3 the same mark is what a ticket-door worker's
+   rows carry:* the door names the worker's lane in
+   `TREECONTEXT_WORKER_SESSION`, and `serve` stamps tool rows into it
+   as `explicit` when the registration there is the one the ticket in
+   the same environment describes (`trustedWorkerLane`). Since
+   0.1.0-beta.4, a server holding a ticket and a lane its store holds
+   no registration for at all stamps the ticket's claim instead: the
+   session the door named, `explicit`, with `_writer_src`
+   `ticket-claim` (D424). A server whose own client session the pid
+   rung reads keeps that identity.
 3. **Beacon fallback if PID matching fails** (no beacon for our PPID,
    PID recycled) — *split in two by the v1.2 amendment (2026-07-24)*.
    As shipped, this rung tagged every pid-miss ambiguous and disclosed

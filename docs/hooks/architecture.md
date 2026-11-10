@@ -109,12 +109,15 @@ See [claude-code.md](claude-code.md) for the reference implementation.
 
 **Platform requirements:** A pre-compaction event (to save state) and a
 session-start event with source discrimination (to rehydrate). Claude Code
-is the only verified platform; the opencode plugin implements the full
-lifecycle but is unverified scaffolding (see [opencode.md](opencode.md)).
+is the verified platform. Codex CLI runs the same hooks through its own
+block: a Codex main is re-oriented at a fresh start and on a resume, and a
+manual compaction leaves a recovery note (an automatic one is
+unrecorded). Antigravity CLI has no compaction event and receives no
+re-orientation packet.
 
-**When new platforms ship compaction events**, adding Layer 3 support is
-a small adapter addition. See [adding-a-platform.md](adding-a-platform.md)
-and `src/hooks/README.md` for the verification bar.
+**Adding a client** is described in
+[adding-a-platform.md](adding-a-platform.md); `src/hooks/README.md` holds
+the verification bar.
 
 ## Design constraints
 

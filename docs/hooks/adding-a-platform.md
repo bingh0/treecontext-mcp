@@ -1,97 +1,124 @@
-# Adding a Platform Adapter
+# Adding a Platform
 
 > **Which clients have hooks, and how:** the dated [compatibility matrix](../../README.md#compatibility-matrix) in the README, one row per client: its hook events, the documentation checked, its mode, and whether capture there is verified live or documented only.
 
 Source of truth: `src/hooks/README.md` (the verification rule and the
-per-adapter status table). This page describes the mechanics.
+per-client status table). This page describes the mechanics, as Codex CLI
+(D406 to D412) and Antigravity CLI (D413 to D415) were added in
+0.1.0-beta.4.
 
 ## The model
 
-The reference hooks (`src/hooks/*.ts`, Claude Code payload shape) own
-all capture semantics. A platform adapter is a directory
-`src/hooks/<platform>/` whose entry points **normalize the platform's
-payload and delegate to the reference hooks** — never a copy of them.
-The `vscode/` adapter is the worked example: `normalize.ts` folds the
-platform's field names into the internal shape, each entry point calls
-the reference hook's `main(preParsed)`, and platform-only events (e.g.
-Copilot's inline `agentStop` text) get the minimal extra handling.
+There are no per-platform adapter directories. Earlier builds carried
+them (`src/hooks/codex`, `cursor`, `gemini`, `opencode`, `vscode`), each
+with its own copy of the capture logic, and the copies drifted off the
+capture charter: they dropped repo-reading tool calls the charter keeps
+and had no assistant-turn capture. They left the build with the
+`--experimental-capture` flag (D399, D406).
 
-Copying capture logic is how adapters rot: the pre-rewrite copies had
-drifted off the capture charter — they dropped repo-reading tool
-invocations the charter says must be kept, and had no assistant-turn
-capture at all (`src/hooks/vscode/normalize.ts` header).
+A client is now captured one of three ways:
 
-## What a new adapter needs
+- **It runs the reference hooks through a block of its own.** Codex CLI's
+  payloads are Claude-shaped, so install writes Codex its own block into
+  `~/.codex/hooks.json` (`src/server/codex-hooks.ts`), each command running
+  the same `~/.claude/hooks/tc-*` scripts with `--client codex`. What only
+  Codex needs lives beside the reference hooks
+  (`src/hooks/codex-calls.ts`: a `PreToolUse` held as a call's account,
+  and the calls a turn's end found no result for).
+- **It gets one hook of its own.** Antigravity CLI's events and payloads
+  are its own, so install writes one named hook (`src/server/agy-hooks.ts`)
+  whose commands run `tc-agy <Event> --client agy`, served by
+  `src/hooks/agy.ts`. The event comes from the command, since two of agy's
+  payloads carry the same keys.
+- **It reads the Claude settings file itself.** VS Code (with
+  `chat.useClaudeHooks` on) and Cursor run Claude Code's block as it is;
+  install writes nothing for them (`AS_IS_CLIENTS`, D154, D226), and
+  their rows stay documented only.
 
-1. **`src/hooks/<platform>/normalize.ts`** — map the platform's real
-   payload shapes (all of them — Copilot has two) onto the fields the
-   reference hooks read: `session_id`, `cwd`, `user_message`/`prompt`,
-   `tool_name`, `tool_input`, `tool_output`, `transcript_path`,
-   `source`.
-2. **Entry points** for the events the platform actually exposes —
-   user-prompt, post-tool, session-start, pre-compact, a turn-end
-   event if one exists, and subagent start/stop if the platform reports
-   them (they register subagents so the store can stamp each row's
-   writer; without them nothing is registered and every row reads as
-   the session's own agent's until its echo drains). A session-start
-   that does not register the session's self leaves every row the agent
-   writes through the tools stamped `unregistered`, shown as "writer
-   unknown": a lane of its own, never any checkout's (D376). Not every platform has a Stop equivalent; user
-   and tool capture stand alone (`src/hooks/README.md`).
-3. **Tests** in `tests/hooks/` exercising the documented payloads
-   (`tests/hooks/copilot-adapter.test.ts` is the template).
-4. **Installer wiring** in `src/server/agents.ts` (config paths and
-   hook format) and `src/server/installer.ts` (an
-   `upsert<Platform>Hooks` writer), gated behind
-   `--experimental-capture` until verified.
-5. **Every hook exits 0, always.** DB unreachable, malformed input —
-   stderr at most. A hook must never crash the agent loop.
+A client with no shell hooks (OpenCode) gets the tools alone.
+
+## What a new client needs
+
+1. **Recordings first.** Run the real client, record its hook payloads
+   and its transcript, and commit them under
+   `tests/fixtures/<client>-hooks/<version>/` with a README saying how
+   they were taken. Recorded fixtures carry model-written text: read it
+   and run `npm run release-scan` before committing. A payload written
+   by hand is never the client's word (the stand-in guard in
+   `tests/feature-guards.test.ts`).
+2. **The client's event list**, `tests/fixtures/<client>-hooks/events.json`:
+   every hook event the client documents, each either wired by install or
+   named with what the journal does not capture because of it (D402). The
+   list is re-read against the client's hooks reference at every client
+   upgrade.
+3. **A name in the command.** A hook takes its client from the command
+   install wrote (`--client <name>`, `src/hooks/hook-client.ts`), never
+   from the payload. Add the client there, and to:
+   - `CLIENTS_STATING_OUTCOME` only on a recording showing its failed
+     calls arrive by an event of their own (D404); otherwise its calls
+     are classed by their text;
+   - `CLIENTS_REGISTERING_NO_SELF` if no event of the client registers
+     the session's self, so its rows outside a worker's lane are stamped
+     `unregistered`, shown as "writer unknown" (D421).
+4. **Install, uninstall and doctor for the client's own files**, in a
+   module of its own (`codex-hooks.ts`, `agy-hooks.ts` are the two worked
+   examples). The rules both follow:
+   - a version floor, the version the recordings were made on; below it,
+     or where the version cannot be read, the client stays tools-only and
+     what install wrote is taken back;
+   - the developer's file is edited as text
+     (`src/server/json-text-edit.ts`), never re-serialised, and a change
+     edits cannot make is a refusal that leaves the file byte for byte;
+   - install records what it wrote (`src/server/install-state.ts`), and a
+     take-back removes exactly that;
+   - one invariant, read in one place: treecontext's hooks are in the
+     client's hooks file if and only if the client's MCP entry serves in
+     capture mode (D386; `codexHooksPresent`, `agyHooksPresent`,
+     `captureHooksInstalled`);
+   - where the client can say what it loaded, ask it instead of modelling
+     its configuration grammar (Codex's `hooks/list`); where it cannot
+     (agy), doctor reads the file and says so.
+5. **Every hook exits 0, always**, and inside the client's own time limit.
+   Store unreachable, malformed input: stderr at most, and what could not
+   be written goes to the gap ledger (`src/hooks/gap-ledger.ts`), never
+   silently away. A hook must never crash or stall the agent loop.
+6. **Charter scenarios** in `features/`, bound through the recordings
+   (`recordedSession`, `replayRecordedSession`). Feature files are owner
+   review territory.
 
 ## Verification — the part that cannot be skipped
 
-Reading hook source is **not** verification (that method missed
-Claude Code's `tool_response` field four times). An adapter joins
-`CAPTURE_PLATFORMS` — and only then does `treecontext install` write
-its hook config without `--experimental-capture` — after someone runs
-the real platform and inspects the staged rows. Until then the
-installer registers MCP tools only and says plainly that nothing is
-being captured.
+Reading hook source is **not** verification (that method missed Claude
+Code's `tool_response` field four times). A client's capture is promised
+only after a live run of the real client and direct inspection of the
+store:
 
-Current status of the shipped scaffolding (`codex/`, `cursor/`,
-`opencode/`): **unverified**, and the first two still hold their own
-copies of capture logic that predate the charter. Bringing each one onto
-the delegate-to-reference pattern is part of its verification pass.
-Gemini CLI is retired (D399): its adapter was removed, install no longer
-wires it, and `treecontext uninstall --agent gemini` sweeps what an
-earlier install wrote for it.
+- `treecontext doctor` reads the client's row as capturing;
+- a real session's tool calls are counted against the store. For Claude
+  Code and Codex CLI: `npm run dogfood:census` (by the client's call id;
+  `--codex <rollout.jsonl>` for a Codex rollout, D409). Antigravity CLI
+  has no census yet; its calls are counted by hand against the worker's
+  lane;
+- the README's compatibility and orchestration matrices say "verified
+  live" only with the client's version, the permission mode and the date
+  of the run the cell rests on.
 
-Codex CLI no longer needs its adapter to be wired: it keeps its own hook
-configuration, so `install --agent codex --experimental-capture` writes a
-**copy of the Claude Code block** there — verbatim into
-`~/.codex/hooks.json`, since Codex's documented contract is Claude Code's
-(all seven events, `SubagentStart` and `SubagentStop` and the four
-`SessionStart` matchers included) — running the same
-`~/.claude/hooks/tc-*` scripts (D154, D208). `treecontext doctor` grades
-the copy against the block this build would write: present and
-consistent, or present and inconsistent with the events it differs on
-and the same command as the way to rewrite it (D161). Codex's `[hooks]`
-table in `~/.codex/config.toml` is graded, cleared by that command and by
-uninstall the same way; a copy in two places reads inconsistent because
-it would fire twice. Ownership is anchored to treecontext's own hooks
-directory, so a `tc-*` hook of yours elsewhere is never touched, and
-`uninstall --agent claude` keeps the scripts while a copy still runs them. A new copying
-client is a row in `CLIENT_HOOK_MODES` and, if its events are renamed, a
-translation table from Claude Code's event names to its own
-(`src/server/installer.ts`).
+Until then install registers the MCP tools only and says plainly that
+nothing is being captured.
 
-VS Code and Cursor are the as-is clients (`AS_IS_CLIENTS`): they read
-the Claude settings file themselves (VS Code only with
-`chat.useClaudeHooks` on, off by default; Cursor by default), so install
-writes nothing for them, with or without `--experimental-capture`, and
-the flagged install prints one line saying so. Their adapters (`vscode/`,
-`cursor/`) stay in source, unwired; a hook file an earlier build wrote
-for them is a second route that doctor warns about, removed by
-`treecontext uninstall --agent vscode|cursor --hooks-only`. OpenCode
-offers no shell hooks, so the tools are its whole surface. Doctor's row
-for each of the five ends in one clause, `the client <mode>; state:
-<state>; remedy: <remedy>`, and no row calls capture verified.
+## Current state
+
+| Client | How it is captured | State |
+| --- | --- | --- |
+| Claude Code | the reference hooks, wired into `~/.claude/settings.json` | verified live; the reference platform |
+| Codex CLI | its own block in `~/.codex/hooks.json`, from 0.167.0; Codex runs a hook only once it is trusted with `/hooks` | verified live as a worker under a Claude Code main; a Codex main is best effort |
+| Antigravity CLI | one named hook in `~/.gemini/config/hooks.json`, from 1.5.3 | basic support; recorded at 1.5.3 |
+| VS Code, Cursor | Claude Code's block, read by the client itself | documented only |
+| OpenCode | no shell hooks | tools only |
+| Gemini CLI | archived (D399) | install never wires it; uninstall sweeps what an earlier build wrote |
+
+A hook file an earlier build wrote for VS Code or Cursor is a second
+route that doctor warns about, removed by `treecontext uninstall --agent
+vscode|cursor --hooks-only`. Doctor's row for each client ends in one
+clause, `the client <mode>; state: <state>; remedy: <remedy>`, and no row
+calls capture verified where no live run stands behind it.

@@ -93,6 +93,30 @@ for the three-layer model.
   from the session's resolved namespace, every namespace only when it
   does not resolve
 
+- `hook-client.ts` — the client a hook runs for (D404), named by the
+  command install wrote (`--client claude-code`, `--client codex`,
+  `--client agy`) and handed on by the hook script, never read from the
+  payload (Codex's payloads are Claude-shaped). `CLIENTS_STATING_OUTCOME`
+  lists the clients whose own events state how a call ended (Claude Code
+  alone: a call arriving by `PostToolUse` succeeded, one by
+  `PostToolUseFailure` failed); every other client's calls are classed by
+  their text. `CLIENTS_REGISTERING_NO_SELF` lists the clients no event of
+  which registers a session's self (Antigravity CLI, D421)
+- `codex-calls.ts` — Codex CLI's calls and turns (D408): a `PreToolUse`
+  staged as a call's account (`captured_from` `pre-tool-use`, never an
+  entry by itself), and at a turn's end (`Stop`, `Interrupt`,
+  `SubagentStop`) each account with no result staged for its call id
+  turned into a `no-result` entry at the call's own moment
+- `agy.ts` — what one Antigravity CLI event stages (D415, D421), reached
+  through `tc-agy <Event> --client agy`: the turn's prompt at the first
+  `PreInvocation` of a turn, a call's account at `PostToolUse`, the call
+  journaled at the `PostInvocation` whose transcript holds its output,
+  the rest and the reply at `Stop`; a ticketed worker's conversation
+  linked to its lane at `SessionStart`. Every answer to agy is `{}`
+- `hook-deadline.ts` — a hook's waits on the store end at its deadline by
+  the clock: each connection's busy timeout is a short slice, and the
+  budget is a moment checked between slices
+
 At the drain a staged row naming an agent is stamped `_writer` (its
 role) with `_writer_src: "hook"`; a row naming none is the session's own
 agent's. Rows written through the tools are stamped by the server from
@@ -141,34 +165,33 @@ never a dependency of the other two hooks on that signal.
   `buildRehydrationPayload`, `enforceCharCap`, `stripAnsi`, `normalizeSource`,
   `payloadWriter`
 
-## Platform adapters — verification status
+## Clients — verification status
 
 Claude Code (the root hooks above) is the **reference platform**,
 verified against live payloads and a live store. Per the capture
-charter's verification rule (reading hook source is not verification —
-that method missed `tool_response` four times), no other platform is
-advertised as working capture until it earns a live-payload pass.
+charter's verification rule (reading hook source is not verification:
+that method missed `tool_response` four times), a client is advertised
+as captured only after a live run of the real client and direct
+inspection of the store.
 
-`install` enforces this rather than leaving it to documentation: it
-writes hook configuration only for slugs in `CAPTURE_PLATFORMS`
-(`src/server/installer.ts`). Every other agent still gets its MCP
-registration — the tools work wherever the agent speaks MCP — and the
-installer says plainly that nothing is being captured.
+There are no per-platform adapter directories any more. The copies
+earlier builds carried (`codex/`, `cursor/`, `gemini/`, `opencode/`,
+`vscode/`) left the build in 0.1.0-beta.4 with the
+`--experimental-capture` flag (D399, D406); a client is now named by the
+command that runs the hook.
 
-| Adapter | State |
+`install` writes hook configuration only where capture can run, and says
+plainly where nothing is being captured. Every other agent still gets its
+MCP registration: the tools work wherever the agent speaks MCP.
+
+| Client | State |
 | --- | --- |
-| root (Claude Code) | **Verified.** Reference platform. In `CAPTURE_PLATFORMS`. |
-| `vscode/` (GitHub Copilot) | **Charter-aligned, awaiting a live pass.** Rewritten to delegate to the reference hooks, so capture semantics can no longer drift; normalization covers both Copilot payload shapes; `agentStop` added. Exercised against the documented payloads (`tests/hooks/copilot-adapter.test.ts`) but **not** against a live Copilot session, which is what the pass requires. No longer installed: VS Code reads the Claude settings file, so the installer writes nothing for it even with the flag (D226); doctor flags a copy an earlier build left. |
-| `codex/`, `cursor/` | **Unverified.** Still hold their own copies of capture logic, and those copies still drop repo-reading invocations the charter says to keep. Bringing each onto the charter is part of its pass — the `vscode/` rewrite is the worked example. `install --experimental-capture` no longer wires `codex/`: Codex CLI gets a copy of the Claude Code block running the reference hooks (D154, D208; `docs/hooks/adding-a-platform.md`). The `gemini/` adapter was removed when Gemini CLI was retired (D399). |
-| `opencode/` | **Unverified.** A plugin rather than hooks; registered manually in opencode's config. |
-
-### What a verification pass costs
-
-The `vscode/` rewrite is the template: normalize the platform's real
-payload shapes, delegate to the reference hook rather than copying it,
-add the events the platform actually exposes, then run the platform for
-real and inspect the staged rows. Only after that last step does a slug
-join `CAPTURE_PLATFORMS`.
+| Claude Code | **Verified live.** The reference platform; the hooks block in `~/.claude/settings.json`, every command ending in `--client claude-code`. |
+| Codex CLI, from 0.167.0 | **Verified live as a worker under a Claude Code main; a Codex main is best effort.** Its own block in `~/.codex/hooks.json` running the same `tc-*` scripts with `--client codex` (`src/server/codex-hooks.ts`, D406 to D412). Codex runs a hook only once it is trusted with `/hooks`. Recordings: `tests/fixtures/codex-hooks/0.167.0`. |
+| Antigravity CLI, from 1.5.3 | **Basic support.** One named hook in `~/.gemini/config/hooks.json` (`src/server/agy-hooks.ts`, D413 to D415), served by `agy.ts`. An agy main registers no self. Recordings: `tests/fixtures/agy-hooks/1.5.3`. |
+| VS Code, Cursor | **Documented only.** They read the Claude settings file themselves, so install writes nothing for them and their events are taken as Claude Code's. |
+| OpenCode | **Tools only.** No shell hooks. |
+| Gemini CLI | **Archived (D399).** Never wired; uninstall sweeps what an earlier build wrote. |
 
 ## Registration
 
