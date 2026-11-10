@@ -82,15 +82,20 @@ jobs:
       # The Codex CLI scenarios ask Codex itself how it reads its
       # configuration (`codex mcp get`, its app server's config/read) and
       # run its sandbox check; none of them calls a model.
+      # No client is pinned (owner ruling 2026-11-10): Claude Code, Codex CLI
+      # and Antigravity CLI change weekly and nobody stays on an old build, so
+      # CI runs what a developer has today. A lane that goes red because a
+      # client moved is the news this job exists to bring. The floors install
+      # enforces (Codex CLI 0.167.0, Antigravity CLI 1.5.3) are minimums, not
+      # pins, and the scenarios that need an exact version line stand in for
+      # that line alone.
       - name: install Codex CLI
-        run: npm i -g @openai/codex@0.167.0
+        run: npm i -g @openai/codex
       # The Antigravity CLI scenarios read agy's own listing of its MCP
       # servers (`agy mcp list`) and its version line; none of them calls a
-      # model or needs a login. agy ships no npm package and its installer
-      # takes no version: it installs the newest build (the installer checks
-      # the download against the manifest's SHA-512), and the harness stands
-      # in for the version line alone where agy has moved past the recorded
-      # one (tests/journal/install-harness.ts).
+      # model or needs a login. agy ships no npm package; its installer
+      # takes the newest build and checks the download against the
+      # manifest's SHA-512.
       - name: install Antigravity CLI (Linux, macOS)
         if: runner.os != 'Windows'
         shell: bash
