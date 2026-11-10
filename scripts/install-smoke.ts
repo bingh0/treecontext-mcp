@@ -133,6 +133,16 @@ function main(): void {
     // one of its own, its `projects` directory, so this looks like a machine
     // with Claude Code on it whether or not the runner has the command.
     mkdirSync(join(home, '.claude', 'projects'), { recursive: true })
+    // And the two other captured clients, as machines that already have
+    // them look (owner, 2026-11-10: the CI tests mimic pre-existing Claude
+    // Code, Codex CLI and Antigravity CLI installations): each client's own
+    // directory, which is what install detects it by where its command is
+    // not on PATH. Whether install also writes their hooks depends on the
+    // command and its version (the floors), so the smoke asserts what holds
+    // either way: each client gets its MCP entry.
+    mkdirSync(join(home, '.codex'), { recursive: true })
+    mkdirSync(join(home, '.gemini', 'antigravity-cli'), { recursive: true })
+    delete env['CODEX_HOME']
     run(bin, ['install', '--yes'], env, 'treecontext install')
 
     const settings = join(home, '.claude', 'settings.json')
@@ -150,6 +160,21 @@ function main(): void {
       process.exit(1)
     }
 
+    // Codex CLI and Antigravity CLI: the entry is in the file each reads.
+    const codexConfig = join(home, '.codex', 'config.toml')
+    const codexText = existsSync(codexConfig) ? readFileSync(codexConfig, 'utf8') : ''
+    if (!/^\[mcp_servers\.treecontext\]/m.test(codexText)) {
+      console.error(`install-smoke: install wrote no treecontext server into ${codexConfig}`)
+      process.exit(1)
+    }
+    const agyConfig = join(home, '.gemini', 'config', 'mcp_config.json')
+    let agyServers: unknown
+    try { agyServers = (JSON.parse(readFileSync(agyConfig, 'utf8')) as { mcpServers?: unknown }).mcpServers } catch { agyServers = undefined }
+    if (!agyServers || typeof agyServers !== 'object' || !('treecontext' in agyServers)) {
+      console.error(`install-smoke: install wrote no treecontext server into ${agyConfig}`)
+      process.exit(1)
+    }
+
     const doctor = run(bin, ['doctor'], env, 'treecontext doctor')
     const errors = doctor.split('\n').filter(l => l.startsWith('[err]'))
     if (errors.length > 0) {
@@ -158,7 +183,7 @@ function main(): void {
       process.exit(1)
     }
 
-    console.log(`install-smoke: ${version} installs, self-reports, wires runnable hooks, and passes doctor.`)
+    console.log(`install-smoke: ${version} installs, self-reports, wires runnable hooks, gives Codex CLI and Antigravity CLI their entries, and passes doctor.`)
   } finally {
     rmSync(sandbox, { recursive: true, force: true })
   }
