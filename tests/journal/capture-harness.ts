@@ -111,8 +111,9 @@ export function openCaptureSandbox(w: CaptureWorld): void {
   w.defer(() => rmSync(w.home!, { recursive: true, force: true }))
   w.proj = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-capture-proj-')))
   w.defer(() => rmSync(w.proj!, { recursive: true, force: true }))
-  // Pin project-root discovery to the temp dir itself (an empty .git is
-  // not a valid repo, so identity stays path-based and deterministic).
+  // An empty .git, as Codex CLI's sandbox leaves one: no repository, so
+  // git names none and treecontext's own walk passes it over (D419); the
+  // project root is the temp dir itself and identity stays path-based.
   mkdirSync(join(w.proj, '.git'))
   w.dbPath = derivedStorePath(w.home, w.proj)
   w.sessionId = `cc-${randomBytes(6).toString('hex')}`

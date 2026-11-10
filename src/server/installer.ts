@@ -5810,6 +5810,28 @@ export async function doctor(): Promise<DiagnosticResult[]> {
     results.push({ check: 'Store directory', status: 'ok', detail: 'not created yet (created on first use)' })
   }
 
+  // The project this directory's store binding and config file follow
+  // (D255), and every `.git` resolution passed over because it is no
+  // repository (D419): an empty directory or a file git cannot read is never
+  // a project root, and a developer whose journal is not where they expected
+  // reads why here. Read-only: the root is resolved, never bound.
+  {
+    const { projectRootReport } = await import('./bindings.js')
+    const { root, repository, passedOver, priorBindings, boundStore } = projectRootReport(process.cwd())
+    const kind = repository ? 'a repository\'s root' : 'no repository: keyed by this directory itself'
+    const ignoredClause = passedOver.map((p) => `; ${p} ignored because it is no repository`).join('')
+    // A binding an earlier build made for the stub's directory: its store is
+    // left as it was, never moved or merged here; the merge is the
+    // developer's command to run (D419).
+    const priorClause = priorBindings.map((b) => `; an earlier treecontext bound this project to ${b.dir}, taking its .git for a root, `
+      + `in store "${b.store}", which is left as it was; to bring its entries into this project's store run `
+      + `treecontext stores merge ${b.store} ${boundStore ?? '<this project\'s store, named once the server has started here>'}`).join('')
+    results.push({
+      check: 'Project root', status: 'ok',
+      detail: `the store binding and config file follow ${root} (${kind})${ignoredClause}${priorClause}`,
+    })
+  }
+
   // Store schema — the check whose absence made a dead server look healthy.
   //
   // Every row above validates an *installation artifact* (a config file, a

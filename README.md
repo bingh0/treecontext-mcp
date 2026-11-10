@@ -913,7 +913,12 @@ anything. Both figures are yours to set per project in a
 `~/.treecontext/config.toml`. The global file applies only to projects
 with no `treecontext.toml` of their own: the first file found is read
 whole, so a project file without a `[retention]` table means the
-defaults, not the global figures.
+defaults, not the global figures. The project's root, for this file
+and for the store it is bound to, is the root of its git repository, or
+the project's own directory when it has none. A `.git` that is no
+repository (an empty directory such as Codex CLI's sandbox leaves, or a
+file git cannot read) is passed over wherever it lies, and doctor's
+"Project root" row names each one it passed over.
 
 ```toml
 [retention]

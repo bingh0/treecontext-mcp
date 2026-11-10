@@ -111,10 +111,13 @@ describe('the stamp on a tool-written row (D190)', () => {
     const chapter = (await insert(c, 'plan: wire the login form', { next_session: true }))['node_id'] as string
     withRaw((db) => { registerSubagent(db, 's1', 'a1', 'tester', MAIN, 101); registerSubagent(db, 's1', 'a2', 'reviewer', MAIN, 102) })
     const r = await insert(c, 'plan: something else', { next_session: true }, [chapter])
-    expect(r).toMatchObject({ writer: 'main', writer_src: 'ambiguous', superseded: [], referenced: [chapter] })
+    // D420: an ambiguous writer owns no lane, so every target it names is
+    // held as pending until the call's echo names the writer.
+    expect(r).toMatchObject({ writer: 'main', writer_src: 'ambiguous', superseded: [] })
+    expect((r['supersession_pending'] as Array<{ node_id: string }>).map((p) => p.node_id)).toEqual([chapter])
     expect(String(r['writer_note'])).toMatch(/2 subagents of this session were live \(tester, reviewer\)/)
     expect(r['writer_candidates']).toEqual([{ agent_id: 'a1', agent_type: 'tester' }, { agent_id: 'a2', agent_type: 'reviewer' }])
-    expect(meta(r['node_id'] as string)).toMatchObject({ _writer: 'main', _writer_src: 'ambiguous', refs: [chapter] })
+    expect(meta(r['node_id'] as string)).toMatchObject({ _writer: 'main', _writer_src: 'ambiguous', _supersedes_pending: [chapter] })
     // The chapter stays a live pointer, untouched.
     expect(meta(chapter)['next_session']).toBe(true)
     await close()
@@ -650,9 +653,10 @@ describe('one lane rule for every reader (D379)', () => {
     withRaw((db) => registerSubagent(db, 'wt', 'a2', 'tester', WT, 101))
     const w = await client(s, 'wt')
     // The insert reads the caller as the live tester, provisionally: the
-    // worktree's chapter is another writer's.
+    // supersession is held as pending until the echo (D420).
     const r = await insert(w.c, 'plan: the layout, settled', { next_session: true }, [lib[0]!])
-    expect(r).toMatchObject({ writer: 'tester', writer_src: 'provisional', superseded: [], referenced: [lib[0]] })
+    expect(r).toMatchObject({ writer: 'tester', writer_src: 'provisional', superseded: [] })
+    expect((r['supersession_pending'] as Array<{ node_id: string }>).map((p) => p.node_id)).toEqual([lib[0]])
     const id = r['node_id'] as string
     const created = withRaw((db) => (db.prepare('SELECT created_at AS t FROM nodes WHERE node_id = ?').get(id) as { t: number }).t)
     // Its echo carries no agent fields: the worktree's own agent wrote it.
@@ -662,6 +666,56 @@ describe('one lane rule for every reader (D379)', () => {
     expect(meta(lib[0]!)).toMatchObject({ superseded_by: id })
     expect(meta(lib[0]!)['next_session']).toBeUndefined()
     await w.close()
+    await s.close()
+  })
+
+  it('a pending supersession of another lane\'s entry is listed in the inserting session\'s status, each lane seeing only its own text (D420, D372; review F2)', async () => {
+    const { s, lib } = await libraryWorld(1)
+    withRaw((db) => registerSubagent(db, 'm', 'a1', 'tester', MAIN, Date.now() / 1000 - 30))
+    const m = await client(s, 'm')
+    // The main checkout's own agent, silent since the tester started: its
+    // bookmark is stamped the tester's, provisionally; held, no echo yet.
+    const r = await insert(m.c, 'bookmark: main takes the layout', { kind: 'bookmark' }, [lib[0]!])
+    expect(r).toMatchObject({ writer: 'tester', writer_src: 'provisional' })
+    const id = r['node_id'] as string
+    type Pending = { node_id?: string; preview?: string; withheld?: string; lane: string; pending: Array<{ node_id?: string; preview?: string; withheld?: string; lane: string }> }
+    const pendingOf = async (c: Client): Promise<Pending[]> =>
+      ((parseToolResult(await c.callTool({ name: 'treecontext_status', arguments: {} }))['pending_supersessions'] ?? []) as Pending[])
+    // The session that made the insert sees it, by its own session's
+    // placement; the worktree's target is named by its lane alone.
+    const fromMain = await pendingOf(m.c)
+    expect(fromMain).toHaveLength(1)
+    expect(fromMain[0]).toMatchObject({ node_id: id, preview: 'bookmark: main takes the layout', lane: 'tester' })
+    expect(fromMain[0]!.pending).toEqual([expect.objectContaining({ lane: 'worktree:feature-login', withheld: expect.any(String) })])
+    expect(JSON.stringify(fromMain)).not.toContain(lib[0]!)
+    expect(JSON.stringify(fromMain)).not.toContain('plan: the layout 0')
+    // The worktree sees its own target held, the main entry by its lane alone.
+    const w = await client(s, 'wt')
+    const fromWt = await pendingOf(w.c)
+    expect(fromWt).toHaveLength(1)
+    expect(fromWt[0]).toMatchObject({ lane: 'tester', withheld: expect.any(String) })
+    expect(fromWt[0]!.pending).toEqual([expect.objectContaining({ node_id: lib[0], preview: 'plan: the layout 0, from a script', lane: 'worktree:feature-login' })])
+    expect(JSON.stringify(fromWt)).not.toContain(id)
+    expect(JSON.stringify(fromWt)).not.toContain('main takes the layout')
+    // A third lane, neither the entry's session's nor the target's, sees nothing.
+    withRaw((db) => registerSelf(db, 'other', { ...WT, worktree: 'other', cwd: '/other', toplevel: '/other' }, 100))
+    const o = await client(s, 'other')
+    expect(await pendingOf(o.c)).toEqual([])
+    await m.close(); await w.close(); await o.close()
+    await s.close()
+  })
+
+  it('a held stamp\'s dedup hit that names the survivor itself reports it as self, the rest as not_exact (D420)', async () => {
+    const { s } = await libraryWorld(0)
+    const m = await client(s, 'm')
+    const x = (await insert(m.c, 'plan: the layout, once', { next_session: true }))['node_id'] as string
+    const y = (await insert(m.c, 'plan: another layout', { next_session: true }))['node_id'] as string
+    withRaw((db) => registerSubagent(db, 'm', 'a1', 'tester', MAIN, Date.now() / 1000 + 1))
+    const r = await insert(m.c, 'plan: the layout, once', { next_session: true }, [x, y])
+    expect(r).toMatchObject({ deduplicated: true })
+    expect(r['supersede_misses']).toEqual([{ nodeId: x, reason: 'self' }, { nodeId: y, reason: 'not_exact' }])
+    expect(meta(y)['next_session']).toBe(true)
+    await m.close()
     await s.close()
   })
 

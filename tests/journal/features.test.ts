@@ -378,10 +378,6 @@ runFeatures(join(HERE, '../../features'), {
     {
       feature: 'journal-orchestration',
       scenarios: [
-        // Unit 9: unit 9 (D420 a supersession made under a provisional stamp is applied when the echo names the writer).
-        "an orchestrator's bookmark written while one subagent was live supersedes its own earlier one once its echo names the orchestrator, <how>",
-        "a supersession held under a provisional stamp leaves <owner>'s entry live after the echo",
-        "a supersession whose echo never comes stays pending, and says so",
         // Unit 10: unit 10 (D406-D412, Codex CLI 0.167.0 captured through its own hooks, doctor reading Codex's trust, the experimental capture flag removed).
         "a Codex CLI main registers itself at its start and the server stamps its rows from it",
         "a Codex CLI main's fresh start is handed its lane's chapter",
@@ -391,15 +387,6 @@ runFeatures(join(HERE, '../../features'), {
         // Unit 11: unit 11 (D413-D418, Antigravity CLI 1.5.3 captured through a named hook, its output read from agy's transcript).
         "an Antigravity CLI main registers itself at its session start and the server stamps its notes from it",
         "an Antigravity CLI main whose subagent has started still writes as itself, <linked>",
-      ],
-    },
-    {
-      feature: 'journal-storage',
-      scenarios: [
-        // Unit 9: unit 9 (D419 a `.git` that is no repository is not a project root).
-        "a project below a directory holding <stub> binds its own store and reads its own config file",
-        "a project inside a repository resolves to the repository's root, with <stub> <where>",
-        "doctor names a `.git` it passed over because it is no repository",
       ],
     },
     {

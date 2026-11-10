@@ -1,6 +1,6 @@
-import fs, { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync, existsSync, statSync } from 'node:fs'
-import { randomBytes } from 'node:crypto'
-import { spawn } from 'node:child_process'
+import fs, { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync, existsSync, statSync, realpathSync } from 'node:fs'
+import { createHash, randomBytes } from 'node:crypto'
+import { execFileSync, spawn } from 'node:child_process'
 import { createRequire, syncBuiltinESMExports } from 'node:module'
 import { once } from 'node:events'
 import { dirname, join } from 'node:path'
@@ -24,7 +24,7 @@ import { MAX_INGEST_ATTEMPTS } from '../../../src/persistence/capture-constants.
 import { T0, mcpOver, nsClaimHook, parseTool, openLiveStore, exportNode, rawAll } from '../world.js'
 import { Client } from '@modelcontextprotocol/client'
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio'
-import { CLI_TS, nodeTsArgs, sandboxedSpawnEnv } from '../../helpers/cli-spawn.js'
+import { CLI_TS, nodeTsArgs, sandboxedSpawnEnv, spawnCli } from '../../helpers/cli-spawn.js'
 import { loadConfigFile } from '../../../src/server/config.js'
 import { newerSchemaLine } from '../../../src/persistence/migrations.js'
 import { SCHEMA_CHECK_TTL_MS } from '../../../src/server/server.js'
@@ -78,6 +78,12 @@ export interface StorageWorld extends RunWorld {
   budgetStatus?: Record<string, unknown>
   /** Seeded demotable rows (id → stored byte length) the valve must spare. */
   budgetSeed?: Map<string, number>
+  /** D419: the store is resolved by the server from its directory (no
+   *  `--store`), the stub `.git`'s directory, and the repository's root. */
+  budgetAutoStore?: boolean
+  stubDir?: string
+  repoRoot?: string
+  doctorOut?: string
   /** The cap-that-bites scenario: its raw handle, sprint shape and sweep. */
   sprintRaw?: DatabaseSync
   sprintSessions?: number
@@ -1651,7 +1657,9 @@ export const storageBudgetDefiner = (reg: Registry<StorageWorld>): void => {
   async function serveFromProject(w: StorageWorld): Promise<Client> {
     const transport = new StdioClientTransport({
       command: process.execPath,
-      args: nodeTsArgs(CLI_TS, ['serve', '--lexical', '--store', w.budgetDb!]),
+      // D419's scenarios leave the store to the server: it resolves the
+      // binding from the directory it starts in, as an installed server does.
+      args: nodeTsArgs(CLI_TS, w.budgetAutoStore ? ['serve', '--lexical'] : ['serve', '--lexical', '--store', w.budgetDb!]),
       env: sandboxedSpawnEnv(w.budgetHome!) as Record<string, string>,
       cwd: w.budgetProject!,
       stderr: 'pipe',
@@ -1705,7 +1713,7 @@ export const storageBudgetDefiner = (reg: Registry<StorageWorld>): void => {
       budgetProject(w, `[retention]\nmax_store_bytes = ${Number(mib) * MiB}\nmax_sessions = ${Number(cap)}\n`)
     },
   )
-  reg.define(/^the server is started from that project and opens its store$/, async (w: StorageWorld) => {
+  reg.define(/^the server is started from that project(?: directory)? and opens its store$/, async (w: StorageWorld) => {
     await serveFromProject(w)
   })
   reg.define(
@@ -1716,6 +1724,135 @@ export const storageBudgetDefiner = (reg: Registry<StorageWorld>): void => {
       expect(storageOf(w)).toMatchObject({ budget_bytes: Number(mib) * MiB, session_cap: Number(cap) })
     },
   )
+
+  // ── D419: a `.git` that is no repository is not a project root ────────
+  //
+  // Real directory trees on disk: a stub `.git` (an empty directory, or a
+  // file git refuses, each proven refused by git itself in the Given), a
+  // real `git init` repository as the control, and a real `serve` with NO
+  // `--store`, so the server resolves the binding from the directory it
+  // starts in. The binding is read back from the sandboxed home's
+  // bindings.json and the store directory on disk.
+  const STUBS: Record<string, 'empty-dir' | 'junk-file'> = {
+    'an empty directory named `.git`': 'empty-dir',
+    'a file named `.git` that git does not accept': 'junk-file',
+  }
+  const gitEnv = (): NodeJS.ProcessEnv =>
+    Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('GIT_')))
+  const gitTop = (cwd: string): { ok: boolean; out: string } => {
+    try {
+      return { ok: true, out: execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd, env: gitEnv(), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim() }
+    } catch (err) {
+      return { ok: false, out: String((err as { stderr?: string }).stderr ?? err) }
+    }
+  }
+  function plantStub(dir: string, stub: string): void {
+    const kind = STUBS[stub]
+    expect(kind, `no stub named ${stub}`).toBeDefined()
+    if (kind === 'empty-dir') mkdirSync(join(dir, '.git'))
+    else writeFileSync(join(dir, '.git'), 'this file is named .git and is no repository\n')
+  }
+  function stubTree(w: StorageWorld): string {
+    const base = mkdtempSync(join(tmpdir(), 'tc-gitstub-'))
+    w.defer(() => rmSync(base, { recursive: true, force: true }))
+    w.budgetHome = join(base, 'home')
+    mkdirSync(w.budgetHome, { recursive: true })
+    w.budgetAutoStore = true
+    // The tree must not itself sit inside a repository, or the control
+    // would prove nothing: git names none above the base.
+    expect(gitTop(base).ok, `${base} is inside a repository; the scenario needs a tree outside one`).toBe(false)
+    return realpathSync(base)
+  }
+  const budgetToml = (mib: string, cap: string): string =>
+    `[retention]\nmax_store_bytes = ${Number(mib) * MiB}\nmax_sessions = ${Number(cap)}\n`
+  /** bindings.ts's fingerprint of an identity: SHA-256, hex, 16 characters
+   *  (docs/project-identity.md). */
+  const fingerprintOf = (identity: string): string => createHash('sha256').update(identity).digest('hex').slice(0, 16)
+  function boundTo(w: StorageWorld, dir: string): void {
+    const file = join(w.budgetHome!, '.treecontext', 'bindings.json')
+    expect(existsSync(file), 'the server wrote no binding').toBe(true)
+    const projects = (JSON.parse(readFileSync(file, 'utf8')) as { projects: Record<string, { store: string }> }).projects
+    const keys = Object.keys(projects)
+    expect(keys, `the server bound ${keys.length} identities`).toHaveLength(1)
+    const expected = fingerprintOf(`path:${realpathSync(dir)}`)
+    expect(keys[0], `the binding is not keyed by ${dir}`).toBe(expected)
+    const store = projects[keys[0]!]!.store
+    expect(store.startsWith(`${dir.split(/[\\/]/).pop()}-`), `store ${store} is not named for ${dir}`).toBe(true)
+    expect(existsSync(join(w.budgetHome!, '.treecontext', 'stores', store, 'treecontext.db')), `the bound store ${store} is not on disk`).toBe(true)
+  }
+
+  reg.define(
+    /^a directory holding (an empty directory named `\.git`|a file named `\.git` that git does not accept), and below it a project with no repository whose config file sets the byte budget to (\d+) MiB and the session cap to (\d+)$/,
+    (w: StorageWorld, ...captures) => {
+      const [stub, mib, cap] = captures as string[]
+      const base = stubTree(w)
+      w.stubDir = join(base, 'holder')
+      mkdirSync(w.stubDir)
+      plantStub(w.stubDir, stub!)
+      w.budgetProject = join(w.stubDir, 'project')
+      mkdirSync(w.budgetProject)
+      writeFileSync(join(w.budgetProject, 'treecontext.toml'), budgetToml(mib!, cap!))
+      // Git itself names no repository from the project: the stub is none.
+      expect(gitTop(w.budgetProject).ok, 'git accepts the stub as a repository').toBe(false)
+    },
+  )
+  reg.define(
+    /^a repository whose root's config file sets the byte budget to (\d+) MiB and the session cap to (\d+), a project directory inside it, and (an empty directory named `\.git`|a file named `\.git` that git does not accept) (in a directory between the project and the root|in the directory above the repository's root)$/,
+    (w: StorageWorld, ...captures) => {
+      const [mib, cap, stub, where] = captures as string[]
+      const base = stubTree(w)
+      const above = join(base, 'above')
+      w.repoRoot = join(above, 'repo')
+      mkdirSync(w.repoRoot, { recursive: true })
+      execFileSync('git', ['init', '-q'], { cwd: w.repoRoot, env: gitEnv(), stdio: 'ignore' })
+      writeFileSync(join(w.repoRoot, 'treecontext.toml'), budgetToml(mib!, cap!))
+      const mid = join(w.repoRoot, 'mid')
+      w.budgetProject = join(mid, 'project')
+      mkdirSync(w.budgetProject, { recursive: true })
+      w.stubDir = where!.startsWith('in a directory between') ? mid : above
+      plantStub(w.stubDir, stub!)
+      // The repository is git's from its root; what git makes of the stub
+      // from the project is the case under test, recorded either way.
+      expect(gitTop(w.repoRoot)).toEqual({ ok: true, out: w.repoRoot })
+      if (STUBS[stub!] === 'junk-file' && w.stubDir === mid) {
+        expect(gitTop(w.budgetProject).ok, 'git read past a .git file it cannot read').toBe(false)
+      }
+    },
+  )
+  reg.define(/^the project's store is bound to the project directory itself, never to the directory above it$/, (w: StorageWorld) => {
+    boundTo(w, w.budgetProject!)
+  })
+  reg.define(/^the project's store is bound to the repository's root$/, (w: StorageWorld) => {
+    boundTo(w, w.repoRoot!)
+  })
+  reg.define(/^a directory holding an empty directory named `\.git`, and below it a project with no repository$/, (w: StorageWorld) => {
+    const base = stubTree(w)
+    w.stubDir = join(base, 'holder')
+    mkdirSync(w.stubDir)
+    plantStub(w.stubDir, 'an empty directory named `.git`')
+    w.budgetProject = join(w.stubDir, 'project')
+    mkdirSync(w.budgetProject)
+    expect(gitTop(w.budgetProject).ok, 'git accepts the stub as a repository').toBe(false)
+  })
+  reg.define(/^doctor runs from that project$/, (w: StorageWorld) => {
+    const run = spawnCli(['doctor'], { home: w.budgetHome!, cwd: w.budgetProject! })
+    w.doctorOut = run.out
+  })
+  const projectRootRow = (w: StorageWorld): string => {
+    const row = w.doctorOut!.split('\n').find((l) => l.includes('Project root'))
+    expect(row, `doctor printed no project root row:\n${w.doctorOut}`).toBeDefined()
+    return row!
+  }
+  reg.define(/^doctor says the `\.git` above the project was ignored because it is no repository, naming its path$/, (w: StorageWorld) => {
+    expect(projectRootRow(w)).toContain(`${join(w.stubDir!, '.git')} ignored because it is no repository`)
+  })
+  reg.define(/^doctor names the project directory itself as the project the store is bound to$/, (w: StorageWorld) => {
+    const row = projectRootRow(w)
+    expect(row).toContain(`store binding and config file follow ${w.budgetProject!} `)
+    expect(row).toContain('no repository: keyed by this directory itself')
+    // step-lint: allow unearned-absence -- the line two above proves the same needle shape (`follow <dir> `) fires on this row
+    expect(row).not.toContain(`follow ${w.stubDir!} `)
+  })
 
   // S: a budget the file cannot mean.
   reg.define(/^a project whose config file sets the byte budget to zero$/, async (w: StorageWorld) => {

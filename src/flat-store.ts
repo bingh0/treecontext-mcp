@@ -76,7 +76,7 @@ import {
 } from './first-moment.js'
 import { trustedWorkerLane, type TicketReading } from './ticket.js'
 import { FIRST_MOMENT_KIND, SEND_BACK_KIND, TICKET_REFUSED_KIND, RUN_META_KEY, LEG_REGISTRATION_KIND, LEG_REGISTRATION_KEY, REGISTRATION_DIFFERS_KEY, isDoorCapture, isRunAuthored } from './run-kinds.js'
-import { retireMeta } from './persistence/writer-heal.js'
+import { retireMeta, sessionChainOf } from './persistence/writer-heal.js'
 import {
   DEDUP_WINDOW_SECS,
   autoEntriesFor,
@@ -1585,13 +1585,45 @@ export class FlatStore implements MemoryStore {
       if (prior.length === 0) return ownSupersedes
       return [...(ownSupersedes ?? []), ...prior]
     }
+    // D420: under a writer stamp that is not exact (one subagent live and
+    // the session's own agent silent, `provisional`; several live,
+    // `ambiguous`) the store cannot tell whose lane a pointer supersession
+    // acts in. It is neither applied nor dropped: every target named, and a
+    // bookmark's retirement of its lane's earlier one (D241), is held on the
+    // new entry as pending, and the call's echo applies it for the writer it
+    // names (writer-heal.ts). `concurrent` stamps the session's own agent and
+    // applies at once, as before.
+    const heldStamp = runKind === null && !isAuto
+      && (meta?.['_writer_src'] === 'provisional' || meta?.['_writer_src'] === 'ambiguous')
     const result = this.db.transaction((): InsertResult => {
+      let pending: { targets: string[]; bookmarks: string[]; misses: SupersedeMiss[] } | null = null
+      if (heldStamp) {
+        pending = this.heldSupersessions(pointerSupersedes, isBookmark ? meta : null)
+        if (pending.targets.length > 0) meta = { ...meta, _supersedes_pending: pending.targets }
+        if (pending.bookmarks.length > 0) meta = { ...meta, _bookmark_retire_pending: pending.bookmarks }
+      }
       // D169: only a lane's own writer retires that lane's pointers. A
       // supersedes target another writer owns is left untouched; the new
       // entry carries the pointer instead, as a reference in its refs,
       // which the owning lane sees as "referenced by" at its next read.
-      const split = this.splitSupersedes(pointerSupersedes, writerLaneOf, isUnknownWriter(meta))
+      const split = heldStamp
+        ? { own: undefined, foreign: [] as string[], across: [] as string[] }
+        : this.splitSupersedes(pointerSupersedes, writerLaneOf, isUnknownWriter(meta))
       ownSupersedes = split.own
+      // What a held insert reports in place of a supersession performed.
+      const heldOut = (landed: boolean, survivor?: string): Partial<InsertResult> => {
+        if (!pending) return {}
+        const held = [...pending.targets, ...pending.bookmarks]
+        if (landed) {
+          return {
+            ...(pointerSupersedes && pointerSupersedes.length > 0 ? { superseded: [] } : {}),
+            ...(pending.misses.length > 0 ? { supersedeMisses: pending.misses } : {}),
+            ...(held.length > 0 ? { pending: { targets: pending.targets, bookmarks: pending.bookmarks } } : {}),
+          }
+        }
+        const misses = [...pending.misses, ...pending.targets.map((nodeId) => ({ nodeId, reason: nodeId === survivor ? 'self' as const : 'not_exact' as const }))]
+        return { ...(pointerSupersedes && pointerSupersedes.length > 0 ? { superseded: [] } : {}), ...(misses.length > 0 ? { supersedeMisses: misses } : {}) }
+      }
       // D378: what an unplaced writer retires across the pre-stamp boundary
       // is listed on the new entry; a dedup hit lands no entry to list it,
       // so it retires nothing across and says so as for another writer's.
@@ -1721,9 +1753,9 @@ export class FlatStore implements MemoryStore {
         const held = this.survivorOf(survivor, writerLaneOf())
         if (held.sameLane) this.mergePointerFlags(survivor, meta)
         const flags = held.sameLane ? {} : this.unarmedFlags(meta)
-        const sup = this.applySupersedes(withPriorBookmarks(survivor), survivor)
+        const sup = heldStamp ? {} : this.applySupersedes(withPriorBookmarks(survivor), survivor)
         return {
-          nodeId: survivor, path: [survivor], depth: 0, deduplicated: true, driftDetected: false, staleNodes: [], ...withForeign(sup, missed, false),
+          nodeId: survivor, path: [survivor], depth: 0, deduplicated: true, driftDetected: false, staleNodes: [], ...withForeign(sup, missed, false), ...heldOut(false, survivor),
           ...this.unrecordedRefs(meta, survivor), survivor: held, ...flags,
         }
       }
@@ -1756,10 +1788,10 @@ export class FlatStore implements MemoryStore {
           retireLeg(this.db, leg, 'invalid', createdAt)
         }
       }
-      const sup = this.applySupersedes(withPriorBookmarks(nodeId), nodeId)
+      const sup = heldStamp ? {} : this.applySupersedes(withPriorBookmarks(nodeId), nodeId)
       const across = split.across.length > 0 ? this.retireAcross(split.across, nodeId, meta) : []
       return {
-        nodeId, path: [nodeId], depth: 0, deduplicated: false, driftDetected: false, staleNodes: [], ...withForeign(sup, split.foreign, true), ...runOut,
+        nodeId, path: [nodeId], depth: 0, deduplicated: false, driftDetected: false, staleNodes: [], ...withForeign(sup, split.foreign, true), ...heldOut(true), ...runOut,
         ...(across.length > 0 ? { retiredAcross: across } : {}),
       }
     })
@@ -1837,6 +1869,35 @@ export class FlatStore implements MemoryStore {
     const held = new Set(refIdsOf(parseMeta(row?.metadata_json ?? null)))
     const missing = [...new Set(wanted)].filter((id) => !held.has(id))
     return missing.length > 0 ? { refsNotRecorded: missing } : {}
+  }
+
+  /** D420: what an insert under a stamp that is not exact holds as pending:
+   *  each named target the store has (one it lacks, or a read-only one, is
+   *  a miss as ever), and, for a bookmark, the session's live bookmarks in
+   *  any lane (its /clear chain, D216), the one in the lane the echo names
+   *  being the one its own retirement (D241) reaches then. */
+  private heldSupersessions(ids: string[] | undefined, bookmarkMeta: Record<string, unknown> | null): { targets: string[]; bookmarks: string[]; misses: SupersedeMiss[] } {
+    const targets: string[] = []
+    const misses: SupersedeMiss[] = []
+    const sel = this.db.prepare('SELECT read_only FROM nodes WHERE node_id = ? AND tree_id = ?')
+    for (const id of new Set(ids ?? [])) {
+      const row = sel.get(id, this.treeId) as { read_only: number } | undefined
+      if (!row) misses.push({ nodeId: id, reason: 'not_found' })
+      else if (row.read_only) misses.push({ nodeId: id, reason: 'read_only' })
+      else targets.push(id)
+    }
+    let bookmarks: string[] = []
+    if (bookmarkMeta) {
+      const chain = sessionChainOf(this.db, bookmarkMeta)
+      if (chain.length > 0) {
+        bookmarks = (this.db.prepare(
+          `SELECT node_id FROM nodes WHERE tree_id = ? AND session_key IN (${chain.map(() => '?').join(',')})
+             AND json_extract(metadata_json, '$.kind') = '${BOOKMARK_KIND}'
+             AND json_extract(metadata_json, '$.next_session') = 1 ORDER BY created_at, rowid`,
+        ).all(this.treeId, ...chain) as Array<{ node_id: string }>).map((r) => r.node_id).filter((id) => !targets.includes(id))
+      }
+    }
+    return { targets, bookmarks, misses }
   }
 
   /** Partition supersedes targets by lane (D169): `own` are this writer's
@@ -2481,6 +2542,7 @@ export class FlatStore implements MemoryStore {
         .all(this.treeId, ...ids) as Array<{ node_id: string; by: string }>
       for (const r of rows) supersededBy.set(r.by, [...(supersededBy.get(r.by) ?? []), r.node_id])
     }
+    const pendingSupersessions = this.pendingSupersessionsFor(opts?.lane)
     const resumePointers: ResumePointer[] = shown.map((r) => ({
       nodeId: r.node_id,
       preview: decodeContent(r.content as string | Buffer | null).slice(0, 200),
@@ -2503,6 +2565,7 @@ export class FlatStore implements MemoryStore {
       resumePointers,
       resumePointerTotal: pointerRows.length,
       ...(opts?.lane !== undefined ? { resumePointerOtherLanes: allPointers - pointerRows.length, otherLanes: otherLanes ?? [] } : {}),
+      ...(pendingSupersessions.length > 0 ? { pendingSupersessions } : {}),
       // Same stored-bytes gauge demoteOverBudget() steers by, so status
       // and the valve can never disagree about "over budget".
       retention: {
@@ -2512,6 +2575,74 @@ export class FlatStore implements MemoryStore {
         sessionCap: this.maxSessions,
       },
     }
+  }
+
+  /** One-line previews (200 characters) of the rows named, by id. */
+  previewsOf(ids: string[]): Map<string, string> {
+    this.ensureOpen()
+    const out = new Map<string, string>()
+    const sel = this.db.prepare('SELECT content FROM nodes WHERE node_id = ? AND tree_id = ?')
+    for (const id of new Set(ids)) {
+      const r = sel.get(id, this.treeId) as { content: unknown } | undefined
+      if (r) out.set(id, decodeContent(r.content as string | Buffer | null).slice(0, 200))
+    }
+    return out
+  }
+
+  /** D420: the supersessions held on entries whose call's echo has not
+   *  named their writer yet, newest first. Confined to a lane, an entry is
+   *  listed where it or any held target is the lane's own: its lane as
+   *  every reader reads it (D379), or its session's placement, so the
+   *  session that made the insert sees its own pending supersession though
+   *  the entry reads as another writer's until the echo. What is another
+   *  placed lane's is named by its lane alone, never its text or id (D372). */
+  private pendingSupersessionsFor(lane: string | undefined): NonNullable<TreeStatus['pendingSupersessions']> {
+    const rows = this.db.prepare(
+      `SELECT node_id, content, created_at, metadata_json, session_key FROM nodes WHERE tree_id = ?
+         AND (json_extract(metadata_json, '$._supersedes_pending') IS NOT NULL
+              OR json_extract(metadata_json, '$._bookmark_retire_pending') IS NOT NULL)
+       ORDER BY created_at DESC LIMIT ${FlatStore.MAX_RESUME_POINTERS}`,
+    ).all(this.treeId) as Array<{ node_id: string; content: unknown; created_at: number; metadata_json: string | null; session_key: string | null }>
+    if (rows.length === 0) return []
+    const sel = this.db.prepare('SELECT content, metadata_json, session_key FROM nodes WHERE node_id = ? AND tree_id = ?')
+    const own = lane !== undefined ? laneWriterOf({ _writer: lane }) : undefined
+    const out: NonNullable<TreeStatus['pendingSupersessions']> = []
+    for (const r of rows) {
+      const meta = parseMeta(r.metadata_json)
+      const asked: Array<[string, 'supersedes' | 'bookmark']> = [
+        ...idsIn(meta?.['_supersedes_pending']).map((id) => [id, 'supersedes'] as [string, 'supersedes']),
+        ...idsIn(meta?.['_bookmark_retire_pending']).map((id) => [id, 'bookmark'] as [string, 'bookmark']),
+      ]
+      const targets = asked.map(([id, how]) => ({ id, how, row: sel.get(id, this.treeId) as { content: unknown; metadata_json: string | null; session_key: string | null } | undefined }))
+      const placed = placementsOf(this.db, [r.session_key, ...targets.map((t) => t.row?.session_key)])
+      // Whether a row is this lane's own to show: its lane as every reader
+      // reads it, or the lane the registry places its session in.
+      const sessionLane = (key: string | null): string | undefined => {
+        const p = placed.get(key ?? '')
+        return p ? laneWriterOf({ _writer: p }) : undefined
+      }
+      const shown = (laneKey: string, key: string | null): boolean => own === undefined || laneKey === own || sessionLane(key) === own
+      const entryLane = laneOfRow(meta, placed.get(r.session_key ?? ''))
+      const entryShown = shown(entryLane, r.session_key)
+      const held = targets.filter((t) => t.row !== undefined).map((t) => {
+        const laneKey = laneOfRow(parseMeta(t.row!.metadata_json), placed.get(t.row!.session_key ?? ''))
+        return { id: t.id, row: t.row!, laneKey, asked: t.how, shown: shown(laneKey, t.row!.session_key) }
+      })
+      if (!entryShown && !held.some((h) => h.shown)) continue
+      // Another placed lane's row is named by its lane alone (D372).
+      out.push({
+        nodeId: entryShown ? r.node_id : null,
+        preview: entryShown ? decodeContent(r.content as string | Buffer | null).slice(0, 200) : null,
+        lane: laneLabelOf(entryLane),
+        createdAt: r.created_at,
+        held: held.map((h) => ({
+          nodeId: h.shown ? h.id : null,
+          preview: h.shown ? decodeContent(h.row.content as string | Buffer | null).slice(0, 200) : null,
+          lane: laneLabelOf(h.laneKey), asked: h.asked,
+        })),
+      })
+    }
+    return out
   }
 
   // ── Vitals ──────────────────────────────────────────────────────────

@@ -98,6 +98,10 @@ function notWorker(db: RegistryHandle): string {
  *  copy through the insert tool is a forgery and is dropped. */
 export const WRITER_STAMP_KEYS = ['_writer', '_writer_src', '_writer_agent_id', '_writer_candidates', '_worktree', '_branch', '_writer_stamped', '_writer_heal_reverted', '_writer_heal_note',
   '_writer_heal_retired', '_writer_heal_unretired', '_superseded_prior', '_supersedes_referenced',
+  // A supersession held while the stamp is not exact (D420): the targets
+  // named, and the session's earlier live bookmarks a bookmark's own
+  // retirement (D241) waits on, until the call's echo names the writer.
+  '_supersedes_pending', '_bookmark_retire_pending', '_supersedes_pending_note', '_writer_heal_superseded_by_newer',
   // The trace every row carries (D293): the directory, the door, whether
   // the identity was registered by a hook or declared, the parent as
   // declared or linked. And a run's numbering and supersession marks

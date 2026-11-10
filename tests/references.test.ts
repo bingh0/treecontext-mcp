@@ -239,7 +239,7 @@ describe('the insert tool (D165, D169)', () => {
     await t.close()
   })
 
-  it('keeps a registered subagent from retiring the main lane\'s plan through the tool, recording a reference (D169, U1-F6)', async () => {
+  it('keeps a registered subagent from retiring the main lane\'s plan through the tool, holding it pending until the echo (D169, D420, U1-F6)', async () => {
     const ctx = await open()
     const raw = new DatabaseSync(path())
     const self = { worktree: null, branch: 'main', cwd: '/repo', toplevel: '/repo', commonDir: '/repo/.git' }
@@ -257,12 +257,15 @@ describe('the insert tool (D165, D169)', () => {
     // is read as the tester's, provisionally, from the registry.
     registerSubagent(raw, 's1', 'a1', 'tester', self, Date.now() / 1000 + 1)
     const r = await call({ content: 'tester: CSRF first, then the form', metadata: { next_session: true }, supersedes: [plan['node_id']] })
-    expect(r).toMatchObject({ writer: 'tester', writer_src: 'provisional', superseded: [], referenced: [plan['node_id']] })
-    expect(r['referenced_note']).toMatch(/another writer.*refs.*referenced-by/)
+    // Provisional, so held (D420): no echo comes in this test, so the
+    // supersession stays pending, the plan live and untouched.
+    expect(r).toMatchObject({ writer: 'tester', writer_src: 'provisional', superseded: [] })
+    expect(r['referenced']).toBeUndefined()
+    expect((r['supersession_pending'] as Array<{ node_id: string }>).map((p) => p.node_id)).toEqual([plan['node_id']])
     const m = meta(plan['node_id'] as string)
     expect(m['next_session']).toBe(true)
     expect(m['superseded_by']).toBeUndefined()
-    expect(meta(r['node_id'] as string)['refs']).toEqual([plan['node_id']])
+    expect(meta(r['node_id'] as string)['_supersedes_pending']).toEqual([plan['node_id']])
     await client.close(); await server.close(); raw.close(); await ctx.close()
   })
 

@@ -7,23 +7,28 @@
  * (bindings.ts gitRoots: one rev-parse, offsets resolved against the
  * physical cwd, a toplevel that does not contain the cwd distrusted), and a
  * checkout is a LINKED worktree only on git's full worktree signature
- * (primaryRepoRoot), so a hand-written `.git` file cannot pose as one. The
+ * (primaryRepoRoot), so a hand-written `.git` file cannot pose as one, and
+ * read through the binding's own resolution (resolvedGitRoots, D419). The
  * branch is one more rev-parse. Outside git, every field but the directory
  * is null.
  */
 import { execFileSync } from 'node:child_process'
 import { basename } from 'node:path'
-import { gitRoots, primaryRepoRoot, identityEnv } from '../server/bindings.js'
+import { resolvedGitRoots, primaryRepoRoot, identityEnv } from '../server/bindings.js'
 import type { GitSelf } from '../persistence/session-registry.js'
 
 export function gitSelfOf(cwd: string): GitSelf {
-  const roots = gitRoots(cwd)
+  // The one resolution the store binding reads (D419): where a `.git` file
+  // git cannot read stops git's discovery below the checkout, git is asked
+  // again from the repository the binding found, so a session is never
+  // placed in a lane other than the one its store was bound through.
+  const { roots, from } = resolvedGitRoots(cwd)
   if (!roots) return { worktree: null, branch: null, cwd, toplevel: null, commonDir: null }
   const primary = primaryRepoRoot(roots.toplevel, roots.gitDir, roots.commonDir, roots.backPointerRoot)
   let branch: string | null = null
   try {
     branch = execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
-      cwd, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], env: identityEnv(), timeout: 2000,
+      cwd: from, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], env: identityEnv(), timeout: 2000,
     }).trim() || null
   } catch { /* an unborn branch or no HEAD: the branch stays unknown */ }
   // A detached HEAD names no branch: rev-parse says the literal "HEAD".

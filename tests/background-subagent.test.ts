@@ -182,17 +182,61 @@ describe('a background subagent beside its orchestrator (F1, D240)', () => {
       // PostToolUse arriving late, say).
       subagentStart(w, 'agent-q', 'tester')
       const r = await insert(w, null, 'plan: the gadget v2; next: ship it', { next_session: true }, [c0])
-      expect(r).toMatchObject({ writer: 'tester', writer_src: 'provisional', superseded: [], referenced: [c0] })
+      // D420: held as pending on the new entry, never reported as another
+      // writer's, until the echo names the writer.
+      expect(r).toMatchObject({ writer: 'tester', writer_src: 'provisional', superseded: [] })
+      expect(r['referenced']).toBeUndefined()
+      expect((r['supersession_pending'] as Array<{ node_id: string }>).map((p) => p.node_id)).toEqual([c0])
+      expect(meta(w, r['node_id'] as string)['_supersedes_pending']).toEqual([c0])
       expect(meta(w, c0)['next_session']).toBe(true)
       subagentStop(w, 'agent-q', 'tester', 'done')
       await drainStaging(w)
       const m = meta(w, r['node_id'] as string)
-      expect(m).toMatchObject({ _writer: 'main', _writer_src: 'echo', refs: [c0], _writer_stamped: { writer: 'tester', src: 'provisional' }, _writer_heal_retired: [c0], _supersedes_referenced: [] })
+      expect(m).toMatchObject({ _writer: 'main', _writer_src: 'echo', _writer_stamped: { writer: 'tester', src: 'provisional' }, _writer_heal_retired: [c0] })
+      expect(m['_supersedes_pending']).toBeUndefined()
       expect(m['_writer_agent_id']).toBeUndefined()
-      expect(String(m['_writer_heal_note'])).toMatch(/asked to supersede in its own lane is retired now/)
+      expect(String(m['_supersedes_pending_note'])).toMatch(/its echo names main: retired /)
       expect(meta(w, c0)).toMatchObject({ superseded_by: r['node_id'], _superseded_prior: { next_session: true } })
       expect(meta(w, c0)['next_session']).toBeUndefined()
       expect(await livePointers(w)).toEqual([r['node_id']])
+    } finally { await done(w) }
+  }, 120_000)
+
+  it.each([
+    ['naming A in supersedes', true],
+    ['naming nothing, its retirement of A held', false],
+  ])('a held bookmark (%s) whose echo drains after a newer bookmark of its lane landed ends retired, pointing at the newer one, and touches neither (D241, D420; review F1)', async (_how, named) => {
+    const w = mkWorld()
+    try {
+      await openWorld(w); sessionStart(w); await client(w)
+      const a = (await insert(w, null, 'bookmark: A, the form half wired', { kind: 'bookmark' }))['node_id'] as string
+      await drainStaging(w)
+      subagentStart(w, 'agent-f1', 'tester')
+      // B: the orchestrator, silent since the tester started, so stamped
+      // provisionally as the tester's; its supersession of A is held. Its
+      // echo is staged at once but not yet drained.
+      const br = await insert(w, null, 'bookmark: B, the form wired', { kind: 'bookmark' }, named ? [a] : undefined)
+      expect(br).toMatchObject({ writer: 'tester', writer_src: 'provisional' })
+      expect((br['supersession_pending'] as Array<{ node_id: string }>).map((p) => p.node_id)).toEqual([a])
+      const b = br['node_id'] as string
+      // C: B's staged echo shows the orchestrator active, so C is stamped
+      // the orchestrator's (concurrent) and retires A at once.
+      const cr = await insert(w, null, 'bookmark: C, the form tested', { kind: 'bookmark' })
+      expect(cr).toMatchObject({ writer: 'main', writer_src: 'concurrent' })
+      const c = cr['node_id'] as string
+      expect(meta(w, a)['superseded_by']).toBe(c)
+      await drainStaging(w)
+      // One live bookmark in main's lane: C. B ended retired, pointing at C.
+      const live = rawAll<{ node_id: string }>(w,
+        "SELECT node_id FROM nodes WHERE json_extract(metadata_json, '$.kind') = 'bookmark' AND json_extract(metadata_json, '$.next_session') = 1")
+      expect(live.map((r) => r.node_id)).toEqual([c])
+      expect(meta(w, b)).toMatchObject({ _writer: 'main', _writer_src: 'echo', superseded_by: c, _superseded_prior: { next_session: true }, _writer_heal_superseded_by_newer: c })
+      expect(meta(w, b)['next_session']).toBeUndefined()
+      // C, the newer one, untouched by B's heal; A keeps the retirement C made.
+      expect(meta(w, c)['next_session']).toBe(true)
+      expect(meta(w, c)['superseded_by']).toBeUndefined()
+      expect(meta(w, a)['superseded_by']).toBe(c)
+      expect((await defaultStatus(w)).ids.filter((id) => [a, b, c].includes(id))).toEqual([c])
     } finally { await done(w) }
   }, 120_000)
 

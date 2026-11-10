@@ -199,8 +199,9 @@ hand-written models, never the client's word.
   `--ticket` or the environment, the worker's stdout passed through, the
   door's one line on stderr, the worker's exit code
 - `src/persistence/writer-heal.ts` — the echo heal that sets a
-  tool-written row's writer exactly at the drain, and undoes what a wrong
-  first stamp did across lanes
+  tool-written row's writer exactly at the drain, undoes what a wrong
+  first stamp did across lanes, and applies a supersession held as
+  pending under a stamp that was not exact (D420)
 - `src/persistence/lane-scope.ts` — the lane read (D376, D374): a placed
   lane's rows (`main`, `worktree:<name>`) read from the session registry
   at query time, as a search scope (its sessions minus helper trails,
@@ -246,7 +247,15 @@ hand-written models, never the client's word.
   (D375)
 - `src/server/bindings.ts` — project identity → store name
   (`~/.treecontext/bindings.json`, keyed by the git remote or the
-  project root; docs/project-identity.md)
+  project root; docs/project-identity.md). The project root is the
+  nearest repository git accepts, else the directory itself: a `.git` is
+  checked for the shape git accepts before it counts, never taken on its
+  name (D419), every file of it read bounded and only if regular;
+  `resolvedGitRoots` is the one resolution the binding, the config file
+  and a session's placement (`hooks/git-self.ts`) all read, so they never
+  disagree; doctor's "Project root" row names what was passed over and an
+  earlier binding to a stub's directory, with the merge command, moving
+  nothing
 - `src/tools/stores.ts`, `src/tools/store-merge.ts` — `treecontext
   stores` (list, rm, prune) and `stores merge`
 - `src/server/sidecar-blob.ts`, `src/server/ccr-pane.ts` — the sidecar
@@ -447,6 +456,19 @@ node dist/server/cli.js doctor      # after a build
   ticket-door worker's curated row is `worker_curated`, unique by its
   session (`WORKER_INDEX_DDL`, migration 033, D391): the class is read
   from the store's own worker stamp (`isWorkerLaneStamp`), never a caller's
+- A pointer supersession through the tools under a writer stamp that is
+  not exact (`provisional`, `ambiguous`) is held, never sorted by the
+  provisional lane: the named targets go to `_supersedes_pending` and a
+  bookmark's D241 candidates to `_bookmark_retire_pending`, and nothing is
+  retired at insert. The echo heal (step 4) applies them for the writer
+  the echo names, recording a truly foreign target as referenced, and
+  deletes both keys; a row whose echo never drains keeps them, and status
+  lists it under `pending_supersessions` (D420), in the lane of the
+  entry, of its session's placement or of a target, another checkout's
+  row named by its lane alone. Step 5: a bookmark the heal lands in a lane
+  beside a newer live one of its session ends retired, pointing at it
+  (D241). `concurrent` still applies at once. Never fill the pending
+  targets from the insert-time stamp's lane
 - A curated dedup hit arms the insert's pointer tags on the survivor only
   in the survivor's own lane (`laneOfRow`), and its echo heals the survivor
   only from that lane (D391); the reply names the survivor's writer and

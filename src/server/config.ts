@@ -18,7 +18,9 @@
  *   2. $TREECONTEXT_CONFIG env var
  *   3. treecontext.toml in the project directory — the root the store
  *      binding resolves (projectRootFor: the primary repository root, else
- *      the nearest `.git` ancestor, else the directory itself), from
+ *      the nearest ancestor whose `.git` is a repository git accepts, else
+ *      the directory itself; a `.git` that is no repository is passed
+ *      over, D419), from
  *      --project-dir, then $TREECONTEXT_PROJECT_DIR, then the cwd (D255)
  *   4. ~/.treecontext/config.toml
  */

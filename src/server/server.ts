@@ -426,7 +426,10 @@ export function createServer(
         + "entry's refs instead and listed as referenced. A client the server "
         + 'cannot place may retire a chapter written before the store recorded '
         + 'writers, where no session has run in the main checkout; the '
-        + 'retirement is recorded on both entries and listed as retired_across.',
+        + 'retirement is recorded on both entries and listed as retired_across. '
+        + 'While the store cannot tell the writer exactly (stamped provisional '
+        + 'or ambiguous) the supersession is held as pending, listed as '
+        + 'supersession_pending, and applied when the call\'s echo names the writer.',
       ),
       media_ref: z.object({
         uri: z.string().describe('URI to the content (file://, https://, etc.)'),
@@ -761,6 +764,24 @@ export function createServer(
           response.refs_not_recorded = result.refsNotRecorded
           response.refs_note = 'This text is already in the journal, so no new entry was written and these refs were not recorded; '
             + 'reword the entry to record them.'
+        }
+        // D420: a supersession made under a stamp that is not exact is held
+        // on this entry until the call's echo names the writer; the reply
+        // says so, naming each target, never that it was another writer's.
+        if (result.pending) {
+          const held = [...result.pending.targets, ...result.pending.bookmarks]
+          const previews = (live as { previewsOf?: (ids: string[]) => Map<string, string> }).previewsOf?.(held) ?? new Map<string, string>()
+          response.supersession_pending = held.map((id) => ({
+            node_id: id,
+            ...(previews.has(id) ? { preview: previews.get(id) } : {}),
+            asked: result.pending!.targets.includes(id) ? 'named in supersedes' : "this bookmark's retirement of its lane's earlier live bookmark",
+          }))
+          response.supersession_pending_note = 'The store cannot yet tell exactly who wrote this entry (its writer is stamped '
+            + `${String(response.writer_src ?? 'not exactly')}), so its supersession is held on it as pending, nothing retired and `
+            + 'nothing dropped, until the call\'s own echo names the writer. Then each target that is that writer\'s own, in its '
+            + 'lane, is retired, and a bookmark retires its lane\'s earlier live bookmark of the session; a target that is another '
+            + 'writer\'s stays live and is recorded as referenced. Until then, and for good if no echo is ever captured, this '
+            + 'entry and status show the supersession as pending.'
         }
         if (opts.supersedes) {
           response.superseded = result.superseded ?? []
@@ -1306,6 +1327,27 @@ export function createServer(
         response.resume_message = (response.resume_message ? response.resume_message + ' ' : '') +
           countText + ' ' +
           'Fetch each via treecontext_export(node_id) before doing other work — these reflect plans/active threads from prior sessions.'
+      }
+
+      // D420: supersessions held until their call's echo names the writer,
+      // listed as pending, never applied and never dropped silently.
+      const pendingSup = (status as { pendingSupersessions?: NonNullable<import('../core/types.js').TreeStatus['pendingSupersessions']> }).pendingSupersessions
+      if (pendingSup && pendingSup.length > 0) {
+        // Another placed lane's row is named by its lane alone (D372).
+        const withheld = { withheld: "another lane's entry: its id and text are not shown in this lane's status" }
+        response.pending_supersessions = pendingSup.map((p) => ({
+          ...(p.nodeId !== null ? { node_id: p.nodeId, preview: p.preview } : withheld),
+          lane: p.lane, created_at: new Date(p.createdAt * 1000).toISOString(),
+          pending: p.held.map((h) => ({
+            ...(h.nodeId !== null ? { node_id: h.nodeId, preview: h.preview } : withheld),
+            lane: h.lane,
+            asked: h.asked === 'supersedes' ? 'named in supersedes' : "the bookmark's retirement of its lane's earlier live bookmark",
+          })),
+        }))
+        response.pending_supersessions_note = 'Each entry here was written while the store could not tell its writer exactly, so '
+          + 'its supersession is held as pending: nothing it names is retired yet. When the call\'s echo names the writer, each '
+          + 'target in that writer\'s lane is retired and the rest stay live as references; an entry whose echo was never '
+          + 'captured stays pending.'
       }
 
       // Storage-budget gauge: over_budget means the retention valve could

@@ -121,6 +121,8 @@ export interface OrchestrationWorld extends RunWorld {
   /** D391: the main checkout's call that hit another lane's row, as its
    *  PostToolUse echo carries it (the input and the tool's own result). */
   hitCall?: { input: Record<string, unknown>; response: unknown }
+  /** D420: whether the tester's SubagentStart has fired and no stop since. */
+  testerLive?: boolean
 }
 
 type Hit = { nodeId: string; content: string; metadata: Record<string, unknown> | null; referencedBy?: RefBy }
@@ -887,9 +889,13 @@ export const orchestrationDefiner = (reg: Registry<OrchestrationWorld>): void =>
     subagentStop(w, w.testerId!, 'tester', 'proposed a CSRF rework')
     await drainStaging(w)
     w.noteId = w.noteReply['node_id'] as string
-    // The reply says the chapter was another writer's: referenced, not retired.
-    expect(w.noteReply).toMatchObject({ writer: 'tester', writer_src: 'provisional', superseded: [], referenced: [w.planId] })
-    expect(rawMeta(w, w.noteId)).toMatchObject({ _writer: 'tester', _writer_src: 'echo' })
+    // Stamped provisionally, the supersession is held until the echo (D420);
+    // the echo names the tester, and the chapter, another writer's, is
+    // recorded as referenced, never retired.
+    expect(w.noteReply).toMatchObject({ writer: 'tester', writer_src: 'provisional', superseded: [] })
+    expect((w.noteReply['supersession_pending'] as Array<{ node_id: string }>).map((p) => p.node_id)).toEqual([w.planId])
+    expect(rawMeta(w, w.noteId)).toMatchObject({ _writer: 'tester', _writer_src: 'echo', _supersedes_referenced: [w.planId] })
+    expect(rawMeta(w, w.noteId)['_supersedes_pending']).toBeUndefined()
   })
   reg.define(/^the orchestrator calling status still sees the chapter as a live pointer$/, async (w) => {
     const panel = await statusPanel(w)
@@ -905,6 +911,187 @@ export const orchestrationDefiner = (reg: Registry<OrchestrationWorld>): void =>
     const at = lines.findIndex((l) => l.startsWith('Chapter summary,') && l.includes(`(id ${w.planId})`))
     expect(at, packet).toBeGreaterThanOrEqual(0)
     expect(lines[at + 1]).toMatch(new RegExp(`^ {2}referenced by: ${w.noteId}, tester, \\d+ minutes? old: "plan: rework the login form`))
+  })
+
+  // ── D420: a supersession held under a provisional stamp ──
+  //
+  // One session, one server connection, the real hooks: the session-start
+  // hook registers the orchestrator's self, the real SubagentStart hook a
+  // tester, and nothing of the orchestrator's fires after it, so the
+  // registry reads an insert made then as the tester's, provisionally. The
+  // insert goes through the real insert tool; its PostToolUse echo, carrying
+  // no agent fields (the session's own agent), goes through the real
+  // post-tool-use hook into staging and the production drain heals from it.
+  // The rows are read from SQLite; the reply and status from the tools.
+  const heldInsert = async (w: OrchestrationWorld, text: string, supersedes?: string[]): Promise<void> => {
+    const input = { content: text, metadata: { kind: 'bookmark' }, ...(supersedes ? { supersedes } : {}) }
+    const res = await w.client!.callTool({ name: 'treecontext_insert', arguments: input })
+    w.hitCall = { input, response: (res as { content: unknown }).content }
+    w.noteReply = parseTool(res)
+    w.noteId = w.noteReply['node_id'] as string
+    // The case under test: the stamp is the tester's, provisionally.
+    expect(w.noteReply, JSON.stringify(w.noteReply)).toMatchObject({ writer: 'tester', writer_src: 'provisional', deduplicated: false })
+    w.entries = { ...w.entries, [text]: { id: w.noteId, text } }
+  }
+  const echoHeld = async (w: OrchestrationWorld): Promise<void> => {
+    const staged = (): number => rawAll<{ n: number }>(w, "SELECT count(*) AS n FROM staging WHERE tool_name = 'mcp__treecontext__treecontext_insert'")[0]!.n
+    const before = staged()
+    echoInsert(w, w.sessionId!, w.proj!, w.hitCall!.input, w.hitCall!.response)
+    expect(staged(), 'the echo was not staged').toBe(before + 1)
+    await drainStaging(w)
+    expect(rawMeta(w, w.noteId!)).toMatchObject({ _writer: 'main', _writer_src: 'echo' })
+  }
+  const entryOf = (w: OrchestrationWorld, text: string): { id: string; text: string } => {
+    const e = w.entries?.[text]
+    expect(e, `no entry "${text}"`).toBeDefined()
+    return e!
+  }
+  const expectLive = (w: OrchestrationWorld, id: string): void => {
+    const m = rawMeta(w, id)
+    expect(m['next_session'], JSON.stringify(m)).toBe(true)
+    expect(m['superseded_by']).toBeUndefined()
+  }
+
+  reg.define(/^the orchestrator's bookmark "([^"]+)" in the main lane$/, async (w, text$) => {
+    const text = String(text$)
+    await openWorld(w)
+    sessionStart(w)
+    await sessionClient(w)
+    const reply = await insertEchoed(w, null, text, { kind: 'bookmark' })
+    expect(reply).toMatchObject({ writer: 'main', writer_src: 'self' })
+    await drainStaging(w)
+    const id = reply['node_id'] as string
+    w.entries = { [text]: { id, text } }
+    w.planId = id
+    w.chapterRow = rawRow(w, id)
+    expectLive(w, id)
+  })
+  reg.define(/^the tester subagent's bookmark "([^"]+)"$/, async (w, text$) => {
+    const text = String(text$)
+    await openWorld(w)
+    sessionStart(w)
+    await sessionClient(w)
+    w.testerId = `agent-${randomBytes(4).toString('hex')}`
+    subagentStart(w, w.testerId, 'tester')
+    w.testerLive = true
+    const reply = await insertEchoed(w, { agentId: w.testerId, agentType: 'tester' }, text, { kind: 'bookmark' })
+    await drainStaging(w)
+    const id = reply['node_id'] as string
+    expect(rawMeta(w, id)).toMatchObject({ _writer: 'tester', _writer_src: 'echo', _writer_agent_id: w.testerId, next_session: true })
+    w.entries = { [text]: { id, text } }
+    w.planId = id
+    w.chapterRow = rawRow(w, id)
+  })
+  reg.define(/^the chapter summary "([^"]+)" in the worktree "([^"]+)"$/, async (w, text$, name$) => {
+    await openGitWorld(w)
+    const main = w.sessionId!
+    w.laneSessions = { main }
+    const lane = `worktree:${String(name$)}`
+    const chapter = await laneChapter(w, lane, String(text$))
+    // Back to the orchestrator's own session in the main checkout.
+    w.sessionId = main
+    await sessionClient(w)
+    w.entries = { [chapter.text]: chapter }
+    w.planId = chapter.id
+    w.chapterRow = rawRow(w, chapter.id)
+    expectLive(w, chapter.id)
+  })
+  reg.define(/^one tester subagent live, the orchestrator silent since it started$/, (w) => {
+    if (!w.testerLive) {
+      w.testerId ??= `agent-${randomBytes(4).toString('hex')}`
+      subagentStart(w, w.testerId, 'tester')
+      w.testerLive = true
+    }
+    const live = rawAll<{ n: number }>(w, "SELECT count(*) AS n FROM session_registry WHERE session_id = ? AND agent_id != '' AND stopped_at IS NULL", w.sessionId)[0]!.n
+    expect(live, 'exactly one subagent of the session is live').toBe(1)
+  })
+  reg.define(/^the orchestrator inserts the bookmark "([^"]+)" through the tools, (naming the earlier one in supersedes|naming nothing to supersede)$/, async (w, text$, how$) => {
+    const earlier = w.planId!
+    await heldInsert(w, String(text$), how$ === 'naming the earlier one in supersedes' ? [earlier] : undefined)
+  })
+  reg.define(/^the reply says the supersession of "([^"]+)" is pending until the call's echo names the writer, and never that it was left live as another writer's$/, (w, text$) => {
+    const target = entryOf(w, String(text$))
+    const pending = (w.noteReply!['supersession_pending'] ?? []) as Array<{ node_id: string; preview?: string }>
+    const held = pending.find((p) => p.node_id === target.id)
+    expect(held, JSON.stringify(w.noteReply)).toBeDefined()
+    expect(held!.preview).toBe(target.text)
+    expect(String(w.noteReply!['supersession_pending_note'])).toMatch(/held on it as pending.*until the call's own echo names the writer/s)
+    expect(w.noteReply!['referenced']).toBeUndefined()
+    expect(w.noteReply!['referenced_note']).toBeUndefined()
+    const retired = /left live and unchanged|another writer, so/
+    expect('Written by another writer, so left live and unchanged; recorded in this entry\'s refs').toMatch(retired)
+    expect(JSON.stringify(w.noteReply)).not.toMatch(retired)
+    // Pending, so not yet applied: the target is still live.
+    expectLive(w, target.id)
+  })
+  reg.define(/^the call's echo is captured and ingestion runs$/, async (w) => {
+    await echoHeld(w)
+  })
+  reg.define(/^"([^"]+)" is retired, superseded by "([^"]+)"$/, (w, old$, by$) => {
+    const old = entryOf(w, String(old$))
+    const by = entryOf(w, String(by$))
+    const m = rawMeta(w, old.id)
+    const nm = rawMeta(w, by.id)
+    expect(m['next_session'], JSON.stringify([m, nm])).toBeUndefined()
+    expect(m['superseded_by']).toBe(by.id)
+    expect(m['_superseded_prior']).toMatchObject({ next_session: true })
+    expect(nm['_supersedes_pending']).toBeUndefined()
+    expect(nm['_bookmark_retire_pending']).toBeUndefined()
+    expect(nm['_writer_heal_retired']).toContain(old.id)
+  })
+  reg.define(/^the orchestrator calling status sees "([^"]+)" as the main lane's one live bookmark$/, async (w, text$) => {
+    const want = entryOf(w, String(text$))
+    const panel = await statusPanel(w)
+    expect(panel['scope']).toMatchObject({ lane: 'main' })
+    const bookmarks = (panel['resume_pointers'] as Array<{ node_id: string; kind: string; lane?: string }>).filter((p) => p.kind === 'bookmark')
+    expect(bookmarks.map((p) => p.node_id)).toEqual([want.id])
+    expect(panel['pending_supersessions']).toBeUndefined()
+  })
+  reg.define(/^the orchestrator inserts a bookmark through the tools superseding that entry, and the call's echo is captured and ingestion runs$/, async (w) => {
+    const target = w.planId!
+    await heldInsert(w, 'next: hand the form to review', [target])
+    expect((w.noteReply!['supersession_pending'] as Array<{ node_id: string }>).map((p) => p.node_id)).toContain(target)
+    await echoHeld(w)
+  })
+  reg.define(/^that entry is still live and unchanged$/, (w) => {
+    expectLive(w, w.planId!)
+    expectRowAsWas(w, w.planId!)
+  })
+  reg.define(/^the orchestrator's bookmark records it as referenced, where its writer sees it as referenced-by$/, async (w) => {
+    const m = rawMeta(w, w.noteId!)
+    expect(m['refs']).toContain(w.planId)
+    expect(m['_supersedes_referenced']).toEqual([w.planId])
+    expect(m['_supersedes_pending']).toBeUndefined()
+    const node = await fetchById(w, w.planId!)
+    expect(node['referencedBy']).toMatchObject({ count: 1, newest: { nodeId: w.noteId, writer: 'main' } })
+  })
+  reg.define(/^the orchestrator inserts a bookmark superseding it through the tools, and no echo of that call is ever captured$/, async (w) => {
+    await heldInsert(w, 'next: write the form\'s tests', [w.planId!])
+    // The drain runs; no echo of the call is in staging for it to read.
+    await drainStaging(w)
+    expect(rawAll<{ n: number }>(w, "SELECT count(*) AS n FROM staging WHERE tool_name = 'mcp__treecontext__treecontext_insert'")[0]!.n).toBe(1)
+    expect(rawMeta(w, w.noteId!)).toMatchObject({ _writer: 'tester', _writer_src: 'provisional' })
+  })
+  reg.define(/^"([^"]+)" is still live$/, (w, text$) => {
+    expectLive(w, entryOf(w, String(text$)).id)
+  })
+  reg.define(/^the new bookmark shows its supersession of "([^"]+)" as pending$/, async (w, text$) => {
+    const target = entryOf(w, String(text$))
+    expect(rawMeta(w, w.noteId!)['_supersedes_pending']).toEqual([target.id])
+    const node = await fetchById(w, w.noteId!)
+    expect((node['metadata'] as Record<string, unknown>)['_supersedes_pending']).toEqual([target.id])
+  })
+  reg.define(/^the orchestrator calling status sees that supersession listed as pending, naming "([^"]+)"$/, async (w, text$) => {
+    const target = entryOf(w, String(text$))
+    const panel = await statusPanel(w)
+    expect(panel['scope']).toMatchObject({ lane: 'main' })
+    const pending = (panel['pending_supersessions'] ?? []) as Array<{ node_id: string; pending: Array<{ node_id: string; preview: string; lane: string }> }>
+    const entry = pending.find((p) => p.node_id === w.noteId)
+    expect(entry, JSON.stringify(panel)).toBeDefined()
+    expect(entry!.pending).toContainEqual(expect.objectContaining({ node_id: target.id, preview: target.text, lane: 'main' }))
+    expect(String(panel['pending_supersessions_note'])).toMatch(/pending/)
+    // Listed as pending, and the target still listed live.
+    expect((panel['resume_pointers'] as Array<{ node_id: string }>).map((p) => p.node_id)).toContain(target.id)
   })
 
   // ── D391: a dedup hit modifies no other lane's row, and says so ──

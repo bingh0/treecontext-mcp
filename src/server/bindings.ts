@@ -19,10 +19,12 @@ import {
   closeSync,
   constants as fsConstants,
   existsSync,
+  fstatSync,
   lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
+  readSync,
   realpathSync,
   renameSync,
   statSync,
@@ -39,17 +41,141 @@ import { SAFE_STORE_RE } from '../tools/store-name.js'
 
 const LEGACY_STICKY = '.treecontext-store'
 
-function findProjectRoot(startDir: string): string {
+/** At most this many bytes of a small file git reads (HEAD, commondir, a
+ *  gitfile): git's own are a line long. */
+const SMALL_FILE_BYTES = 4096
+
+/**
+ * The text of a small regular file, at most SMALL_FILE_BYTES read, or null:
+ * a FIFO, a device (a symlink to /dev/zero), a directory, or a file that
+ * does not open is never read (D419: validate before assuming).
+ */
+function readSmallFile(path: string): string | null {
+  let fd: number | null = null
+  try {
+    fd = openSync(path, fsConstants.O_RDONLY | (fsConstants.O_NONBLOCK ?? 0))
+    if (!fstatSync(fd).isFile()) return null
+    const buf = Buffer.alloc(SMALL_FILE_BYTES)
+    const n = readSync(fd, buf, 0, SMALL_FILE_BYTES, 0)
+    return buf.subarray(0, n).toString('utf8')
+  } catch {
+    return null
+  } finally {
+    if (fd !== null) { try { closeSync(fd) } catch { /* already closed */ } }
+  }
+}
+
+/**
+ * Whether `dir` is a git directory as git itself judges one (D419; git's
+ * `is_git_directory`): a HEAD that is a symbolic ref or an object name, and
+ * an `objects` and a `refs` directory, read through `commondir` for a
+ * linked worktree's git directory. A shape check, so no git binary is
+ * needed and no subprocess is spent: the walk below runs where git itself
+ * already answered nothing. Every file it reads is read bounded.
+ */
+function isGitDirectory(dir: string): boolean {
+  try {
+    if (!statSync(dir).isDirectory()) return false
+    const headPath = join(dir, 'HEAD')
+    if (!lstatSync(headPath).isSymbolicLink()) {
+      const text = readSmallFile(headPath)?.trim()
+      // git accepts `ref:` with or without the space before the ref.
+      if (text === undefined || (!/^ref:\s*refs\//.test(text) && !/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(text))) return false
+    }
+    let common = dir
+    const commondirFile = join(dir, 'commondir')
+    if (existsSync(commondirFile)) {
+      const raw = readSmallFile(commondirFile)?.trim()
+      if (!raw) return false
+      common = resolvePath(dir, raw)
+    }
+    return statSync(join(common, 'objects')).isDirectory() && statSync(join(common, 'refs')).isDirectory()
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Whether the `.git` in `dir` is a repository git accepts (D419): a git
+ * directory, or a gitfile whose `gitdir:` line names one. An empty
+ * directory (Codex CLI's sandbox leaves those as mount points), a file of
+ * anything else, or a gitfile naming nothing is no repository, whatever its
+ * name.
+ */
+export function holdsRepository(dir: string): boolean {
+  const entry = join(dir, '.git')
+  try {
+    if (statSync(entry).isDirectory()) return isGitDirectory(entry)
+    const text = readSmallFile(entry)
+    if (text === null) return false
+    const first = text.split(/\r?\n/, 1)[0] ?? ''
+    const m = /^gitdir: (.+)$/.exec(first)
+    if (!m) return false
+    return isGitDirectory(resolvePath(dir, m[1]!.trim()))
+  } catch {
+    return false
+  }
+}
+
+/** Whether `dir` holds anything named `.git` at all. */
+function holdsGitEntry(dir: string): boolean {
+  try { lstatSync(join(dir, '.git')); return true } catch { return false }
+}
+
+/**
+ * treecontext's own look upward, for where git named no repository: the
+ * nearest directory whose `.git` is a repository git accepts (D419), never
+ * one merely holding something named `.git`; null when there is none.
+ */
+function findRepositoryRoot(startDir: string): string | null {
   let current = startDir
   while (true) {
-    if (existsSync(join(current, '.git'))) {
-      return current
-    }
+    if (holdsRepository(current)) return current
+    const parent = dirname(current)
+    if (parent === current) return null
+    current = parent
+  }
+}
+
+/**
+ * The project root resolution of `cwd` reaches, whether a repository is
+ * there, and every `.git` it passed over because it is no repository
+ * (D419), for doctor to name: from `cwd` up to the root, and, where the
+ * root is no repository's, all the way up. Read-only: nothing is bound.
+ */
+export function projectRootReport(cwd: string): {
+  root: string; repository: boolean; passedOver: string[]
+  /** A binding an earlier build made for a passed-over `.git`'s directory
+   *  (the stub taken for a root, D419): that directory and its store, left
+   *  as they were. Read from bindings.json only; nothing is written. */
+  priorBindings: Array<{ dir: string; store: string }>
+  /** The store this directory is bound to now, if recorded. */
+  boundStore: string | null
+} {
+  const facts = gitFacts(cwd)
+  const { root, identity } = identityFrom(cwd, facts)
+  const stops = [facts.primaryRoot, facts.toplevel, facts.walkedRoot]
+    .filter((r): r is string => r !== null).map(realpathOr)
+  const passedOver: string[] = []
+  let current = realpathOr(cwd)
+  while (true) {
+    if (stops.some((s) => samePath(current, s))) break
+    if (holdsGitEntry(current) && !holdsRepository(current)) passedOver.push(join(current, '.git'))
     const parent = dirname(current)
     if (parent === current) break
     current = parent
   }
-  return startDir
+  const { projects } = readBindingsFile().bindings
+  const boundStore = projects[fingerprint(identity)]?.store ?? null
+  const priorBindings: Array<{ dir: string; store: string }> = []
+  for (const entry of passedOver) {
+    const dir = dirname(entry)
+    const store = [realpathOr(dir), ...pathSpellingVariants(dir)]
+      .map((p) => projects[fingerprint(`path:${p}`)]?.store)
+      .find((s): s is string => typeof s === 'string')
+    if (store !== undefined && store !== boundStore) priorBindings.push({ dir, store })
+  }
+  return { root, repository: stops.length > 0, passedOver, priorBindings, boundStore }
 }
 
 function bindingsFilePath(): string {
@@ -514,8 +640,8 @@ export function gitRoots(cwd: string): {
     // path the attacker names — before any worktree guard can fire.
     // Whatever git claims, this process is standing in `cwd`; a
     // toplevel that is not an ancestor of it is a forgery or a
-    // misconfiguration, and both fall back to findProjectRoot(cwd) —
-    // the hostile directory itself, which is the correct answer.
+    // misconfiguration, and both fall back to the walk (findRepositoryRoot)
+    // — the hostile directory itself, which is the correct answer.
     const rel = relative(realpathOr(toplevel), physicalCwd)
     if (rel.startsWith('..') || isAbsolute(rel)) return null
     const at = (raw: string | undefined): string | null => (raw ? resolvePath(physicalCwd, raw) : null)
@@ -606,16 +732,48 @@ interface GitFacts {
   url: string | null
   /** primary root per §3.4; null outside a repository */
   primaryRoot: string | null
+  /** the checkout git named (a linked worktree's own top), null when none */
+  toplevel: string | null
+  /** where treecontext's own walk found a repository git did not name at
+   *  `cwd` (D419: a `.git` file git cannot read stops git's discovery);
+   *  null when git named one or the walk found none */
+  walkedRoot: string | null
+}
+
+/**
+ * The one resolution of where git stands for `cwd` (D419), which the store
+ * binding, the config file and a session's placement (hooks/git-self.ts)
+ * all read, so they never disagree: git's own roots from `cwd`; where git
+ * names none, the nearest repository git accepts above (a `.git` file git
+ * cannot read stops git's own discovery), asked again from there. `from`
+ * is the directory git was asked from; `walkedRoot` is a repository the
+ * walk found that git still would not name.
+ */
+export function resolvedGitRoots(cwd: string): {
+  roots: ReturnType<typeof gitRoots>
+  from: string
+  walkedRoot: string | null
+} {
+  const roots = gitRoots(cwd)
+  if (roots) return { roots, from: cwd, walkedRoot: null }
+  const walkedRoot = findRepositoryRoot(cwd)
+  if (walkedRoot !== null && !samePath(walkedRoot, cwd)) {
+    const again = gitRoots(walkedRoot)
+    return { roots: again, from: walkedRoot, walkedRoot: again ? null : walkedRoot }
+  }
+  return { roots: null, from: cwd, walkedRoot }
 }
 
 function gitFacts(cwd: string): GitFacts {
-  const url = gitRemoteUrl(cwd)
-  const roots = gitRoots(cwd)
+  const { roots, from, walkedRoot } = resolvedGitRoots(cwd)
+  const url = gitRemoteUrl(from)
   return {
     url,
     primaryRoot: roots
       ? primaryRepoRoot(roots.toplevel, roots.gitDir, roots.commonDir, roots.backPointerRoot)
       : null,
+    toplevel: roots ? roots.toplevel : null,
+    walkedRoot,
   }
 }
 
@@ -636,15 +794,17 @@ function realpathOr(p: string): string {
 }
 
 function identityFrom(cwd: string, facts: GitFacts): { identity: string; source: 'git' | 'path'; root: string } {
-  const root = facts.primaryRoot ?? findProjectRoot(cwd)
+  const root = facts.primaryRoot ?? facts.walkedRoot ?? cwd
   if (facts.url) return { identity: `git:${facts.url}`, source: 'git', root }
   return { identity: `path:${realpathOr(root)}`, source: 'path', root }
 }
 
 /**
  * The project root a store binding resolves `cwd` to: the primary
- * repository root (worktrees fold to it), else the nearest directory
- * holding `.git`, else `cwd` itself. The config loader discovers the
+ * repository root (worktrees fold to it), else the nearest directory whose
+ * `.git` is a repository git accepts, else `cwd` itself. A `.git` that is
+ * no repository (an empty directory, a file git cannot read) is passed
+ * over wherever it lies (D419). The config loader discovers the
  * project's `treecontext.toml` here, so a server started from a
  * subdirectory reads the same file as one started from the root — the
  * file and the store follow one project directory (D255).

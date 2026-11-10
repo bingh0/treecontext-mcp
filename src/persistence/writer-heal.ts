@@ -24,7 +24,13 @@
  *     retiring row;
  *  3. supersessions the row asked for but could not perform under its
  *     first stamp (`_supersedes_referenced`) that its true lane owns are
- *     performed now.
+ *     performed now (rows written before D420; since then a stamp that is
+ *     not exact holds its supersession instead, step 4).
+ *  4. D420: a supersession held as pending because the stamp was not exact
+ *     (`_supersedes_pending`, and a bookmark's `_bookmark_retire_pending`)
+ *     is applied for the writer the echo names, lane change or not: its own
+ *     lane's targets retired, its lane's earlier live bookmark of the
+ *     session retired, a truly foreign target recorded as referenced.
  * A restored bookmark never makes two live in one session's lane (D241):
  * when a newer one is live there, the restored one stays retired, pointing
  * at it. Only a creating call of the same session heals; a deduplicated
@@ -35,6 +41,7 @@ import type { Database } from './database.js'
 import { isSessionOwnRow, laneOfRow, laneWriterOf, MAIN_LANE, UNKNOWN_LANE, RETIRED_ACROSS_KEY, SUPERSEDES_ACROSS_KEY } from '../references.js'
 import { placementsOf, type PlacedLane } from './lane-scope.js'
 import { sessionOf, NO_SESSION } from '../dedup-identity.js'
+import { sessionChainWith } from '../checkpoints.js'
 import { agentWriterOf, selfOf, selfWriterOf } from './session-registry.js'
 import { capRefusalsOf, confirmedCapRefusal, legOf, legWriterOf, workerOfSession, settleLegKey, unsettleLegKey, recordOpenedRun, WORKER_AGENT_ID } from './leg-registry.js'
 import {
@@ -55,6 +62,9 @@ export interface WriterHealResult {
   unretired?: string
   /** Supersessions of the true lane performed at the heal. */
   retired?: string[]
+  /** D241 with D420: the healed bookmark landed beside a newer live one
+   *  of its session and lane, and was retired pointing at it. */
+  supersededByNewer?: string
   /** A run open's or close's `by`, pending at insert, set by this echo. */
   runBy?: string
 }
@@ -73,6 +83,23 @@ function refsOf(meta: Record<string, unknown>): string[] {
 }
 
 const isLive = (m: Record<string, unknown>): boolean => m['next_session'] === true || m['status'] === 'active'
+
+function idsOf(v: unknown): string[] {
+  return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && x !== '') : []
+}
+
+/** The session keys of `meta`'s session, its whole /clear chain (D216),
+ *  read from the store's own record; the session alone where there is none. */
+export function sessionChainOf(db: Database, meta: Record<string, unknown> | null): string[] {
+  const session = sessionOf(meta)
+  if (session === NO_SESSION) return [session]
+  try {
+    const cfg = db.prepare('SELECT value FROM store_config WHERE key = ?')
+    return sessionChainWith((k) => (cfg.get(k) as { value: string } | undefined)?.value, session)
+  } catch {
+    return [session]
+  }
+}
 
 /** A row's lane as every reader reads it (D379, references.ts laneOfRow),
  *  so the heal's own and foreign test is insert's: the session's own
@@ -316,6 +343,78 @@ export function healWriterFromEcho(db: Database, opts: {
 
       next['_writer_heal_note'] = `stamped ${before.writer ?? 'with no writer'} (${before.src ?? 'unstamped'}) at insert; its echo names ${writer}. `
         + (notes.length > 0 ? `${notes.join('; ')}.` : 'Nothing it did under the first stamp needed undoing.')
+    }
+    // 4. D420: a supersession held at insert because the stamp was not
+    // exact is applied now that the echo names the writer, whether or not
+    // the row changed lane: each named target in the writer's lane, as the
+    // registry places it for any pointer (D379), is retired as an immediate
+    // supersession would have retired it; one truly another writer's stays
+    // live and is recorded as referenced (D169); and a bookmark retires its
+    // lane's earlier live bookmark of the session (D241).
+    const heldTargets = idsOf(next['_supersedes_pending'])
+    const heldBookmarks = next['_bookmark_retire_pending'] !== undefined
+    if (heldTargets.length > 0 || heldBookmarks) {
+      const sel = db.prepare('SELECT created_at, read_only, metadata_json FROM nodes WHERE node_id = ? AND tree_id = ?')
+      const upd = db.prepare('UPDATE nodes SET metadata_json = ?, updated_at = ? WHERE node_id = ?')
+      const applied: string[] = []
+      const referenced: string[] = []
+      for (const id of heldTargets) {
+        const t = sel.get(id, row.tree_id) as { created_at: number; read_only: number; metadata_json: string | null } | undefined
+        const tm = t ? parse(t.metadata_json) : null
+        if (!t || !tm) continue
+        if (laneOf(tm) !== newLane) { referenced.push(id); continue }
+        if (t.read_only || !isLive(tm)) continue
+        upd.run(JSON.stringify(retireMeta(tm, opts.nodeId, now)), now, id)
+        applied.push(id)
+      }
+      if (heldBookmarks && next['kind'] === BOOKMARK && next['next_session'] === true) {
+        const chain = sessionChainOf(db, next)
+        const prior = db.prepare(
+          `SELECT node_id, read_only, metadata_json FROM nodes WHERE tree_id = ? AND session_key IN (${chain.map(() => '?').join(',')})
+             AND node_id != ? AND created_at <= ?
+             AND json_extract(metadata_json, '$.kind') = '${BOOKMARK}' AND json_extract(metadata_json, '$.next_session') = 1`,
+        ).all(row.tree_id, ...chain, opts.nodeId, row.created_at) as Array<{ node_id: string; read_only: number; metadata_json: string | null }>
+        for (const p of prior) {
+          const pm = parse(p.metadata_json)
+          if (!pm || p.read_only || laneOf(pm) !== newLane || applied.includes(p.node_id)) continue
+          upd.run(JSON.stringify(retireMeta(pm, opts.nodeId, now)), now, p.node_id)
+          applied.push(p.node_id)
+        }
+      }
+      delete next['_supersedes_pending']
+      delete next['_bookmark_retire_pending']
+      if (applied.length > 0) {
+        next['_writer_heal_retired'] = [...new Set([...idsOf(next['_writer_heal_retired']), ...applied])]
+        result.retired = [...new Set([...(result.retired ?? []), ...applied])]
+      }
+      if (referenced.length > 0) {
+        next['refs'] = [...new Set([...refsOf(next), ...referenced])]
+        next['_supersedes_referenced'] = [...new Set([...idsOf(next['_supersedes_referenced']), ...referenced])]
+      }
+      next['_supersedes_pending_note'] = `held at insert under a stamp that was not exact (${before.src ?? 'unstamped'}); its echo names ${writer}: `
+        + (applied.length > 0 ? `retired ${applied.join(', ')}` : 'retired nothing')
+        + (referenced.length > 0 ? `; ${referenced.join(', ')} another writer's, left live and recorded as referenced` : '')
+        + '.'
+    }
+    // 5. D241 read with D420: a live bookmark the heal lands in a lane
+    // (held, or moved there) never makes two live in that lane of its
+    // session. Where a newer live bookmark of the session is already there
+    // (written while this one waited for its echo), this one ends retired,
+    // pointing at it, as a restored bookmark does.
+    if (next['kind'] === BOOKMARK && next['next_session'] === true && (newLane !== oldLane || heldTargets.length > 0 || heldBookmarks)) {
+      const chain = sessionChainOf(db, next)
+      const newer = (db.prepare(
+        `SELECT node_id, metadata_json FROM nodes WHERE tree_id = ? AND session_key IN (${chain.map(() => '?').join(',')})
+           AND node_id != ? AND created_at > ?
+           AND json_extract(metadata_json, '$.kind') = '${BOOKMARK}' AND json_extract(metadata_json, '$.next_session') = 1
+         ORDER BY created_at DESC, rowid DESC`,
+      ).all(row.tree_id, ...chain, opts.nodeId, row.created_at) as Array<{ node_id: string; metadata_json: string | null }>)
+        .find((r) => laneOf(parse(r.metadata_json)) === newLane)?.node_id
+      if (newer) {
+        retireMeta(next, newer, now)
+        next['_writer_heal_superseded_by_newer'] = newer
+        result.supersededByNewer = newer
+      }
     }
     // D331 (read with its sib clause), D320, D326: the leg the echo names
     // is exact, so what the store could only guess at insert is set here.

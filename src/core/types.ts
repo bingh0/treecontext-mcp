@@ -10,8 +10,11 @@ export type BackendMode = 'lexical' | 'tree'
 export interface SupersedeMiss {
   nodeId: string
   /** `other_writer`: the target is another writer's (D169) and this
-   *  insert was a dedup hit, so no reference could be recorded either. */
-  reason: 'not_found' | 'read_only' | 'self' | 'other_writer'
+   *  insert was a dedup hit, so no reference could be recorded either.
+   *  `not_exact`: the writer stamp was not exact (D420), so the
+   *  supersession would have been held on the new entry, and the insert was
+   *  a dedup hit, so no entry landed to hold it. */
+  reason: 'not_found' | 'read_only' | 'self' | 'other_writer' | 'not_exact'
 }
 
 export interface InsertResult {
@@ -29,6 +32,12 @@ export interface InsertResult {
    *  and recorded instead as references in this entry's `metadata.refs`.
    *  Present only when there were any. */
   referenced?: string[]
+  /** D420: supersessions held while the writer stamp is not exact
+   *  (`provisional`, `ambiguous`), applied when the call's echo names the
+   *  writer: the targets named (`targets`) and, for a bookmark, the
+   *  session's earlier live bookmarks its own retirement waits on
+   *  (`bookmarks`). Present only when anything was held. */
+  pending?: { targets: string[]; bookmarks: string[] }
   /** On a dedup hit: ids in the incoming `metadata.refs` (cross-writer
    *  supersedes included) that the surviving row does not carry. They
    *  were not recorded anywhere — the survivor is never modified to hold
@@ -272,6 +281,16 @@ export interface TreeStatus {
    *  one lane (D372), the most recently active first: each lane's name,
    *  pointer count, and its newest pointer's kind and moment. */
   otherLanes?: Array<{ laneKey: string; lane: string; pointers: number; newestKind: 'chapter' | 'bookmark'; newestAt: number }>
+  /** Supersessions held because the writer stamp was not exact (D420),
+   *  each waiting for its call's echo: the entry holding it and what it
+   *  holds, each with its lane. Confined to one lane, status lists those
+   *  whose entry or any held target is that lane's own, or placed there by
+   *  its session; another placed lane's row is named by its lane alone, its
+   *  id and preview null (D372). Absent when none. */
+  pendingSupersessions?: Array<{
+    nodeId: string | null; preview: string | null; lane: string; createdAt: number
+    held: Array<{ nodeId: string | null; preview: string | null; lane: string; asked: 'supersedes' | 'bookmark' }>
+  }>
   /** Byte-budget gauge. `storeBytes` is the stored (compressed) content
    *  size; `overBudget` means the store exceeds `budgetBytes` — the
    *  retention valve could not (or has not yet) brought it under, e.g.
