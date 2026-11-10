@@ -329,14 +329,19 @@ Feature: Orchestration inside one store — lanes that stay their own
     # session id.
 
   @D409 @D375 @D286
-  Scenario: a Codex CLI compaction leaves a recovery note that the session's next start claims in its own lane
+  Scenario: a Codex CLI compaction leaves a recovery note that the next fresh start in its lane claims
     Given the events Codex CLI sent, as recorded, for a manual compaction of a main session with the hooks install wrote trusted
     When the hooks install writes for Codex receive those events and ingestion runs
     Then a recovery snapshot of the session is taken at its PreCompact
-    And the session's start after the compaction claims it in the session's own lane, as a Claude Code session's start after a compaction does
+    And the next fresh start of a session in the same lane claims it, in that lane, as on Claude Code; the compacted session's own start after the compaction claims nothing
     # Recorded live, 2026-11-09: a manual /compact fired PreCompact,
     # PostCompact, then SessionStart with source "compact", under one
     # session id. An automatic compaction was not recorded.
+    # Corrected 2026-11-10 from the code: on Claude Code a recovery note
+    # is claimed by another session's fresh start in the note's lane
+    # (D375), never by the start that follows the compaction in the same
+    # session, which still holds its context. Codex follows the same
+    # rule; nothing changes for Claude Code.
 
   @D410
   Scenario: at a Codex CLI turn's end treecontext's hooks print nothing

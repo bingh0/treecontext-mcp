@@ -267,6 +267,29 @@ Feature: Journal storage — the store is durable, bounded, and honest about los
     Then doctor says the `.git` above the project was ignored because it is no repository, naming its path
     And doctor names the project directory itself as the project the store is bound to
 
+  @D419
+  Scenario: doctor names the store an earlier treecontext bound to a stub's directory, and leaves it as it was
+    Given a directory holding an empty directory named `.git`, below it a project with no repository, and a store an earlier treecontext bound to that directory for the project
+    When the server is started from the project and doctor runs from it
+    Then doctor names the earlier store, says it is left as it was, and gives the command that merges it into the project's store
+    And no store or binding was moved or merged
+    # Ruled in on 2026-11-10: a developer whose project sat below a stub
+    # was bound to the stub's directory by every earlier build, so this
+    # ruling moves them to a new store. Their journal is still on disk;
+    # without this line nothing says where.
+
+  @D419 @D190
+  Scenario: a session below a `.git` file git cannot read is placed in the checkout its store is bound to
+    Given a linked worktree "subproject" of a repository, holding a `.git` file git does not accept in a directory below its top
+    When a session starts in a directory below that file
+    Then the session is registered in the worktree "subproject" on the worktree's branch, as a session at the worktree's top is
+    And the project's store is the repository's store
+    # Found by the review of 2026-11-10: the store binding looked past
+    # the file to the repository while the session's placement asked git
+    # at its own directory and read no repository, so a worktree's
+    # session joined the shared store as the main checkout's and could
+    # retire main's chapter summaries. One reading decides both.
+
   @D59
   Scenario: an additive migration also runs behind a backup
     Given a store one additive migration behind the current schema

@@ -208,6 +208,18 @@ Feature: Journal capture — everything worth recalling enters the journal
     # says Codex reported no result, never that the call failed.
 
   @D408
+  Scenario: a Codex call whose turn never reached an end the journal heard is kept, and says only what is known
+    Given the events Codex CLI sent, as recorded, for a file edit whose patch did not match the file, its turn ended by no Stop or Interrupt the hooks received
+    When ingestion runs and the processed staging is later purged
+    Then the journal holds one entry for the call, with its tool name, its input and Codex's own id for it, dated at the moment Codex started the call
+    And the entry says Codex started the call and neither its result nor the end of its turn reached the journal, with no exit class
+    # Ruled in on 2026-11-10, from the review of the build: a session
+    # that crashes, is killed, or is a worker ended at its timeout sends
+    # no Stop, and the call's only trace was dropped with the staging it
+    # sat in. No invocation is ever filtered out: before it leaves
+    # staging it becomes an entry that claims nothing it does not know.
+
+  @D408
   Scenario: a Codex call that succeeded is journaled once, though two events carried it
     Given the events Codex CLI sent, as recorded, for a file edit that succeeded, its PreToolUse and its PostToolUse
     When the hooks install writes for Codex receive those events and ingestion runs

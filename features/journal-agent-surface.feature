@@ -42,7 +42,10 @@ Feature: Journal agent surface — the parts the agent reads are product
     Given a server running on the lexical backend
     When the MCP handshake sends its instructions
     Then they say that hooks capture a session on Claude Code, and on Codex CLI or Antigravity CLI where their hooks are installed and running, and that elsewhere only what the agent inserts is kept
-    And they say that the re-orientation packet reaches a Claude Code session, and a Codex CLI main at a fresh start, never an Antigravity CLI agent
+    # Ruled 2026-11-10: which clients receive the re-orientation packet
+    # is said in the README (journal-clients, D412), not here. The card
+    # is capped at 2048 bytes (D210) and the sentence did not fit beside
+    # the clauses other scenarios pin; an agent acts on none of it.
     # The line read "On Claude Code, hooks auto-capture …; elsewhere only
     # what you insert is kept" until D412: true of its day, and a Codex
     # agent told it is uncaptured inserts what its hooks already keep.

@@ -148,10 +148,14 @@ Feature: Journal install — setup is auditable, reversible, and honest
     Given the transcript of a headless Codex session and the store its hooks wrote, both recorded, in which Codex called a tool directly and ran shell commands through its code mode
     When the capture census counts the session's calls against the store
     Then the census counts the direct call as found by Codex's id for it
-    And it counts each code-mode call as matched by inference, and says how many were inferred and why
+    And it counts each code-mode call by Codex's id for it where the transcript's record of the completed call carries that id, and as matched by inference where it does not
+    And it says how many it found by id and how many it inferred, and why
     # Recorded live, 2026-11-09, Codex CLI 0.167.0: Codex runs most tool
-    # calls inside a script of its own, and the id its hooks carry for such
-    # a call is found nowhere in its transcript. The census over a live
+    # calls inside a script of its own. Corrected 2026-11-10 from the
+    # recordings: the transcript's record of a completed code-mode call
+    # carries the id the hooks carry (5 of 6 in the headless recording);
+    # a call the sandbox refused and a patch that failed carry none, and
+    # only those are inferred. The census over a live
     # Codex session is a release dogfood check, as D402's census is: run
     # by the dogfood routine against the installed build before the
     # release, never by this scenario, which reads what was recorded.
@@ -495,10 +499,16 @@ Feature: Journal install — setup is auditable, reversible, and honest
     Examples:
       | case                                                      | outcome                                   | change                                               | then                                                                                                   |
       | nothing changed                                           | leaves every hook's command as it was     | nothing changes                                      | every hook of treecontext's has its command byte for byte as it was, Codex still trusts each, and install names no hook to trust again |
-      | an upgrade moved the Node interpreter the hooks name      | names each hook Codex will ask to trust again | the Node interpreter the hooks name moves with an upgrade | install names each hook whose command changed and says Codex will ask to trust it again with `/hooks` |
+      | an upgrade moved the Node interpreter the hook scripts name | leaves every hook's command as it was   | the Node interpreter the hook scripts name moves with an upgrade | every hook of treecontext's has its command byte for byte as it was, Codex still trusts each, and install names no hook to trust again |
+      | the directory holding the hook scripts moved              | names each hook Codex will ask to trust again | the hook scripts are moved to another directory, so every command changes | install names each hook whose command changed and says Codex will ask to trust it again with `/hooks` |
     # The owner's Node upgrade routine moves the interpreter and reruns
     # install; a hook whose command text changes reads untrusted to Codex.
     # Nothing changed must mean nothing changed, byte for byte.
+    # Corrected 2026-11-10 from the build: a Codex hook's command names
+    # the hook script and the client, never the interpreter, which the
+    # script names; a Node upgrade therefore changes no command and costs
+    # no trust. The third row keeps the promise the second used to carry,
+    # for a command that does change.
 
   @D406 @D413 @D51
   Scenario Outline: the hook scripts a client's hooks run are there whenever a client's hooks name them, <case>
