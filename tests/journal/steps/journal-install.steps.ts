@@ -2612,7 +2612,6 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
     // A command spells its script with forward slashes on every platform.
     const oldHome = `${w.rxOldHome!.replace(/\\/g, '/')}/`
     expect(w.rxText).toContain(oldHome)
-    // step-lint: allow unearned-absence -- the line above proves the needle fires on the file before the move
     expect(text).not.toContain(oldHome)
     const seen = await ourHooksSeen(w)
     expect(seen).toHaveLength(Object.keys(codexHooksBlock()).length)
