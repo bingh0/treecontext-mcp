@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { join } from 'node:path'
 import { codexProbeEnv } from './codex-home.js'
 import type { CodexApprovalSupport } from './tool-approvals.js'
@@ -25,6 +25,27 @@ export const CODEX_PROBE_TIMEOUT_MS = 20_000
 
 const GROUPS = process.platform !== 'win32'
 
+/**
+ * End a probe and everything it started. On POSIX the probe is its own
+ * process group and the group is killed. On Windows there are no groups,
+ * and `codex` is a .cmd shim reached through a shell: killing the child
+ * ends only that shell and leaves the shim's node and Codex's own process
+ * running, an app server holding the directory it was asked from. So the
+ * tree under the child is ended by `taskkill /T`, which reads it while the
+ * child still lives; the child's own kill is the fallback.
+ */
+export function killProbeTree(child: ChildProcess): void {
+  try {
+    if (child.pid === undefined) return
+    if (GROUPS) { process.kill(-child.pid, 'SIGKILL'); return }
+    if (child.exitCode === null && child.signalCode === null) {
+      const r = spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true, timeout: 5000 })
+      if (r.status === 0) return
+    }
+    child.kill('SIGKILL')
+  } catch { /* gone */ }
+}
+
 export interface BoundedRun {
   status: number | null
   stdout: string
@@ -48,12 +69,7 @@ export function runBounded(file: string, args: string[], timeoutMs: number, env?
     let stderr = ''
     let settled = false
     let timedOut = false
-    const killGroup = (): void => {
-      try {
-        if (GROUPS && child.pid !== undefined) process.kill(-child.pid, 'SIGKILL')
-        else child.kill('SIGKILL')
-      } catch { /* gone */ }
-    }
+    const killGroup = (): void => killProbeTree(child)
     const settle = (r: BoundedRun): void => {
       if (settled) return
       settled = true
@@ -207,10 +223,7 @@ export function readCodexConfig(cwd: string, timeoutMs: number = CODEX_PROBE_TIM
       settled = true
       clearTimeout(timer)
       try { child.stdin?.end() } catch { /* closed */ }
-      try {
-        if (GROUPS && child.pid !== undefined) process.kill(-child.pid, 'SIGKILL')
-        else child.kill('SIGKILL')
-      } catch { /* gone */ }
+      killProbeTree(child)
       resolve(r)
     }
     const timer = setTimeout(() => settle({ ok: false, why: `codex app-server did not answer within ${Math.round(timeoutMs / 1000)} s` }), timeoutMs)
@@ -300,10 +313,7 @@ export function readCodexHooksTrust(cwd: string, timeoutMs: number = CODEX_PROBE
       settled = true
       clearTimeout(timer)
       try { child.stdin?.end() } catch { /* closed */ }
-      try {
-        if (GROUPS && child.pid !== undefined) process.kill(-child.pid, 'SIGKILL')
-        else child.kill('SIGKILL')
-      } catch { /* gone */ }
+      killProbeTree(child)
       resolve(r)
     }
     const timer = setTimeout(() => settle({ ok: false, why: `codex app-server did not answer hooks/list within ${timeoutMs >= 1000 ? `${Math.round(timeoutMs / 1000)} s` : `${timeoutMs} ms`}` }), timeoutMs)

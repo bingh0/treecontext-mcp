@@ -16,7 +16,9 @@ const base = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-root-shape-')))
 afterAll(() => rmSync(base, { recursive: true, force: true }))
 const gitEnv = (): NodeJS.ProcessEnv => Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('GIT_')))
 const gitNames = (cwd: string): string | null => {
-  try { return execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd, env: gitEnv(), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim() } catch { return null }
+  // git prints a path with forward slashes on Windows: read it back in the
+  // platform's own spelling, as the paths it is compared with are.
+  try { return realpathSync.native(execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd, env: gitEnv(), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim()) } catch { return null }
 }
 
 /** A holder directory with `plant` applied to its `.git`, and a project

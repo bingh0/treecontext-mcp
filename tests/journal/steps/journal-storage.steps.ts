@@ -1766,7 +1766,9 @@ export const storageBudgetDefiner = (reg: Registry<StorageWorld>): void => {
     // The tree must not itself sit inside a repository, or the control
     // would prove nothing: git names none above the base.
     expect(gitTop(base).ok, `${base} is inside a repository; the scenario needs a tree outside one`).toBe(false)
-    return realpathSync(base)
+    // The platform's own canonical spelling (on Windows the long form, where
+    // the temp directory's is an 8.3 short name), as the product keys by.
+    return realpathSync.native(base)
   }
   const budgetToml = (mib: string, cap: string): string =>
     `[retention]\nmax_store_bytes = ${Number(mib) * MiB}\nmax_sessions = ${Number(cap)}\n`
@@ -1779,7 +1781,7 @@ export const storageBudgetDefiner = (reg: Registry<StorageWorld>): void => {
     const projects = (JSON.parse(readFileSync(file, 'utf8')) as { projects: Record<string, { store: string }> }).projects
     const keys = Object.keys(projects)
     expect(keys, `the server bound ${keys.length} identities`).toHaveLength(1)
-    const expected = fingerprintOf(`path:${realpathSync(dir)}`)
+    const expected = fingerprintOf(`path:${realpathSync.native(dir)}`)
     expect(keys[0], `the binding is not keyed by ${dir}`).toBe(expected)
     const store = projects[keys[0]!]!.store
     expect(store.startsWith(`${dir.split(/[\\/]/).pop()}-`), `store ${store} is not named for ${dir}`).toBe(true)
@@ -1818,7 +1820,10 @@ export const storageBudgetDefiner = (reg: Registry<StorageWorld>): void => {
       plantStub(w.stubDir, stub!)
       // The repository is git's from its root; what git makes of the stub
       // from the project is the case under test, recorded either way.
-      expect(gitTop(w.repoRoot)).toEqual({ ok: true, out: w.repoRoot })
+      // git's own answer, read in the platform's spelling (it prints
+      // forward slashes on Windows).
+      const top = gitTop(w.repoRoot)
+      expect([top.ok, top.ok ? realpathSync.native(top.out) : null]).toEqual([true, w.repoRoot])
       if (STUBS[stub!] === 'junk-file' && w.stubDir === mid) {
         expect(gitTop(w.budgetProject).ok, 'git read past a .git file it cannot read').toBe(false)
       }
@@ -1909,10 +1914,10 @@ export const storageBudgetDefiner = (reg: Registry<StorageWorld>): void => {
     const bindings = readFileSync(join(w.budgetHome!, '.treecontext', 'bindings.json'), 'utf8')
     expect(bindings).toBe(w.earlier!.bindings)
     const projects = (JSON.parse(bindings) as { projects: Record<string, { store: string }> }).projects
-    expect(projects[fingerprintOf(`path:${realpathSync(w.stubDir!)}`)]?.store).toBe(w.earlier!.store)
+    expect(projects[fingerprintOf(`path:${realpathSync.native(w.stubDir!)}`)]?.store).toBe(w.earlier!.store)
     expect(storeRows(w.budgetHome!, w.earlier!.store)).toEqual(w.earlier!.rows)
     expect(w.earlier!.rows!.some((r) => r.includes('the journal an earlier treecontext kept'))).toBe(true)
-    const now = projects[fingerprintOf(`path:${realpathSync(w.budgetProject!)}`)]!.store
+    const now = projects[fingerprintOf(`path:${realpathSync.native(w.budgetProject!)}`)]!.store
     expect(storeRows(w.budgetHome!, now).filter((r) => r.includes('the journal an earlier treecontext kept'))).toEqual([])
   })
 

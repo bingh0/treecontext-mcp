@@ -12,6 +12,7 @@ import { markClaudeCodeInstalled } from '../helpers/home.js'
 export { markClaudeCodeInstalled }
 import type { World } from './world.js'
 import { TS_ROOT } from './proc.js'
+import { killProbeTree } from '../../src/server/codex-client.js'
 import { writeFakeClaude, writeFakeCodex, writeFakeGemini, writeFakeAgy, writeCodexVersionLine, type FakeCodexPlan } from './standins.js'
 
 // ── Install-wave harness: the real CLI, a redirected HOME, and the ─────
@@ -379,7 +380,11 @@ export async function codexConfigRead(w: InstallWorld): Promise<{ config?: Recor
   } finally {
     clearTimeout(timer)
     child.stdin.end()
-    child.kill('SIGTERM')
+    // On Windows the child is a shell around the `.cmd` shim: ending it
+    // alone leaves Codex's app server running in the world's directory,
+    // which then cannot be removed. End the tree, as the product does.
+    if (process.platform === 'win32') killProbeTree(child)
+    else child.kill('SIGTERM')
   }
 }
 
