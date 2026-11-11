@@ -155,7 +155,14 @@ groupChild?.unref()
 // its own clock; it outlives the worker. A write to a closed stream throws
 // (EPIPE), which ends it.
 const background = step.bgStderr
-  ? spawn(process.execPath, ['-e', BACKGROUND_WRITER, String(step.bgStderr.lines), String(step.bgStderr.everyMs)], { stdio: ['ignore', 'ignore', 'inherit'] })
+  ? spawn(process.execPath, ['-e', BACKGROUND_WRITER, String(step.bgStderr.lines), String(step.bgStderr.everyMs)], {
+    stdio: ['ignore', 'ignore', 'inherit'],
+    // On Windows Node ends its non-detached children when it exits (libuv
+    // puts them in a job that is closed with the process), so "a
+    // background process the worker left" exists there only detached. On
+    // Linux and macOS it stays in the worker's group, as D393 needs.
+    detached: process.platform === 'win32',
+  })
   : null
 background?.unref()
 if (log) {

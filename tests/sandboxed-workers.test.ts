@@ -435,8 +435,11 @@ describe('the store\'s own rules beside a phantom (D403)', () => {
     const { s, db } = await store()
     const dir = tmp('tc-phantom-rerun-')
     // Each run writes its number to ready<n> and waits for go<n>; it never
-    // checkpoints, so its first exit earns the one send-back.
-    const script = `n=$(cat ${dir}/count 2>/dev/null || echo 0); n=$((n+1)); echo $n > ${dir}/count; echo $$ > ${dir}/ready$n; while [ ! -e ${dir}/go$n ]; do sleep 0.05; done`
+    // checkpoints, so its first exit earns the one send-back. The script
+    // names the directory with forward slashes: a shell eats the
+    // backslashes of a Windows path.
+    const d = dir.replace(/\\/g, '/')
+    const script = `n=$(cat ${d}/count 2>/dev/null || echo 0); n=$((n+1)); echo $n > ${d}/count; echo $$ > ${d}/ready$n; while [ ! -e ${d}/go$n ]; do sleep 0.05; done`
     const { spawnWorker } = await import('../src/ticket-door.js')
     const run = spawnWorker({ store: s, ticket: { run: 'r1', key: 'k', role: 'builder', checkpointer: 'builder', parent: { id: 'p1' } }, prompt: 'p', command: 'sh', args: ['-c', script], onStderr: () => undefined })
     cleanups.push(async () => { for (const n of [1, 2]) if (!existsSync(join(dir, `go${n}`))) writeFileSync(join(dir, `go${n}`), 'go'); await run.catch(() => undefined) })

@@ -7,6 +7,15 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      only:
+        # Temporary (2026-11-11): 'windows-debug' runs the Windows test
+        # lane alone, and in it only the scenarios still failing there with
+        # the process snapshots on, so a look takes minutes. Empty runs the
+        # full matrix as before. Remove with tests/helpers/win-debug.ts.
+        description: "empty for the full matrix, or 'windows-debug'"
+        required: false
+        default: ''
 
 # A superseded run's minutes buy nothing — cancel it when a newer push
 # arrives (this workflow runs on a limited monthly minute budget, with
@@ -39,7 +48,10 @@ jobs:
     steps:
       - id: set
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+          if [ "${{ inputs.only }}" = "windows-debug" ]; then
+            echo 'test-os=["windows-latest"]' >> "$GITHUB_OUTPUT"
+            echo 'package-os=["ubuntu-latest"]' >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ] || [[ "${{ github.ref }}" == refs/tags/v* ]]; then
             echo 'test-os=["ubuntu-latest","macos-latest","windows-latest"]' >> "$GITHUB_OUTPUT"
             echo 'package-os=["ubuntu-latest","macos-latest","windows-latest"]' >> "$GITHUB_OUTPUT"
           else
@@ -121,11 +133,18 @@ jobs:
         run: npx tsx scripts/ci-diag-codex-hooks.ts
 
       - run: npm run typecheck
+        if: inputs.only != 'windows-debug'
       # The hook-budget suite times the hooks as they ship: built (dist)
       # hooks run when they are newer than the sources, else tsx, whose
       # start alone eats the 9 s rule on a macOS runner.
       - run: npm run build
       - run: npm test
+        if: inputs.only != 'windows-debug'
+      - name: windows debug, the scenarios still failing there
+        if: inputs.only == 'windows-debug' && runner.os == 'Windows'
+        env:
+          TC_WIN_DEBUG: '1'
+        run: npx vitest run tests/sandboxed-workers.test.ts tests/journal/features.test.ts -t "phantom its door sends back|background process the worker left|capture census counts a Codex|directory holding the hook scripts moved|ended by a signal"
 
   # Source passing is not the same as the shipped artifact working. Pack it,
   # install it somewhere clean, and exercise it end to end.
