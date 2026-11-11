@@ -1,10 +1,18 @@
 {"run-manifest":1}
+{"file":"features/journal-agent-surface.feature","title":"a lane named in the environment without its ticket gets the ordinary handshake","status":"passed"}
+{"file":"features/journal-agent-surface.feature","title":"a worker's own server tells it to begin from its first message","status":"passed"}
 {"file":"features/journal-agent-surface.feature","title":"every channel teaches the same session-start protocol","status":"passed"}
 {"file":"features/journal-agent-surface.feature","title":"gap markers are explained where the agent will meet them","status":"passed"}
 {"file":"features/journal-agent-surface.feature","title":"installing the AGENTS.md block twice yields one block","status":"passed"}
 {"file":"features/journal-agent-surface.feature","title":"instructions survive the platform's size cap un-truncated","status":"passed"}
+{"file":"features/journal-agent-surface.feature","title":"the first message the ticket door composes for a one-off worker whose ticket says it has no key opens with the line the block names [2]","status":"passed"}
+{"file":"features/journal-agent-surface.feature","title":"the first message the ticket door composes for a worker run once more for a missing checkpoint opens with the line the block names [4]","status":"passed"}
+{"file":"features/journal-agent-surface.feature","title":"the first message the ticket door composes for a worker whose ticket is truncated after the role \"builder\" opens with the line the block names [3]","status":"passed"}
+{"file":"features/journal-agent-surface.feature","title":"the first message the ticket door composes for a worker with a key and a brief in effect opens with the line the block names [1]","status":"passed"}
 {"file":"features/journal-agent-surface.feature","title":"the handshake keeps its orientation query and the skill says what ranks where","status":"passed"}
+{"file":"features/journal-agent-surface.feature","title":"the handshake names the clients whose sessions are captured","status":"passed"}
 {"file":"features/journal-agent-surface.feature","title":"the handshake stays a card and the long form lives in the skill reference","status":"passed"}
+{"file":"features/journal-agent-surface.feature","title":"the instruction block tells a worker to skip the session-start routine, in one line","status":"passed"}
 {"file":"features/journal-agent-surface.feature","title":"the instructions explain the preview marker before the agent meets one","status":"passed"}
 {"file":"features/journal-agent-surface.feature","title":"the instructions name doctor as the first move when something looks wrong","status":"passed"}
 {"file":"features/journal-agent-surface.feature","title":"the instructions teach the checkpoint protocol","status":"passed"}
@@ -14,16 +22,35 @@
 {"file":"features/journal-agent-surface.feature","title":"the media guidance in the lexical instructions is honest","status":"passed"}
 {"file":"features/journal-agent-surface.feature","title":"the tool surface is exactly the ruled set","status":"passed"}
 {"file":"features/journal-agent-surface.feature","title":"tool schemas describe only what the backend does","status":"passed"}
+{"file":"features/journal-capture.feature","title":"a Codex call that ends with no result reported is journaled once, unclassified, a file edit whose patch did not match the file [2]","status":"passed"}
+{"file":"features/journal-capture.feature","title":"a Codex call that ends with no result reported is journaled once, unclassified, an MCP tool call Codex got an error reply for [1]","status":"passed"}
+{"file":"features/journal-capture.feature","title":"a Codex call that succeeded is journaled once, though two events carried it","status":"passed"}
+{"file":"features/journal-capture.feature","title":"a Codex call whose turn never reached an end the journal heard is kept, and says only what is known","status":"passed"}
+{"file":"features/journal-capture.feature","title":"a Codex session's prompt, tool calls and last reply are journaled","status":"passed"}
+{"file":"features/journal-capture.feature","title":"a Codex shell command that fails is journaled with what Codex said, and no outcome the client never gave","status":"passed"}
+{"file":"features/journal-capture.feature","title":"a Codex turn the developer interrupted is journaled as interrupted, its partial reply named as not captured","status":"passed"}
+{"file":"features/journal-capture.feature","title":"a call is journaled once, whichever events carried it","status":"passed"}
+{"file":"features/journal-capture.feature","title":"a call the client refused before running it is journaled from the client's own account","status":"passed"}
+{"file":"features/journal-capture.feature","title":"a call the client says succeeded is classed a success, whatever its output says","status":"passed"}
+{"file":"features/journal-capture.feature","title":"a call whose client says nothing of how it ended is still classed by its output","status":"passed"}
+{"file":"features/journal-capture.feature","title":"a call whose output agy's transcript does not hold is kept, and says its output was not captured","status":"passed"}
+{"file":"features/journal-capture.feature","title":"a call's output is read from agy's transcript at the end of the model call that made it","status":"passed"}
 {"file":"features/journal-capture.feature","title":"a client that dies before the server finishes starting leaves no orphan","status":"passed"}
 {"file":"features/journal-capture.feature","title":"a dropped or failed event leaves a visible gap marker","status":"passed"}
+{"file":"features/journal-capture.feature","title":"a failing Codex shell command replayed through Codex's hooks is classed by its text, never by the client's word","status":"passed"}
+{"file":"features/journal-capture.feature","title":"a prompt Antigravity repeats on every event is journaled once per turn","status":"passed"}
 {"file":"features/journal-capture.feature","title":"a recovery snapshot quotes the journal at its preview and never quotes a snapshot","status":"passed"}
 {"file":"features/journal-capture.feature","title":"a schema-less store file left by an earlier hook is healed, not abandoned","status":"passed"}
 {"file":"features/journal-capture.feature","title":"a server abandoned by its client shuts down instead of spinning","status":"passed"}
+{"file":"features/journal-capture.feature","title":"a shell command that fails on Antigravity is journaled with what it printed, its ending read from its text","status":"passed"}
 {"file":"features/journal-capture.feature","title":"a stop that asks for a bookmark still captures the response","status":"passed"}
+{"file":"features/journal-capture.feature","title":"a tool call that fails is journaled with what the client said went wrong","status":"passed"}
 {"file":"features/journal-capture.feature","title":"a tool event can be the first thing a fresh install ever captures","status":"passed"}
 {"file":"features/journal-capture.feature","title":"a tool event is captured with both its input and its response","status":"passed"}
 {"file":"features/journal-capture.feature","title":"a tool event's output is captured as text, a line a line","status":"passed"}
 {"file":"features/journal-capture.feature","title":"a user message is captured verbatim","status":"passed"}
+{"file":"features/journal-capture.feature","title":"an Antigravity session's prompt, tool calls and reply are journaled with the output agy's transcript holds","status":"passed"}
+{"file":"features/journal-capture.feature","title":"an Antigravity subagent's conversation is journaled as its own session, writer unknown, and its parent keeps the call that started it","status":"passed"}
 {"file":"features/journal-capture.feature","title":"an assistant response is captured at turn end","status":"passed"}
 {"file":"features/journal-capture.feature","title":"an oversized non-re-derivable event keeps its full content","status":"passed"}
 {"file":"features/journal-capture.feature","title":"curated notes carry what the raw stream cannot","status":"passed"}
@@ -31,24 +58,75 @@
 {"file":"features/journal-capture.feature","title":"every entry carries the moment its event happened","status":"passed"}
 {"file":"features/journal-capture.feature","title":"every tool invocation is journaled, even the boring ones","status":"passed"}
 {"file":"features/journal-capture.feature","title":"hooks racing to create one fresh store all land on the finished schema","status":"passed"}
+{"file":"features/journal-capture.feature","title":"on a store whose schema keeps no stated-success mark, a call that succeeded is classed by its text","status":"passed"}
 {"file":"features/journal-capture.feature","title":"outputs of execution and external tools are kept in full","status":"passed"}
 {"file":"features/journal-capture.feature","title":"outputs of repo-reading tools are trail, not treasure","status":"passed"}
 {"file":"features/journal-capture.feature","title":"platforms without a Stop hook still journal user and tool events","status":"passed"}
 {"file":"features/journal-capture.feature","title":"repeated identical events dedup without losing distinct ones","status":"passed"}
 {"file":"features/journal-capture.feature","title":"the first hook on a fresh install captures without waiting for a server","status":"passed"}
-{"file":"features/journal-clients.feature","title":"a copied configuration that drifted reads inconsistent with its remedy","status":"passed"}
-{"file":"features/journal-clients.feature","title":"a copied configuration that matches reads present and consistent","status":"passed"}
+{"file":"features/journal-clients.feature","title":"Codex's block that drifted reads inconsistent with its remedy","status":"passed"}
+{"file":"features/journal-clients.feature","title":"Codex's block that matches reads present and consistent","status":"passed"}
+{"file":"features/journal-clients.feature","title":"a cell verified live says under which permissions its run was made","status":"passed"}
 {"file":"features/journal-clients.feature","title":"a teammate on another agent reads and writes through the tools","status":"passed"}
-{"file":"features/journal-clients.feature","title":"a translated Gemini copy that drifted reads inconsistent with its remedy","status":"passed"}
-{"file":"features/journal-clients.feature","title":"a translated Gemini copy that matches reads present and consistent","status":"passed"}
-{"file":"features/journal-clients.feature","title":"doctor reports Codex CLI as a client that copies the hooks into its own configuration [1]","status":"passed"}
-{"file":"features/journal-clients.feature","title":"doctor reports Cursor as a client that reads the Claude settings file by default [4]","status":"passed"}
-{"file":"features/journal-clients.feature","title":"doctor reports Gemini CLI as a client that copies the hooks into its own translated configuration [2]","status":"passed"}
-{"file":"features/journal-clients.feature","title":"doctor reports OpenCode as a client that offers no shell hooks, so the tools are its whole surface [5]","status":"passed"}
-{"file":"features/journal-clients.feature","title":"doctor reports VS Code as a client that reads the Claude settings file when its Claude-hooks setting is on [3]","status":"passed"}
+{"file":"features/journal-clients.feature","title":"doctor names what an earlier install left for Gemini CLI, and the command it names removes that and nothing else","status":"passed"}
+{"file":"features/journal-clients.feature","title":"doctor reports Antigravity CLI as a client that keeps its own hook configuration, where install writes a named hook of its own beside the developer's from 1.5.3 [5]","status":"passed"}
+{"file":"features/journal-clients.feature","title":"doctor reports Codex CLI as a client that keeps its own hook configuration, where install writes Codex's own block from 0.167.0 [1]","status":"passed"}
+{"file":"features/journal-clients.feature","title":"doctor reports Cursor as a client that reads the Claude settings file by default [3]","status":"passed"}
+{"file":"features/journal-clients.feature","title":"doctor reports OpenCode as a client that offers no shell hooks, so the tools are its whole surface [4]","status":"passed"}
+{"file":"features/journal-clients.feature","title":"doctor reports VS Code as a client that reads the Claude settings file when its Claude-hooks setting is on [2]","status":"passed"}
+{"file":"features/journal-clients.feature","title":"doctor shows no sandbox row where it does not apply","status":"passed"}
+{"file":"features/journal-clients.feature","title":"doctor's row for Antigravity CLI says what it found of agy's hooks, when its hooks file does not parse [9]","status":"passed"}
+{"file":"features/journal-clients.feature","title":"doctor's row for Antigravity CLI says what it found of agy's hooks, when its hooks file holds a hook of the developer's named treecontext [7]","status":"passed"}
+{"file":"features/journal-clients.feature","title":"doctor's row for Antigravity CLI says what it found of agy's hooks, when its hooks file holds the named hook an earlier build wrote, wired for fewer events [3]","status":"passed"}
+{"file":"features/journal-clients.feature","title":"doctor's row for Antigravity CLI says what it found of agy's hooks, when its hooks file holds the named hook this build writes, switched off with `enabled: false` [6]","status":"passed"}
+{"file":"features/journal-clients.feature","title":"doctor's row for Antigravity CLI says what it found of agy's hooks, when its version cannot be read [5]","status":"passed"}
+{"file":"features/journal-clients.feature","title":"doctor's row for Antigravity CLI says what it found of agy's hooks, when its version reads 1.5.2 [4]","status":"passed"}
+{"file":"features/journal-clients.feature","title":"doctor's row for Antigravity CLI says what it found of agy's hooks, when its version reads 1.5.3 and its hooks file holds no treecontext hook [2]","status":"passed"}
+{"file":"features/journal-clients.feature","title":"doctor's row for Antigravity CLI says what it found of agy's hooks, when its version reads 1.5.3 and its hooks file holds the named hook this build writes [1]","status":"passed"}
+{"file":"features/journal-clients.feature","title":"doctor's row for Antigravity CLI says what it found of agy's hooks, when its version reads 1.6.0 and its hooks file holds the named hook this build writes [8]","status":"passed"}
+{"file":"features/journal-clients.feature","title":"doctor's row for Antigravity CLI says whether a headless agy worker can use the tools, when agy's permission preset is a value doctor does not know [4]","status":"passed"}
+{"file":"features/journal-clients.feature","title":"doctor's row for Antigravity CLI says whether a headless agy worker can use the tools, when agy's settings file does not parse [5]","status":"passed"}
+{"file":"features/journal-clients.feature","title":"doctor's row for Antigravity CLI says whether a headless agy worker can use the tools, when install has wired it and agy's permission preset is `always-proceed` [1]","status":"passed"}
+{"file":"features/journal-clients.feature","title":"doctor's row for Antigravity CLI says whether a headless agy worker can use the tools, when install has wired it and agy's permission preset is `request-review` [2]","status":"passed"}
+{"file":"features/journal-clients.feature","title":"doctor's row for Antigravity CLI says whether a headless agy worker can use the tools, when install has wired it and agy's settings set no permission preset [3]","status":"passed"}
+{"file":"features/journal-clients.feature","title":"doctor's row for Antigravity CLI says whether a headless agy worker can use the tools, when its MCP configuration holds no treecontext server [6]","status":"passed"}
+{"file":"features/journal-clients.feature","title":"doctor's row for Antigravity CLI says whether a headless agy worker can use the tools, when the allow rule for treecontext_insert is missing [7]","status":"passed"}
+{"file":"features/journal-clients.feature","title":"doctor's row for Antigravity CLI says whether a headless agy worker can use the tools, when the developer's ask rule stands over treecontext_insert [8]","status":"passed"}
+{"file":"features/journal-clients.feature","title":"doctor's row for Antigravity CLI shows tool approvals turned off as the developer's choice [3]","status":"passed"}
+{"file":"features/journal-clients.feature","title":"doctor's row for Claude Code shows tool approvals turned off as the developer's choice [1]","status":"passed"}
+{"file":"features/journal-clients.feature","title":"doctor's row for Codex CLI says whether Codex runs treecontext's hooks, when Codex holds a trust record, at the place of a treecontext hook, that was given to a different hook [5]","status":"passed"}
+{"file":"features/journal-clients.feature","title":"doctor's row for Codex CLI says whether Codex runs treecontext's hooks, when Codex trusted the block and a hook of it has changed since [4]","status":"passed"}
+{"file":"features/journal-clients.feature","title":"doctor's row for Codex CLI says whether Codex runs treecontext's hooks, when install has written its block at 0.167.0 and Codex reports every hook of it trusted [1]","status":"passed"}
+{"file":"features/journal-clients.feature","title":"doctor's row for Codex CLI says whether Codex runs treecontext's hooks, when install has written its block at 0.167.0 and Codex reports none of it trusted [2]","status":"passed"}
+{"file":"features/journal-clients.feature","title":"doctor's row for Codex CLI says whether Codex runs treecontext's hooks, when install has written its block at 0.167.0 and Codex reports some of its hooks trusted and others not [3]","status":"passed"}
+{"file":"features/journal-clients.feature","title":"doctor's row for Codex CLI says whether Codex runs treecontext's hooks, when install has written its block at 0.167.0 and Codex's own account of its hooks cannot be read [6]","status":"passed"}
+{"file":"features/journal-clients.feature","title":"doctor's row for Codex CLI says whether Codex runs treecontext's hooks, when its hooks file does not parse [12]","status":"passed"}
+{"file":"features/journal-clients.feature","title":"doctor's row for Codex CLI says whether Codex runs treecontext's hooks, when its hooks file holds the verbatim copy of the Claude Code block an earlier build wrote under the experimental flag [8]","status":"passed"}
+{"file":"features/journal-clients.feature","title":"doctor's row for Codex CLI says whether Codex runs treecontext's hooks, when its version cannot be read [11]","status":"passed"}
+{"file":"features/journal-clients.feature","title":"doctor's row for Codex CLI says whether Codex runs treecontext's hooks, when its version is 0.167.0 and no treecontext hook is written [7]","status":"passed"}
+{"file":"features/journal-clients.feature","title":"doctor's row for Codex CLI says whether Codex runs treecontext's hooks, when its version reads 0.166.0 [9]","status":"passed"}
+{"file":"features/journal-clients.feature","title":"doctor's row for Codex CLI says whether Codex runs treecontext's hooks, when its version reads 0.166.0 and its hooks file still holds the hooks an earlier install wrote [10]","status":"passed"}
+{"file":"features/journal-clients.feature","title":"doctor's row for Codex CLI says whether a headless worker can use the tools, when its entry approves none of the four tools, with no choice of the developer's recorded [3]","status":"passed"}
+{"file":"features/journal-clients.feature","title":"doctor's row for Codex CLI says whether a headless worker can use the tools, when its entry carries the developer's approval for treecontext_insert set to prompt [4]","status":"passed"}
+{"file":"features/journal-clients.feature","title":"doctor's row for Codex CLI says whether a headless worker can use the tools, when its entry carries the developer's default approving every tool [5]","status":"passed"}
+{"file":"features/journal-clients.feature","title":"doctor's row for Codex CLI says whether a headless worker can use the tools, when its entry forwards the worker variables and approves the four tools [1]","status":"passed"}
+{"file":"features/journal-clients.feature","title":"doctor's row for Codex CLI says whether a headless worker can use the tools, when its entry lacks the worker variables [2]","status":"passed"}
+{"file":"features/journal-clients.feature","title":"doctor's row for Codex CLI shows tool approvals turned off as the developer's choice [2]","status":"passed"}
 {"file":"features/journal-clients.feature","title":"every matrix row carries its client, its events, its documentation date and one status","status":"passed"}
+{"file":"features/journal-clients.feature","title":"on Linux, doctor runs Codex's own sandbox check, which fails because the system refuses bubblewrap a user namespace [2]","status":"passed"}
+{"file":"features/journal-clients.feature","title":"on Linux, doctor runs Codex's own sandbox check, which fails for another reason [3]","status":"passed"}
+{"file":"features/journal-clients.feature","title":"on Linux, doctor runs Codex's own sandbox check, which passes [1]","status":"passed"}
+{"file":"features/journal-clients.feature","title":"the README and doctor say when a headless agy worker returns nothing because agy refused it a tool","status":"unbound"}
+{"file":"features/journal-clients.feature","title":"the README names the oldest Antigravity CLI whose hooks install writes, and what its capture leaves out","status":"passed"}
+{"file":"features/journal-clients.feature","title":"the README says from which Codex CLI capture runs, the step install leaves, and what a Codex entry does not hold","status":"passed"}
+{"file":"features/journal-clients.feature","title":"the README says what a worker may do, that it skips orientation, and how a failed run reads","status":"passed"}
+{"file":"features/journal-clients.feature","title":"the README says what is promised for each client as a main and as a worker, and documents the workflow every client shares","status":"passed"}
+{"file":"features/journal-clients.feature","title":"the README's headless-workers section carries the steps for `agy -p` [3]","status":"passed"}
+{"file":"features/journal-clients.feature","title":"the README's headless-workers section carries the steps for `claude -p` [1]","status":"passed"}
+{"file":"features/journal-clients.feature","title":"the README's headless-workers section carries the steps for `codex exec` [2]","status":"passed"}
+{"file":"features/journal-clients.feature","title":"the command doctor's Codex row names makes its headless workers ready","status":"passed"}
 {"file":"features/journal-clients.feature","title":"the orchestration matrix is its own table, one cell per client and role, each with one status and its date","status":"passed"}
-{"file":"features/journal-clients.feature","title":"without the experimental flag a copying client gets tools only","status":"passed"}
+{"file":"features/journal-clients.feature","title":"the orchestration matrix's Codex CLI cells say what a Codex hook can and cannot do","status":"passed"}
 {"file":"features/journal-handoff.feature","title":"12000 entries exported inline write 10000 and state 2000 omitted [1]","status":"passed"}
 {"file":"features/journal-handoff.feature","title":"500 entries exported inline write 500 and state 0 omitted [2]","status":"passed"}
 {"file":"features/journal-handoff.feature","title":"a file born in this store imports without failing","status":"passed"}
@@ -65,15 +143,31 @@
 {"file":"features/journal-handoff.feature","title":"the default export carries summaries only","status":"passed"}
 {"file":"features/journal-handoff.feature","title":"the file's authorship claims are data, not identity","status":"passed"}
 {"file":"features/journal-handoff.feature","title":"the handoff file says how to use itself","status":"passed"}
+{"file":"features/journal-install.feature","title":"Claude Code's grant sits beside the developer's own rules and leaves with uninstall","status":"passed"}
 {"file":"features/journal-install.feature","title":"a Claude Code whose version cannot be read gets the idle-compaction key not written and doctor says the setting is not read by this client, version unknown [4]","status":"passed"}
 {"file":"features/journal-install.feature","title":"a Claude Code whose version reads 2.1.289 gets the idle-compaction key not written and doctor says the setting is not read by this client, version 2.1.289 [1]","status":"passed"}
 {"file":"features/journal-install.feature","title":"a Claude Code whose version reads 2.1.290 gets the idle-compaction key written off and doctor says off [2]","status":"passed"}
 {"file":"features/journal-install.feature","title":"a Claude Code whose version reads 2.1.302 gets the idle-compaction key written off and doctor says off [3]","status":"passed"}
+{"file":"features/journal-install.feature","title":"a Codex that cannot read per-tool approvals gets none, and is told why","status":"passed"}
+{"file":"features/journal-install.feature","title":"a client below the version its capture was verified at gets tools, not capture hooks [1]","status":"passed"}
+{"file":"features/journal-install.feature","title":"a client below the version its capture was verified at gets tools, not capture hooks [2]","status":"passed"}
 {"file":"features/journal-install.feature","title":"a client that honors the key but has no /config row is told the settings line alone","status":"passed"}
 {"file":"features/journal-install.feature","title":"a corrupt config file is backed up, not destroyed","status":"passed"}
 {"file":"features/journal-install.feature","title":"a forced reinstall rewrites only the agent it names","status":"passed"}
+{"file":"features/journal-install.feature","title":"a hook the developer added after install keeps its words, and the developer is told when Codex will ask to trust it again","status":"passed"}
+{"file":"features/journal-install.feature","title":"a named hook the developer switched off stays off through a reinstall","status":"passed"}
+{"file":"features/journal-install.feature","title":"a permission rule the developer wrote for Antigravity CLI survives install and uninstall","status":"passed"}
+{"file":"features/journal-install.feature","title":"a reinstall converges Claude Code's entry and keeps what the developer added [3]","status":"passed"}
+{"file":"features/journal-install.feature","title":"a reinstall converges Codex CLI's entry and keeps what the developer added [1]","status":"passed"}
+{"file":"features/journal-install.feature","title":"a reinstall converges Codex CLI's entry and keeps what the developer added [2]","status":"passed"}
+{"file":"features/journal-install.feature","title":"a reinstall converges the named hook an earlier build wrote and keeps the developer's","status":"passed"}
+{"file":"features/journal-install.feature","title":"a reinstall turns the copy an earlier build wrote into Codex's own block","status":"passed"}
+{"file":"features/journal-install.feature","title":"a reinstall where an upgrade moved the Node interpreter the hook scripts name leaves every hook's command as it was [2]","status":"passed"}
+{"file":"features/journal-install.feature","title":"a reinstall where nothing changed leaves every hook's command as it was [1]","status":"passed"}
+{"file":"features/journal-install.feature","title":"a reinstall where the directory holding the hook scripts moved names each hook Codex will ask to trust again [3]","status":"passed"}
+{"file":"features/journal-install.feature","title":"an Antigravity CLI below 1.5.3 has the named hook an earlier install wrote taken back","status":"passed"}
+{"file":"features/journal-install.feature","title":"an install told not to approve writes no approval, and a later install keeps it that way","status":"passed"}
 {"file":"features/journal-install.feature","title":"an interpreter that cannot run this package is reported, not tolerated","status":"passed"}
-{"file":"features/journal-install.feature","title":"an unverified platform gets tools, not capture hooks","status":"passed"}
 {"file":"features/journal-install.feature","title":"an unwritable agent config fails loudly and changes nothing","status":"passed"}
 {"file":"features/journal-install.feature","title":"doctor holds the package to one Node floor","status":"passed"}
 {"file":"features/journal-install.feature","title":"doctor names a staging row retried past ten times the ceiling and who spins on it","status":"passed"}
@@ -85,13 +179,31 @@
 {"file":"features/journal-install.feature","title":"doctor warns while idle compaction is on, naming the /config row first","status":"passed"}
 {"file":"features/journal-install.feature","title":"doctor warns with the settings line alone where the client has no /config row","status":"passed"}
 {"file":"features/journal-install.feature","title":"doctor's database row names the SQLite the running Node carries","status":"passed"}
+{"file":"features/journal-install.feature","title":"every hook event Antigravity CLI has is wired or named as not captured","status":"passed"}
+{"file":"features/journal-install.feature","title":"every hook event Codex CLI has is wired or named as not captured","status":"passed"}
+{"file":"features/journal-install.feature","title":"every hook event the client has is wired or named as not captured","status":"passed"}
 {"file":"features/journal-install.feature","title":"existing configuration is merged, never clobbered","status":"passed"}
-{"file":"features/journal-install.feature","title":"experimental capture is an opt-in by name","status":"passed"}
 {"file":"features/journal-install.feature","title":"hooks-only uninstall keeps the launcher its MCP registration points at","status":"passed"}
+{"file":"features/journal-install.feature","title":"install lets a headless Codex worker use the tools that read and write, and leaves the four that remove or bring in rows asking","status":"passed"}
+{"file":"features/journal-install.feature","title":"install never wires Gemini CLI, even where its own command and files are there","status":"passed"}
+{"file":"features/journal-install.feature","title":"install never writes the approval the developer set for treecontext_delete to approve [2]","status":"passed"}
+{"file":"features/journal-install.feature","title":"install never writes the approval the developer set for treecontext_insert to prompt [1]","status":"passed"}
 {"file":"features/journal-install.feature","title":"install never writes the idle-compaction key the user set to off [2]","status":"passed"}
 {"file":"features/journal-install.feature","title":"install never writes the idle-compaction key the user set to on [1]","status":"passed"}
+{"file":"features/journal-install.feature","title":"install refuses an install naming Gemini CLI, saying it is retired","status":"passed"}
+{"file":"features/journal-install.feature","title":"install says what it approved, what still asks, and the way back","status":"passed"}
 {"file":"features/journal-install.feature","title":"install turns Claude Code's idle compaction off when the setting is absent, and says so","status":"passed"}
+{"file":"features/journal-install.feature","title":"install wires Antigravity CLI for the tools and lets a headless agy worker use the four that read and write","status":"passed"}
+{"file":"features/journal-install.feature","title":"install wires Codex CLI 0.167.0 for capture with its own hooks, and names the one step left","status":"passed"}
 {"file":"features/journal-install.feature","title":"install wires only the agents that are present","status":"passed"}
+{"file":"features/journal-install.feature","title":"install writes Antigravity CLI its own named hook beside the developer's","status":"unbound"}
+{"file":"features/journal-install.feature","title":"install writes no Antigravity CLI hook where the hooks file holds a hook of the developer's named treecontext, and says why [4]","status":"passed"}
+{"file":"features/journal-install.feature","title":"install writes no Antigravity CLI hook where the hooks file holds the developer's hook and does not parse, and says why [3]","status":"passed"}
+{"file":"features/journal-install.feature","title":"install writes no Antigravity CLI hook where the version cannot be read, and says why [2]","status":"passed"}
+{"file":"features/journal-install.feature","title":"install writes no Antigravity CLI hook where the version reads 1.5.2, and says why [1]","status":"passed"}
+{"file":"features/journal-install.feature","title":"install writes no Codex CLI hook where its hooks file does not parse, takes back what install wrote, and says why [3]","status":"passed"}
+{"file":"features/journal-install.feature","title":"install writes no Codex CLI hook where its version cannot be read, takes back what install wrote, and says why [2]","status":"passed"}
+{"file":"features/journal-install.feature","title":"install writes no Codex CLI hook where its version reads 0.166.0, takes back what install wrote, and says why [1]","status":"passed"}
 {"file":"features/journal-install.feature","title":"install writes the key on a later run once the client is upgraded","status":"passed"}
 {"file":"features/journal-install.feature","title":"install's way back on at 2.1.301 is the settings line \"idleCompaction\": true, no /config row [1]","status":"passed"}
 {"file":"features/journal-install.feature","title":"install's way back on at 2.1.302 is the client's /config row [2]","status":"passed"}
@@ -99,14 +211,36 @@
 {"file":"features/journal-install.feature","title":"project instructions refresh in place","status":"passed"}
 {"file":"features/journal-install.feature","title":"reinstalling converges instead of duplicating","status":"passed"}
 {"file":"features/journal-install.feature","title":"the README's install section says idle compaction is turned off and why","status":"passed"}
+{"file":"features/journal-install.feature","title":"the capture census counts a Codex session's calls and says which it could only infer","status":"passed"}
 {"file":"features/journal-install.feature","title":"the command doctor prints is one that clears the finding","status":"passed"}
 {"file":"features/journal-install.feature","title":"the command the install instructions tell you to type produces output","status":"passed"}
 {"file":"features/journal-install.feature","title":"the dry run is the whole plan","status":"passed"}
-{"file":"features/journal-install.feature","title":"the experimental capture flag without a named agent is refused","status":"passed"}
+{"file":"features/journal-install.feature","title":"the experimental capture flag is refused, saying it is gone and naming each client's floor, and no agent name [1]","status":"passed"}
+{"file":"features/journal-install.feature","title":"the experimental capture flag is refused, saying it is gone and naming each client's floor, naming Antigravity CLI [3]","status":"passed"}
+{"file":"features/journal-install.feature","title":"the experimental capture flag is refused, saying it is gone and naming each client's floor, naming Codex CLI [2]","status":"passed"}
+{"file":"features/journal-install.feature","title":"the hook scripts a client's hooks run are there whenever a client's hooks name them, after Claude Code alone is uninstalled [3]","status":"passed"}
+{"file":"features/journal-install.feature","title":"the hook scripts a client's hooks run are there whenever a client's hooks name them, on a machine where Codex CLI is the only client [1]","status":"passed"}
+{"file":"features/journal-install.feature","title":"the hook scripts a client's hooks run are there whenever a client's hooks name them, on a machine where agy is the only client [2]","status":"passed"}
+{"file":"features/journal-install.feature","title":"the instruction block in GEMINI.md is Antigravity CLI's, and goes with Antigravity CLI's uninstall","status":"passed"}
 {"file":"features/journal-install.feature","title":"the interpreter install chooses can actually run this package","status":"passed"}
 {"file":"features/journal-install.feature","title":"the registration lands where the agent itself reads it","status":"passed"}
+{"file":"features/journal-install.feature","title":"the server runs in capture mode for Antigravity CLI only where its capture hooks are installed [4]","status":"passed"}
+{"file":"features/journal-install.feature","title":"the server runs in capture mode for Antigravity CLI only where its capture hooks are installed [5]","status":"passed"}
+{"file":"features/journal-install.feature","title":"the server runs in capture mode for Claude Code only where its capture hooks are installed [1]","status":"passed"}
+{"file":"features/journal-install.feature","title":"the server runs in capture mode for Codex CLI only where its capture hooks are installed [2]","status":"passed"}
+{"file":"features/journal-install.feature","title":"the server runs in capture mode for Codex CLI only where its capture hooks are installed [3]","status":"passed"}
+{"file":"features/journal-install.feature","title":"the sweep for Gemini CLI leaves Antigravity CLI's hooks file alone","status":"passed"}
 {"file":"features/journal-install.feature","title":"the upgrading instructions say to quit every running session first","status":"passed"}
+{"file":"features/journal-install.feature","title":"turning tool approvals off and on again in Antigravity CLI touches only what install wrote [3]","status":"passed"}
+{"file":"features/journal-install.feature","title":"turning tool approvals off and on again in Claude Code touches only what install wrote [1]","status":"passed"}
+{"file":"features/journal-install.feature","title":"turning tool approvals off and on again in Codex CLI touches only what install wrote [2]","status":"passed"}
 {"file":"features/journal-install.feature","title":"uninstall removes everything install wrote and nothing else","status":"passed"}
+{"file":"features/journal-install.feature","title":"uninstall sweeps what an earlier install wrote for Gemini CLI and keeps the developer's own keys","status":"passed"}
+{"file":"features/journal-install.feature","title":"uninstall takes back the hooks install wrote for Codex CLI and keeps the developer's, install's record naming its hooks [1]","status":"passed"}
+{"file":"features/journal-install.feature","title":"uninstall takes back the hooks install wrote for Codex CLI and keeps the developer's, no record naming them [2]","status":"passed"}
+{"file":"features/journal-install.feature","title":"uninstall takes back the named hook install wrote and nothing else","status":"passed"}
+{"file":"features/journal-install.feature","title":"with install's own record lost, uninstall knows treecontext's named hook by its commands and keeps the file","status":"passed"}
+{"file":"features/journal-legs.feature","title":"a Codex CLI subagent is registered, retired and summarised, and is never a leg","status":"passed"}
 {"file":"features/journal-legs.feature","title":"a checkpoint of 1 characters is accepted on its first write and accepted on the second [1]","status":"passed"}
 {"file":"features/journal-legs.feature","title":"a checkpoint of 16000 characters is accepted on its first write and accepted on the second [2]","status":"passed"}
 {"file":"features/journal-legs.feature","title":"a checkpoint of 16001 characters is refused with the reason and the shape asked for on its first write and accepted and marked over the cap on the second [3]","status":"passed"}
@@ -193,18 +327,57 @@
 {"file":"features/journal-namespaces.feature","title":"the drain serves namespaces nobody is serving","status":"passed"}
 {"file":"features/journal-namespaces.feature","title":"two servers sharing one namespace keep their sessions apart","status":"passed"}
 {"file":"features/journal-namespaces.feature","title":"writers in different namespaces never see each other by default","status":"passed"}
+{"file":"features/journal-orchestration.feature","title":"a Codex CLI compaction leaves a recovery note that the next fresh start in its lane claims","status":"passed"}
+{"file":"features/journal-orchestration.feature","title":"a Codex CLI main registers itself at its start and the server stamps its rows from it","status":"passed"}
+{"file":"features/journal-orchestration.feature","title":"a Codex CLI main's fresh start is handed its lane's chapter","status":"passed"}
+{"file":"features/journal-orchestration.feature","title":"a chapter a program wrote through the library in a worktree's session is the worktree's in every reader","status":"passed"}
+{"file":"features/journal-orchestration.feature","title":"a chapter whose writer could not be identified is set apart as writer unknown in every lane","status":"passed"}
+{"file":"features/journal-orchestration.feature","title":"a client without hooks retires its chapter from before the upgrade, and the retirement says who, what, when and how","status":"passed"}
+{"file":"features/journal-orchestration.feature","title":"a dedup hit from another lane records no reference on the surviving row, and the reply says so","status":"passed"}
+{"file":"features/journal-orchestration.feature","title":"a dedup hit never arms another lane's resume pointer","status":"passed"}
+{"file":"features/journal-orchestration.feature","title":"a dedup hit's echo from another lane leaves the surviving row's writer and lane as they were","status":"passed"}
+{"file":"features/journal-orchestration.feature","title":"a dedup hit's reply names the surviving row's writer and lane and says nothing landed in the caller's","status":"passed"}
+{"file":"features/journal-orchestration.feature","title":"a fresh start adopts a recovery snapshot only from its own lane","status":"passed"}
+{"file":"features/journal-orchestration.feature","title":"a lane's search finds its helpers' reports and its imports, never a helper's trail","status":"passed"}
+{"file":"features/journal-orchestration.feature","title":"a main checkout alone in its store opens on its own thread and names no other lane","status":"passed"}
+{"file":"features/journal-orchestration.feature","title":"a main checkout with only a bookmark is handed the bookmark, never a worktree's chapter","status":"passed"}
 {"file":"features/journal-orchestration.feature","title":"a new subagent starts from its role's prior trail and the plan it was spawned under","status":"passed"}
 {"file":"features/journal-orchestration.feature","title":"a new worktree is treated as a new subagent process","status":"passed"}
+{"file":"features/journal-orchestration.feature","title":"a restarted main checkout opens on its own thread and is told what else exists","status":"passed"}
 {"file":"features/journal-orchestration.feature","title":"a restarted worktree session resumes its own thread","status":"passed"}
+{"file":"features/journal-orchestration.feature","title":"a resumed Codex CLI main is the same session and is handed what a resume is handed","status":"passed"}
 {"file":"features/journal-orchestration.feature","title":"a subagent appends into the main lane with its writer and reference stamped","status":"passed"}
 {"file":"features/journal-orchestration.feature","title":"a subagent cannot retire the orchestrator's pointer","status":"passed"}
+{"file":"features/journal-orchestration.feature","title":"a subagent's chapter in a worktree's session is its role's, never the worktree's own","status":"passed"}
 {"file":"features/journal-orchestration.feature","title":"a subagent's tool-written note carries its own writer though it shares the session","status":"passed"}
+{"file":"features/journal-orchestration.feature","title":"a supersession held under a provisional stamp leaves the tester's entry live after the echo [1]","status":"passed"}
+{"file":"features/journal-orchestration.feature","title":"a supersession held under a provisional stamp leaves the worktree \"subproject\"'s entry live after the echo [2]","status":"passed"}
+{"file":"features/journal-orchestration.feature","title":"a supersession whose echo never comes stays pending, and says so","status":"passed"}
+{"file":"features/journal-orchestration.feature","title":"a worktree's conversation from an earlier release is the worktree's own","status":"passed"}
+{"file":"features/journal-orchestration.feature","title":"a worktree's status lists its own lane's pointers and says what else exists","status":"passed"}
+{"file":"features/journal-orchestration.feature","title":"an Antigravity CLI session the ticket door did not start is captured as a session no hook registered","status":"passed"}
+{"file":"features/journal-orchestration.feature","title":"an orchestrator's bookmark written while one subagent was live supersedes its own earlier one once its echo names the orchestrator, naming nothing to supersede [2]","status":"passed"}
+{"file":"features/journal-orchestration.feature","title":"an orchestrator's bookmark written while one subagent was live supersedes its own earlier one once its echo names the orchestrator, naming the earlier one in supersedes [1]","status":"passed"}
+{"file":"features/journal-orchestration.feature","title":"an unplaced writer's chapters still supersede one another","status":"passed"}
+{"file":"features/journal-orchestration.feature","title":"asking for every lane lists them flat, each pointer naming its lane","status":"passed"}
+{"file":"features/journal-orchestration.feature","title":"at a Codex CLI turn's end treecontext's hooks print nothing","status":"passed"}
 {"file":"features/journal-orchestration.feature","title":"internal summaries already stored are re-marked when a newer treecontext opens the store","status":"passed"}
+{"file":"features/journal-orchestration.feature","title":"once a session has run in the main checkout, a client without hooks cannot retire the main checkout's chapter from before the upgrade","status":"passed"}
 {"file":"features/journal-orchestration.feature","title":"references resolve one hop deep, the rest on request","status":"passed"}
+{"file":"features/journal-orchestration.feature","title":"rows from before the store recorded writers stay the main lane's","status":"passed"}
+{"file":"features/journal-orchestration.feature","title":"the boundary opens for the writer-unknown lane alone","status":"passed"}
+{"file":"features/journal-orchestration.feature","title":"the boundary opens to no pointer that names a writer, whose session the registry holds, or that was imported","status":"passed"}
 {"file":"features/journal-orchestration.feature","title":"the client's own internal agent is marked as such, never as a subagent","status":"passed"}
+{"file":"features/journal-orchestration.feature","title":"the main checkout's status is scoped to the main lane the same way","status":"passed"}
 {"file":"features/journal-orchestration.feature","title":"the orchestrator finds the subagent's summary by search","status":"passed"}
 {"file":"features/journal-orchestration.feature","title":"the orchestrator reads the subagent's trail on its own","status":"passed"}
+{"file":"features/journal-orchestration.feature","title":"the orientation search is scoped to the session's own lane","status":"passed"}
+{"file":"features/journal-orchestration.feature","title":"the other lanes are counted and at most three named with 0 other lanes [1]","status":"passed"}
+{"file":"features/journal-orchestration.feature","title":"the other lanes are counted and at most three named with 1 other lanes [2]","status":"passed"}
+{"file":"features/journal-orchestration.feature","title":"the other lanes are counted and at most three named with 3 other lanes [3]","status":"passed"}
+{"file":"features/journal-orchestration.feature","title":"the other lanes are counted and at most three named with 5 other lanes [4]","status":"passed"}
 {"file":"features/journal-orchestration.feature","title":"the session-start hook registers self and the server stamps rows from it","status":"passed"}
+{"file":"features/journal-orchestration.feature","title":"two hundred helpers do not displace the main checkout's own thread","status":"passed"}
 {"file":"features/journal-policy.feature","title":"a contributor can add but never remove","status":"passed"}
 {"file":"features/journal-policy.feature","title":"a contributor server ingests captured events","status":"passed"}
 {"file":"features/journal-policy.feature","title":"a contributor's insert is a real write, not just a listed tool","status":"passed"}
@@ -298,6 +471,7 @@
 {"file":"features/journal-runs.feature","title":"every key lookup carries the run's facts beside the checkpoint","status":"passed"}
 {"file":"features/journal-runs.feature","title":"nesting is not limited to one level","status":"passed"}
 {"file":"features/journal-runs.feature","title":"the export's reply names the legs whose first moment is the door's own line, and no other","status":"passed"}
+{"file":"features/journal-runs.feature","title":"the export's reply names the legs whose summary row carries the end of an error stream, and no other","status":"passed"}
 {"file":"features/journal-runs.feature","title":"the harness asks by run and key with no model and receives the one checkpoint in effect","status":"passed"}
 {"file":"features/journal-runs.feature","title":"the harness closes a run with a reason and plain SQL shows who ended it and why","status":"passed"}
 {"file":"features/journal-runs.feature","title":"the lookup reply carries the pointer to the return of the leg that wrote the checkpoint","status":"passed"}
@@ -328,7 +502,7 @@
 {"file":"features/journal-session-echo.feature","title":"an exact insert-time attribution is never overwritten","status":"passed"}
 {"file":"features/journal-session-echo.feature","title":"an export taken before the drain shows the pre-heal state honestly","status":"passed"}
 {"file":"features/journal-session-echo.feature","title":"an insert whose input overflows the echo preview still correlates","status":"passed"}
-{"file":"features/journal-session-echo.feature","title":"identical concurrent inserts from two sessions disclose their ambiguity","status":"passed"}
+{"file":"features/journal-session-echo.feature","title":"identical concurrent inserts from two sessions of one lane disclose their ambiguity","status":"passed"}
 {"file":"features/journal-session-echo.feature","title":"the echo outranks a freshest-beacon guess that disagrees","status":"passed"}
 {"file":"features/journal-session-namespace.feature","title":"a beacon guess never publishes a namespace annotation","status":"passed"}
 {"file":"features/journal-session-namespace.feature","title":"a healed insert corroborates the session's namespace","status":"passed"}
@@ -363,6 +537,12 @@
 {"file":"features/journal-storage.feature","title":"a crash mid-write never corrupts the store","status":"passed"}
 {"file":"features/journal-storage.feature","title":"a full disk fails loudly and corrupts nothing","status":"passed"}
 {"file":"features/journal-storage.feature","title":"a poison event cannot wedge ingestion","status":"passed"}
+{"file":"features/journal-storage.feature","title":"a project below a directory holding a file named `.git` that git does not accept binds its own store and reads its own config file [2]","status":"passed"}
+{"file":"features/journal-storage.feature","title":"a project below a directory holding an empty directory named `.git` binds its own store and reads its own config file [1]","status":"passed"}
+{"file":"features/journal-storage.feature","title":"a project inside a repository resolves to the repository's root, with a file named `.git` that git does not accept in a directory between the project and the root [2]","status":"passed"}
+{"file":"features/journal-storage.feature","title":"a project inside a repository resolves to the repository's root, with an empty directory named `.git` in a directory between the project and the root [1]","status":"passed"}
+{"file":"features/journal-storage.feature","title":"a project inside a repository resolves to the repository's root, with an empty directory named `.git` in the directory above the repository's root [3]","status":"passed"}
+{"file":"features/journal-storage.feature","title":"a session below a `.git` file git cannot read is placed in the checkout its store is bound to","status":"passed"}
 {"file":"features/journal-storage.feature","title":"a stale server tells the agent to restart instead of failing","status":"passed"}
 {"file":"features/journal-storage.feature","title":"a store built by a deleted backend refuses loudly and loses nothing","status":"passed"}
 {"file":"features/journal-storage.feature","title":"a store that cannot get under budget says so","status":"passed"}
@@ -374,6 +554,8 @@
 {"file":"features/journal-storage.feature","title":"curated synthesis outlives auto-captured bulk","status":"passed"}
 {"file":"features/journal-storage.feature","title":"deleted space is actually reclaimed","status":"passed"}
 {"file":"features/journal-storage.feature","title":"demotion archives before it shrinks","status":"passed"}
+{"file":"features/journal-storage.feature","title":"doctor names a `.git` it passed over because it is no repository","status":"passed"}
+{"file":"features/journal-storage.feature","title":"doctor names the store an earlier treecontext bound to a stub's directory, and leaves it as it was","status":"passed"}
 {"file":"features/journal-storage.feature","title":"evicted content leaves a tombstone pointing at its archive","status":"passed"}
 {"file":"features/journal-storage.feature","title":"eviction demotes to cold archive, it never destroys","status":"passed"}
 {"file":"features/journal-storage.feature","title":"eviction refuses when it cannot archive","status":"passed"}
@@ -388,11 +570,13 @@
 {"file":"features/journal-storage.feature","title":"the session cap the operator sets is the cap that bites","status":"passed"}
 {"file":"features/journal-storage.feature","title":"the store does not grow without bound","status":"passed"}
 {"file":"features/journal-storage.feature","title":"what goes in comes back out, byte for byte","status":"passed"}
-{"file":"features/journal-workers.feature","title":"a `agy -p` worker under a Antigravity parent writes into its own lane with its role as writer [3]","status":"unbound"}
 {"file":"features/journal-workers.feature","title":"a `claude -p` child started by the wrapper is told who it is in one line, and its first moment is not spent twice","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a `claude -p` child with a ticket is registered as a worker by the hook, never as a self","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a `claude -p` worker under a Codex parent writes into its own lane with its role as writer [2]","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a `codex exec` worker under a Claude Code parent writes into its own lane with its role as writer [1]","status":"passed"}
+{"file":"features/journal-workers.feature","title":"a `codex exec` worker with Codex's hooks is never registered as a self, its hooks print it nothing, and what it does lands in its own lane","status":"passed"}
+{"file":"features/journal-workers.feature","title":"a `codex exec` worker writing the same text as the main session in the main checkout leaves its own row in its own lane [1]","status":"passed"}
+{"file":"features/journal-workers.feature","title":"a background process the worker left writing to its error stream is not cut off when the run settles","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a checkpoint the store cannot take at exit is lost from the store, not from the spawner","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a first moment with no checkpoint in effect is the brief and the prompt","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a first-moment row keeps a pasted prompt whole behind a bounded preview","status":"passed"}
@@ -400,40 +584,65 @@
 {"file":"features/journal-workers.feature","title":"a gone worker nobody retired is retired as a phantom by the next session-start hook on its host [3]","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a gone worker nobody retired is retired as a phantom by the next status call on its host [2]","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a gone worker nobody retired is retired as a phantom by the next ticket door on its host [4]","status":"passed"}
-{"file":"features/journal-workers.feature","title":"a hook-less worker and a `claude -p` child leave the same first-moment row, readable with plain SQL alone","status":"passed"}
-{"file":"features/journal-workers.feature","title":"a hook-less worker that finishes without a checkpoint is run once more by the `treecontext run` wrapper that started it [1]","status":"passed"}
-{"file":"features/journal-workers.feature","title":"a hook-less worker that finishes without a checkpoint is run once more by the library call that started it [2]","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a host whose process start moment cannot be read leaves the number alone, and the reply says so","status":"passed"}
+{"file":"features/journal-workers.feature","title":"a live worker is never retired as a phantom by a reader whose processes are numbered apart from its own, the reader inside a sandbox [2]","status":"passed"}
+{"file":"features/journal-workers.feature","title":"a live worker is never retired as a phantom by a reader whose processes are numbered apart from its own, the worker inside a sandbox [1]","status":"passed"}
+{"file":"features/journal-workers.feature","title":"a live worker is never retired as a phantom by a reader whose processes are numbered apart from its own, the worker inside a sandbox that shows the machine's processes as its own [4]","status":"passed"}
+{"file":"features/journal-workers.feature","title":"a live worker is never retired as a phantom by a reader whose processes are numbered apart from its own, the worker registered by an earlier build, the reader inside a sandbox [3]","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a live worker with its own start moment stays live","status":"passed"}
+{"file":"features/journal-workers.feature","title":"a long error stream is kept as its end","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a parent a hook did register is linked by id, never copied","status":"passed"}
-{"file":"features/journal-workers.feature","title":"a parent no hook registered is carried on each worker's registration as declared, never as a row of its own","status":"passed"}
+{"file":"features/journal-workers.feature","title":"a parent no hook registered, a Antigravity CLI main, is carried on each worker's registration as declared, never as a row of its own [2]","status":"passed"}
+{"file":"features/journal-workers.feature","title":"a parent no hook registered, a Codex CLI main, is carried on each worker's registration as declared, never as a row of its own [1]","status":"passed"}
+{"file":"features/journal-workers.feature","title":"a reader inside a sandbox says a worker outside it cannot be checked from there","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a reused process number is told from the worker by the process's start moment","status":"passed"}
+{"file":"features/journal-workers.feature","title":"a second `codex exec` worker writing the same text as a `codex exec` worker leaves its own row in its own lane [2]","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a stranger's checkpoint reaches the worker's first moment flagged in words","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a ticket that says in words the worker has no key starts a one-off worker","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a ticket that says nothing about the door is read as declaring one","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a ticket whose key is merely blank is damage","status":"passed"}
+{"file":"features/journal-workers.feature","title":"a worker ended by a kill the door did not send, sent to the worker's process leaves no process of its group running [2]","status":"passed"}
+{"file":"features/journal-workers.feature","title":"a worker ended by the wrapper's timeout leaves no process of its group running [1]","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a worker is not started while the store cannot be read, and the spawner is told","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a worker is retired at exit and its last output is the summary row the pointer names","status":"passed"}
+{"file":"features/journal-workers.feature","title":"a worker of the ticket door searches the whole store and sees every lane","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a worker on another host is left live and the reply says it cannot be checked from here","status":"passed"}
+{"file":"features/journal-workers.feature","title":"a worker started through the `treecontext run` wrapper from inside a Claude Code session carries none of that session's variables [1]","status":"passed"}
+{"file":"features/journal-workers.feature","title":"a worker started through the library call, in the process's own environment from inside a Claude Code session carries none of that session's variables [2]","status":"passed"}
+{"file":"features/journal-workers.feature","title":"a worker started through the library call, with an environment it passes from inside a Claude Code session carries none of that session's variables [3]","status":"passed"}
+{"file":"features/journal-workers.feature","title":"a worker taken for a phantom while it ran and then sent back reads live through its re-run","status":"passed"}
+{"file":"features/journal-workers.feature","title":"a worker taken for a phantom while it ran is set right by its door when it exits on its own after printing \"done\" [1]","status":"passed"}
+{"file":"features/journal-workers.feature","title":"a worker taken for a phantom while it ran is set right by its door when it is ended by a signal [2]","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a worker that claimed a ticket with no wrapper gets no send-back and ends visibly without a checkpoint","status":"passed"}
+{"file":"features/journal-workers.feature","title":"a worker that exits cleanly having printed nothing leaves a summary row that says why [3]","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a worker that exits on its own error is finished and gets the one send-back","status":"passed"}
+{"file":"features/journal-workers.feature","title":"a worker that failed, was run once more and failed again leaves its last run's reason","status":"passed"}
+{"file":"features/journal-workers.feature","title":"a worker that fails after printing part of its work leaves a summary row that says why [2]","status":"passed"}
+{"file":"features/journal-workers.feature","title":"a worker that fails having printed nothing leaves a summary row that says why [1]","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a worker whose first-moment row the store cannot write is not registered and opens no run","status":"passed"}
+{"file":"features/journal-workers.feature","title":"a worker whose hooks do not run and a `claude -p` child leave the same first-moment row, readable with plain SQL alone","status":"passed"}
+{"file":"features/journal-workers.feature","title":"a worker whose hooks do not run that finishes without a checkpoint is run once more by the `treecontext run` wrapper that started it [1]","status":"passed"}
+{"file":"features/journal-workers.feature","title":"a worker whose hooks do not run that finishes without a checkpoint is run once more by the library call that started it [2]","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a worker whose key another writer checkpointed while it ran is not sent back","status":"passed"}
+{"file":"features/journal-workers.feature","title":"a worker whose sandbox has ended is retired as a phantom by a reader that can see the sandbox is gone","status":"passed"}
+{"file":"features/journal-workers.feature","title":"a worker whose server opens a store holding no registration for it writes under its ticket's claim, never as the main session","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a worker whose ticket declares no door gets no send-back","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a worker whose ticket is hand-edited so that the run is missing is registered with what was read, told its instructions were invalid, and ends visibly through the session-start hook of a `claude -p` child [2]","status":"passed"}
-{"file":"features/journal-workers.feature","title":"a worker whose ticket is minted in an older shape that still reads as the role \"reviewer\" is registered with what was read, told its instructions were invalid, and ends visibly through the hook-less door of a `codex exec` worker [3]","status":"passed"}
-{"file":"features/journal-workers.feature","title":"a worker whose ticket is truncated after the role \"builder\" is registered with what was read, told its instructions were invalid, and ends visibly through the hook-less door of a `codex exec` worker [1]","status":"passed"}
+{"file":"features/journal-workers.feature","title":"a worker whose ticket is minted in an older shape that still reads as the role \"reviewer\" is registered with what was read, told its instructions were invalid, and ends visibly through the door of a `codex exec` worker whose hooks do not run [3]","status":"passed"}
+{"file":"features/journal-workers.feature","title":"a worker whose ticket is truncated after the role \"builder\" is registered with what was read, told its instructions were invalid, and ends visibly through the door of a `codex exec` worker whose hooks do not run [1]","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a worker whose ticket is truncated after the role \"builder\" is registered with what was read, told its instructions were invalid, and ends visibly through the session-start hook of a `claude -p` child [4]","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a worker whose ticket names another role as checkpointer is never sent back","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a worker whose ticket still named its run is listed under that run; one that named neither is reachable only by its exit line and parent","status":"passed"}
+{"file":"features/journal-workers.feature","title":"a worker with a damaged ticket taken for a phantom while it ran is set right when its one row lands","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a worker's first message carries both checkpoints when two are in effect","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a worker's re-run for its missing checkpoint is the same leg in the same lane","status":"passed"}
 {"file":"features/journal-workers.feature","title":"a worker's registration carries every field its ticket declared and the facts the door read","status":"passed"}
+{"file":"features/journal-workers.feature","title":"an `agy -p` worker started by `treecontext run` is never a self, and its captured calls land in its own lane","status":"passed"}
 {"file":"features/journal-workers.feature","title":"an empty spawner prompt still leaves the first-moment row","status":"passed"}
 {"file":"features/journal-workers.feature","title":"an exit by signal is a cut, never sent back, and the next leg of the role is a recovery leg","status":"passed"}
 {"file":"features/journal-workers.feature","title":"an unregistered writer's row through the library call is accepted and traced, never refused [2]","status":"passed"}
 {"file":"features/journal-workers.feature","title":"an unregistered writer's row through the ticket door, with a self-minted ticket is accepted and traced, never refused [1]","status":"passed"}
-{"file":"features/journal-workers.feature","title":"the first-moment row is the first row of the worker's lane through the hook-less door of a `codex exec` worker [1]","status":"passed"}
+{"file":"features/journal-workers.feature","title":"the first-moment row is the first row of the worker's lane through the door of a `codex exec` worker whose hooks do not run [1]","status":"passed"}
 {"file":"features/journal-workers.feature","title":"the first-moment row is the first row of the worker's lane through the wrapper of a `claude -p` child, whose session-start hook links the lane [2]","status":"passed"}
 {"file":"features/journal-workers.feature","title":"the stop hook's send-back is the leg's one, and the wrapper starts no run after it","status":"passed"}
 {"file":"features/journal-workers.feature","title":"the ticket door composes a worker's first message from the brief, the checkpoint in effect and the spawner's prompt","status":"passed"}

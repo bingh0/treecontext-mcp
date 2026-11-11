@@ -101,10 +101,10 @@
 {"file":"flat-store-conversation-window.feature","title":"window 2 on a 7-entry session returns 2 before and 2 after, chronologically","status":"passed"}
 {"file":"flat-store-dedup.feature","title":"Stop-hook double-fire inside the window still dedups","status":"passed"}
 {"file":"flat-store-dedup.feature","title":"a curated insert never dedups onto an auto-capture node","status":"passed"}
-{"file":"flat-store-dedup.feature","title":"a dedup hit re-arms resume-pointer tags on the surviving note","status":"passed"}
+{"file":"flat-store-dedup.feature","title":"a dedup hit in the surviving note's own lane re-arms its resume-pointer tags","status":"passed"}
 {"file":"flat-store-dedup.feature","title":"a repeated user directive outside the window becomes its own node","status":"passed"}
 {"file":"flat-store-dedup.feature","title":"anchors resolve to the current occurrence, not a stale first one","status":"passed"}
-{"file":"flat-store-dedup.feature","title":"curated notes keep global idempotent dedup across sessions","status":"passed"}
+{"file":"flat-store-dedup.feature","title":"curated notes keep idempotent dedup across sessions of one lane","status":"passed"}
 {"file":"flat-store-dedup.feature","title":"dedup compares capture timestamps, not drain time","status":"passed"}
 {"file":"flat-store-dedup.feature","title":"identical content from another session inside the window is a distinct event","status":"passed"}
 {"file":"flat-store-dedup.feature","title":"the dedup window slides with the newest occurrence","status":"passed"}

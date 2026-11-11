@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0-beta.4 — unreleased
+## 0.1.0-beta.4 — headless workers on three clients: Codex CLI and Antigravity CLI are captured through hooks of their own, install approves the tools a worker needs, and a call that fails or is refused is journaled (2026-11-11)
 
 beta.4 documents headless workers and the permissions they run under (D388); the install side (tool approvals, Antigravity CLI, the worker card) is described in the entries of its other units.
 
