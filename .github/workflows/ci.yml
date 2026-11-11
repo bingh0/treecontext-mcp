@@ -112,6 +112,14 @@ jobs:
           Add-Content -Path $env:GITHUB_PATH -Value $bin
           & (Join-Path $bin "agy.exe") --version
 
+      # Temporary (2026-11-11): what Codex itself answers about a hooks file
+      # holding treecontext's block, on each runner. Windows reads "Codex
+      # does not load" for a file install wrote; this prints Codex's raw
+      # answer so the cause is read, not guessed. Remove once it is.
+      - name: diagnostic, Codex's own account of treecontext's hooks
+        continue-on-error: true
+        run: npx tsx scripts/ci-diag-codex-hooks.ts
+
       - run: npm run typecheck
       # The hook-budget suite times the hooks as they ship: built (dist)
       # hooks run when they are newer than the sources, else tsx, whose
