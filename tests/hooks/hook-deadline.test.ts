@@ -108,11 +108,18 @@ describe('withHookDeadline: the deadline is the clock, not SQLite\'s arithmetic'
   })
 
   it('returns the unit\'s answer once the store answers inside the deadline', () => {
+    // Two busy tries of two slices each (400 ms as asked for), then the
+    // answer. The deadline here leaves room for a runner that oversleeps
+    // (a loaded macOS runner stretched those two sleeps past the 600 ms the
+    // other tests use, twice running, and the unit gave up before its third
+    // try): what is under test is that an answer inside the deadline is
+    // returned, not how tight the deadline can be.
+    const roomy = DEADLINE_MS * 4
     const f = oversleeper(3)
     const t0 = Date.now()
-    expect(withHookDeadline(f.db, t0 + DEADLINE_MS, f.step)).toBe('answered')
+    expect(withHookDeadline(f.db, t0 + roomy, f.step)).toBe('answered')
     expect(f.attempts()).toBe(3)
-    expect(Date.now() - t0).toBeLessThan(DEADLINE_MS)
+    expect(Date.now() - t0).toBeLessThan(roomy)
   })
 
   it('rolls back the transaction a busy unit left open before running it again', () => {
