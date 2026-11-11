@@ -304,6 +304,14 @@ re-decided, and the previous text is in git history.
   of a child's start against its parent's call result. An agy worker
   started through `treecontext run` is not deferred. (D422, D421,
   2026-11-10)
+- **A census of an Antigravity CLI session** — deferred to
+  `0.1.0-beta.5`: the dogfood census counts a Claude Code session's and a
+  Codex CLI session's tool calls against the store, and not yet an agy
+  session's, whose transcript carries no call id and would be counted by
+  conversation and step. Until then an agy session's captured calls are
+  counted by hand against its lane at the release gate, as they were for
+  `0.1.0-beta.4` on two machines. Everything else D417 says of agy's
+  event list and its recordings stands. (D425, D417, 2026-11-11)
 - **Self registrations' stop moment** — declined until `0.1.0-beta.5`:
   the store records no stop for a self registration, at a /clear or any
   other end, and no reader reads one; the /clear's stop of its

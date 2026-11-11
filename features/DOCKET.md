@@ -3280,3 +3280,376 @@ D424 2026-11-10 [I] amends D288
   serves: N9 N23
   touches: D288 D293 D376 D423
 # the owner, 2026-11-10: "let's do item 2, seems straightforward enough and makes it cleaner", after: "i think writer unknown isn't quite accurate - the second store just needs to know an external writer showed up and wrote something? what would be the most reproducible writer name or namespace?" Found the same day: the agy worker fixture of 2026-11-09 was recorded with the door on a throwaway store while agy ran in the repository's checkout, and its checkpoint landed in the checkout's journal stamped main / self; the live run of 2026-11-10 (agy 1.5.3, door and server on one store) showed agy hands its MCP server both worker variables
+
+D425 2026-11-11 [V] amends D417
+  trig:  the dogfood routine is run after a session on Antigravity CLI, to count the session's tool calls against the store [V]
+  resp:  the dogfood census of an Antigravity CLI session, counting its transcript's tool calls against the store by conversation and step, is deferred to `0.1.0-beta.5`; D417 stands in every other clause, and until then an agy session's captured calls are counted by hand against its lane at the release gate [V]
+  ->     fence-deferred agy-census
+  touches: D417 D402 D409 D415
+# the owner, 2026-11-10, ruling at the gate that the agy census (D417) goes to `0.1.0-beta.5` with the headless agy refusal binding, the README and doctor already saying what a refused call leaves; never recorded in the docket or on the fence until this entry, which the visionary ratified on 2026-11-11 with "ratify everything as proposed". The release gate of `0.1.0-beta.4` counted an agy worker's calls by hand on two machines
+
+D426 2026-11-11 [V] amends D418
+  trig:  an Antigravity CLI session the ticket door did not start starts a subagent, in `0.1.0-beta.4` [V]
+  resp:  in `0.1.0-beta.4` no helper is registered or linked for a subagent agy starts: its conversation is captured as a session of its own, as D421 has it, and its registration as a helper linked through its parent's call result waits with D422; D418 stands in what it says of the parent's `invoke_subagent` call, of a call agy refuses and of agy's transcript [V]
+  sib:   none -- a ratified entry promising a registered, linked helper that the build of `0.1.0-beta.4` does not make is what this prevents, not a behaviour
+  touches: D418 D421 D422 D415
+# D421 amended D416 by name and changed what D418 says of a subagent without naming it; this entry records that, as put to the visionary on 2026-11-11 and ratified with "ratify everything as proposed"
+
+D427 2026-11-11 [V] ratifies D372
+  resp:  status in a linked worktree lists that worktree's own live pointers, with a `scope` block naming the lane, the other lanes counted and how to widen, and status in the main checkout lists main's, as D372 has it [V]
+  ->     structural
+  serves: N23 N24 N20 N5
+  touches: D372 D242 D167 D190 D243 D169 D166 D158 D240 D288
+# the visionary, 2026-11-11, at the release gate of `0.1.0-beta.4`, "ratify everything as proposed", to the list put to him in plain words (journal, session of 2026-11-10 and 2026-11-11): the entries carrying his own quoted words as one batch, the nine drafted for his read and never answered by name (D379, D400, D401, D402, D404, D413, D414, D415, D417), and the four corrections of D425, D426, D400 and D380, under D333's rule that gate questions are resolved from the record first
+
+D428 2026-11-11 [V] ratifies D373
+  resp:  a session starting in a linked worktree opens its packet on that worktree's own thread, the newest live chapter summary of its lane, and a session starting in the main checkout opens on main's, as D373 has it [V]
+  ->     structural
+  serves: N23 N24 N20 N5
+  touches: D373 D236 D167 D372 D160 D162 D190
+# the visionary, 2026-11-11, at the release gate, the same "ratify everything as proposed" as D427
+
+D429 2026-11-11 [V] ratifies D374
+  resp:  a search by a session's own agent placed in a checkout defaults to its own lane, a subagent's to its role's trail, and `scope` `all` searches the whole store, the reply saying which ran, as D374 has it [V]
+  ->     structural
+  serves: N20 N21 N23 N24
+  touches: D374 D237 D167 D264 D150 D240 D147 D263 D151 D186 D336 D288 D309 D313
+# the visionary, 2026-11-11, at the release gate, the same "ratify everything as proposed" as D427
+
+D430 2026-11-11 [V] ratifies D375
+  resp:  the recovery snapshot row is bounded like a tool event, names what it quotes, never quotes another recovery snapshot, and is claimed only by a session of the lane it was written for, as D375 has it [V]
+  ->     structural
+  serves: N1 N4 N23 N5
+  touches: D375 D286 D35 D167 D372 D374
+# the visionary, 2026-11-11, at the release gate, the same "ratify everything as proposed" as D427
+
+D431 2026-11-11 [V] ratifies D376
+  resp:  a detached HEAD registers no branch, a worktree whose name another top level holds registers under a name of its own, a subagent type spelled as a lane is stamped under `agent:`, and a row's lane is read as the entry has it, as D376 has it [V]
+  ->     structural
+  serves: N5 N20 N21 N23
+  touches: D376 D243 D235 D228 D240 D190 D167 D169 D166 D372 D374
+# the visionary, 2026-11-11, at the release gate, the same "ratify everything as proposed" as D427
+
+D432 2026-11-11 [V] ratifies D377
+  resp:  the lane-scoped search ships in `0.1.0-beta.3`, built by the aBDD pathway though it was not formally scoped, as D377 has it [V]
+  ->     boundary
+  serves: N23 N24 N31
+  touches: D377 D374 D372 D373 D375 D376 D370
+# the visionary, 2026-11-11, at the release gate, the same "ratify everything as proposed" as D427
+
+D433 2026-11-11 [V] ratifies D378
+  resp:  a writer the store could not place may retire a chapter summary of the main lane that names no writer, the retirement recorded on both entries with who, what, when and how, as D378 has it [V]
+  ->     structural
+  serves: N5 N20 N21 N23
+  touches: D378 D376 D169 D235 D240 D241 D243 D166 D223 D293 D372 D373 D374
+# the visionary, 2026-11-11, at the release gate, the same "ratify everything as proposed" as D427
+
+D434 2026-11-11 [V] ratifies D379
+  resp:  a pointer's lane is read from the session registry at the moment of the read and never written onto a row, a row with no stamp being main's only where the registry never held its session, as D379 has it [V]
+  ->     structural
+  serves: N5 N20 N21 N23
+  touches: D379 D376 D378 D243 D372 D373 D374 D375 D240 D235 D169 D223
+# the visionary, 2026-11-11, at the release gate, the same "ratify everything as proposed" as D427
+
+D435 2026-11-11 [V] ratifies D380
+  resp:  every wait a hook makes on the store ends by the hook's own deadline counted by the clock, a second wait taking what is left of the first's and never a fresh budget; it is held by the deadline unit tests, no charter scenario citing it, as D380 has it [V]
+  ->     structural
+  serves: N3 N26 N2
+  touches: D380 D263 D314 D175
+# the visionary, 2026-11-11, at the release gate, the same "ratify everything as proposed" as D427
+
+D436 2026-11-11 [V] ratifies D381
+  resp:  install approves status, query, export and insert for Codex CLI one by one and writes no approval for clear, delete, import and merge, which go on asking, as D381 has it [V]
+  ->     structural
+  serves: N27 N15 N9 N26
+  touches: D381 D51 D288 D290 D370
+# the visionary, 2026-11-11, at the release gate, the same "ratify everything as proposed" as D427
+
+D437 2026-11-11 [V] ratifies D382
+  resp:  a server serving a worker whose lane it trusts sends the worker's own handshake, telling it that its first message holds its brief and to begin from there, with no orientation routine, as D382 has it [V]
+  ->     structural
+  serves: N29 N27 N14
+  touches: D382 D8 D371 D210 D264 D295 D298 D341 D342 D374
+# the visionary, 2026-11-11, at the release gate, the same "ratify everything as proposed" as D427
+
+D438 2026-11-11 [V] ratifies D383
+  resp:  Antigravity CLI enters the agent table as a client under the slug `agy`, its MCP entry written where agy reads it, as D399 and D413 have since amended, as D383 has it [V]
+  ->     structural
+  serves: N27 N9 N23 N26 N31 N32
+  touches: D383 D370 D109 D153 D161 D51 D29 D290 D381
+# the visionary, 2026-11-11, at the release gate, the same "ratify everything as proposed" as D427
+
+D439 2026-11-11 [V] ratifies D384
+  resp:  a worker's summary row holds its last output, then treecontext's line naming the exit code and the end of its error stream, as D397 has since amended, as D384 has it [V]
+  ->     structural
+  serves: N27 N32 N30 N31 N28
+  touches: D384 D288 D291 D292 D307 D316 D351
+# the visionary, 2026-11-11, at the release gate, the same "ratify everything as proposed" as D427
+
+D440 2026-11-11 [V] ratifies D385
+  resp:  install converges only what it owns in an agent's entry and keeps every key the developer added, saying what it kept and what it could not, as D385 has it [V]
+  ->     structural
+  serves: N9 N26
+  touches: D385 D51 D278 D53 D120 D290 D381
+# the visionary, 2026-11-11, at the release gate, the same "ratify everything as proposed" as D427
+
+D441 2026-11-11 [V] ratifies D386
+  resp:  an entry starts the server in capture mode only for an agent whose capture hooks are installed, as D406 has since amended for Codex CLI, as D386 has it [V]
+  ->     structural
+  serves: N23 N9 N3 N2
+  touches: D386 D29 D109 D208 D51 D385
+# the visionary, 2026-11-11, at the release gate, the same "ratify everything as proposed" as D427
+
+D442 2026-11-11 [V] ratifies D387
+  resp:  doctor's row for a client says whether a headless worker of it can use the tools, from what the client's configuration holds, naming what is missing and the command that sets it right, as D387 has it [V]
+  ->     structural
+  serves: N9 N26 N27
+  touches: D387 D161 D208 D386 D51 D120 D290 D381 D383
+# the visionary, 2026-11-11, at the release gate, the same "ratify everything as proposed" as D427
+
+D443 2026-11-11 [V] ratifies D388
+  resp:  the README has a section on headless workers, giving for each client the `treecontext run` line that starts one, what install sets up, what is left to the developer and how a failed run reads, as D388 has it [V]
+  ->     structural
+  serves: N23 N25 N27
+  touches: D388 D370 D383 D153 D152 D381 D382 D384 D387
+# the visionary, 2026-11-11, at the release gate, the same "ratify everything as proposed" as D427
+
+D444 2026-11-11 [V] ratifies D389
+  resp:  the ticket door hands a worker none of its spawner's own client-session variables, by a named list per client kept in one place, as D389 has it [V]
+  ->     structural
+  serves: N32 N27 N8
+  touches: D389 D288 D294 D295 D298 D307 D335
+# the visionary, 2026-11-11, at the release gate, the same "ratify everything as proposed" as D427
+
+D445 2026-11-11 [V] ratifies D390
+  resp:  one approval rule holds for Claude Code, Codex CLI and Antigravity CLI: install approves the tools that read and write, beside the developer's own rules and never over them, with a recorded way back, as D390 has it [V]
+  ->     structural
+  serves: N27 N9 N15 N25 N26
+  touches: D390 D381 D383 D387 D388 D51 D290 D385 D156
+# the visionary, 2026-11-11, at the release gate, the same "ratify everything as proposed" as D427
+
+D446 2026-11-11 [V] ratifies D391
+  resp:  a curated dedup hit never modifies another lane's row, and a ticket-door worker's curated entries dedup within its own lane, as D391 has it [V]
+  ->     structural
+  serves: N5 N23 N27 N32 N17
+  touches: D391 D2 D169 D86 D9 D240 D288 D379
+# the visionary, 2026-11-11, at the release gate, the same "ratify everything as proposed" as D427
+
+D447 2026-11-11 [V] ratifies D392
+  resp:  curated dedup scoped to a hooks-door leg's own lane waits for `0.1.0-beta.5` and its workflows, as D392 has it [V]
+  ->     fence-deferred leg-lane-dedup
+  touches: D392 D391 D279 D169
+# the visionary, 2026-11-11, at the release gate, the same "ratify everything as proposed" as D427
+
+D448 2026-11-11 [V] ratifies D393
+  resp:  an exit by signal is a cut, whoever sent the signal, and what is left of the worker's process group is ended with it on Linux and macOS, as D393 has it [V]
+  ->     structural
+  serves: N27 N28
+  touches: D393 D292 D279 D291 D288 D384
+# the visionary, 2026-11-11, at the release gate, the same "ratify everything as proposed" as D427
+
+D449 2026-11-11 [V] ratifies D394
+  resp:  the wider promise, that nothing a ticketed worker started outlives a cut, is declined until a live probe of each CLI, as D394 has it [V]
+  ->     fence-deferred cut-reaches-every-descendant
+  touches: D394 D393 D292
+# the visionary, 2026-11-11, at the release gate, the same "ratify everything as proposed" as D427
+
+D450 2026-11-11 [V] ratifies D395
+  resp:  a SessionEnd hook is declined for now, session liveness being ruled once, in `0.1.0-beta.5`, as D395 has it [V]
+  ->     fence-deferred session-end-hook
+  touches: D395 D190 D216 D297
+# the visionary, 2026-11-11, at the release gate, the same "ratify everything as proposed" as D427
+
+D451 2026-11-11 [V] ratifies D396
+  resp:  a self registration's stop moment is declined until `0.1.0-beta.5`, and the writer that recorded one at a clear is out of the build, as D396 has it [V]
+  ->     fence-deferred self-stop-moment
+  touches: D396 D190 D216 D240 D395
+# the visionary, 2026-11-11, at the release gate, the same "ratify everything as proposed" as D427
+
+D452 2026-11-11 [V] ratifies D397
+  resp:  the worker's error stream is handed on after the run settles and never closed by the door, so a background process still writing to it is not cut off while the spawner lives, as D397 has it [V]
+  ->     structural
+  serves: N27 N32 N30 N31 N28
+  touches: D397 D384 D288 D291 D292 D307 D316 D351 D393
+# the visionary, 2026-11-11, at the release gate, the same "ratify everything as proposed" as D427
+
+D453 2026-11-11 [V] ratifies D398
+  resp:  a run's export names each leg whose summary row holds the end of its worker's error stream, and redacts nothing, as D398 has it [V]
+  ->     structural
+  serves: N31 N28
+  touches: D398 D318 D368 D300 D384 D397
+# the visionary, 2026-11-11, at the release gate, the same "ratify everything as proposed" as D427
+
+D454 2026-11-11 [V] ratifies D399
+  resp:  Gemini CLI is retired as an archived platform: install never detects or wires it, uninstall's archived sweep removes what an earlier install wrote, and doctor names what is left, as D399 has it [V]
+  ->     structural
+  serves: N9 N23
+  touches: D399 D383 D161 D154 D208 D109 D152 D153 D29 D51 D386
+# the visionary, 2026-11-11, at the release gate, the same "ratify everything as proposed" as D427
+
+D455 2026-11-11 [V] ratifies D400
+  resp:  a tool call that fails on Claude Code is journaled as a successful one is, with the client's error text as its Output section, marked `outcome` `failed` or `interrupted`, carrying the client's id for the call; its clause on Codex CLI's verbatim copy of the block is retired by D406, which gives Codex its own block, as D400 has it [V]
+  ->     structural
+  serves: N3 N2
+  touches: D400 D3 D270 D161 D154 D208 D250 D190
+# the visionary, 2026-11-11, at the release gate, the same "ratify everything as proposed" as D427
+
+D456 2026-11-11 [V] ratifies D401
+  resp:  a call Claude Code resolves without an event of its own is journaled once, from the client's account of its batch, marked `captured_from` `batch`, saying what the client said and not why the call did not run, as D401 has it [V]
+  ->     structural
+  serves: N3 N2
+  touches: D401 D3 D400 D80 D190 D314
+# the visionary, 2026-11-11, at the release gate, the same "ratify everything as proposed" as D427
+
+D457 2026-11-11 [V] ratifies D402
+  resp:  the repository keeps the client's hook events as a dated list, each wired or named with what the journal does not capture because of it, a step that says an event is as the client sent it replays a recording, and the dogfood census counts a real session's calls against the store, as D402 has it [V]
+  ->     structural
+  serves: N3 N2
+  touches: D402 D3 D400 D401 D250 D51
+# the visionary, 2026-11-11, at the release gate, the same "ratify everything as proposed" as D427
+
+D458 2026-11-11 [V] ratifies D403
+  resp:  a worker registration records which numbering of processes its process id belongs to, a reader in another numbering never judges it by its own process table, and a worker wrongly taken for gone is set right by its door, as D403 has it [V]
+  ->     structural
+  serves: N28 N27 N32
+  touches: D403 D297 D317 D307 D288 D384 D393 D342
+# the visionary, 2026-11-11, at the release gate, the same "ratify everything as proposed" as D427
+
+D459 2026-11-11 [V] ratifies D404
+  resp:  where the client's own event states how a call ended, the entry's class is the client's word and its text decides nothing, the class being read from the text elsewhere, and each entry says which decided, as D404 has it [V]
+  ->     structural
+  serves: N3 N2
+  touches: D404 D400 D401 D402 D102 D3
+# the visionary, 2026-11-11, at the release gate, the same "ratify everything as proposed" as D427
+
+D460 2026-11-11 [V] ratifies D406
+  resp:  at Codex CLI `0.167.0` or later install writes Codex its own hooks block by default, beside the developer's hooks and by text edits that keep theirs, and the experimental capture flag is gone, as D406 has it [V]
+  ->     structural
+  serves: N3 N23 N9 N26
+  touches: D406 D386 D208 D161 D154 D30 D109 D29 D57 D51 D385 D361 D381 D402
+# the visionary, 2026-11-11, at the release gate, the same "ratify everything as proposed" as D427
+
+D461 2026-11-11 [V] ratifies D407
+  resp:  doctor's row for Codex CLI says, from Codex's own account, whether treecontext's hooks are written and trusted, and install never writes Codex's record of trusted hooks, as D407 has it [V]
+  ->     structural
+  serves: N9 N3 N23
+  touches: D407 D161 D208 D386 D387 D406 D51
+# the visionary, 2026-11-11, at the release gate, the same "ratify everything as proposed" as D427
+
+D462 2026-11-11 [V] ratifies D408
+  resp:  a Codex CLI session is journaled as a Claude Code session is, a call Codex reported no result for and a turn that never ended each kept as an entry that says so, as D408 has it [V]
+  ->     structural
+  serves: N3 N2
+  touches: D408 D3 D400 D401 D404 D249 D270 D314 D406
+# the visionary, 2026-11-11, at the release gate, the same "ratify everything as proposed" as D427
+
+D463 2026-11-11 [V] ratifies D409
+  resp:  Codex CLI's hook events are kept as a dated list beside its block, and the capture census reads a Codex transcript, saying which calls it found by Codex's id and which it could only infer, as D409 has it [V]
+  ->     structural
+  serves: N3 N2
+  touches: D409 D402 D400 D401 D395 D406 D408 D286 D375
+# the visionary, 2026-11-11, at the release gate, the same "ratify everything as proposed" as D427
+
+D464 2026-11-11 [V] ratifies D410
+  resp:  a Codex CLI main registers a self through its SessionStart hook, so the rows it writes through the tools are stamped with its lane, as D410 has it [V]
+  ->     structural
+  serves: N27 N29 N32 N2
+  touches: D410 D190 D167 D236 D373 D375 D294 D295 D298 D240 D379 D406
+# the visionary, 2026-11-11, at the release gate, the same "ratify everything as proposed" as D427
+
+D465 2026-11-11 [V] ratifies D411
+  resp:  a Codex CLI subagent is registered at its start, retired at its stop, its last reply kept as its summary, and is never a leg, as D411 has it [V]
+  ->     structural
+  serves: N2 N27 N3
+  touches: D411 D305 D320 D392 D190 D371 D408 D409
+# the visionary, 2026-11-11, at the release gate, the same "ratify everything as proposed" as D427
+
+D466 2026-11-11 [V] ratifies D412
+  resp:  capture is promised where it is verified live, on Claude Code, on Codex CLI from `0.167.0` with its hooks trusted and on Antigravity CLI from `1.5.3` with its named hook written, the README saying so, as D412 has it [V]
+  ->     structural
+  serves: N23 N3 N2
+  touches: D412 D153 D29 D30 D370 D388 D406 D408 D411
+# the visionary, 2026-11-11, at the release gate, the same "ratify everything as proposed" as D427
+
+D467 2026-11-11 [V] ratifies D413
+  resp:  where agy's version reads `1.5.3` or later install writes agy its own named hook, `treecontext`, for SessionStart, PreInvocation, PostToolUse, PostInvocation and Stop and never PreToolUse, the developer's own named hooks never written over, moved or removed, as D413 has it [V]
+  ->     structural
+  serves: N3 N9 N23 N27
+  touches: D413 D383 D399 D386 D385 D361 D390 D51 D29 D402 D406
+# the visionary, 2026-11-11, at the release gate, the same "ratify everything as proposed" as D427
+
+D468 2026-11-11 [V] ratifies D414
+  resp:  doctor's Antigravity CLI row reads agy's hooks from agy's own files and says which state it found with its remedy, naming agy's version beside the one recorded and agy's permission preset, as D414 has it [V]
+  ->     structural
+  serves: N9 N23 N26 N27
+  touches: D414 D387 D161 D208 D386 D413 D388 D384 D51
+# the visionary, 2026-11-11, at the release gate, the same "ratify everything as proposed" as D427
+
+D469 2026-11-11 [V] ratifies D415
+  resp:  an Antigravity CLI session is journaled from agy's events and agy's transcript: the prompt once per turn, each call with its output read from the transcript, the reply read at `Stop`, and a call whose output cannot be read kept and saying so, as D415 has it [V]
+  ->     structural
+  serves: N3 N2
+  touches: D415 D3 D270 D400 D404 D412 D314 D190 D413 D402
+# the visionary, 2026-11-11, at the release gate, the same "ratify everything as proposed" as D427
+
+D470 2026-11-11 [V] ratifies D416
+  resp:  a worker the ticket door started on Antigravity CLI is never a self and its captured rows land in its worker's lane; the entry's self registration of an agy main is amended by D421 and deferred by D422, as D416 has it [V]
+  ->     structural
+  serves: N27 N32 N18 N31
+  touches: D416 D190 D295 D294 D288 D374 D379 D383 D413 D415
+# the visionary, 2026-11-11, at the release gate, the same "ratify everything as proposed" as D427
+
+D471 2026-11-11 [V] ratifies D417
+  resp:  the repository keeps agy's hook events as a dated list in the form D402 gives Claude Code's, with recordings from a real agy held to their own fixture directory, as limited by D425, which defers its census of an agy session, as D417 has it [V]
+  ->     structural
+  serves: N3 N2
+  touches: D417 D402 D413 D415 D3 D250 D51
+# the visionary, 2026-11-11, at the release gate, the same "ratify everything as proposed" as D427
+
+D472 2026-11-11 [V] ratifies D418
+  resp:  a subagent agy starts is journaled in its parent as the tool call it is, a call agy refuses in a headless run leaves no entry, and agy's transcript is read in the layout recorded at `1.5.3`, as limited by D426, D421 and D422, which register and link no helper for it, as D418 has it [V]
+  ->     structural
+  serves: N3 N27 N31
+  touches: D418 D370 D383 D294 D320 D374 D376 D384 D411 D415 D416 D401
+# the visionary, 2026-11-11, at the release gate, the same "ratify everything as proposed" as D427
+
+D473 2026-11-11 [V] ratifies D419
+  resp:  a `.git` that is no repository is not a project root: the store binding and the config file follow the nearest repository git accepts, else the project's own directory, and doctor names what was passed over, as D419 has it [V]
+  ->     structural
+  serves: N6 N9 N7
+  touches: D419 D255 D51
+# the visionary, 2026-11-11, at the release gate, the same "ratify everything as proposed" as D427
+
+D474 2026-11-11 [V] ratifies D420
+  resp:  a supersession asked under a writer stamp that is not exact is held on the new entry as pending and applied when the call's echo names the writer, never sorted by the provisional lane and never dropped, as D420 has it [V]
+  ->     structural
+  serves: N1 N5 N20 N2
+  touches: D420 D240 D169 D241 D379 D190
+# the visionary, 2026-11-11, at the release gate, the same "ratify everything as proposed" as D427
+
+D475 2026-11-11 [V] ratifies D421
+  resp:  an Antigravity CLI main is best effort in `0.1.0-beta.4`: captured through the named hook, kept in its own session, in no checkout's lane, registering no self, a subagent's conversation captured the same way and not linked, as D421 has it [V]
+  ->     structural
+  serves: N3 N27
+  touches: D421 D416 D418 D415 D294 D413 D414
+# the visionary, 2026-11-11, at the release gate, the same "ratify everything as proposed" as D427
+
+D476 2026-11-11 [V] ratifies D422
+  resp:  the self registration of an Antigravity CLI main and a subagent registered as a linked helper are deferred to `0.1.0-beta.5` or a user's request, as D422 has it [V]
+  ->     fence-deferred agy-main-identity
+  touches: D422 D416 D418 D421
+# the visionary, 2026-11-11, at the release gate, the same "ratify everything as proposed" as D427
+
+D477 2026-11-11 [V] ratifies D423
+  resp:  support is promised in tiers, said in one table in the README with every difference between the clients named: Claude Code as the main in full, workers of any CLI through the doors, Codex CLI and Antigravity CLI mains best effort, as D423 has it [V]
+  ->     structural
+  serves: N9 N23 N27
+  touches: D423 D406 D410 D413 D416 D421 D422 D288 D294
+# the visionary, 2026-11-11, at the release gate, the same "ratify everything as proposed" as D427
+
+D478 2026-11-11 [V] ratifies D424
+  resp:  a worker of the ticket door whose server opened a store holding no registration for it writes under its ticket's claim, keyed to the session its door named and stamped `ticket-claim`, never as the main session, as D424 has it [V]
+  ->     structural
+  serves: N9 N23
+  touches: D424 D288 D293 D376 D423
+# the visionary, 2026-11-11, at the release gate, the same "ratify everything as proposed" as D427
