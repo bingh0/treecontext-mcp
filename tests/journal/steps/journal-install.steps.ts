@@ -2488,7 +2488,10 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
     // The premise: a direct call, and shell commands run through code mode.
     expect(calls.filter((c) => c.codex?.made === 'direct').map((c) => c.name)).toEqual(['collaborationspawn_agent', 'collaborationwait_agent'])
     expect(calls.filter((c) => c.codex?.made === 'code-mode' && c.name === 'Bash').map((c) => c.input['command'])).toEqual(['head -c 13 notes.txt', 'ls /no-such-path-fixture', 'touch /etc/tc-fixture-probe'])
-    w.cxRows = classify(calls, storeViewOf(new DatabaseSync(w.dbPath!, { readOnly: true })))
+    // Closed once read: an open handle keeps Windows from removing the
+    // store's directory when the scenario ends.
+    const view = new DatabaseSync(w.dbPath!, { readOnly: true })
+    try { w.cxRows = classify(calls, storeViewOf(view)) } finally { view.close() }
   })
   reg.define(/^the capture census counts the session's calls against the store$/, (w: CensusWorld) => {
     w.cxCensus = spawnNodeTs(join(TS_ROOT, 'scripts', 'capture-census.ts'), [...w.cxRollouts!.flatMap((f) => ['--codex', f]), '--store', w.dbPath!], { home: w.home! })
@@ -2606,9 +2609,11 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
     // Every command changed, and Codex itself no longer counts any trusted.
     const text = readFileSync(cxHooksFile(w), 'utf8')
     // The needle fires: before the move every command named the old home.
-    expect(w.rxText).toContain(`${w.rxOldHome!}/`)
+    // A command spells its script with forward slashes on every platform.
+    const oldHome = `${w.rxOldHome!.replace(/\\/g, '/')}/`
+    expect(w.rxText).toContain(oldHome)
     // step-lint: allow unearned-absence -- the line above proves the needle fires on the file before the move
-    expect(text).not.toContain(`${w.rxOldHome!}/`)
+    expect(text).not.toContain(oldHome)
     const seen = await ourHooksSeen(w)
     expect(seen).toHaveLength(Object.keys(codexHooksBlock()).length)
     expect(seen.filter((h) => h.trustStatus === 'trusted')).toEqual([])
