@@ -267,7 +267,7 @@ function runNamedCommand(w: ClientsWorld, command: string): void {
 export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
   // ── every matrix row carries its client, its events, its date and one status (D153)
   reg.define(/^the documentation's compatibility matrix$/, (w: ClientsWorld) => {
-    w.readme = readFileSync(join(TS_ROOT, 'README.md'), 'utf8')
+    w.readme = readFileSync(join(TS_ROOT, 'README.md'), 'utf8').replace(/\r\n/g, '\n')
     // The matrix is THE documentation's: every hook page links to it, so a
     // developer who starts from docs/hooks lands on the same table.
     const hookDocs = readdirSync(join(TS_ROOT, 'docs', 'hooks')).filter(f => f.endsWith('.md'))
@@ -312,7 +312,7 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
 
   // ── the orchestration matrix, its own table (D370) ─────────────────────
   reg.define(/^the documentation's orchestration matrix$/, (w: ClientsWorld) => {
-    w.readme = readFileSync(join(TS_ROOT, 'README.md'), 'utf8')
+    w.readme = readFileSync(join(TS_ROOT, 'README.md'), 'utf8').replace(/\r\n/g, '\n')
   })
   reg.define(/^the developer sees a table apart from the compatibility matrix, one row each for Claude Code, Codex CLI and Antigravity CLI, and one column per orchestration role$/, (w: ClientsWorld) => {
     const m = parseOrchestrationMatrix(w.readme!)
@@ -535,7 +535,7 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
     const c = w.clause!
     // The mode is the README matrix's Mode cell, exactly, so a reworded
     // parenthetical on either side fails, and it carries the feature's phrase.
-    const readmeRow = parseMatrix(readFileSync(join(TS_ROOT, 'README.md'), 'utf8')).find(r => r.client.startsWith(client!))
+    const readmeRow = parseMatrix(readFileSync(join(TS_ROOT, 'README.md'), 'utf8').replace(/\r\n/g, '\n')).find(r => r.client.startsWith(client!))
     expect(readmeRow, `the README matrix has no row for ${client}`).toBeDefined()
     expect(c.mode).toBe(readmeRow!.mode)
     expect(c.mode).toContain(mode)
@@ -610,7 +610,7 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
     const [client, verdict] = captures as string[]
     expect(client).toBe(w.clientName)
     const c = w.clause!
-    const readmeRow = parseMatrix(readFileSync(join(TS_ROOT, 'README.md'), 'utf8')).find(r => r.client === client)
+    const readmeRow = parseMatrix(readFileSync(join(TS_ROOT, 'README.md'), 'utf8').replace(/\r\n/g, '\n')).find(r => r.client === client)
     expect(c.mode).toBe(readmeRow!.mode)
     expect(c.state).toContain(`treecontext's hooks in ${join(w.ihome!, '.codex', 'hooks.json')}: present and ${verdict} with Codex's block`)
     if (verdict === 'consistent') {
@@ -1173,7 +1173,7 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
 
   // ── the README's headless-workers section (D388) ───────────────────────
   reg.define(/^the README's section on headless workers$/, (w: ClientsWorld) => {
-    const readme = readFileSync(join(TS_ROOT, 'README.md'), 'utf8')
+    const readme = readFileSync(join(TS_ROOT, 'README.md'), 'utf8').replace(/\r\n/g, '\n')
     const start = readme.indexOf('\n### Headless workers')
     expect(start, 'the README has no "Headless workers" section').toBeGreaterThan(-1)
     const rest = readme.slice(start + 1)
@@ -1276,7 +1276,7 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
     expect(w.workerPart!.replace(/\s+/g, ' ')).toMatch(/Abridged here: the stream was 1,200 characters, all of them in the row, and only its end is shown/)
   })
   reg.define(/^the developer reads how to turn tool approvals off and on again$/, () => {
-    const readme = readFileSync(join(TS_ROOT, 'README.md'), 'utf8')
+    const readme = readFileSync(join(TS_ROOT, 'README.md'), 'utf8').replace(/\r\n/g, '\n')
     expect(readme).toContain('treecontext config tool-approvals off [--agent claude|codex|agy]')
     expect(readme).toContain('treecontext config tool-approvals on  [--agent claude|codex|agy]')
     expect(readme).toContain('treecontext install --no-tool-approvals')
@@ -1578,7 +1578,7 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
   // whitespace flattened so a line break never hides a phrase.
   const codexParts = new WeakMap<ClientsWorld, string>()
   reg.define(/^the README$/, (w: ClientsWorld) => {
-    codexParts.set(w, readFileSync(join(TS_ROOT, 'README.md'), 'utf8'))
+    codexParts.set(w, readFileSync(join(TS_ROOT, 'README.md'), 'utf8').replace(/\r\n/g, '\n'))
   })
   reg.define(/^a developer reads its parts on Codex CLI$/, (w: ClientsWorld) => {
     const readme = codexParts.get(w)!
@@ -1675,7 +1675,7 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
   // Read from the README itself: its "Antigravity CLI capture" section
   // (§6, whitespace flattened) and agy's row of the orchestration matrix.
   reg.define(/^the README's install section, its compatibility matrix and its orchestration matrix$/, (w: ClientsWorld) => {
-    w.readme = readFileSync(join(TS_ROOT, 'README.md'), 'utf8')
+    w.readme = readFileSync(join(TS_ROOT, 'README.md'), 'utf8').replace(/\r\n/g, '\n')
     for (const heading of ['\n## 2. Install', '\n### Compatibility matrix', '\n### Orchestration matrix']) {
       expect(w.readme.includes(heading), `the README has no "${heading.trim()}" heading`).toBe(true)
     }

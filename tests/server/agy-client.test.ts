@@ -588,21 +588,26 @@ describe.skipIf(process.platform === 'win32')('install and uninstall for agy (D3
 })
 
 describe("the machine's own agy, hidden from a sandboxed child's PATH", () => {
-  test('on Linux and macOS a directory holding one is mirrored without it; on Windows the PATH is left whole', () => {
+  test('a directory holding one is mirrored without it, on every platform, its other commands and directories kept', () => {
     const dir = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-path-')))
     dirs.push(dir)
-    for (const n of ['agy', 'node-ish']) writeFileSync(join(dir, n), '', { mode: 0o755 })
+    // The client under each name a platform gives it, another command, and
+    // a directory beside them (npm's shims find `node_modules` there).
+    const clients = process.platform === 'win32' ? ['agy.exe', 'claude.cmd', 'claude.ps1', 'claude'] : ['agy', 'claude']
+    for (const n of [...clients, 'node-ish']) writeFileSync(join(dir, n), 'x', { mode: 0o755 })
+    mkdirSync(join(dir, 'node_modules'))
+    writeFileSync(join(dir, 'node_modules', 'inside'), 'kept')
     const was = process.env['PATH']
     process.env['PATH'] = `${dir}${delimiter}${was ?? ''}`
     try {
-      const path = `${dir}${delimiter}/usr/bin`
-      expect(pathHidingMachineClients(path, 'win32')).toBe(path)
-      if (process.platform !== 'win32') {
-        const hidden = pathHidingMachineClients(path, process.platform)!.split(delimiter)
-        expect(hidden).toHaveLength(2)
-        expect(hidden[0]).not.toBe(dir)
-        expect(readdirSync(hidden[0]!)).toEqual(['node-ish'])
-      }
+      const other = process.platform === 'win32' ? 'C:\\Windows' : '/usr/bin'
+      const hidden = pathHidingMachineClients(`${dir}${delimiter}${other}`)!.split(delimiter)
+      expect(hidden).toHaveLength(2)
+      expect(hidden[0]).not.toBe(dir)
+      expect(hidden[1]).toBe(other)
+      expect(readdirSync(hidden[0]!).sort()).toEqual(['node-ish', 'node_modules'])
+      expect(readFileSync(join(hidden[0]!, 'node-ish'), 'utf8')).toBe('x')
+      expect(readFileSync(join(hidden[0]!, 'node_modules', 'inside'), 'utf8')).toBe('kept')
     } finally {
       process.env['PATH'] = was
     }

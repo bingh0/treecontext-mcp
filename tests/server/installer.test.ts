@@ -9,6 +9,9 @@ import { fileURLToPath } from 'node:url'
 import { execSync, execFileSync, spawnSync } from 'node:child_process'
 import { parse as parseToml } from 'smol-toml'
 import type { AgentDefinition } from '../../src/server/agents.js'
+
+/** A command that exists on this platform and is not the launcher install writes: a developer's own, valid one. */
+const EXISTING_COMMAND = process.platform === 'win32' ? (process.env['ComSpec'] ?? 'C:\\Windows\\System32\\cmd.exe') : '/bin/sh'
 import {
   upsertJsonMcp, removeJsonMcp,
   upsertTomlMcp, removeTomlMcp,
@@ -483,14 +486,15 @@ describe('convergeMcpEntry and the upserts that use it (D385)', () => {
     const p = join(dir, 'config.toml')
     writeFileSync(p, [
       '[mcp_servers.treecontext]',
-      'command = "/bin/sh"',
+      // A command that exists on this platform and is not install's own.
+      `command = ${JSON.stringify(EXISTING_COMMAND)}`,
       'args = ["serve", "--store", "pinned"]',
       'env_vars = ["TREECONTEXT_TICKET", "TREECONTEXT_WORKER_SESSION"]',
       'default_tools_approval_mode = "prompt"',
     ].join('\n'))
     // Without force a command that exists is the developer's to keep.
     expect(upsertTomlMcp(p, codexWant(), false, false).status).toBe('updated')
-    expect(tomlEntry(p)['command']).toBe('/bin/sh')
+    expect(tomlEntry(p)['command']).toBe(EXISTING_COMMAND)
     expect(tomlEntry(p)['args']).toEqual(['serve', '--transport', 'stdio', '--no-capture', '--store', 'pinned'])
     // With force install's command replaces it; the developer's keys stay.
     expect(upsertTomlMcp(p, codexWant(), true, false).status).toBe('updated')
@@ -595,10 +599,10 @@ describe('convergeMcpEntry and the upserts that use it (D385)', () => {
 
   it('names what it cannot keep: an args string, a non-list env_vars, a replaced type; a single env_vars name is kept as a list', () => {
     const json = convergeMcpEntry(
-      { type: 'sse', command: '/bin/sh', args: '--store pinned' },
+      { type: 'sse', command: EXISTING_COMMAND, args: '--store pinned' },
       { type: 'stdio', command: launcher(), args: ['serve', '--transport', 'stdio', '--no-capture'] }, false,
     )
-    expect(json.entry).toEqual({ type: 'stdio', command: '/bin/sh', args: ['serve', '--transport', 'stdio', '--no-capture'] })
+    expect(json.entry).toEqual({ type: 'stdio', command: EXISTING_COMMAND, args: ['serve', '--transport', 'stdio', '--no-capture'] })
     expect(json.dropped).toEqual(['args "--store pinned" (not a list)', 'type "sse" (install writes "stdio")'])
     const one = convergeMcpEntry({ command: launcher(), args: ['serve', '--transport', 'stdio', '--no-capture'], env_vars: 'MY_TOKEN' }, codexWant(), false)
     expect(one.entry['env_vars']).toEqual(['MY_TOKEN', 'TREECONTEXT_TICKET', 'TREECONTEXT_WORKER_SESSION'])

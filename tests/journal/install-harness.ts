@@ -238,6 +238,16 @@ export function agyReading(w: InstallWorld, version: string): void {
   if (says !== version) writeFakeAgy(w.iAgyBin!, version, real)
 }
 
+/** What the `agy` of the world's own directory answers to `--version`, run
+ *  as install runs it: by name, through the shell on Windows (where the
+ *  stand-in is a batch file), with that directory first on PATH. */
+export function worldAgyVersion(w: InstallWorld): string {
+  const win = process.platform === 'win32'
+  const pathKey = Object.keys(process.env).find(k => k.toUpperCase() === 'PATH') ?? 'PATH'
+  const env = { ...process.env, [pathKey]: `${w.iAgyBin!}${delimiter}${process.env[pathKey] ?? ''}` }
+  return spawnSync('agy', ['--version'], { encoding: 'utf8', env, shell: win, timeout: 60_000 }).stdout.trim()
+}
+
 /**
  * Antigravity CLI's OWN cli against the redirected HOME — the other side
  * for agy: it reads `~/.gemini/config/mcp_config.json` under HOME (checked

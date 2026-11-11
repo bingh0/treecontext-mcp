@@ -578,7 +578,8 @@ describe('the end of the error stream (D384)', () => {
 describe('a run the door signalled is a cut, whatever its exit code (D292)', () => {
   const trap = ['-c', 'trap "exit 143" TERM; cat >/dev/null; sleep 777 & wait']
   const ticket = { run: 'r1', key: 'k', role: 'builder', checkpointer: 'builder', parent: { id: 'p1' } }
-  it('a worker that traps the door\'s SIGTERM and exits with a code is retired cut: no summary row, no send-back, a recovery leg next', async () => {
+  // A signal cannot be trapped on Windows: the worker ends by it, with no code.
+  it.skipIf(process.platform === 'win32')('a worker that traps the door\'s SIGTERM and exits with a code is retired cut: no summary row, no send-back, a recovery leg next', async () => {
     const s = await open()
     try {
       const r = await spawnWorker({ store: s, ticket, command: 'sh', args: trap, timeoutMs: 1000 })

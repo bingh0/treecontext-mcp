@@ -17,7 +17,7 @@
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { createRequire } from 'node:module'
-import { existsSync, mkdtempSync, readdirSync, rmSync, symlinkSync } from 'node:fs'
+import { copyFileSync, existsSync, linkSync, mkdtempSync, readdirSync, rmSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { sandboxedEnv } from './home.js'
@@ -95,7 +95,24 @@ export const DETECTED_CLIENT_COMMANDS = ['agy', 'claude'] as const
 const mirrors = new Map<string, string>()
 let mirrorRoot: string | null = null
 
-/** A directory of the machine's PATH holding a detected client, mirrored without it: every other name there symlinked. */
+/** Whether a file name in a PATH directory is one of the detected clients'
+ *  commands: the bare name, or on Windows the name with any extension
+ *  (`claude.cmd`, `claude.ps1`, `agy.exe`). */
+function isClientCommand(name: string): boolean {
+  const stem = process.platform === 'win32' ? name.toLowerCase().replace(/\.[^.]+$/, '') : name
+  return (DETECTED_CLIENT_COMMANDS as readonly string[]).includes(stem)
+}
+
+/**
+ * A directory of the machine's PATH holding a detected client, mirrored
+ * without it. On Linux and macOS every other name there is symlinked. On
+ * Windows, where a symlink needs an elevated or developer-mode account, a
+ * file is hard-linked (copied where the link is refused, as across volumes)
+ * and a directory is joined by a junction, which needs no privilege: npm's
+ * global directory holds a client's `.cmd` beside `node`, `npx` and
+ * treecontext's own shim, and each shim finds its `node_modules` beside
+ * itself, so the junction keeps the shims working from the mirror.
+ */
 function mirrorWithoutClients(dir: string): string {
   const cached = mirrors.get(dir)
   if (cached !== undefined) return cached
@@ -105,38 +122,44 @@ function mirrorWithoutClients(dir: string): string {
     process.once('exit', () => { try { rmSync(root, { recursive: true, force: true }) } catch { /* best effort */ } })
   }
   const mirror = mkdtempSync(join(mirrorRoot, 'd-'))
-  for (const name of readdirSync(dir)) {
-    if ((DETECTED_CLIENT_COMMANDS as readonly string[]).includes(name)) continue
-    try { symlinkSync(join(dir, name), join(mirror, name)) } catch { /* a name that cannot be linked is not a command we need */ }
+  const win = process.platform === 'win32'
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const name = entry.name
+    if (isClientCommand(name)) continue
+    const from = join(dir, name)
+    const to = join(mirror, name)
+    try {
+      if (!win) symlinkSync(from, to)
+      else if (entry.isDirectory()) symlinkSync(from, to, 'junction')
+      else {
+        try { linkSync(from, to) } catch { copyFileSync(from, to) }
+      }
+    } catch { /* a name that cannot be linked is not a command we need */ }
   }
   mirrors.set(dir, mirror)
   return mirror
 }
 
 function holdsClient(dir: string): boolean {
-  return DETECTED_CLIENT_COMMANDS.some(c => existsSync(join(dir, c)))
+  if (process.platform !== 'win32') return DETECTED_CLIENT_COMMANDS.some(c => existsSync(join(dir, c)))
+  try { return readdirSync(dir).some(n => isClientCommand(n)) } catch { return false }
 }
 
 /**
  * A PATH whose directories from this machine's own PATH show no detected
- * client command. On Linux and macOS each such directory is replaced by a
- * mirror of it without `agy` and `claude`.
- *
- * On Windows the hiding is off, and the PATH is returned as it is. A mirror
- * needs symlinks, which Windows grants only to an elevated or developer-mode
- * account; dropping the directory instead would take every other command in
- * it too (npm's global directory holds a client's `.cmd` beside `node`, `npx` and
- * treecontext's own shim, which the children need). Shadowing the two with
- * stub `.cmd` files first on PATH does not hide them either: install detects
- * a client by its command's file on PATH (commandOnPath) without running it,
- * so a stub reads as the client installed. A Windows machine that has `agy`
- * on PATH therefore detects it in a sandboxed install world;
- * the scenarios that depend on their absence are verified on Linux and macOS.
+ * client command: each such directory is replaced by a mirror of it without
+ * `agy` and `claude` (mirrorWithoutClients). Shadowing the two with stubs
+ * first on PATH would not hide them: install detects a client by its
+ * command's file on PATH (commandOnPath) without running it, so a stub reads
+ * as the client installed.
  */
-export function pathHidingMachineClients(path: string | undefined, platform: NodeJS.Platform = process.platform): string | undefined {
-  if (path === undefined || platform === 'win32') return path
-  const ambient = new Set((process.env['PATH'] ?? '').split(delimiter).filter(Boolean))
-  return path.split(delimiter).map(d => (!d || !ambient.has(d) || !holdsClient(d) ? d : mirrorWithoutClients(d))).join(delimiter)
+export function pathHidingMachineClients(path: string | undefined): string | undefined {
+  if (path === undefined) return path
+  const win = process.platform === 'win32'
+  // Windows compares directories without regard to case or a trailing slash.
+  const norm = (d: string): string => (win ? d.replace(/[\\/]+$/, '').toLowerCase() : d)
+  const ambient = new Set((process.env['PATH'] ?? process.env['Path'] ?? '').split(delimiter).filter(Boolean).map(norm))
+  return path.split(delimiter).map(d => (!d || !ambient.has(norm(d)) || !holdsClient(d) ? d : mirrorWithoutClients(d))).join(delimiter)
 }
 
 /** Child-process env: home sandboxed, every leak key scrubbed, overrides

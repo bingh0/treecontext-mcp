@@ -797,6 +797,20 @@ export function writeFakeGemini(dir: string): void {
 export function writeFakeAgy(dir: string, version: string | null, realForMcpList?: string): void {
   // A link to the real agy is replaced, never written through.
   rmSync(join(dir, 'agy'), { force: true })
+  if (process.platform === 'win32') {
+    // The batch form: Windows runs `agy` through its shell, which takes the
+    // first `agy.<ext>` of the first PATH directory holding one, so the
+    // linked `agy.exe` goes and `agy.cmd` answers. `exit /b` with no code
+    // hands on the real agy's own (inside a block, %ERRORLEVEL% would be
+    // read before the command ran).
+    rmSync(join(dir, 'agy.exe'), { force: true })
+    const v = version === null ? 'echo agy: cannot report a version 1>&2\r\nexit /b 1' : `echo ${version}\r\nexit /b 0`
+    const list = realForMcpList
+      ? `if "%~1"=="mcp" if "%~2"=="list" (\r\n"${realForMcpList}" %*\r\nexit /b\r\n)\r\n`
+      : ''
+    writeFileSync(join(dir, 'agy.cmd'), `@echo off\r\nif "%~1"=="--version" (\r\n${v}\r\n)\r\n${list}echo stand-in agy: %1 is not stood in for 1>&2\r\nexit /b 2\r\n`)
+    return
+  }
   const q = (t: string): string => `'${t.replace(/'/g, `'\\''`)}'`
   writeFileSync(join(dir, 'agy'), [
     '#!/bin/sh',

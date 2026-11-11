@@ -15,7 +15,7 @@ import { concreteForms, documentedCommands, isSynopsis, runLineRefusal, shellWor
 // through the CLI in a home of its own, with --dry-run where the command
 // has one, and must not be refused.
 
-const README = readFileSync(join(__dirname, '..', '..', 'README.md'), 'utf8')
+const README = readFileSync(join(__dirname, '..', '..', 'README.md'), 'utf8').replace(/\r\n/g, '\n')
 
 const runRefusal = runLineRefusal
 

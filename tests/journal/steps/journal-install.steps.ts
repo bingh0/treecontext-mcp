@@ -17,7 +17,7 @@ import { openNodeSqlite } from '../../../src/persistence/node-sqlite.js'
 import { FlatStore } from '../../../src/flat-store.js'
 import { LeaseClient, DRAIN_LEASE_TTL_SECS } from '../../../src/persistence/leases.js'
 import { MAX_INGEST_ATTEMPTS } from '../../../src/persistence/capture-constants.js'
-import { type InstallWorld, type CliRun, codexReading, pathWithFakeClaude, setClaudeVersion, tcCli, agentCli, codexCli, codexConfigRead, setFakeCodex, openInstallWorld, treeOf, pathsMentioned, installedCommands, interpreterRunsPackage, isBatchBody, toPosix, mcpLauncherIn, agentConfigPath, fakeGlobalInstall, clientEntry, putAgyOnPath, agyReading, realAgy, putGeminiOnPath, markGeminiCliInstalled, layEarlierGeminiInstall, GEMINI_WRAPPER_STEMS, agyMcpList, type ClientEntry } from '../install-harness.js'
+import { type InstallWorld, type CliRun, codexReading, worldAgyVersion, pathWithFakeClaude, setClaudeVersion, tcCli, agentCli, codexCli, codexConfigRead, setFakeCodex, openInstallWorld, treeOf, pathsMentioned, installedCommands, interpreterRunsPackage, isBatchBody, toPosix, mcpLauncherIn, agentConfigPath, fakeGlobalInstall, clientEntry, putAgyOnPath, agyReading, realAgy, putGeminiOnPath, markGeminiCliInstalled, layEarlierGeminiInstall, GEMINI_WRAPPER_STEMS, agyMcpList, type ClientEntry } from '../install-harness.js'
 import { CODEX_APPROVALS_FLOOR } from '../../../src/server/codex-client.js'
 import { startEntryAsClient, developerTrustsCodexHooks, codexHooksSeen, recordedSession, replayRecordedSession, writeFakeAgy } from '../standins.js'
 import { agyHooksBlock, commandsIn, AGY_HOOK_NAME, AGY_CAPTURE_FLOOR } from '../../../src/server/agy-hooks.js'
@@ -622,8 +622,7 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
     await openInstallWorld(w, ['.claude', '.codex', '.gemini'])
     setFakeCodex(w, { version: '0.167.0', sandbox: { exit: 0, stderr: '' } })
     agyReading(w, '1.5.3')
-    const agy = spawnSync(join(w.iAgyBin!, 'agy'), ['--version'], { encoding: 'utf8' })
-    expect(agy.stdout.trim(), "the agy on PATH is not the version the Given names").toBe('1.5.3')
+    expect(worldAgyVersion(w), "the agy on PATH is not the version the Given names").toBe('1.5.3')
     ;(w as InstallWorld & { iTreeBefore?: Record<string, string> }).iTreeBefore = homeBytes(w.ihome!)
   })
   reg.define(/^install runs with the experimental capture flag (and no agent name|naming Codex CLI|naming Antigravity CLI)$/, (w: InstallWorld, named: unknown) => {
@@ -1353,7 +1352,7 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
 
   // ── the README's upgrading section says quit first (D265) ───────────
   reg.define(/^the README's section on upgrading between betas$/, (w: InstallWorld) => {
-    const readme = readFileSync(join(TS_ROOT, 'README.md'), 'utf8')
+    const readme = readFileSync(join(TS_ROOT, 'README.md'), 'utf8').replace(/\r\n/g, '\n')
     const start = readme.indexOf('### Upgrading between beta releases')
     expect(start, 'the README has no upgrading section').toBeGreaterThan(-1)
     const rest = readme.slice(start + '### Upgrading between beta releases'.length)
@@ -1591,7 +1590,7 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
   reg.define(/^the developer reads the README's install section$/, (w: InstallWorld) => {
     // Section 2, "Install": the section that gives the install command and
     // the one D276's tester reads (D361). Its subsections are part of it.
-    const readme = readFileSync(join(TS_ROOT, 'README.md'), 'utf8')
+    const readme = readFileSync(join(TS_ROOT, 'README.md'), 'utf8').replace(/\r\n/g, '\n')
     const start = readme.indexOf('\n## 2. Install')
     expect(start, 'the README has no install section (## 2. Install)').toBeGreaterThan(-1)
     const rest = readme.slice(start + 1)
@@ -2873,7 +2872,7 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
     // the version the Given names (agyReading).
     agyReading(w, AGY_CAPTURE_FLOOR)
     seedAgyHome(w)
-    expect(spawnSync(join(w.iAgyBin!, 'agy'), ['--version'], { encoding: 'utf8' }).stdout.trim()).toBe(AGY_CAPTURE_FLOOR)
+    expect(worldAgyVersion(w)).toBe(AGY_CAPTURE_FLOOR)
     w.iproj = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-install-proj-')))
     w.defer(() => rmSync(w.iproj!, { recursive: true, force: true }))
   })
@@ -3077,7 +3076,7 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
       writeFakeAgy(w.iAgyBin!, String(agyV), real)
     } else {
       agyReading(w, AGY_CAPTURE_FLOOR)
-      expect(spawnSync(join(w.iAgyBin!, 'agy'), ['--version'], { encoding: 'utf8' }).stdout.trim()).toBe(AGY_CAPTURE_FLOOR)
+      expect(worldAgyVersion(w)).toBe(AGY_CAPTURE_FLOOR)
     }
     w.irun = tcCli(w, ['install', '--yes'])
     expect(w.irun.status, w.irun.out).toBe(0)
