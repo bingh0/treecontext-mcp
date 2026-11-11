@@ -2807,9 +2807,11 @@ function sandboxSteps(define: (re: RegExp, fn: (w: WorkersWorld, ...caps: string
     // process (standins.ts `osAnsweringGone`), handed to the harness's
     // own lookup.
     const reg = rawRegistration(w, w.legs!['worker']!)
-    expect(reg['proc_ns'], 'this build\'s door recorded its numbering').not.toBeNull()
+    // A numbering exists on Linux alone (D403: macOS and Windows record
+    // none, and a reader there judges by the process id as before).
+    if (process.platform === 'linux') expect(reg['proc_ns'], 'this build\'s door recorded its numbering').not.toBeNull()
     w.moments!['before-read'] = Date.now() / 1000
-    const l = w.store!.lookupKey({ run: RUN, key: 'login-form', probe: osAnsweringGone(reg['pid'] as number, reg['proc_ns'] as string) })
+    const l = w.store!.lookupKey({ run: RUN, key: 'login-form', probe: osAnsweringGone(reg['pid'] as number, reg['proc_ns'] as string | null) })
     w.lookups![RUN] = l
     w.moments!['after-read'] = Date.now() / 1000
     const taken = rawRegistration(w, w.legs!['worker']!)
