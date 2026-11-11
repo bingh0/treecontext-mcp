@@ -1,4 +1,3 @@
-import { winSnapshot } from '../helpers/win-debug.js'
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { createHash, randomBytes } from 'node:crypto'
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
@@ -111,10 +110,7 @@ export function openCaptureSandbox(w: CaptureWorld): void {
   w.home = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-capture-home-')))
   // Retried: on Windows a process a scenario started may still be closing,
   // and a directory a live process holds cannot be removed.
-  w.defer(() => {
-    winSnapshot(`before removing the capture home ${w.home!}`)
-    try { rmSync(w.home!, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }) } catch (e) { winSnapshot(`the capture home could not be removed (${String(e)})`); throw e }
-  })
+  w.defer(() => rmSync(w.home!, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }))
   w.proj = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-capture-proj-')))
   w.defer(() => rmSync(w.proj!, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }))
   // An empty .git, as Codex CLI's sandbox leaves one: no repository, so

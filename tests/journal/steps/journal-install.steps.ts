@@ -1,4 +1,3 @@
-import { winSnapshot } from '../../helpers/win-debug.js'
 import { appendFileSync, chmodSync, copyFileSync, renameSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync, existsSync, statSync } from 'node:fs'
 import { spawn, spawnSync } from 'node:child_process'
 import { basename, delimiter, dirname, isAbsolute, join } from 'node:path'
@@ -2571,9 +2570,8 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
       // handle inside it (a scanner reading a script just written, a
       // process still closing): retried, as file tools on Windows do.
       for (let attempt = 0; ; attempt++) {
-        try { renameSync(w.ihome!, moved); if (attempt > 0) winSnapshot(`the home was renamed on attempt ${attempt + 1}`); break } catch (e) {
-          if (process.platform !== 'win32' || attempt >= 40 || (e as NodeJS.ErrnoException).code !== 'EPERM') { winSnapshot(`the home could not be renamed after ${attempt + 1} attempts`); throw e }
-          if (attempt === 0) winSnapshot('the first rename of the home was refused')
+        try { renameSync(w.ihome!, moved); break } catch (e) {
+          if (process.platform !== 'win32' || attempt >= 40 || (e as NodeJS.ErrnoException).code !== 'EPERM') throw e
           Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500)
         }
       }
