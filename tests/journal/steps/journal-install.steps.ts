@@ -2661,9 +2661,13 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
     expect(Object.keys(cxHooks(w))).toEqual(expect.arrayContaining(['PostToolUseFailure', 'PostToolBatch']))
   }
   const withHome = <T>(w: InstallWorld, fn: () => T): T => {
-    const before = process.env['HOME']
-    process.env['HOME'] = w.ihome!
-    try { return fn() } finally { if (before === undefined) delete process.env['HOME']; else process.env['HOME'] = before }
+    // os.homedir() reads HOME on Linux and macOS and USERPROFILE on Windows.
+    const keys = ['HOME', 'USERPROFILE'] as const
+    const before = keys.map(k => process.env[k])
+    for (const k of keys) process.env[k] = w.ihome!
+    try { return fn() } finally {
+      keys.forEach((k, i) => { if (before[i] === undefined) delete process.env[k]; else process.env[k] = before[i] })
+    }
   }
   reg.define(/^Codex CLI 0\.167\.0 whose hooks file holds the verbatim copy of the Claude Code block an earlier build wrote under the experimental flag, beside a hook of the developer's$/, async (w: CodexWorld) => {
     await openInstallWorld(w, ['.claude', '.codex'])
@@ -2860,7 +2864,7 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
   }
   const ourAgyHook = (data: Record<string, unknown>): Record<string, unknown> | undefined => data[AGY_HOOK_NAME] as Record<string, unknown> | undefined
   /** The named hook install writes, as written under the world's home. */
-  const agyHooksBlockFor = (w: InstallWorld): Record<string, unknown> => JSON.parse(JSON.stringify(agyHooksBlock()).split(homedir()).join(w.ihome!)) as Record<string, unknown>
+  const agyHooksBlockFor = (w: InstallWorld): Record<string, unknown> => JSON.parse(JSON.stringify(agyHooksBlock()).split(homedir().replace(/\\/g, '/')).join(w.ihome!.replace(/\\/g, '/'))) as Record<string, unknown>
   const agyEntryArgs = (w: InstallWorld): string[] => {
     const cfg = JSON.parse(readFileSync(join(w.ihome!, '.gemini', 'config', 'mcp_config.json'), 'utf8')) as { mcpServers: Record<string, { args: string[] }> }
     return cfg.mcpServers['treecontext']!.args

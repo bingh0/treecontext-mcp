@@ -13,7 +13,7 @@ export { markClaudeCodeInstalled }
 import type { World } from './world.js'
 import { TS_ROOT } from './proc.js'
 import { killProbeTree } from '../../src/server/codex-client.js'
-import { writeFakeClaude, writeFakeCodex, writeFakeGemini, writeFakeAgy, writeCodexVersionLine, type FakeCodexPlan } from './standins.js'
+import { writeFakeClaude, writeFakeCodex, writeFakeGemini, writeFakeAgy, writeCodexVersionLine, writeCodexHomeRedirect, type FakeCodexPlan } from './standins.js'
 
 // ── Install-wave harness: the real CLI, a redirected HOME, and the ─────
 //    other side of every boundary it claims to cross.
@@ -122,6 +122,18 @@ export function tcCli(w: InstallWorld, args: string[], opts: { cwd?: string; nod
   // The real `agy` goes first from a directory of its own where a scenario
   // installs Antigravity CLI; the machine's own is hidden from every child
   // (sandboxedSpawnEnv), so no other world sees it (D383).
+  // On Windows the real Codex does not follow a redirected HOME (it asks
+  // the system for the profile folder), so where a world uses the machine's
+  // own Codex it goes through a redirect to the world's `.codex`.
+  if (process.platform === 'win32' && !w.iCodexBin && !w.iPathWithoutCodex) {
+    const real = resolveOnPath('codex')
+    if (real !== null) {
+      w.iCodexBin = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-codex-home-')))
+      const bin = w.iCodexBin
+      w.defer(() => rmSync(bin, { recursive: true, force: true }))
+      writeCodexHomeRedirect(bin, real, join(w.ihome!, '.codex'))
+    }
+  }
   const base = w.iPathWithoutCodex ?? process.env['PATH'] ?? ''
   const withGemini = w.iGeminiBin ? `${w.iGeminiBin}${delimiter}${base}` : base
   const withAgy = w.iAgyBin ? `${w.iAgyBin}${delimiter}${withGemini}` : withGemini
@@ -321,7 +333,7 @@ export function codexReading(w: InstallWorld, version: string): string {
       w.iCodexBin = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-codex-line-')))
       w.defer(() => rmSync(w.iCodexBin!, { recursive: true, force: true }))
     }
-    writeCodexVersionLine(w.iCodexBin, version, real)
+    writeCodexVersionLine(w.iCodexBin, version, real, join(w.ihome!, '.codex'))
   }
   return has
 }

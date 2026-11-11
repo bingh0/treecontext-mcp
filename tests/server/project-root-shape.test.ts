@@ -78,7 +78,8 @@ describe('a .git is a repository only in the shape git accepts (D419)', () => {
     mkdirSync(project, { recursive: true })
     writeFileSync(join(repo, 'mid', '.git'), 'junk\n')
     expect(gitNames(project)).toBeNull()
-    expect(projectRootFor(project)).toBe(repo)
+    // The root is git's own spelling of it (forward slashes on Windows).
+    expect(realpathSync.native(projectRootFor(project))).toBe(repo)
   })
 
   it.skipIf(process.platform === 'win32')('a gitfile that is a device or a FIFO is never read without bound', () => {

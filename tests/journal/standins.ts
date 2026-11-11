@@ -63,6 +63,14 @@
  *  |                                        | and its sandbox check stay Codex's own. It stands in for    |
  *  |                                        | the version line alone, and must never be given a version   |
  *  |                                        | NEWER than the real Codex (the harness refuses that)        |
+ *  | `writeCodexHomeRedirect`               | the redirected home, for Codex on Windows: Codex finds its  |
+ *  |                                        | directory there through the system's profile folder, not    |
+ *  |                                        | `USERPROFILE`, so a world's HOME does not reach it as       |
+ *  |                                        | `$HOME` does on Linux and macOS. A `codex.cmd` first on     |
+ *  |                                        | PATH sets `CODEX_HOME` to the world's `.codex` (when that   |
+ *  |                                        | directory exists) and hands everything to the real Codex.   |
+ *  |                                        | It stands in for the sandbox's home alone; the CLI under    |
+ *  |                                        | test still sees no `CODEX_HOME` of its own                  |
  *  | `writeCodexPassThrough`                | nothing: a `codex` on PATH that hands `--version` and       |
  *  |                                        | `app-server` to the real Codex further along PATH, so the   |
  *  |                                        | answers are Codex's own, and refuses everything else (exit  |
@@ -880,10 +888,10 @@ export function writeFakeCodex(dir: string, plan: FakeCodexPlan): void {
  * path), arguments untouched: the version line alone is stood in for, for
  * a host whose Codex has moved past the version a Given names.
  */
-export function writeCodexVersionLine(dir: string, version: string, real: string): void {
+export function writeCodexVersionLine(dir: string, version: string, real: string, windowsCodexHome?: string): void {
   if (process.platform === 'win32') {
     // npm's Codex is a .cmd on Windows, so it is called, not started.
-    writeFileSync(join(dir, 'codex.cmd'), `@echo off\r\nif "%~1"=="--version" (\r\necho codex-cli ${version}\r\nexit /b 0\r\n)\r\ncall "${real}" %*\r\nexit /b %ERRORLEVEL%\r\n`)
+    writeFileSync(join(dir, 'codex.cmd'), `@echo off\r\nif "%~1"=="--version" (\r\necho codex-cli ${version}\r\nexit /b 0\r\n)\r\n${windowsCodexHome ? codexHomeLine(windowsCodexHome) : ''}call "${real}" %*\r\nexit /b %ERRORLEVEL%\r\n`)
     return
   }
   const q = (t: string): string => `'${t.replace(/'/g, `'\\''`)}'`
@@ -893,6 +901,23 @@ export function writeCodexVersionLine(dir: string, version: string, real: string
     `exec ${q(real)} "$@"`,
     '',
   ].join('\n'), { mode: 0o755 })
+}
+
+/** The batch line that points Codex at a world's own directory, where it exists. */
+function codexHomeLine(codexHome: string): string {
+  return `if exist "${codexHome}\\" set "CODEX_HOME=${codexHome}"\r\n`
+}
+
+/**
+ * Windows only: a `codex.cmd` in `dir` that sets `CODEX_HOME` to the world's
+ * own `.codex` and hands every invocation to the real Codex at `real`. A
+ * world redirects HOME and USERPROFILE, which is how Codex finds its
+ * directory on Linux and macOS; on Windows Codex asks the system for the
+ * profile folder, so without this the real Codex reads the machine's own
+ * directory and answers for files the scenario never wrote.
+ */
+export function writeCodexHomeRedirect(dir: string, real: string, codexHome: string): void {
+  writeFileSync(join(dir, 'codex.cmd'), `@echo off\r\n${codexHomeLine(codexHome)}call "${real}" %*\r\nexit /b %ERRORLEVEL%\r\n`)
 }
 
 /**
