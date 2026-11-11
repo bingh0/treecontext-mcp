@@ -326,7 +326,10 @@ treecontext install --no-tool-approvals
 `off` removes exactly what install wrote. A chosen off is kept by every
 later install until you say `on`.
 
-On Windows, `~` means `%USERPROFILE%`. Existing config is merged, not
+On Windows, `~` means `%USERPROFILE%`. Codex CLI itself does not follow a
+redirected `USERPROFILE` there (seen with 0.167.1, 2026-11-11: it went on
+reading the account's own profile folder); where the two differ, set
+`CODEX_HOME`, which install, doctor and Codex all follow. Existing config is merged, not
 overwritten — your other MCP servers and hooks are left alone, and a
 corrupt config file is kept beside itself as `<file>.bak` (a dated
 `<file>.bak-<UTC timestamp>` where that name is taken, never over an
@@ -778,6 +781,16 @@ the door and must scrub its own environment.
   (currently about a second, not a promise). On
   Windows only the worker itself is ended. A process that left the group
   (`setsid`, a detached spawn) is not reached.
+- Windows has no signals, so there the door cannot tell a worker that was
+  killed from outside (Task Manager, `taskkill`, another program) from one
+  that exited by itself: it reads as an exit with a code, the worker is
+  retired with its summary row, and it may be sent back once, as a worker
+  that finished is. The door's own cut (its `--timeout`, the spawner's
+  abort) is a cut on Windows too.
+- Also on Windows: a background process a Node-based worker started as an
+  ordinary child ends when the worker exits (Node ends its non-detached
+  children with itself), before the door does anything. One that must
+  outlive its worker has to be started detached.
 - A failed run's summary row keeps the end of stderr verbatim. If a CLI
   prints secrets or tokens to stderr, they land in the journal. Note that
   `codex exec` writes its whole progress transcript to stderr.

@@ -113,6 +113,12 @@ const HOST_SKIPS: Record<string, string> = process.platform === 'win32' ? {
   // on Windows the door makes no group and ends the direct child alone.
   "a worker ended by the wrapper's timeout leaves no process of its group running [1]": 'win32: no process groups; only the direct child is ended (D393)',
   "a worker ended by a kill the door did not send, sent to the worker's process leaves no process of its group running [2]": 'win32: no process groups; only the direct child is ended (D393)',
+  // Windows has no signals: a worker killed from outside ends with an exit
+  // code, which the door reads as a worker that finished (retired, with a
+  // summary row), never as a cut. The row for a worker that exits by
+  // itself runs here; README, "Headless workers", states the limit (owner,
+  // 2026-11-11).
+  'a worker taken for a phantom while it ran is set right by its door when it is ended by a signal [2]': 'win32: no signals; a kill from outside reads as an exit with a code (README, Headless workers)',
 } : {}
 // D403: the sandbox that numbers its own processes is Linux's, and these
 // scenarios need a real one (the stand-in harness's PID_SANDBOX, a user and
