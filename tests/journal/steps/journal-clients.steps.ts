@@ -372,7 +372,7 @@ export const clientsDefiner = (reg: Registry<ClientsWorld>): void => {
     writeFakeAgy(bin, '1.5.2', real)
     w.iAgyBin = bin
     w.iproj = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-clients-proj-')))
-    w.defer(() => rmSync(w.iproj!, { recursive: true, force: true }))
+    w.defer(() => rmSync(w.iproj!, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }))
     mkdirSync(w.iproj, { recursive: true })
     const run = tcCli(w, ['install', '--yes', '--agent', 'agy'])
     expect(run.status, run.out).toBe(0)

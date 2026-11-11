@@ -271,6 +271,7 @@ import { basename, join } from 'node:path'
 import { WORKER_AGENT_ID, type LegRef, type LegRegistration } from '../../src/persistence/leg-registry.js'
 import { mintTicket, TICKET_ENV, type TicketFields } from '../../src/ticket.js'
 import { hostProbe, type ProcessProbe } from '../../src/persistence/process-probe.js'
+import { killProbeTree } from '../../src/server/codex-client.js'
 import { spawnWorker, DOOR_LINE_PREFIX, type WorkerRunResult } from '../../src/ticket-door.js'
 import type { FlatStore } from '../../src/flat-store.js'
 import { sandboxedSpawnEnv, nodeTsArgs, CLI_TS } from '../helpers/cli-spawn.js'
@@ -1019,7 +1020,17 @@ export async function startEntryAsClient(
     throw new Error(`${mode ? `the server ran in ${mode}, but what the caller waited for` : 'the server wrote no mode line'} did not happen within 60s:\n${stderr}`)
   } finally {
     child.stdin.end()
-    child.kill('SIGTERM')
+    if (win) {
+      // The child is a shell around the batch launcher: killing it leaves
+      // the server itself running in the home, which then cannot be
+      // removed. The server ends by itself when its stdin closes; wait for
+      // that, and end the whole tree if it has not.
+      await new Promise<void>((done) => {
+        if (child.exitCode !== null) { done(); return }
+        const t = setTimeout(() => { killProbeTree(child); done() }, 15_000)
+        child.once('close', () => { clearTimeout(t); done() })
+      })
+    } else child.kill('SIGTERM')
     await new Promise<void>((r) => { if (child.exitCode !== null || child.signalCode !== null) r(); else child.once('exit', () => r()) })
     unplace()
   }

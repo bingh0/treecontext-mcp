@@ -38,8 +38,9 @@ beforeEach(() => {
   markClaudeCodeInstalled(home)
 })
 afterEach(() => {
-  rmSync(home, { recursive: true, force: true })
-  rmSync(proj, { recursive: true, force: true })
+  // Retried: on Windows the server just stopped may still be closing.
+  rmSync(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 })
+  rmSync(proj, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 })
 })
 
 const cursorEntry = (): { command: string; args: string[] } =>

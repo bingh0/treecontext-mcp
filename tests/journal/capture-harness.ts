@@ -108,9 +108,11 @@ function derivedStorePath(home: string, proj: string): string {
  *  the way every other capture scenario expects to find it. */
 export function openCaptureSandbox(w: CaptureWorld): void {
   w.home = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-capture-home-')))
-  w.defer(() => rmSync(w.home!, { recursive: true, force: true }))
+  // Retried: on Windows a process a scenario started may still be closing,
+  // and a directory a live process holds cannot be removed.
+  w.defer(() => rmSync(w.home!, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }))
   w.proj = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-capture-proj-')))
-  w.defer(() => rmSync(w.proj!, { recursive: true, force: true }))
+  w.defer(() => rmSync(w.proj!, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }))
   // An empty .git, as Codex CLI's sandbox leaves one: no repository, so
   // git names none and treecontext's own walk passes it over (D419); the
   // project root is the temp dir itself and identity stays path-based.

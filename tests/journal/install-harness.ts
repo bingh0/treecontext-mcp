@@ -571,7 +571,10 @@ export async function openInstallWorld(w: InstallWorld, agentDirs: string[] = ['
     for (const d of readdirSync(w.ihome!, { withFileTypes: true })) {
       if (d.isDirectory()) { try { chmodSync(join(w.ihome!, d.name), 0o700) } catch { /* best effort */ } }
     }
-    rmSync(w.ihome!, { recursive: true, force: true })
+    // Retried: on Windows a server a client started in the home (Codex's
+    // app server starts the MCP servers its configuration names) may still
+    // be closing, and a directory a live process holds cannot be removed.
+    rmSync(w.ihome!, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 })
   })
   for (const d of agentDirs) mkdirSync(join(w.ihome, d), { recursive: true })
   // A world that lays out `~/.claude` means Claude Code to be there: since

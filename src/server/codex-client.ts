@@ -222,8 +222,12 @@ export function readCodexConfig(cwd: string, timeoutMs: number = CODEX_PROBE_TIM
       if (settled) return
       settled = true
       clearTimeout(timer)
-      try { child.stdin?.end() } catch { /* closed */ }
+      // The tree first, while every process of it still lives: closing
+      // stdin first lets the app server exit by itself and orphan what it
+      // started (the MCP servers its configuration names), which a tree
+      // kill on Windows can then no longer find.
       killProbeTree(child)
+      try { child.stdin?.end() } catch { /* closed */ }
       resolve(r)
     }
     const timer = setTimeout(() => settle({ ok: false, why: `codex app-server did not answer within ${Math.round(timeoutMs / 1000)} s` }), timeoutMs)
@@ -312,8 +316,12 @@ export function readCodexHooksTrust(cwd: string, timeoutMs: number = CODEX_PROBE
       if (settled) return
       settled = true
       clearTimeout(timer)
-      try { child.stdin?.end() } catch { /* closed */ }
+      // The tree first, while every process of it still lives: closing
+      // stdin first lets the app server exit by itself and orphan what it
+      // started (the MCP servers its configuration names), which a tree
+      // kill on Windows can then no longer find.
       killProbeTree(child)
+      try { child.stdin?.end() } catch { /* closed */ }
       resolve(r)
     }
     const timer = setTimeout(() => settle({ ok: false, why: `codex app-server did not answer hooks/list within ${timeoutMs >= 1000 ? `${Math.round(timeoutMs / 1000)} s` : `${timeoutMs} ms`}` }), timeoutMs)

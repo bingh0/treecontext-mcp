@@ -102,7 +102,7 @@ describe('a machine without Claude Code is never wired for it', () => {
       expect(run.status, run.out).toBe(0)
       expect(run.stdout).toContain('Detected agents: Antigravity CLI\n')
     }
-    expect(existsSync(join(h, '.claude', 'hooks', 'tc-mcp-serve')), 'the launcher is install\'s own').toBe(true)
+    expect(existsSync(join(h, '.claude', 'hooks', `tc-mcp-serve${process.platform === 'win32' ? '.cmd' : ''}`)), 'the launcher is install\'s own').toBe(true)
     expect(existsSync(join(h, '.claude.json'))).toBe(false)
     expect(existsSync(join(h, '.claude', 'settings.json'))).toBe(false)
     expect(existsSync(join(h, '.claude', 'skills'))).toBe(false)

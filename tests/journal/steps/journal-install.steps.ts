@@ -53,7 +53,7 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
   reg.define(/^a machine with the reference agent installed$/, async (w: InstallWorld) => {
     await openInstallWorld(w, ['.claude'])
     w.iproj = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-install-proj-')))
-    w.defer(() => rmSync(w.iproj!, { recursive: true, force: true }))
+    w.defer(() => rmSync(w.iproj!, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }))
   })
 
   reg.define(/^the agent's own configuration listing reports the treecontext server$/, (w: InstallWorld) => {
@@ -1245,7 +1245,7 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
   reg.define(/^a project instruction file already carrying an older treecontext block$/, async (w: InstallWorld) => {
     await openInstallWorld(w, ['.claude'])
     w.iproj = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-install-proj-')))
-    w.defer(() => rmSync(w.iproj!, { recursive: true, force: true }))
+    w.defer(() => rmSync(w.iproj!, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }))
     writeFileSync(join(w.iproj, 'AGENTS.md'), [
       '# Project notes',
       '',
@@ -1649,7 +1649,7 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
       w.iClient = agent as 'Claude Code' | 'Codex CLI'
       await openInstallWorld(w, w.iClient === 'Codex CLI' ? ['.claude', '.codex'] : ['.claude'])
       w.iproj = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-install-proj-')))
-      w.defer(() => rmSync(w.iproj!, { recursive: true, force: true }))
+      w.defer(() => rmSync(w.iproj!, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }))
       // This build's own entry first: it is the oracle for what this build
       // writes, and the launcher an earlier build would have left exists.
       expect(tcCli(w, ['install', '--yes']).status).toBe(0)
@@ -1757,7 +1757,7 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
     await openInstallWorld(w, w.iClient === 'Codex CLI' ? ['.claude', '.codex'] : ['.claude'])
     if (w.iClient === 'Antigravity CLI') putAgyOnPath(w)
     w.iproj = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-install-proj-')))
-    w.defer(() => rmSync(w.iproj!, { recursive: true, force: true }))
+    w.defer(() => rmSync(w.iproj!, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }))
   })
 
   reg.define(/^install runs (as usual|without the experimental flag|with the experimental flag naming Codex CLI)$/, (w: InstallWorld, how: unknown) => {
@@ -1841,7 +1841,7 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
   reg.define(/^Codex CLI is installed at a version that reads per-tool approvals$/, async (w: InstallWorld) => {
     await openInstallWorld(w, ['.claude', '.codex'])
     w.iproj = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-install-proj-')))
-    w.defer(() => rmSync(w.iproj!, { recursive: true, force: true }))
+    w.defer(() => rmSync(w.iproj!, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }))
     // The real Codex, read by its own --version, at or past the first
     // version verified to read per-tool approvals.
     const v = codexCli(w, ['--version'])
@@ -1889,7 +1889,7 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
   reg.define(/^a Codex CLI whose treecontext entry carries the developer's approval for (treecontext_\w+) set to (\w+)$/, async (w: InstallWorld, tool: unknown, value: unknown) => {
     await openInstallWorld(w, ['.claude', '.codex'])
     w.iproj = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-install-proj-')))
-    w.defer(() => rmSync(w.iproj!, { recursive: true, force: true }))
+    w.defer(() => rmSync(w.iproj!, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }))
     expect(tcCli(w, ['install', '--yes']).status).toBe(0)
     // The developer sets the tool's approval in the entry install wrote:
     // over install's own for one of the four, beside it for another tool.
@@ -1939,7 +1939,7 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
   reg.define(/^a Codex CLI whose version reads older than the first that reads per-tool approvals$/, async (w: InstallWorld) => {
     await openInstallWorld(w, ['.claude', '.codex'])
     w.iproj = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-install-proj-')))
-    w.defer(() => rmSync(w.iproj!, { recursive: true, force: true }))
+    w.defer(() => rmSync(w.iproj!, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }))
     expect(CODEX_APPROVALS_FLOOR).toBe('0.166.0')
     setFakeCodex(w, { version: '0.165.0', sandbox: { exit: 0, stderr: '' } })
   })
@@ -2019,7 +2019,7 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
     await openInstallWorld(w, w.iClient === 'Codex CLI' ? ['.claude', '.codex'] : ['.claude'])
     if (w.iClient === 'Antigravity CLI') putAgyOnPath(w)
     w.iproj = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-install-proj-')))
-    w.defer(() => rmSync(w.iproj!, { recursive: true, force: true }))
+    w.defer(() => rmSync(w.iproj!, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }))
     const install = tcCli(w, ['install', '--yes'])
     expect(install.status, install.out).toBe(0)
     // Install's grants, then the developer's rule beside them, written the
@@ -2529,7 +2529,7 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
   // Codex), the developer's /hooks click the stand-in's, with Codex's hashes.
   type ReinstallWorld = CodexWorld & { rxFirst?: string; rxText?: string; rxTrust?: Record<string, string>; rxScript?: string; rxNode?: string; rxOldHome?: string }
   const ourHooksSeen = async (w: InstallWorld): Promise<CodexListedHook[]> => (await codexSays(w)).filter((h) => h.sourcePath === cxHooksFile(w) && h.command.includes('--client codex'))
-  const stopScript = (w: InstallWorld): string => join(w.ihome!, '.claude', 'hooks', 'tc-stop')
+  const stopScript = (w: InstallWorld): string => join(w.ihome!, '.claude', 'hooks', `tc-stop${process.platform === 'win32' ? '.cmd' : ''}`)
   reg.define(/^Codex CLI 0\.167\.0 wired by install, every hook of treecontext's trusted$/, async (w: ReinstallWorld) => {
     await openInstallWorld(w, ['.claude', '.codex'])
     realCodexAt(w, '0.167.0')
@@ -2553,7 +2553,7 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
       // probe picks it first and the hook scripts name it.
       const dir = join(w.ihome!, '.nvm', 'versions', 'node', 'v99.0.0', 'bin')
       mkdirSync(dir, { recursive: true })
-      w.rxNode = join(dir, 'node')
+      w.rxNode = join(dir, process.platform === 'win32' ? 'node.exe' : 'node')
       copyFileSync(process.execPath, w.rxNode)
       chmodSync(w.rxNode, 0o755)
       w.irun = tcCli(w, ['install', '--yes'], { node: w.rxNode })
@@ -2878,7 +2878,7 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
     seedAgyHome(w)
     expect(worldAgyVersion(w)).toBe(AGY_CAPTURE_FLOOR)
     w.iproj = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-install-proj-')))
-    w.defer(() => rmSync(w.iproj!, { recursive: true, force: true }))
+    w.defer(() => rmSync(w.iproj!, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }))
   })
   reg.define(/^no hook of Antigravity CLI's is written but treecontext's own named hook$/, (w: InstallWorld) => {
     const data = agyHooksOnDisk(w)
@@ -2918,7 +2918,7 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
   reg.define(/^an Antigravity CLI whose version reads 1\.5\.3, whose hooks file holds the developer's own named hook for PostToolUse, and a workspace whose `\.agents\/hooks\.json` holds a hook of the developer's$/, async (w: InstallWorld) => {
     await agyAt(w, AGY_CAPTURE_FLOOR, DEVELOPER_AGY_HOOK)
     w.iproj = realpathSync.native(mkdtempSync(join(tmpdir(), 'tc-install-proj-')))
-    w.defer(() => rmSync(w.iproj!, { recursive: true, force: true }))
+    w.defer(() => rmSync(w.iproj!, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }))
     mkdirSync(join(w.iproj, '.agents'), { recursive: true })
     writeFileSync(join(w.iproj, '.agents', 'hooks.json'), DEVELOPER_AGY_HOOK)
   })
@@ -3119,13 +3119,17 @@ export const installDefiner = (reg: Registry<InstallWorld>): void => {
     w.defer(unplace)
     for (const f of files) {
       const commands = commandsIn(JSON.parse(readFileSync(f, 'utf8')))
-        .filter((c) => c.includes(join(w.ihome!, '.claude', 'hooks')))
+        // A command spells its script with forward slashes on every platform.
+        .filter((c) => c.replace(/\\/g, '/').includes(join(w.ihome!, '.claude', 'hooks').replace(/\\/g, '/')))
       expect(commands.length, `${f} names no hook script of treecontext's`).toBeGreaterThanOrEqual(5)
       for (const c of commands) {
         const script = /"([^"]+)"/.exec(c)![1]!
         expect(existsSync(script), `${script}, named in ${f}, is not there`).toBe(true)
-        // Run as the client runs it: through sh, the payload on stdin.
-        const r = spawnSync('sh', ['-c', c], { input: '{}', env: sandboxedSpawnEnv(w.ihome!), encoding: 'utf8', timeout: 60_000 })
+        // Run as the client runs it: through the platform's shell, the
+        // payload on stdin.
+        const r = process.platform === 'win32'
+          ? spawnSync(c, { input: '{}', env: sandboxedSpawnEnv(w.ihome!), encoding: 'utf8', timeout: 60_000, shell: true })
+          : spawnSync('sh', ['-c', c], { input: '{}', env: sandboxedSpawnEnv(w.ihome!), encoding: 'utf8', timeout: 60_000 })
         expect(r.status, `${c}: ${r.stderr}`).toBe(0)
         if (f === agyHooksFile(w)) expect(r.stdout.trim()).toBe('{}')
       }
