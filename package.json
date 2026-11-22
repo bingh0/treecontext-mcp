@@ -64,7 +64,7 @@
     "@types/istanbul-reports": "3.0.4",
     "@types/node": "^26.6.6",
     "@vitest/coverage-v8": "^5.0.5",
-    "gherkin-node-test": "0.11.0",
+    "gherkin-node-test": "0.12.0",
     "istanbul-lib-coverage": "3.2.2",
     "istanbul-lib-report": "3.0.1",
     "istanbul-reports": "3.2.0",
